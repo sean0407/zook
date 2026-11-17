@@ -1459,3 +1459,10 @@ button {
 
 .dir-import { font-size: 12.5px; font-weight: 500; margin-left: 6px; padding: 0; }
 .dir-add { flex-wrap: wrap; }
+
+.sched-intro { margin: 0 0 16px; max-width: 760px; line-height: 1.6; }
+.sched-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sched-head h3 { margin: 0; }
+.sched-card .status { display: block; margin-top: 4px; }
+.sched-card .status.warn { color: #b3261e; }
+.sched-when { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; }

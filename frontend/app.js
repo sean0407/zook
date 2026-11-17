@@ -195,7 +195,7 @@
       const tools = drag && !isPinned ? `<span class="section-tools"><button class="icon-btn mini" data-action="rename-section" data-id="${esc(name)}" aria-label="重新命名分組" title="重新命名">✎</button>${items.length ? '' : `<button class="icon-btn mini" data-action="delete-section" data-id="${esc(name)}" aria-label="刪除分組" title="刪除空分組">×</button>`}</span>` : '';
       return `<div class="side-section" data-drop-section="${esc(isPinned ? '__pinned' : name)}"><div class="section-head bot-section-head" ${drag && !isPinned ? `draggable="true" data-drag-section="${esc(name)}"` : ''}><button class="section-toggle" data-action="collapse" data-id="${esc(name)}"><span>${esc(name)} ${items.some(b=>pendingForBot(b.id).length)?'<span class="approval-badge">待核准</span>':''}</span><span>${closed?'⌄':'⌃'}</span></button>${tools}</div>${closed?'':items.map(botRow).join('') + (items.length || !drag ? '' : '<div class="drop-hint">把 Bot 拖到這裡</div>')}</div>`;
     };
-    return `<aside class="sidebar"><div class="side-top"><div class="brand">Zook<span>✳</span></div><div class="side-actions"><button class="icon-btn" data-action="search-focus" aria-label="搜尋">${svg('search')}</button><button class="icon-btn" data-action="new-bot" aria-label="新增 Bot">${svg('plus')}</button></div></div><div class="search"><span class="glass tiny-icon">${svg('search')}</span><input id="side-search" placeholder="搜尋 Bots 和知識" aria-label="搜尋 Bots 和知識" value="${esc(state.query)}"></div><div class="side-scroll">${groupsBlock()}${pinned.length?block('已釘選',pinned,true):''}${sections.map(s=>block(s,bots.filter(b=>!b.pinned&&(b.section||'我的 Bots')===s))).join('')}${state.query?'':'<button class="side-empty add-section" data-action="new-section">＋ 新增分組</button>'}${state.query&&state.data.knowledge.filter(n=>matches(n.title)||matches(n.content)).length?`<div class="section-head">知識搜尋結果</div>${state.data.knowledge.filter(n=>matches(n.title)||matches(n.content)).map(n=>`<button class="side-row" data-action="edit-note" data-id="${esc(n.id)}"><span>▤</span><span class="side-copy"><span class="side-name">${esc(n.title)}</span><span class="side-preview">${esc(n.content)}</span></span></button>`).join('')}`:''}</div><div class="side-footer"><div class="user-avatar">S</div><div class="user-name">我的工作區</div><div class="launcher"><button class="icon-btn launcher-btn" data-action="launcher" aria-label="開啟功能選單" aria-expanded="${state.launcher}">${svg('grid')}</button>${state.launcher?`<div class="popup">${[['usage','◷','使用量'],['knowledge','▤','知識庫'],['memory','◎','記憶'],['accounts','⚿','模型帳號'],['skills','✳','Skills 與連接器'],['settings','⚙','設定']].map(x=>`<button class="nav-item" data-action="page" data-id="${x[0]}"><span>${x[1]}</span>${x[2]}</button>`).join('')}</div>`:''}</div><button class="icon-btn" data-action="page" data-id="settings" aria-label="設定">${svg('settings')}</button>${state.update?.available ? `<button class="icon-btn update-btn" data-action="update-open" aria-label="有新版 ${esc(state.update.latest)}，按這裡更新" title="有新版 ${esc(state.update.latest)}">${svg('download')}</button>` : ''}</div></aside>`
+    return `<aside class="sidebar"><div class="side-top"><div class="brand">Zook<span>✳</span></div><div class="side-actions"><button class="icon-btn" data-action="search-focus" aria-label="搜尋">${svg('search')}</button><button class="icon-btn" data-action="new-bot" aria-label="新增 Bot">${svg('plus')}</button></div></div><div class="search"><span class="glass tiny-icon">${svg('search')}</span><input id="side-search" placeholder="搜尋 Bots 和知識" aria-label="搜尋 Bots 和知識" value="${esc(state.query)}"></div><div class="side-scroll">${groupsBlock()}${pinned.length?block('已釘選',pinned,true):''}${sections.map(s=>block(s,bots.filter(b=>!b.pinned&&(b.section||'我的 Bots')===s))).join('')}${state.query?'':'<button class="side-empty add-section" data-action="new-section">＋ 新增分組</button>'}${state.query&&state.data.knowledge.filter(n=>matches(n.title)||matches(n.content)).length?`<div class="section-head">知識搜尋結果</div>${state.data.knowledge.filter(n=>matches(n.title)||matches(n.content)).map(n=>`<button class="side-row" data-action="edit-note" data-id="${esc(n.id)}"><span>▤</span><span class="side-copy"><span class="side-name">${esc(n.title)}</span><span class="side-preview">${esc(n.content)}</span></span></button>`).join('')}`:''}</div><div class="side-footer"><div class="user-avatar">S</div><div class="user-name">我的工作區</div><div class="launcher"><button class="icon-btn launcher-btn" data-action="launcher" aria-label="開啟功能選單" aria-expanded="${state.launcher}">${svg('grid')}</button>${state.launcher?`<div class="popup">${[['usage','◷','使用量'],['schedules','◴','排程'],['knowledge','▤','知識庫'],['memory','◎','記憶'],['accounts','⚿','模型帳號'],['skills','✳','Skills 與連接器'],['settings','⚙','設定']].map(x=>`<button class="nav-item" data-action="page" data-id="${x[0]}"><span>${x[1]}</span>${x[2]}</button>`).join('')}</div>`:''}</div><button class="icon-btn" data-action="page" data-id="settings" aria-label="設定">${svg('settings')}</button>${state.update?.available ? `<button class="icon-btn update-btn" data-action="update-open" aria-label="有新版 ${esc(state.update.latest)}，按這裡更新" title="有新版 ${esc(state.update.latest)}">${svg('download')}</button>` : ''}</div></aside>`
   }
 
   function jobsForBot(botId) { return Object.values(state.jobDetails).filter(j => j.botId === botId && !j.groupId); }
@@ -768,12 +768,15 @@
       settings: '設定',
       memory: '記憶',
       accounts: '模型帳號',
+      schedules: '排程',
       plugins: 'Skills 與連接器'
     } [state.page] || '';
     let content = '';
     if (state.page === 'knowledge') {
       let notes = state.data.knowledge.filter(n => !state.query || matches(n.title) || matches(n.content) || (n.tags || []).some(matches));
       content = notes.length ? `<div class="cards">${notes.map(n=>`<article class="card"><h3>${esc(n.title)}</h3><p>${esc(n.content)}</p><span class="status">${esc(state.data.bots.find(b=>b.id===n.botId)?.name||'共用知識')}</span><div class="actions"><button class="link" data-action="edit-note" data-id="${esc(n.id)}">編輯</button><button class="link" data-action="delete-note" data-id="${esc(n.id)}">刪除</button></div></article>`).join('')}</div>` : '<div class="blank">目前沒有知識。新增筆記，為 Bot 提供背景資料。</div>'
+    } else if (state.page === 'schedules') {
+      content = schedulesPage();
     } else if (state.page === 'skills' || state.page === 'mcp' || state.page === 'plugins') {
       content = directoryPage(state.page);
     } else if (state.page === 'skills-legacy') {
@@ -811,7 +814,7 @@
       let s = state.data.settings || {};
       content = permissionSection(s.permissionMode || 'manual') + `<form id="settings-form" class="setting-list">${settingRow('預設提供者', '新對話預設使用的模型服務。登入狀態在「模型帳號」管理。', `<select name="provider" class="plain-select" aria-label="預設提供者">${providerOptions(s.provider || 'codex', false)}</select>`)}${settingRow('預設模型', '未個別指定模型的 Bot 會使用這個模型。', modelPicker(s.model||'', true))}${[0, 1].map(i => settingRow('備用模型 ' + (i + 1), i ? '第一個備用也不能用時，再換這一個。' : '預設模型額度用完、未登入或回覆失敗時，自動換這個模型，並在回覆下方註明。', dropdown('fallback' + i, (s.fallbacks || [])[i] || '', [{id: '', name: '不使用'}, ...providerList()], 'data-fallback-slot'))).join('')}<div class="setting-actions"><button class="primary">儲存模型設定</button><button type="button" class="secondary" data-action="export">匯出所有資料</button></div></form>` + updateSection() + remoteSection()
     }
-    return `<main class="main"><header class="main-header"><div class="bot-pill">Zook</div></header><div class="page"><div class="page-inner"><div class="page-top"><h1>${name}</h1>${state.page==='knowledge'?'<button class="primary" data-action="new-note">＋ 新增知識</button>':''}</div>${content}</div></div></main>`
+    return `<main class="main"><header class="main-header"><div class="bot-pill">Zook</div></header><div class="page"><div class="page-inner"><div class="page-top"><h1>${name}</h1>${state.page==='knowledge'?'<button class="primary" data-action="new-note">＋ 新增知識</button>':state.page==='schedules'?'<button class="primary" data-action="new-schedule">＋ 新增排程</button>':''}</div>${content}</div></div></main>`
   }
 
   function render(keepScroll = false) {
@@ -883,6 +886,23 @@
     } catch (e) { if (form.isConnected) target.innerHTML = `<p class="error-text">無法載入能力清單：${esc(e.message)}。請關閉並重試。</p>`; }
   }
 
+  const REPEATS = [['daily', '每天'], ['weekdays', '週一到週五'], ['mon', '每週一'], ['tue', '每週二'], ['wed', '每週三'], ['thu', '每週四'], ['fri', '每週五'], ['sat', '每週六'], ['sun', '每週日']];
+  const repeatName = id => (REPEATS.find(r => r[0] === id) || REPEATS[0])[1];
+  function schedulesPage() {
+    const items = state.data.schedules || [];
+    const intro = '<p class="muted sched-intro">時間到了，Zook 會自動把這則訊息送給 Bot，回覆留在對話裡。Mac 要開著、Zook 要在執行；需要你核准的動作仍會等你核准。</p>';
+    if (!items.length) return intro + '<div class="blank">目前沒有排程。按「新增排程」，讓 Bot 在固定時間自動做事。</div>';
+    const last = x => !x.lastStatus ? '尚未執行' : (x.lastStatus === 'sent' ? '上次執行：' : x.lastStatus === 'missed' ? '上次錯過：' : '上次失敗：') + formatDate(x.lastAt) + (x.lastStatus !== 'sent' && x.lastError ? '（' + x.lastError + '）' : '');
+    return intro + `<div class="cards">${items.map(x => { const b = state.data.bots.find(b => b.id === x.botId); return `<article class="card sched-card"><div class="sched-head"><h3>${esc(repeatName(x.repeat))} ${esc(x.time)}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><p>${esc(x.content)}</p><span class="status">${esc(b ? b.name : '找不到 Bot')}</span><span class="status ${x.lastStatus && x.lastStatus !== 'sent' ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button><button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`; }).join('')}</div>`;
+  }
+  function scheduleModal(x = {}) {
+    if (!state.data.bots.length) { toast('請先建立一個 Bot'); return; }
+    const two = n => String(n).padStart(2, '0'), [h, m] = (x.time || '10:00').split(':');
+    const minutes = [...new Set([...Array.from({length: 12}, (_, i) => two(i * 5)), m])].sort();
+    const bot = x.botId || (state.page === 'chat' && state.selected) || state.data.bots[0].id;
+    modal(x.id ? '編輯排程' : '新增排程', `<form id="schedule-form"><div class="modal-body"><div class="field">Bot${dropdown('botId', bot, state.data.bots.map(b => ({id: b.id, name: b.name})))}</div><label class="field">要 Bot 做的事<textarea name="content" required placeholder="例如：整理今天的行事曆和未讀信件，列出三件最重要的事">${esc(x.content || '')}</textarea></label><div class="sched-when"><div class="field">重複${dropdown('repeat', x.repeat || 'daily', REPEATS.map(r => ({id: r[0], name: r[1]})))}</div><div class="field">時${dropdown('hour', h, Array.from({length: 24}, (_, i) => ({id: two(i), name: two(i)})))}</div><div class="field">分${dropdown('minute', m, minutes.map(v => ({id: v, name: v})))}</div></div><div class="setting-list in-form">${settingRow('啟用', '關閉後不會自動執行。', toggle('name="on"', x.on !== false, '啟用'))}${settingRow('錯過時補跑', '到時間時 Mac 在睡眠或 Zook 沒開，之後一開啟就補做一次（限 24 小時內）。', toggle('name="catchUp"', x.catchUp !== false, '錯過時補跑'))}</div></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">儲存</button></div></form>`);
+    $('#schedule-form').dataset.id = x.id || '';
+  }
   function noteModal(n = {}) {
     modal(n.id ? '編輯知識' : '新增知識', `<form id="note-form"><div class="modal-body"><label class="field">標題<input name="title" required value="${esc(n.title||'')}"></label><label class="field">內容<textarea name="content" required>${esc(n.content||'')}</textarea></label><label class="field">標籤（以逗號分隔）<input name="tags" value="${esc((n.tags||[]).join(', '))}"></label><label class="field">關聯 Bot<select name="botId"><option value="">共用知識</option>${state.data.bots.map(b=>`<option value="${esc(b.id)}" ${(n.botId||(!n.id&&state.page==='chat'?state.selected:''))===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select></label></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">儲存</button></div></form>`);
     $('#note-form').dataset.id = n.id || ''
@@ -914,6 +934,7 @@
     if (!state.providers) api('providers').then(r => { state.providers = r.providers; }).catch(() => {});
     if (!state.data.bots) state.data.bots = [];
     if (!state.data.knowledge) state.data.knowledge = [];
+    if (!state.data.schedules) state.data.schedules = [];
     if (!state.data.groups) state.data.groups = [];
     if (state.groupId && !activeGroup()) state.groupId = null;
     for (const job of state.data.jobs || []) state.jobDetails[job.id] = job;
@@ -1323,6 +1344,24 @@
           state.detail = id;
           render(true);
           break;
+        case 'new-schedule':
+          scheduleModal();
+          break;
+        case 'edit-schedule':
+          scheduleModal(state.data.schedules.find(x => x.id === id));
+          break;
+        case 'delete-schedule':
+          if (confirm('確定刪除這個排程？')) {
+            await api('schedules/' + encodeURIComponent(id), {method: 'DELETE'});
+            await refresh();
+            toast('已刪除排程');
+          }
+          break;
+        case 'run-schedule':
+          await post('schedules/' + encodeURIComponent(id) + '/run', {});
+          await refresh(); startPollers();
+          toast('已送出，回覆會出現在 Bot 的對話裡');
+          break;
         case 'new-note':
           noteModal();
           break;
@@ -1581,6 +1620,12 @@
       catch (err) { toast(err.message); }
       return;
     }
+    if (e.target.dataset.scheduleSwitch !== undefined) {
+      const on = e.target.checked;
+      try { await post('schedules/' + encodeURIComponent(e.target.dataset.id), {on}, 'PATCH'); await refresh(); toast(on ? '已啟用排程' : '已停用排程'); }
+      catch (err) { e.target.checked = !on; toast(err.message); }
+      return;
+    }
     if (e.target.dataset.dirFilter !== undefined) { state.dirFilter = e.target.value; render(true); return; }
     if (e.target.dataset.dirSwitch !== undefined) {
       const kind = e.target.dataset.kind, id = e.target.dataset.id;
@@ -1789,6 +1834,13 @@
         const bots = old ? state.data.bots.map(b => !b.pinned && (b.section || '我的 Bots') === old ? {...b, section: name} : b) : state.data.bots;
         closeModal(); await saveArrangement(bots, sections);
         toast(old ? '已重新命名分組' : '已新增分組，把 Bot 拖進去即可');
+      } else if (form.id === 'schedule-form') {
+        const d = new FormData(form), id = form.dataset.id;
+        const data = {botId: d.get('botId'), content: d.get('content'), repeat: d.get('repeat'), time: d.get('hour') + ':' + d.get('minute'), on: d.get('on') === 'on', catchUp: d.get('catchUp') === 'on'};
+        await post(id ? 'schedules/' + encodeURIComponent(id) : 'schedules', data, id ? 'PATCH' : 'POST');
+        closeModal();
+        await refresh();
+        toast('已儲存排程');
       } else if (form.id === 'note-form') {
         let d = new FormData(form),
           id = form.dataset.id;
