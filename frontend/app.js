@@ -599,7 +599,7 @@
   }
 
   // Directory: Skills / connectors / plugins in one place, laid out like an app directory.
-  const SOURCE_NAMES = {agents: '你的 Skills', claude: 'Claude Skills', codex: 'Codex Skills', shared: '共用 Skills 庫', builtin: 'Zook 內建',
+  const SOURCE_NAMES = {zook: 'Zook Skills', agents: '你的 Skills', claude: 'Claude Skills', codex: 'Codex Skills', shared: '共用 Skills 庫', builtin: 'Zook 內建',
     'claude-code': 'Claude Code 插件'};
   const ICON_COLORS = ['#2585f6', '#13bf78', '#f59a0a', '#ed2f9b', '#14b8a6', '#ff6d0c', '#9254ff', '#a47545'];
   function itemIcon(name, icon) {
@@ -619,6 +619,8 @@
     const t = state.mcpTests[i.id];
     if (i.id === 'builtin:workspace') return ['ok', '可用'];
     if (i.gmail && i.needsSetup) return ['', '尚未設定'];
+    if (i.needsKey) return ['', '需要金鑰'];
+    if (i.copied) return ['', '已複製到 Zook'];
     if (t?.status === 'ready') return ['ok', `已連線 · ${t.toolCount} 個工具`];
     if (t?.status === 'error') return ['bad', '連線失敗'];
     return ['', '尚未測試連線'];
@@ -628,15 +630,18 @@
     if (tab === 'skills') {
       const off = new Set(settings.disabledSkills || []);
       return (inv.skills || []).map(i => ({id: i.id, icon: i.icon, name: i.name, description: i.description || '', group: sourceName(i.plugin || i.source),
-        meta: sourceName(i.plugin || i.source), on: !off.has(i.id), toggle: 'skill', toggleLabel: off.has(i.id) ? '開放給所有 Bot' : '所有 Bot 共用中'}));
+        meta: i.imported ? '改用 Zook 裡的那一份' : i.source === 'zook' && SOURCE_NAMES[i.origin] ? '匯入自 ' + SOURCE_NAMES[i.origin] : i.source === 'zook' && i.origin === 'pack' ? '來自設定包' : sourceName(i.plugin || i.source),
+        on: !i.imported && !off.has(i.id), toggle: 'skill', toggleLabel: off.has(i.id) ? '開放給所有 Bot' : '所有 Bot 共用中',
+        moved: i.imported ? '已匯入' : '', importable: i.source !== 'zook' && !i.imported, removable: !!i.removable, canUpdate: !!i.canUpdate, note: (i.notes || []).join(' ')}));
     }
     if (tab === 'mcp') {
       return (inv.mcp || []).map(i => {
         const on = (settings.sharedMcp || []).includes(i.id);
         const [cls, label] = mcpStatus(i);
-        const description = i.id === 'builtin:workspace' ? '讓 Bot 在自己的工作區讀寫檔案。寫入前會依權限設定請你核准。' : i.gmail && i.needsSetup ? '讓 Bot 搜尋、讀取你的 Gmail，建立草稿和寄信。用 Google 的應用程式密碼連接，寄信前一定會先請你核准。' : (t => t?.status === 'error' ? '連線失敗：' + t.error : t?.status === 'ready' ? '可用工具：' + (t.tools || []).slice(0, 8).map(x => x.name.replace(/_/g, ' ')).join('、') : i.gmail ? `已連接 ${i.address}。Bot 可以搜尋、讀信、建立草稿和寄信；寄信前一定會先請你核准。` : i.editable ? (i.config.command || i.config.url) : sourceName(i.plugin || i.source, 'mcp') + '。按「測試連線」確認是否可以使用。')(state.mcpTests[i.id]);
-        return {id: i.id, icon: i.icon, name: i.id === 'builtin:workspace' ? 'Bot 工作區' : i.name, description, group: sourceName(i.plugin || i.source, 'mcp'), meta: on ? '所有 Bot 共用中' : '未開啟',
-          on, toggle: 'mcp', toggleLabel: on ? '停用這個連接器' : '開放給所有 Bot', status: [cls, label], test: i.id !== 'builtin:workspace' && !i.needsSetup, editable: !!i.editable, gmail: !!i.gmail, needsSetup: !!i.needsSetup};
+        const description = i.id === 'builtin:workspace' ? '讓 Bot 在自己的工作區讀寫檔案。寫入前會依權限設定請你核准。' : i.needsKey ? '這個連接器是從設定包匯入的，金鑰沒有跟著過來。按「貼上金鑰」完成設定。' : i.copied ? 'Zook 已經有自己的一份，Bot 用的是 Zook 那一份。' : i.gmail && i.needsSetup ? '讓 Bot 搜尋、讀取你的 Gmail，建立草稿和寄信。用 Google 的應用程式密碼連接，寄信前一定會先請你核准。' : (t => t?.status === 'error' ? '連線失敗：' + t.error : t?.status === 'ready' ? '可用工具：' + (t.tools || []).slice(0, 8).map(x => x.name.replace(/_/g, ' ')).join('、') : i.gmail ? `已連接 ${i.address}。Bot 可以搜尋、讀信、建立草稿和寄信；寄信前一定會先請你核准。` : i.editable ? (i.config.command || i.config.url) : sourceName(i.plugin || i.source, 'mcp') + '。按「測試連線」確認是否可以使用。')(state.mcpTests[i.id]);
+        return {id: i.id, icon: i.icon, name: i.id === 'builtin:workspace' ? 'Bot 工作區' : i.name, description, group: sourceName(i.plugin || i.source, 'mcp'), meta: i.copied ? '來源設定仍保留' : i.needsKey ? '等待金鑰' : on ? '所有 Bot 共用中' : '未開啟',
+          on: on && !i.copied && !i.needsKey, toggle: 'mcp', toggleLabel: on ? '停用這個連接器' : '開放給所有 Bot', status: i.copied ? null : [cls, label], test: i.id !== 'builtin:workspace' && !i.needsSetup && !i.needsKey && !i.copied, editable: !!i.editable, gmail: !!i.gmail, needsSetup: !!i.needsSetup,
+          needsKey: !!i.needsKey, moved: i.copied ? '已複製' : '', copyable: !!i.copyable};
       });
     }
     return (inv.plugins || []).map(pl => ({id: pl.id, icon: pl.icon, name: pl.displayName, description: pl.description || '', group: pl.sourceName,
@@ -647,15 +652,15 @@
     if (!state.integrations) return '<div class="blank">正在讀取…</div>';
     const q = (state.dirQuery || '').toLowerCase(), filter = state.dirFilter || 'all';
     const items = directoryItems(tab).filter(i => (!q || (i.name + ' ' + i.description + ' ' + i.group).toLowerCase().includes(q)) && (filter === 'all' || (filter === 'on') === i.on));
-    const groups = [...new Set(items.map(i => i.group))];
-    const counts = {skills: (state.integrations.skills || []).length, mcp: (state.integrations.mcp || []).length, plugins: (state.integrations.plugins || []).length};
+    const groups = [...new Set(items.map(i => i.group))].sort((a, b) => (b === SOURCE_NAMES.zook) - (a === SOURCE_NAMES.zook));
+    const counts = {skills: (state.integrations.skills || []).filter(i => !i.imported).length, mcp: (state.integrations.mcp || []).filter(i => !i.copied).length, plugins: (state.integrations.plugins || []).length};
     const tabs = [['skills', 'Skills'], ['mcp', '連接器'], ['plugins', '插件']];
-    const intro = {skills: 'Skills 由所有 Bot 共用。開啟的 Skill 每個 Bot 都能使用。', mcp: '連接器讓 Bot 使用外部服務或工具，開啟後所有 Bot 共用。開得越多，回覆越慢；連不上的建議關閉。', plugins: '插件會一次帶來一組 Skills 和連接器，來源是 Claude Code。'}[tab];
+    const intro = {skills: 'Skills 由所有 Bot 共用。開啟的 Skill 每個 Bot 都能使用。匯入到 Zook 之後，就算移除原本的工具也還在；同名的只會保留一份。', mcp: '連接器讓 Bot 使用外部服務或工具，開啟後所有 Bot 共用。開得越多，回覆越慢；連不上的建議關閉。', plugins: '插件會一次帶來一組 Skills 和連接器，來源是 Claude Code。'}[tab];
     const card = i => {
       const expanded = state.dirExpanded?.[i.id];
-      return `<article class="dir-card ${expanded ? 'expanded' : ''}">${itemIcon(i.name, i.icon)}<div class="dir-body"><div class="dir-title"><h3 title="${esc(i.name)}">${esc(i.name)}</h3>${i.needsSetup ? '<button class="primary small-btn" data-action="gmail-setup">設定</button>' : toggle(`data-dir-switch data-kind="${i.toggle}" data-id="${esc(i.id)}" title="${esc(i.toggleLabel)}"`, i.on, i.toggleLabel)}</div><p class="dir-desc">${esc(i.description || '沒有說明。')}</p>${i.description.length > 70 ? `<button class="link dir-more" data-action="dir-expand" data-id="${esc(i.id)}">${expanded ? '收合' : '展開'}</button>` : ''}<div class="dir-meta">${i.status ? `<span class="dir-status ${i.status[0]}">${esc(i.status[1])}</span>` : ''}<span>${esc(i.meta)}</span>${i.test ? `<button class="link" data-action="test-mcp" data-id="${esc(i.id)}">測試連線</button>` : ''}${i.gmail && !i.needsSetup ? '<button class="link" data-action="gmail-setup">重新設定</button><button class="link danger" data-action="gmail-remove">中斷連接</button>' : ''}${i.editable ? `<button class="link" data-action="connector-edit" data-id="${esc(i.id)}">編輯</button><button class="link danger" data-action="connector-delete" data-id="${esc(i.id)}" data-name="${esc(i.name)}">移除</button>` : ''}</div>${i.note ? `<p class="dir-note">${esc(i.note)}</p>` : ''}</div></article>`;
+      return `<article class="dir-card ${expanded ? 'expanded' : ''}">${itemIcon(i.name, i.icon)}<div class="dir-body"><div class="dir-title"><h3 title="${esc(i.name)}">${esc(i.name)}</h3>${i.needsSetup ? '<button class="primary small-btn" data-action="gmail-setup">設定</button>' : i.needsKey ? `<button class="primary small-btn" data-action="connector-edit" data-id="${esc(i.id)}">貼上金鑰</button>` : i.moved ? `<span class="dir-status">${i.moved}</span>` : toggle(`data-dir-switch data-kind="${i.toggle}" data-id="${esc(i.id)}" title="${esc(i.toggleLabel)}"`, i.on, i.toggleLabel)}</div><p class="dir-desc">${esc(i.description || '沒有說明。')}</p>${i.description.length > 70 ? `<button class="link dir-more" data-action="dir-expand" data-id="${esc(i.id)}">${expanded ? '收合' : '展開'}</button>` : ''}<div class="dir-meta">${i.status ? `<span class="dir-status ${i.status[0]}">${esc(i.status[1])}</span>` : ''}<span>${esc(i.meta)}</span>${i.test ? `<button class="link" data-action="test-mcp" data-id="${esc(i.id)}">測試連線</button>` : ''}${i.gmail && !i.needsSetup ? '<button class="link" data-action="gmail-setup">重新設定</button><button class="link danger" data-action="gmail-remove">中斷連接</button>' : ''}${i.copyable ? `<button class="link" data-action="connector-copy" data-id="${esc(i.id)}">複製到 Zook</button>` : ''}${i.canUpdate ? `<button class="link" data-action="skill-update" data-id="${esc(i.id)}" title="原本的來源有更新">從原來源更新</button>` : ''}${i.removable ? `<button class="link danger" data-action="skill-remove" data-id="${esc(i.id)}" data-name="${esc(i.name)}">移除</button>` : ''}${i.editable ? `<button class="link" data-action="connector-edit" data-id="${esc(i.id)}">編輯</button><button class="link danger" data-action="connector-delete" data-id="${esc(i.id)}" data-name="${esc(i.name)}">移除</button>` : ''}</div>${i.note ? `<p class="dir-note">${esc(i.note)}</p>` : ''}</div></article>`;
     };
-    return `<div class="dir-bar"><div class="dir-tabs">${tabs.map(([id, label]) => `<button class="${tab === id ? 'active' : ''}" data-action="dir-tab" data-id="${id}">${label}<small>${counts[id]}</small></button>`).join('')}</div><div class="dir-filters">${dropdown('dirFilter', filter, [{id: 'all', name: '全部'}, {id: 'on', name: '已啟用'}, {id: 'off', name: '未啟用'}], 'data-dir-filter')}</div><input id="dir-search" class="dir-search" placeholder="搜尋" aria-label="搜尋" value="${esc(state.dirQuery || '')}"></div><p class="muted dir-intro">${intro}</p>${tab === 'mcp' ? '<div class="dir-add"><button class="primary" data-action="connector-add">＋ 新增連接器</button><span class="muted small">直接加在 Zook 裡，不需要先在 Codex 或 Claude 設定。</span></div>' : ''}${groups.length ? groups.map(g => { const closed = (state.data.settings.dirCollapsed || []).includes(tab + ':' + g) && !q; return `<section class="dir-section"><h2><button class="dir-fold" data-action="dir-collapse" data-id="${esc(tab + ':' + g)}" aria-expanded="${!closed}"><span>${esc(g)}</span><small>${items.filter(i => i.group === g).length}</small><span class="dir-chev" aria-hidden="true">${closed ? '⌄' : '⌃'}</span></button></h2>${closed ? '' : `<div class="dir-grid">${items.filter(i => i.group === g).map(card).join('')}</div>`}</section>`; }).join('') : '<div class="blank">沒有符合的項目。</div>'}`;
+    return `<div class="dir-bar"><div class="dir-tabs">${tabs.map(([id, label]) => `<button class="${tab === id ? 'active' : ''}" data-action="dir-tab" data-id="${id}">${label}<small>${counts[id]}</small></button>`).join('')}</div><div class="dir-filters">${dropdown('dirFilter', filter, [{id: 'all', name: '全部'}, {id: 'on', name: '已啟用'}, {id: 'off', name: '未啟用'}], 'data-dir-filter')}</div><input id="dir-search" class="dir-search" placeholder="搜尋" aria-label="搜尋" value="${esc(state.dirQuery || '')}"></div><p class="muted dir-intro">${intro}</p>${tab === 'mcp' ? '<div class="dir-add"><button class="primary" data-action="connector-add">＋ 新增連接器</button><span class="muted small">直接加在 Zook 裡，不需要先在 Codex 或 Claude 設定。</span></div>' : ''}${tab === 'plugins' ? '' : `<div class="dir-add"><button class="secondary" data-action="pack-export">匯出設定包</button><button class="secondary" data-action="pack-import">匯入設定包</button><span class="muted small">把 Zook 自己的 Skills 和連接器搬到另一台 Mac。金鑰不會放進設定包。</span></div>`}${groups.length ? groups.map(g => { const closed = (state.data.settings.dirCollapsed || []).includes(tab + ':' + g) && !q; return `<section class="dir-section"><h2><button class="dir-fold" data-action="dir-collapse" data-id="${esc(tab + ':' + g)}" aria-expanded="${!closed}"><span>${esc(g)}</span><small>${items.filter(i => i.group === g).length}</small><span class="dir-chev" aria-hidden="true">${closed ? '⌄' : '⌃'}</span></button>${tab === 'skills' && items.some(i => i.group === g && i.importable) ? `<button class="link dir-import" data-action="skills-import" data-id="${esc(g)}">匯入到 Zook</button>` : ''}</h2>${closed ? '' : `<div class="dir-grid">${items.filter(i => i.group === g).map(card).join('')}</div>`}</section>`; }).join('') : '<div class="blank">沒有符合的項目。</div>'}`;
   }
   // Built-in Gmail: an address and a Google app password. The password goes to the Keychain.
   function gmailModal() {
@@ -667,7 +672,7 @@
     const c = item?.config || {}, http = item ? item.transport === 'http' : false;
     const types = [{id: 'stdio', name: '本機指令', hint: '在這台 Mac 上執行的程式，例如用 npx 或 uvx 啟動的 MCP 伺服器'}, {id: 'http', name: '網址', hint: '遠端的 MCP 伺服器（Streamable HTTP）'}];
     const kept = c.hasSecret ? '已儲存。留空表示不變更' : '';
-    modal(item ? '編輯連接器' : '新增連接器', `<form id="connector-form" data-id="${esc(item ? item.id.split(':')[1] : '')}"><div class="modal-body"><label class="field">名稱<input name="name" required maxlength="80" placeholder="例如：GitHub" value="${esc(item?.name || '')}"></label><div class="setting-list in-form">${settingRow('類型', '連接器在哪裡執行', dropdown('transport', http ? 'http' : 'stdio', types))}</div><div data-for="stdio" ${http ? 'hidden' : ''}><label class="field">啟動指令<input name="command" spellcheck="false" placeholder="例如：npx -y @modelcontextprotocol/server-github" value="${esc(c.command || '')}"><small class="muted">和你在終端機輸入的一樣。Zook 會在需要時啟動它。</small></label><label class="field">環境變數（選填，每行一個）<textarea name="env" rows="3" spellcheck="false" placeholder="NAME=value">${esc(Object.entries(c.env || {}).map(([k, v]) => k + '=' + v).join('\n'))}</textarea></label><div class="form-grid"><label class="field">金鑰的環境變數名稱（選填）<input name="secretName" spellcheck="false" placeholder="例如：GITHUB_TOKEN" value="${esc(http ? '' : c.secretName || '')}"></label><label class="field">金鑰<input name="secretStdio" type="password" autocomplete="off" spellcheck="false" placeholder="${esc(http ? '' : kept)}"></label></div></div><div data-for="http" ${http ? '' : 'hidden'}><label class="field">網址<input name="url" spellcheck="false" placeholder="https://example.com/mcp" value="${esc(c.url || '')}"></label><label class="field">存取權杖（選填）<input name="secretHttp" type="password" autocomplete="off" spellcheck="false" placeholder="${esc(http ? kept : '')}"><small class="muted">會以 Bearer 權杖送給這個網址。</small></label></div><p class="muted small">金鑰和權杖只存進 macOS 鑰匙圈，不會寫進 Zook 的資料檔，也不會傳到手機。${c.hasSecret ? ' <label class="inline-check"><input type="checkbox" name="clearSecret"> 移除已儲存的金鑰</label>' : ''}</p></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">${item ? '儲存' : '新增'}</button></div></form>`);
+    modal(item ? '編輯連接器' : '新增連接器', `<form id="connector-form" data-id="${esc(item ? item.id.split(':')[1] : '')}"><div class="modal-body"><label class="field">名稱<input name="name" required maxlength="80" placeholder="例如：GitHub" value="${esc(item?.name || '')}"></label><div class="setting-list in-form">${settingRow('類型', '連接器在哪裡執行', dropdown('transport', http ? 'http' : 'stdio', types))}</div><div data-for="stdio" ${http ? 'hidden' : ''}><label class="field">啟動指令<input name="command" spellcheck="false" placeholder="例如：npx -y @modelcontextprotocol/server-github" value="${esc(c.command || '')}"><small class="muted">和你在終端機輸入的一樣。Zook 會在需要時啟動它。</small></label><label class="field">環境變數（選填，每行一個）<textarea name="env" rows="3" spellcheck="false" placeholder="NAME=value">${esc(Object.entries(c.env || {}).map(([k, v]) => k + '=' + v).join('\n'))}</textarea></label><div class="form-grid"><label class="field">金鑰的環境變數名稱（選填）<input name="secretName" spellcheck="false" placeholder="例如：GITHUB_TOKEN" value="${esc(http ? '' : c.secretName || '')}"></label><label class="field">金鑰<input name="secretStdio" type="password" autocomplete="off" spellcheck="false" placeholder="${esc(http ? '' : kept)}"></label></div>${(c.moreSecrets || []).map(m => `<label class="field">金鑰 ${esc(m.name)}<input name="more:${esc(m.name)}" type="password" autocomplete="off" spellcheck="false" placeholder="${m.saved ? '已儲存。留空表示不變更' : '請貼上這把金鑰'}"></label>`).join('')}</div><div data-for="http" ${http ? '' : 'hidden'}><label class="field">網址<input name="url" spellcheck="false" placeholder="https://example.com/mcp" value="${esc(c.url || '')}"></label><label class="field">存取權杖（選填）<input name="secretHttp" type="password" autocomplete="off" spellcheck="false" placeholder="${esc(http ? kept : '')}"><small class="muted">會以 Bearer 權杖送給這個網址。</small></label></div><p class="muted small">金鑰和權杖只存進 macOS 鑰匙圈，不會寫進 Zook 的資料檔，也不會傳到手機。${c.hasSecret ? ' <label class="inline-check"><input type="checkbox" name="clearSecret"> 移除已儲存的金鑰</label>' : ''}</p></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">${item ? '儲存' : '新增'}</button></div></form>`);
   }
   function mcpBotsModal(id) {
     const item = (state.integrations?.mcp || []).find(i => i.id === id);
@@ -1395,6 +1400,63 @@
         case 'connector-add':
           connectorModal();
           break;
+        case 'skills-import': {
+          const ids = directoryItems('skills').filter(i => i.group === id && i.importable).map(i => i.id);
+          el.disabled = true; el.textContent = '匯入中…';
+          const r = await post('skills/import', {ids});
+          state.integrations = await api('integrations'); await refresh();
+          toast([r.imported.length ? `已匯入 ${r.imported.length} 個 Skill` : '沒有新的 Skill 可以匯入', r.skipped.length ? `${r.skipped.length} 個同名的只保留一份` : '', r.failed.length ? `${r.failed.length} 個匯入失敗：${r.failed[0].error}` : ''].filter(Boolean).join('，'));
+          break;
+        }
+        case 'skill-update':
+          el.disabled = true;
+          await post('skills/' + encodeURIComponent(id.split(':')[1]) + '/update');
+          state.integrations = await api('integrations'); render(true); toast('已更新成原來源的最新內容');
+          break;
+        case 'skill-remove':
+          if (!confirm(`從 Zook 移除 Skill「${el.dataset.name}」？原本工具裡的那一份不受影響。`)) break;
+          await api('skills/' + encodeURIComponent(id.split(':')[1]), {method: 'DELETE'});
+          state.integrations = await api('integrations'); await refresh(); toast('已從 Zook 移除');
+          break;
+        case 'connector-copy': {
+          el.disabled = true;
+          const made = await post('connector-copy', {id});
+          state.integrations = await api('integrations'); await refresh();
+          try { state.mcpTests[made.id] = await post('mcp/' + encodeURIComponent(made.id) + '/test'); }
+          catch (error) { state.mcpTests[made.id] = {status: 'error', error: error.message}; }
+          render(true);
+          toast(state.mcpTests[made.id].status === 'ready' ? '已複製到 Zook，連線正常' : '已複製到 Zook，但連不上。如果它需要登入，授權還留在原本的工具裡');
+          break;
+        }
+        case 'pack-export': {
+          el.disabled = true;
+          const pack = await api('pack');
+          el.disabled = false;
+          if (!pack.skills && !pack.connectors) { toast('還沒有可以匯出的內容。先把 Skill 匯入 Zook，或把連接器複製到 Zook'); break; }
+          const raw = atob(pack.data), bytes = new Uint8Array(raw.length);
+          for (let n = 0; n < raw.length; n++) bytes[n] = raw.charCodeAt(n);
+          download(bytes, pack.name, 'application/zip');
+          toast(`已匯出 ${pack.skills} 個 Skill、${pack.connectors} 個連接器`);
+          break;
+        }
+        case 'pack-import': {
+          const input = document.createElement('input');
+          input.type = 'file'; input.accept = '.zookpack,.zip';
+          input.onchange = async () => {
+            const file = input.files[0];
+            if (!file) return;
+            if (file.size > 150 * 1024 * 1024) { toast('設定包超過 150 MB，無法匯入'); return; }
+            if (!confirm(`匯入「${file.name}」？\n\n設定包裡的 Skill 和連接器可以在這台 Mac 上執行程式，請只匯入你自己匯出的檔案。`)) return;
+            try {
+              const text = await new Promise((done, fail) => { const reader = new FileReader(); reader.onload = () => done(reader.result); reader.onerror = fail; reader.readAsDataURL(file); });
+              const r = await post('pack', {data: String(text).split(',')[1] || ''});
+              state.integrations = await api('integrations'); await refresh();
+              toast([`已匯入 ${r.skills.length} 個 Skill、${r.connectors.length} 個連接器`, r.skipped.length ? `${r.skipped.length} 個已經有或無法匯入，已略過` : '', r.needKeys.length ? `${r.needKeys.length} 個連接器需要重新貼上金鑰` : ''].filter(Boolean).join('，'));
+            } catch (error) { toast(error.message || '匯入失敗'); }
+          };
+          input.click();
+          break;
+        }
         case 'connector-edit':
           connectorModal((state.integrations?.mcp || []).find(i => i.id === id));
           break;
@@ -1693,6 +1755,9 @@
         const body = {name: d.get('name').trim(), transport, command: d.get('command').trim(), url: d.get('url').trim(), env: transport === 'http' ? {} : env, secretName: transport === 'http' ? '' : d.get('secretName').trim()};
         if (secret) body.secret = secret;
         if (d.has('clearSecret')) body.clearSecret = true;
+        const more = {};
+        for (const [k, v] of d.entries()) if (k.startsWith('more:') && String(v).trim()) more[k.slice(5)] = String(v).trim();
+        if (Object.keys(more).length) body.moreSecrets = more;
         const made = await post(id ? 'connectors/' + encodeURIComponent(id) : 'connectors', body, id ? 'PATCH' : 'POST');
         closeModal(); delete state.mcpTests[made.id];
         state.integrations = await api('integrations'); await refresh();

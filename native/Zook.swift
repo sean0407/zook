@@ -124,7 +124,7 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
     @objc private func showAbout() {
         let alert = NSAlert()
         alert.messageText = "Zook"
-        alert.informativeText = "0.4.6\n你的本機 AI 工作空間\nBot 對話・知識庫・用量與工具管理"
+        alert.informativeText = "0.5.0\n你的本機 AI 工作空間\nBot 對話・知識庫・用量與工具管理"
         alert.runModal()
     }
 
@@ -222,6 +222,13 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
     func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
         let alert = NSAlert(); alert.messageText = "Zook"; alert.informativeText = message
         alert.beginSheetModal(for: window) { _ in completionHandler() }
+    }
+    // File pickers on the page (importing a settings pack) open the standard macOS panel.
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        panel.canChooseDirectories = false
+        panel.beginSheetModal(for: window) { completionHandler($0 == .OK ? panel.urls : nil) }
     }
     func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
         let alert = NSAlert(); alert.messageText = "Zook"; alert.informativeText = message

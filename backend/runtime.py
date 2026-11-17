@@ -717,7 +717,7 @@ class RuntimeSession:
                 result = _content(self.extras[name][1](copy.deepcopy(frozen)))
             elif name == 'zook_read_skill':
                 instructions = self._read(Path(self.skills[source]['path']))
-                if source.startswith('skill-shared:'):
+                if source.startswith('skill-shared:') or self.skills[source].get('shared'):  # the shared library's rules travel with its Skills
                     preface = []
                     for rule in self.inventory.get('_private', {}).get('shared_rules', []):
                         try:

@@ -14,6 +14,7 @@ The layout is inspired by Grok Bot. The implementation is independent and uses n
 - **Several accounts per model**: add more sign-ins or API keys for the same CLI and choose one for each Bot. Each sign-in stays in its own folder managed by the CLI; API keys are kept in the macOS Keychain.
 - **Access scope per Bot**: the whole Mac (default), one folder, or only Zook's workspace.
 - **Shared Skills, connectors and plugins**: configured once and available to every Bot. Connectors (MCP servers) can be added in Zook itself, as a local command or a web address, or picked up from your Codex and Claude settings.
+- **Zook's own copies**: import Skills from Claude, Codex or a plugin into Zook (same-named ones are kept once), copy connectors over with their keys moved to the Keychain, and see which Skills mention a connector or tool Zook does not have. Export everything as one settings pack to set up another Mac; keys are never included.
 - **Built-in Gmail**: search and read mail, save drafts and send, using a Google app password kept in the Keychain. Sending always asks for your approval.
 - **Usage**: provider quotas and token use per Bot.
 - **Updates**: Zook checks this repository's releases and installs a new version with one click, after verifying its checksum and signature.

@@ -85,7 +85,7 @@ class Store:
         self.data.setdefault('groups', []); self.data.setdefault('memories', []); self.data.setdefault('quota', {})
         self.data.setdefault('customProviders', [])
         _active['data'] = self.data; _active['dir'] = self.dir
-        self.data.setdefault('accounts', []); self.data.setdefault('connectors', [])
+        self.data.setdefault('accounts', []); self.data.setdefault('connectors', []); self.data.setdefault('skills', [])
         self.data.setdefault('settings', {}).setdefault('disabledSkills', [])
         self.data['settings'].setdefault('disabledPlugins', [])
         self.data['settings'].setdefault('fallbacks', [])
@@ -239,12 +239,12 @@ def memory_block(store, bot):
 
 def shared_skill_ids(store, inventory):
     disabled = set(store.data['settings'].get('disabledSkills') or [])
-    return [x['id'] for x in inventory['skills'] if x['id'] not in disabled]
+    return [x['id'] for x in inventory['skills'] if x['id'] not in disabled and not x.get('imported')]
 
 
 def shared_mcp_ids(store, inventory):
     on = set(store.data['settings'].get('sharedMcp') or [])
-    return [x['id'] for x in inventory['mcp'] if x['id'] in on and not x.get('needsSetup')]
+    return [x['id'] for x in inventory['mcp'] if x['id'] in on and not x.get('needsSetup') and not x.get('needsKey') and not x.get('copied')]
 
 
 def arrange_bots(store, body):
@@ -1012,7 +1012,8 @@ def connector_fields(body, existing=None):
     name = body.get('name', old.get('name'))
     if not isinstance(name, str) or not name.strip() or len(name) > 80: raise ValueError('請輸入連接器名稱。')
     transport = body.get('transport', old.get('transport'))
-    record = dict(id=old.get('id') or ID(), name=name.strip(), transport=transport, command='', url='', env={}, secretName='', secretId=old.get('secretId', ''))
+    record = dict(id=old.get('id') or ID(), name=name.strip(), transport=transport, command='', url='', env={}, secretName='', secretId=old.get('secretId', ''),
+                  headers=dict(old.get('headers') or {}), moreSecrets=dict(old.get('moreSecrets') or {}), origin=old.get('origin', ''))
     if transport == 'stdio':
         command = body.get('command', old.get('command'))
         if not isinstance(command, str) or not command.strip() or len(command) > 2000: raise ValueError('請輸入啟動連接器的指令。')
@@ -1050,7 +1051,271 @@ def connector_fields(body, existing=None):
 def connector_view(record):
     """What the interface may know about a Zook connector: everything except the secret itself."""
     return dict(command=record.get('command', ''), url=record.get('url', ''), env=record.get('env') or {},
-                secretName=record.get('secretName', ''), hasSecret=bool(record.get('secretId')))
+                secretName=record.get('secretName', ''), hasSecret=bool(record.get('secretId')),
+                moreSecrets=[dict(name=k, saved=bool(v)) for k, v in sorted((record.get('moreSecrets') or {}).items())])
+
+
+# ---- Zook's own copies of Skills and connectors ----------------------------------------------------
+SKILL_SKIP = {'.git', 'node_modules', '__pycache__', '.venv', '.DS_Store'}
+SKILL_BYTES = 20 * 1024 * 1024
+SKILL_FILES = 2000
+PACK_BYTES = 150 * 1024 * 1024
+ZOOK_SKILL = 'skill-zook:'
+
+
+def same_name(value): return re.sub(r'\s+', ' ', str(value or '')).strip().lower()
+
+
+def skills_home(store):
+    path = store.dir / 'skills'; path.mkdir(exist_ok=True, mode=0o700)
+    return path
+
+
+def skill_files(root):
+    """(relative path, file) for every regular file in a Skill folder. Links and build folders are left out."""
+    root = pathlib.Path(root); found = []; total = 0
+    for folder, dirs, files in os.walk(str(root)):
+        dirs[:] = sorted(d for d in dirs if d not in SKILL_SKIP and not os.path.islink(os.path.join(folder, d)))
+        for name in sorted(files):
+            path = pathlib.Path(folder) / name
+            if name in SKILL_SKIP or path.is_symlink() or not path.is_file(): continue
+            total += path.stat().st_size; found.append((str(path.relative_to(root)), path))
+            if len(found) > SKILL_FILES or total > SKILL_BYTES: raise ValueError('這個 Skill 的資料夾太大（超過 20 MB 或 2000 個檔案），無法匯入。')
+    return found
+
+
+def skill_stamp(root):
+    """Changes whenever a file in the folder is added, removed or edited. Cheap: file contents are not read."""
+    h = hashlib.sha256()
+    try:
+        for relative, path in skill_files(root):
+            info = path.stat(); h.update(('%s\0%d\0%d\n' % (relative, info.st_size, info.st_mtime_ns)).encode())
+    except (OSError, ValueError): return ''
+    return h.hexdigest()
+
+
+def skill_copy(source, target):
+    files = skill_files(source)
+    if not any(relative == 'SKILL.md' for relative, _ in files): raise ValueError('這個資料夾裡沒有 SKILL.md。')
+    temp = pathlib.Path(tempfile.mkdtemp(prefix='.incoming-', dir=str(target.parent)))
+    try:
+        for relative, path in files:
+            out = temp / relative; out.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(path), str(out))
+        if target.exists(): shutil.rmtree(str(target))
+        os.replace(str(temp), str(target))
+    except BaseException:
+        shutil.rmtree(str(temp), ignore_errors=True); raise
+
+
+def skill_folder(name, taken):
+    base = re.sub(r'[^A-Za-z0-9_-]+', '-', name).strip('-')[:60] or 'skill'
+    folder, n = base, 2
+    while folder.lower() in taken: folder = '%s-%d' % (base, n); n += 1
+    return folder
+
+
+def skill_title(root, fallback):
+    try: text = (root / 'SKILL.md').read_text(errors='replace')[:128 * 1024]
+    except OSError: return fallback, ''
+    name, description = runtime_module()._frontmatter(text)
+    return name or fallback, description
+
+
+def skills_import(store, inventory, ids):
+    """Copy Skills from other tools into Zook's own folder. A name Zook already has is not copied twice."""
+    home = skills_home(store); done, skipped, failed = [], [], []
+    for ident in ids:
+        entry = next((x for x in inventory['skills'] if x['id'] == ident), None); private = inventory['_private']['skills'].get(ident)
+        if not entry or not private or entry.get('source') == 'zook': continue
+        with store.lock: have = {same_name(x['name']) for x in store.data['skills']}; taken = {x['folder'].lower() for x in store.data['skills']}
+        if same_name(entry['name']) in have: skipped.append(entry['name']); continue
+        folder = skill_folder(entry['name'], taken)
+        try: skill_copy(private['root'], home / folder)
+        except ValueError as exc: failed.append(dict(name=entry['name'], error=str(exc))); continue
+        except OSError: failed.append(dict(name=entry['name'], error='讀不到這個 Skill 的檔案。')); continue
+        record = dict(id=ID(), name=entry['name'], folder=folder, origin=entry.get('plugin') or entry['source'], originPath=private['root'], stamp=skill_stamp(private['root']))
+        with store.lock:
+            store.data['skills'].append(record)
+            off = store.data['settings']['disabledSkills']
+            if ident in off: off.append(ZOOK_SKILL + record['id'])  # a Skill you had switched off stays off
+            store.save()
+        done.append(entry['name'])
+    return dict(imported=done, skipped=skipped, failed=failed)
+
+
+CLI_ONLY_TOOLS = (('Claude', ('AskUserQuestion', 'TodoWrite', 'NotebookEdit', 'ExitPlanMode', 'claude-in-chrome', 'computer-use')),
+                  ('Codex', ('apply_patch',)))
+_notes_cache = {}
+
+
+def skill_needs(path):
+    """Connector names and single-CLI tools a Skill's instructions mention. Read once per file version."""
+    try: info = os.stat(path); key = (path, info.st_mtime_ns, info.st_size)
+    except OSError: return [], []
+    if key not in _notes_cache:
+        try:
+            with open(path, encoding='utf-8', errors='replace') as f: text = f.read(128 * 1024)
+        except OSError: text = ''
+        servers = []
+        for server in dict.fromkeys(re.findall(r'mcp__([A-Za-z0-9_.-]+?)__[A-Za-z]', text)):
+            label = re.sub(r'^(claude_ai_|plugin_[A-Za-z0-9-]+_)', '', server).replace('_', ' ').strip()
+            if label and not re.fullmatch(r'[0-9a-f-]{20,}', server): servers.append(label)
+        tools = [(cli, [t for t in names if re.search(r'(?<![A-Za-z0-9_-])%s(?![A-Za-z0-9_-])' % re.escape(t), text)]) for cli, names in CLI_ONLY_TOOLS]
+        if len(_notes_cache) > 4000: _notes_cache.clear()
+        _notes_cache[key] = (list(dict.fromkeys(servers))[:12], [(cli, found) for cli, found in tools if found])
+    return _notes_cache[key]
+
+
+def skill_notes(path, connectors):
+    """What a Skill asks for that Zook may not have. `connectors` is [(name in lower-case letters and digits, switched on)]."""
+    servers, tools = skill_needs(path); missing, off, notes = [], [], []
+    for label in servers:
+        key = re.sub(r'[^a-z0-9]', '', label.lower())
+        hits = [on for name, on in connectors if len(key) >= 3 and len(name) >= 3 and (key in name or name in key)]
+        if not hits: missing.append(label)
+        elif not any(hits): off.append(label)
+    if missing: notes.append('會用到連接器' + ''.join('「%s」' % x for x in missing[:6]) + '，Zook 裡沒有。')
+    if off: notes.append('會用到的連接器' + ''.join('「%s」' % x for x in off[:6]) + '還沒開啟。')
+    for cli, found in tools: notes.append('提到 %s 專屬的工具（%s），其他模型的 Bot 可能無法照做。' % (cli, '、'.join(found)))
+    return notes
+
+
+def connector_from_config(name, config):
+    """A connector read from another tool's settings, as a Zook connector. Returns (record, {name: secret value})."""
+    transport, found, fields = config.get('transport'), {}, dict(name=name, transport=config.get('transport'), env={})
+    headers = {}
+    if transport == 'stdio':
+        command, args = config.get('command'), config.get('args') or []
+        if not isinstance(command, str) or not command or not isinstance(args, list) or any(not isinstance(a, str) for a in args): raise ValueError('這個連接器的指令設定不完整，無法複製。')
+        fields['command'] = ' '.join(shlex.quote(x) for x in [command] + args)
+        env = config.get('env') if isinstance(config.get('env'), dict) else {}
+        for key, value in env.items():
+            if not isinstance(key, str) or not isinstance(value, str): raise ValueError('這個連接器的環境變數格式 Zook 讀不懂，無法複製。')
+            if value and runtime_module().SECRET_KEY.search(key): found[key] = value
+            else: fields['env'][key] = value
+    elif transport == 'http':
+        fields['url'] = config.get('url')
+        for source in ('headers', 'http_headers'):
+            if isinstance(config.get(source), dict): headers.update(config[source])
+        for key, variable in (config.get('env_http_headers') or {}).items():
+            if os.environ.get(variable): headers[key] = os.environ[variable]
+        if config.get('bearer_token_env_var') and os.environ.get(config['bearer_token_env_var']): headers['Authorization'] = 'Bearer ' + os.environ[config['bearer_token_env_var']]
+        for key, value in list(headers.items()):
+            if not isinstance(key, str) or not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9-]{1,80}', key) or len(value) > 2000 or '\n' in value or '\r' in value:
+                raise ValueError('這個連接器的標頭設定 Zook 讀不懂，無法複製。')
+            if key.lower() == 'authorization' and value.startswith('Bearer '): found['Authorization'] = value[7:].strip(); del headers[key]
+            elif key.lower() == 'authorization' or runtime_module().SECRET_KEY.search(key): raise ValueError('這個連接器用的驗證方式 Zook 還不支援，無法複製。請改用「新增連接器」。')
+    else: raise ValueError('Zook 只支援本機指令和網址（Streamable HTTP）這兩種連接器。')
+    record, _ = connector_fields(fields)
+    record['headers'] = headers
+    return record, found
+
+
+def connector_keep_secrets(record, found):
+    """Put a copied connector's keys in the Keychain. The first is the one the edit form shows; the rest are kept by name."""
+    saved = []
+    try:
+        for index, (key, value) in enumerate(found.items()):
+            ident = ID(); secret_set(ident, value); saved.append(ident)
+            if index == 0: record['secretName'], record['secretId'] = key, ident
+            else: record['moreSecrets'][key] = ident
+    except (ValueError, RuntimeError):
+        for ident in saved: secret_delete(ident)
+        raise ValueError('這個連接器的金鑰含有鑰匙圈存不了的字元，無法複製。請改用「新增連接器」手動輸入。')
+
+
+def connector_secret_ids(record):
+    return [x for x in [record.get('secretId')] + list((record.get('moreSecrets') or {}).values()) if x]
+
+
+def pack_export(store):
+    """Zook's own Skills and connectors as one zip file. Keys stay in the Keychain and are never included."""
+    import io, zipfile
+    with store.lock:
+        skills = copy.deepcopy(store.data['skills']); connectors = copy.deepcopy(store.data['connectors'])
+        off = set(store.data['settings']['disabledSkills']); on = set(store.data['settings'].get('sharedMcp') or [])
+    manifest = dict(format='zook-pack', version=1, skills=[], connectors=[]); buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as z:
+        for record in skills:
+            try: files = skill_files(store.dir / 'skills' / record['folder'])
+            except (OSError, ValueError): continue
+            if not files: continue
+            manifest['skills'].append(dict(name=record['name'], folder=record['folder'], on=ZOOK_SKILL + record['id'] not in off))
+            for relative, path in files: z.write(str(path), 'skills/%s/%s' % (record['folder'], relative))
+        for c in connectors:
+            manifest['connectors'].append(dict(name=c['name'], transport=c['transport'], command=c.get('command', ''), url=c.get('url', ''), env=c.get('env') or {},
+                headers=c.get('headers') or {}, secretName=c.get('secretName', ''), moreSecrets=sorted(c.get('moreSecrets') or {}), on='zook:' + c['id'] in on))
+        z.writestr('zook.json', json.dumps(manifest, ensure_ascii=False, indent=1))
+    raw = buffer.getvalue()
+    if len(raw) > PACK_BYTES: raise ValueError('設定包超過 150 MB，無法匯出。請先移除用不到的 Skill。')
+    return raw, len(manifest['skills']), len(manifest['connectors'])
+
+
+def pack_import(store, raw):
+    """Add the Skills and connectors from a pack. Names Zook already has are left alone; connectors that need a key wait for it."""
+    import io, zipfile
+    bad = ValueError('這不是 Zook 的設定包，或檔案已損壞。')
+    try: z = zipfile.ZipFile(io.BytesIO(raw))
+    except (zipfile.BadZipFile, ValueError): raise bad
+    result = dict(skills=[], connectors=[], skipped=[], needKeys=[])
+    with z:
+        infos = z.infolist()
+        try: manifest = json.loads(z.read('zook.json').decode('utf-8'))
+        except (KeyError, ValueError, zipfile.BadZipFile): raise bad
+        if not isinstance(manifest, dict) or manifest.get('format') != 'zook-pack' or not isinstance(manifest.get('skills'), list) or not isinstance(manifest.get('connectors'), list): raise bad
+        if manifest.get('version') != 1: raise ValueError('這個設定包是較新版的 Zook 匯出的，請先更新 Zook。')
+        if len(infos) > 20000: raise bad
+        home = skills_home(store)
+        for item in manifest['skills'][:1024]:
+            if not isinstance(item, dict) or not isinstance(item.get('name'), str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}', str(item.get('folder'))): continue
+            prefix = 'skills/%s/' % item['folder']; temp = pathlib.Path(tempfile.mkdtemp(prefix='.incoming-', dir=str(home)))
+            try:
+                total = count = 0
+                for info in infos:
+                    if not info.filename.startswith(prefix) or info.is_dir(): continue
+                    parts = info.filename[len(prefix):].split('/'); count += 1
+                    if '\\' in info.filename or any(x in ('', '.', '..') or x in SKILL_SKIP for x in parts) or (info.external_attr >> 16) & 0o170000 == 0o120000 or count > SKILL_FILES: raise ValueError()
+                    with z.open(info) as source: content = source.read(SKILL_BYTES - total + 1)
+                    total += len(content)
+                    if total > SKILL_BYTES: raise ValueError()
+                    out = temp.joinpath(*parts); out.parent.mkdir(parents=True, exist_ok=True); out.write_bytes(content)
+                    if (info.external_attr >> 16) & 0o111: out.chmod(0o755)
+                if not (temp / 'SKILL.md').is_file(): raise ValueError()
+                name, _ = skill_title(temp, item['name'][:200])
+                with store.lock: have = {same_name(x['name']) for x in store.data['skills']}; taken = {x['folder'].lower() for x in store.data['skills']}
+                if same_name(name) in have: raise KeyError(name)
+                folder = skill_folder(name, taken); os.replace(str(temp), str(home / folder))
+            except KeyError: shutil.rmtree(str(temp), ignore_errors=True); result['skipped'].append(item['name'][:200]); continue
+            except (ValueError, OSError, zipfile.BadZipFile, RuntimeError): shutil.rmtree(str(temp), ignore_errors=True); result['skipped'].append(item['name'][:200]); continue
+            record = dict(id=ID(), name=name, folder=folder, origin='pack', originPath='', stamp='')
+            with store.lock:
+                store.data['skills'].append(record)
+                if item.get('on') is False: store.data['settings']['disabledSkills'].append(ZOOK_SKILL + record['id'])
+                store.save()
+            result['skills'].append(name)
+        for item in manifest['connectors'][:200]:
+            if not isinstance(item, dict): continue
+            try:
+                record, _ = connector_fields(dict(name=item.get('name'), transport=item.get('transport'), command=item.get('command'), url=item.get('url'), env=item.get('env') or {}))
+                headers, more, secret_name = item.get('headers') or {}, item.get('moreSecrets') or [], item.get('secretName') or ''
+                if not isinstance(headers, dict) or any(not isinstance(k, str) or not isinstance(v, str) or not re.fullmatch(r'[A-Za-z0-9-]{1,80}', k) or len(v) > 2000 or '\n' in v or '\r' in v
+                                                       or k.lower() == 'authorization' or runtime_module().SECRET_KEY.search(k) for k, v in headers.items()): raise ValueError()
+                if not isinstance(more, list) or len(more) > 20 or any(not isinstance(k, str) or not ENV_NAME.fullmatch(k) for k in more): raise ValueError()
+                if not isinstance(secret_name, str) or (secret_name and not ENV_NAME.fullmatch(secret_name)): raise ValueError()
+            except ValueError: result['skipped'].append(str(item.get('name'))[:80]); continue
+            record['headers'] = headers; record['moreSecrets'] = {k: '' for k in more}
+            record['secretName'] = ('Authorization' if secret_name else '') if record['transport'] == 'http' else secret_name
+            waiting = bool(record['secretName'] or more)
+            with store.lock:
+                if any(same_name(c['name']) == same_name(record['name']) for c in store.data['connectors']): result['skipped'].append(record['name']); continue
+                store.data['connectors'].append(record)
+                if item.get('on') is True and not waiting:
+                    st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + ['zook:' + record['id']]))
+                store.save()
+            result['connectors'].append(record['name'])
+            if waiting: result['needKeys'].append(record['name'])
+    return result
 
 
 def inventory_for(store):
@@ -1073,10 +1338,32 @@ def inventory_for(store):
             config = dict(transport='stdio', command=parts[0], args=parts[1:], env=dict(record.get('env') or {}))
             if secret and record.get('secretName'): config['env'][record['secretName']] = secret
         else:
-            config = dict(transport='http', url=record['url'], headers={'Authorization': 'Bearer ' + secret} if secret else {})
+            config = dict(transport='http', url=record['url'], headers=dict(record.get('headers') or {}))
+            if secret: config['headers']['Authorization'] = 'Bearer ' + secret
+        waiting = bool(record.get('secretName')) and not secret  # brought in from a pack: the key has not been pasted yet
+        for key, sid in (record.get('moreSecrets') or {}).items():
+            value = secret_get(sid) if sid else ''
+            if value and record['transport'] == 'stdio': config['env'][key] = value
+            elif not value: waiting = True
         data['_private']['mcp'][ident] = config
         data['mcp'].insert(2 + own.index(record), {'id': ident, 'name': record['name'], 'source': 'zook', 'transport': record['transport'], 'status': 'configured',
-                            'editable': True, 'config': connector_view(record)})
+                            'editable': True, 'config': connector_view(record), 'needsKey': waiting})
+    copied = {record.get('origin') for record in own if record.get('origin')}
+    for item in data['mcp']:
+        if item['id'] in copied: item['copied'] = True  # Zook now has its own copy, so this one is no longer handed to Bots
+        elif item.get('source') in ('codex', 'claude'): item['copyable'] = True
+    with store.lock: mine = copy.deepcopy(store.data.get('skills') or [])
+    names = set()
+    for record in mine:  # Skills kept in Zook's own folder; they stay even when the tool they came from is removed
+        root = store.dir / 'skills' / record['folder']
+        if not (root / 'SKILL.md').is_file(): continue
+        name, description = skill_title(root, record['name']); ident = ZOOK_SKILL + record['id']
+        data['_private']['skills'][ident] = {'path': str(root / 'SKILL.md'), 'root': str(root), 'shared': record.get('origin') == 'shared'}
+        data['skills'].append({'id': ident, 'name': name, 'description': description[:1500], 'path': str(root / 'SKILL.md'), 'source': 'zook', 'origin': record.get('origin', ''), 'removable': True})
+        names.add(same_name(name))
+    for item in data['skills']:
+        if item['source'] != 'zook' and same_name(item['name']) in names: item['imported'] = True
+    data['skills'].sort(key=lambda x: (x['name'].lower(), x['id']))
     with store.lock: off = set(store.data['settings'].get('disabledPlugins') or [])
     for plugin in data.get('plugins', []): plugin['enabled'] = plugin['id'] not in off
     for key in ('skills', 'mcp'):
@@ -1145,6 +1432,15 @@ def icon_png(store, key):
 
 def integrations(store):
     data = inventory_for(store)
+    with store.lock: on = set(store.data['settings'].get('sharedMcp') or []); records = {ZOOK_SKILL + x['id']: dict(x) for x in store.data.get('skills') or []}
+    connectors = [(re.sub(r'[^a-z0-9]', '', m['name'].lower()), m['id'] in on and not (m.get('needsSetup') or m.get('needsKey') or m.get('copied'))) for m in data['mcp']]
+    for item in data['skills']:
+        if item.get('imported'): continue
+        notes = skill_notes(data['_private']['skills'].get(item['id'], {}).get('path', ''), connectors)
+        if notes: item['notes'] = notes
+        record = records.get(item['id'])
+        if record and record.get('originPath') and record.get('stamp') and os.path.isfile(os.path.join(record['originPath'], 'SKILL.md')):
+            item['canUpdate'] = skill_stamp(record['originPath']) != record['stamp']
     with_icons = lambda items, field: [dict(x, icon=icon_for(x.get(field)) or icon_for(x.get('plugin', '')) ) for x in items]
     return dict(skills=with_icons(data['skills'], 'name'), mcp=with_icons(data['mcp'], 'name'), plugins=with_icons(data.get('plugins', []), 'displayName'), providers=provider_info())
 
@@ -2353,10 +2649,10 @@ class Handler(BaseHTTPRequestHandler):
         bridge = self.server.bridge_token
         if bridge and secrets.compare_digest(token, 'Bearer ' + bridge): self.via_bridge = True; return True
         return secrets.compare_digest(token, 'Bearer '+self.server.token) or secrets.compare_digest(value, self.server.token)
-    def body(self):
+    def body(self, limit=MAX_BODY):
         try:
             n = int(self.headers.get('Content-Length', '0'))
-            if n <= 0 or n > MAX_BODY: raise ValueError()
+            if n <= 0 or n > limit: raise ValueError()
             obj = json.loads(self.rfile.read(n))
             if not isinstance(obj, dict): raise ValueError()
             return obj
@@ -2498,6 +2794,59 @@ class Handler(BaseHTTPRequestHandler):
                     st = store.data['settings']; st['gmail'] = dict(address=address.strip(), secretId=secret_id)
                     st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + [GMAIL_ID])); store.save()
                 return self.respond(200, {'ok': True, 'address': address.strip()})
+            if path == '/api/skills/import' and self.command == 'POST':
+                ids = self.body().get('ids')
+                if not isinstance(ids, list) or len(ids) > 1024 or any(not isinstance(x, str) for x in ids): return self.error(400, '請選擇要匯入的 Skill。')
+                return self.respond(200, skills_import(store, inventory_for(store), ids))
+            if parts[:2] == ['api', 'skills'] and len(parts) in (3, 4) and parts[2] != 'import':
+                with store.lock: record = next((dict(x) for x in store.data['skills'] if x['id'] == parts[2]), None)
+                if not record: return self.error(404, '找不到這個 Skill。')
+                if len(parts) == 3 and self.command == 'DELETE':
+                    with store.lock:
+                        store.data['skills'] = [x for x in store.data['skills'] if x['id'] != record['id']]
+                        st = store.data['settings']; st['disabledSkills'] = [x for x in st['disabledSkills'] if x != ZOOK_SKILL + record['id']]
+                        store.save()
+                    shutil.rmtree(str(store.dir / 'skills' / record['folder']), ignore_errors=True)
+                    return self.respond(200, {'ok': True})
+                if len(parts) == 4 and parts[3] == 'update' and self.command == 'POST':
+                    self.body()
+                    if not record.get('originPath') or not os.path.isfile(os.path.join(record['originPath'], 'SKILL.md')): return self.error(409, '找不到原本的來源，無法更新。')
+                    try: skill_copy(record['originPath'], store.dir / 'skills' / record['folder'])
+                    except ValueError as exc: return self.error(400, str(exc))
+                    except OSError: return self.error(409, '讀不到原本來源的檔案。')
+                    with store.lock:
+                        for x in store.data['skills']:
+                            if x['id'] == record['id']: x['stamp'] = skill_stamp(record['originPath'])
+                        store.save()
+                    return self.respond(200, {'ok': True})
+                return self.error(404, '找不到資源。')
+            if path == '/api/connector-copy' and self.command == 'POST':
+                ident = self.body().get('id'); found = inventory_for(store)
+                entry = next((m for m in found['mcp'] if m['id'] == ident and m.get('copyable')), None); config = found['_private']['mcp'].get(ident)
+                if not entry or not isinstance(config, dict): return self.error(404, '找不到這個連接器，或它已經複製過了。')
+                with store.lock:
+                    if any(same_name(c['name']) == same_name(entry['name']) for c in store.data['connectors']): return self.error(400, 'Zook 已經有同名的連接器。')
+                try:
+                    record, secrets_found = connector_from_config(entry['name'][:80], config)
+                    connector_keep_secrets(record, secrets_found)
+                except ValueError as exc: return self.error(400, str(exc))
+                record['origin'] = ident
+                with store.lock:
+                    store.data['connectors'].append(record)
+                    st = store.data['settings']; shared = st.get('sharedMcp') or []; was_on = ident in shared
+                    st['sharedMcp'] = [x for x in shared if x != ident] + (['zook:' + record['id']] if was_on else [])
+                    store.save()
+                return self.respond(201, dict(id='zook:' + record['id'], name=record['name'], on=was_on))
+            if path == '/api/pack' and self.command == 'GET':
+                try: raw, skill_count, connector_count = pack_export(store)
+                except ValueError as exc: return self.error(400, str(exc))
+                return self.respond(200, dict(name='Zook-設定包-%s.zookpack' % datetime.date.today().strftime('%Y%m%d'), data=base64.b64encode(raw).decode(), skills=skill_count, connectors=connector_count))
+            if path == '/api/pack' and self.command == 'POST':
+                try:
+                    raw = base64.b64decode(self.body(PACK_BYTES * 2).get('data') or '', validate=True)
+                    if not raw or len(raw) > PACK_BYTES: raise ValueError('設定包超過 150 MB，無法匯入。')
+                    return self.respond(200, pack_import(store, raw))
+                except ValueError as exc: return self.error(400, str(exc) if '設定包' in str(exc) else '這不是 Zook 的設定包，或檔案已損壞。')
             if parts[:2] == ['api', 'connectors'] and len(parts) in (2, 3):
                 body = self.body() if self.command in ('POST', 'PATCH') else {}
                 try:
@@ -2511,6 +2860,10 @@ class Handler(BaseHTTPRequestHandler):
                             record['secretId'] = record['secretId'] or ID(); secret_set(record['secretId'], secret)
                         elif not record['secretName'] and record['secretId']:
                             secret_delete(record['secretId']); record['secretId'] = ''
+                        more = body.get('moreSecrets') if isinstance(body.get('moreSecrets'), dict) else {}
+                        for key, value in more.items():  # keys a copied or imported connector carries besides the main one
+                            if key in record['moreSecrets'] and isinstance(value, str) and value.strip():
+                                record['moreSecrets'][key] = record['moreSecrets'][key] or ID(); secret_set(record['moreSecrets'][key], value.strip())
                         with store.lock:
                             store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]
                             if not existing:  # a connector you just added is switched on for every Bot
@@ -2522,7 +2875,7 @@ class Handler(BaseHTTPRequestHandler):
                             store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != existing['id']]
                             st = store.data['settings']; st['sharedMcp'] = [x for x in st.get('sharedMcp') or [] if x != 'zook:' + existing['id']]
                             store.save()
-                        if existing.get('secretId'): secret_delete(existing['secretId'])
+                        for secret_id in connector_secret_ids(existing): secret_delete(secret_id)
                         return self.respond(200, {'ok': True})
                 except ValueError as exc: return self.error(400, str(exc))
                 except RuntimeError as exc: return self.error(409, str(exc))
