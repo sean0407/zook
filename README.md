@@ -53,3 +53,11 @@ python3 -m unittest discover -s tests -p '*test.py' -v
 | `ios/` | ZookMobile, the iPhone app |
 | `relay/` | Cloudflare Worker that forwards encrypted messages |
 | `tests/` | backend and protocol tests |
+
+## License
+
+Copyright © 2026 sean0407.
+
+The source code is licensed under the [GNU General Public License v3.0](LICENSE). You may use, modify and redistribute it, and any version you distribute must be released under the same license with its source code.
+
+The name "Zook", the app icon and the Bot avatar artwork are not covered by that license. All rights to them are reserved. A modified version must use a different name and icon.

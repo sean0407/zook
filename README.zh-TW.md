@@ -53,3 +53,11 @@ python3 -m unittest discover -s tests -p '*test.py' -v
 | `ios/` | iPhone App「ZookMobile」 |
 | `relay/` | 轉送加密訊息的 Cloudflare Worker |
 | `tests/` | 後端與通訊協定測試 |
+
+## 授權
+
+Copyright © 2026 sean0407。
+
+原始碼以 [GNU General Public License v3.0](LICENSE) 授權。你可以使用、修改和再散佈，但散佈出去的任何版本都必須以同樣的授權公開原始碼。
+
+「Zook」這個名稱、App 圖示與 Bot 頭像圖案不在上述授權範圍內，保留所有權利。修改後的版本必須改用不同的名稱與圖示。
