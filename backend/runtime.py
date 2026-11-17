@@ -4,6 +4,7 @@ Configuration snapshots contain credentials and MUST remain private. Only the
 skills/mcp catalog arrays may be returned to the UI.
 """
 import copy
+import glob
 import hashlib
 import json
 import os
@@ -12,6 +13,7 @@ import queue
 import re
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
@@ -240,10 +242,25 @@ class Redactor:
         return self.text(value) if isinstance(value, str) else value
 
 
+# An app opened from Finder does not get the shell's PATH, so connectors started with npx, uvx, node and
+# the like would not be found. These are the usual places such tools are installed.
+TOOL_DIRS = ('~/.local/bin', '/opt/homebrew/bin', '/usr/local/bin', '~/.npm-global/bin', '~/.bun/bin', '~/.volta/bin',
+             '~/.cargo/bin', '~/.deno/bin', '~/.nvm/versions/node/*/bin')
+
+
+def tool_path(current):
+    parts = [p for p in (current or '').split(os.pathsep) if p]
+    for pattern in TOOL_DIRS:
+        for folder in sorted(glob.glob(os.path.expanduser(pattern)), reverse=True)[:1]:  # the newest Node version only
+            if os.path.isdir(folder) and folder not in parts: parts.append(folder)
+    return os.pathsep.join(parts)
+
+
 def _environment(config=None):
     config = config or {}
     env = {k: v for k, v in os.environ.items()
            if not SECRET_KEY.search(k) and not k.startswith(('ZOOK_', 'SWARMR_', 'CLAUDECODE', 'CLAUDE_CODE_'))}
+    env['PATH'] = tool_path(env.get('PATH') or '/usr/bin:/bin:/usr/sbin:/sbin')
     for key in config.get('env_vars', []):
         if isinstance(key, str) and key in os.environ:
             env[key] = os.environ[key]
@@ -272,9 +289,15 @@ class ProtocolClient:
             command, args = config.get('command'), config.get('args', [])
             if not isinstance(command, str) or not isinstance(args, list) or not all(isinstance(x, str) for x in args):
                 raise RuntimeError('Invalid configured MCP command or arguments.')
+            env = _environment(config)
+            program = os.path.expanduser(command)
+            if '/' not in program:  # look the command up in the widened PATH, not only the app's own
+                program = next((os.path.join(d, program) for d in env['PATH'].split(os.pathsep) if os.access(os.path.join(d, program), os.X_OK)), None)
+                if not program: raise RuntimeError('找不到連接器的指令「%s」。請先安裝它，或在來源 App 的設定裡改成完整路徑。' % command)
+            self.errors = tempfile.TemporaryFile()  # what the connector prints when it fails, shown to the user as the reason
             try:
-                self.process = subprocess.Popen([os.path.expanduser(command)] + args, stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=_environment(config), start_new_session=True)
+                self.process = subprocess.Popen([program] + args, stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE, stderr=self.errors, env=env, start_new_session=True)
             except (OSError, ValueError):
                 raise RuntimeError('Configured MCP executable could not start. Install or authorize it in its owning app, then retry.')
             threading.Thread(target=self._reader, daemon=True).start()
@@ -299,6 +322,7 @@ class ProtocolClient:
             raise
 
     def _reader(self):
+        skipped = 0
         try:
             while not self.closed:
                 line = self.process.stdout.readline(MAX_MESSAGE + 1)
@@ -307,9 +331,11 @@ class ProtocolClient:
                 try:
                     msg = json.loads(line)
                 except (ValueError, UnicodeDecodeError):
-                    break
-                if not isinstance(msg, dict):
-                    break
+                    msg = None
+                if not isinstance(msg, dict):  # a banner or log line on standard output; some connectors print one before they are ready
+                    skipped += 1
+                    if skipped > 500: break
+                    continue
                 self.responses.put_nowait(msg)
         except (OSError, ValueError, queue.Full):
             pass
@@ -317,6 +343,16 @@ class ProtocolClient:
             self.responses.put_nowait({'_closed': True})
         except queue.Full:
             pass
+
+    def _last_error(self):
+        """The last lines the connector wrote to its error output, with anything secret-looking removed."""
+        try:
+            time.sleep(0.2); self.errors.seek(0)
+            lines = [l.strip() for l in self.errors.read(200000).decode('utf-8', 'replace').splitlines() if l.strip()]
+        except (OSError, ValueError, AttributeError):
+            return ''
+        text = re.sub(r'(?i)((?:token|password|secret|authorization|api[_-]?key|cookie|bearer)[\w-]*)(\s*[=:]\s*|\s+)\S+', r'\1\2***', ' / '.join(lines[-3:]))
+        return ('它回報：' + text[:400]) if text else ''
 
     def _send_stdio(self, msg):
         try:
@@ -404,7 +440,7 @@ class ProtocolClient:
                         self.close()
                         raise RuntimeError('MCP request timed out. Check server readiness and reconnect.')
                     if response.get('_closed'):
-                        raise RuntimeError('MCP process closed before responding. Check its configuration and authorization.')
+                        raise RuntimeError('連接器啟動後就結束了。' + (self._last_error() or '請確認它的設定，以及是否已在來源 App 登入授權。'))
                     if response.get('method') and 'id' in response:
                         if response['method'] == 'ping':
                             self._send_stdio({'jsonrpc': '2.0', 'id': response['id'], 'result': {}})

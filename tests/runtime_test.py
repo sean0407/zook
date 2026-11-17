@@ -179,5 +179,28 @@ class RuntimeTests(unittest.TestCase):
             server.shutdown(); server.server_close(); thread.join(timeout=2)
 
 
+class ConnectorStartTest(unittest.TestCase):
+    """A connector is started the way the user's own shell would start it, and a failure says why."""
+    SERVER = "import sys, json\nprint('Starting server v1...')\nfor line in sys.stdin:\n    m = json.loads(line)\n    if 'id' in m: print(json.dumps({'jsonrpc': '2.0', 'id': m['id'], 'result': {'protocolVersion': '2025-06-18', 'tools': []}})); sys.stdout.flush()\n"
+
+    def test_banner_on_standard_output_is_ignored(self):
+        client = runtime.ProtocolClient({'command': sys.executable, 'args': ['-c', self.SERVER]})
+        self.assertEqual(client.request('tools/list', {})['tools'], []); client.close()
+
+    def test_failure_reports_what_the_connector_said(self):
+        with self.assertRaises(RuntimeError) as caught:
+            runtime.ProtocolClient({'command': sys.executable, 'args': ['-c', "import sys; sys.stderr.write('Session expired. token=abc123 Run login again.\\n'); sys.exit(1)"]})
+        self.assertIn('Session expired', str(caught.exception)); self.assertNotIn('abc123', str(caught.exception))
+
+    def test_command_is_found_in_the_usual_install_folders(self):
+        with tempfile.TemporaryDirectory() as home:
+            tools = Path(home) / '.nvm/versions/node/v20.0.0/bin'; tools.mkdir(parents=True)
+            script = tools / 'fake-mcp'; script.write_text('#!' + sys.executable + '\n' + self.SERVER); script.chmod(0o755)
+            with patch.dict(os.environ, {'HOME': home, 'PATH': '/usr/bin:/bin'}):
+                client = runtime.ProtocolClient({'command': 'fake-mcp', 'args': []}); client.close()
+                with self.assertRaises(RuntimeError) as caught: runtime.ProtocolClient({'command': 'no-such-mcp', 'args': []})
+            self.assertIn('no-such-mcp', str(caught.exception))
+
+
 if __name__ == '__main__':
     unittest.main()
