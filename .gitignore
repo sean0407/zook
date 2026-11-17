@@ -1,0 +1,10 @@
+build/
+__pycache__/
+*.pyc
+.DS_Store
+.scratch/runtime/
+.scratch/
+.wrangler/
+node_modules/
+xcuserdata/
+.env*
