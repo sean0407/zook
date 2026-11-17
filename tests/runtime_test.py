@@ -46,6 +46,18 @@ class RuntimeTests(unittest.TestCase):
         session.tools()
         return next(name for name, route in session.routes.items() if route[1] == original)
 
+    def test_connector_gets_shell_variables(self):
+        # A sign-in kept in the shell profile reaches the connector, and ${VAR} in its settings is filled in.
+        with tempfile.TemporaryDirectory() as folder:
+            shell = Path(folder) / 'sh'
+            shell.write_text('#!/bin/sh\necho noise from the profile\nexport FAKE_SESSION_TOKEN=from-shell FAKE_PLAIN=plain\nshift\nexec /bin/sh -c "$@"\n')
+            shell.chmod(0o755)
+            with patch.dict(os.environ, {'SHELL': str(shell), 'ZOOK_SHELL_ENV': '1'}), patch.object(runtime, '_SHELL_ENV', None):
+                env = runtime._environment({'env': {'A': '1'}})
+                self.assertEqual((env['FAKE_SESSION_TOKEN'], env['FAKE_PLAIN'], env['A']), ('from-shell', 'plain', '1'))
+                self.assertNotIn('FAKE_SESSION_TOKEN', runtime._environment())
+                self.assertEqual(runtime._expand({'k': ['${FAKE_PLAIN}/x', '${NOPE_ZZ:-d}', '${NOPE_ZZ}']}), {'k': ['plain/x', 'd', '${NOPE_ZZ}']})
+
     def test_real_stdio_handshake_paging_schema_and_call(self):
         session, events = self.session(mcp=['fixture:mcp'])
         name = self.external_name(session, 'echo')

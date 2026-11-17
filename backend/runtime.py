@@ -256,14 +256,65 @@ def tool_path(current):
     return os.pathsep.join(parts)
 
 
+_SHELL_ENV = None
+_SHELL_LOCK = threading.Lock()
+_OWN = ('ZOOK_', 'SWARMR_', 'CLAUDECODE', 'CLAUDE_CODE_')
+
+
+def shell_environment():
+    """The variables the user's login shell sets (from ~/.zshrc and the like). An app opened from the Dock gets none
+    of them, so a connector that reads its sign-in from one works in a terminal tool and fails here. Read once."""
+    global _SHELL_ENV
+    with _SHELL_LOCK:
+        if _SHELL_ENV is not None: return _SHELL_ENV
+        found = {}
+        shell = os.environ.get('SHELL') or '/bin/zsh'
+        if os.environ.get('ZOOK_SHELL_ENV') != '0' and os.access(shell, os.X_OK):
+            mark = '__zook_env_%s__' % uuid.uuid4().hex
+            try:
+                done = subprocess.run([shell, '-ilc', 'printf %s ' + mark + '; /usr/bin/env -0'], stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=8, start_new_session=True)
+                text = done.stdout.decode('utf-8', 'replace')
+                if mark in text:
+                    for item in text.split(mark, 1)[1].split('\0'):
+                        key, eq, value = item.partition('=')
+                        if eq and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) and not key.startswith(_OWN): found[key] = value
+            except (OSError, subprocess.SubprocessError): pass
+        _SHELL_ENV = found
+        return found
+
+
+def _lookup(name):
+    return os.environ[name] if name in os.environ else shell_environment().get(name)
+
+
+def _expand(value):
+    """${VAR} and ${VAR:-default}, the way Claude Code reads them in a connector's settings."""
+    if isinstance(value, str) and '${' in value:
+        def swap(match):
+            found = _lookup(match.group(1))
+            if found is None: found = match.group(2)
+            return match.group(0) if found is None else found
+        return re.sub(r'\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}', swap, value)
+    if isinstance(value, list): return [_expand(v) for v in value]
+    if isinstance(value, dict): return {k: _expand(v) for k, v in value.items()}
+    return value
+
+
 def _environment(config=None):
+    env = {k: v for k, v in os.environ.items() if not SECRET_KEY.search(k) and not k.startswith(_OWN)}
+    path = env.get('PATH') or '/usr/bin:/bin:/usr/sbin:/sbin'
+    if config is not None:  # a connector: give it what a terminal would
+        shell = shell_environment()
+        for key, value in shell.items():
+            if key != 'PATH': env.setdefault(key, value)
+        have = path.split(os.pathsep)
+        path = os.pathsep.join(have + [d for d in shell.get('PATH', '').split(os.pathsep) if d and d not in have])
     config = config or {}
-    env = {k: v for k, v in os.environ.items()
-           if not SECRET_KEY.search(k) and not k.startswith(('ZOOK_', 'SWARMR_', 'CLAUDECODE', 'CLAUDE_CODE_'))}
-    env['PATH'] = tool_path(env.get('PATH') or '/usr/bin:/bin:/usr/sbin:/sbin')
+    env['PATH'] = tool_path(path)
     for key in config.get('env_vars', []):
-        if isinstance(key, str) and key in os.environ:
-            env[key] = os.environ[key]
+        if isinstance(key, str) and _lookup(key) is not None:
+            env[key] = _lookup(key)
     for key, value in config.get('env', {}).items():
         if isinstance(key, str) and isinstance(value, (str, int, float, bool)):
             env[key] = str(value)
@@ -272,6 +323,9 @@ def _environment(config=None):
 
 class ProtocolClient:
     def __init__(self, config):
+        config = dict(config)
+        for field in ('command', 'args', 'env', 'url', 'headers', 'http_headers'):
+            if field in config: config[field] = _expand(config[field])
         self.config = config
         self.closed = False
         self.lock = threading.Lock()
@@ -367,14 +421,14 @@ class ProtocolClient:
         headers.update(self.config.get('headers', {}))
         headers.update(self.config.get('http_headers', {}))
         for key, envname in self.config.get('env_http_headers', {}).items():
-            if envname not in os.environ:
+            if _lookup(envname) is None:
                 raise RuntimeError('A configured MCP credential environment variable is unavailable. Authorize it in its owning app.')
-            headers[key] = os.environ[envname]
+            headers[key] = _lookup(envname)
         token = self.config.get('bearer_token_env_var')
         if token:
-            if token not in os.environ:
+            if _lookup(token) is None:
                 raise RuntimeError('MCP bearer credential is unavailable. Authorize it in its owning app.')
-            headers['Authorization'] = 'Bearer ' + os.environ[token]
+            headers['Authorization'] = 'Bearer ' + _lookup(token)
         if self.session_id:
             headers['Mcp-Session-Id'] = self.session_id
         class NoRedirect(urllib.request.HTTPRedirectHandler):
