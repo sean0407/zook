@@ -606,7 +606,7 @@
     let h = 0; for (const ch of text) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
     return `<span class="dir-icon" style="--ic:${ICON_COLORS[h % ICON_COLORS.length]}">${esc((text[0] || '?').toUpperCase())}</span>`;
   }
-  const MCP_SOURCE_NAMES = {codex: '來自 Codex 設定', claude: '來自 Claude 設定', builtin: 'Zook 內建'};
+  const MCP_SOURCE_NAMES = {zook: '在 Zook 新增', codex: '來自 Codex 設定', claude: '來自 Claude 設定', builtin: 'Zook 內建'};
   function sourceName(source, kind) {
     if (!source) return '其他';
     if (kind === 'mcp' && MCP_SOURCE_NAMES[source]) return MCP_SOURCE_NAMES[source];
@@ -631,9 +631,9 @@
       return (inv.mcp || []).map(i => {
         const on = (settings.sharedMcp || []).includes(i.id);
         const [cls, label] = mcpStatus(i);
-        const description = i.id === 'builtin:workspace' ? '讓 Bot 在自己的工作區讀寫檔案。寫入前會依權限設定請你核准。' : (t => t?.status === 'error' ? '連線失敗：' + t.error : t?.status === 'ready' ? '可用工具：' + (t.tools || []).slice(0, 8).map(x => x.name.replace(/_/g, ' ')).join('、') : sourceName(i.plugin || i.source, 'mcp') + '。按「測試連線」確認是否可以使用。')(state.mcpTests[i.id]);
+        const description = i.id === 'builtin:workspace' ? '讓 Bot 在自己的工作區讀寫檔案。寫入前會依權限設定請你核准。' : (t => t?.status === 'error' ? '連線失敗：' + t.error : t?.status === 'ready' ? '可用工具：' + (t.tools || []).slice(0, 8).map(x => x.name.replace(/_/g, ' ')).join('、') : i.editable ? (i.config.command || i.config.url) : sourceName(i.plugin || i.source, 'mcp') + '。按「測試連線」確認是否可以使用。')(state.mcpTests[i.id]);
         return {id: i.id, icon: i.icon, name: i.id === 'builtin:workspace' ? 'Bot 工作區' : i.name, description, group: sourceName(i.plugin || i.source, 'mcp'), meta: on ? '所有 Bot 共用中' : '未開啟',
-          on, toggle: 'mcp', toggleLabel: on ? '停用這個連接器' : '開放給所有 Bot', status: [cls, label], test: i.id !== 'builtin:workspace'};
+          on, toggle: 'mcp', toggleLabel: on ? '停用這個連接器' : '開放給所有 Bot', status: [cls, label], test: i.id !== 'builtin:workspace', editable: !!i.editable};
       });
     }
     return (inv.plugins || []).map(pl => ({id: pl.id, icon: pl.icon, name: pl.displayName, description: pl.description || '', group: pl.sourceName,
@@ -650,9 +650,16 @@
     const intro = {skills: 'Skills 由所有 Bot 共用。開啟的 Skill 每個 Bot 都能使用。', mcp: '連接器讓 Bot 使用外部服務或工具，開啟後所有 Bot 共用。開得越多，回覆越慢；連不上的建議關閉。', plugins: '插件會一次帶來一組 Skills 和連接器，來源是 Claude Code。'}[tab];
     const card = i => {
       const expanded = state.dirExpanded?.[i.id];
-      return `<article class="dir-card ${expanded ? 'expanded' : ''}">${itemIcon(i.name, i.icon)}<div class="dir-body"><div class="dir-title"><h3 title="${esc(i.name)}">${esc(i.name)}</h3>${toggle(`data-dir-switch data-kind="${i.toggle}" data-id="${esc(i.id)}" title="${esc(i.toggleLabel)}"`, i.on, i.toggleLabel)}</div><p class="dir-desc">${esc(i.description || '沒有說明。')}</p>${i.description.length > 70 ? `<button class="link dir-more" data-action="dir-expand" data-id="${esc(i.id)}">${expanded ? '收合' : '展開'}</button>` : ''}<div class="dir-meta">${i.status ? `<span class="dir-status ${i.status[0]}">${esc(i.status[1])}</span>` : ''}<span>${esc(i.meta)}</span>${i.test ? `<button class="link" data-action="test-mcp" data-id="${esc(i.id)}">測試連線</button>` : ''}</div>${i.note ? `<p class="dir-note">${esc(i.note)}</p>` : ''}</div></article>`;
+      return `<article class="dir-card ${expanded ? 'expanded' : ''}">${itemIcon(i.name, i.icon)}<div class="dir-body"><div class="dir-title"><h3 title="${esc(i.name)}">${esc(i.name)}</h3>${toggle(`data-dir-switch data-kind="${i.toggle}" data-id="${esc(i.id)}" title="${esc(i.toggleLabel)}"`, i.on, i.toggleLabel)}</div><p class="dir-desc">${esc(i.description || '沒有說明。')}</p>${i.description.length > 70 ? `<button class="link dir-more" data-action="dir-expand" data-id="${esc(i.id)}">${expanded ? '收合' : '展開'}</button>` : ''}<div class="dir-meta">${i.status ? `<span class="dir-status ${i.status[0]}">${esc(i.status[1])}</span>` : ''}<span>${esc(i.meta)}</span>${i.test ? `<button class="link" data-action="test-mcp" data-id="${esc(i.id)}">測試連線</button>` : ''}${i.editable ? `<button class="link" data-action="connector-edit" data-id="${esc(i.id)}">編輯</button><button class="link danger" data-action="connector-delete" data-id="${esc(i.id)}" data-name="${esc(i.name)}">移除</button>` : ''}</div>${i.note ? `<p class="dir-note">${esc(i.note)}</p>` : ''}</div></article>`;
     };
-    return `<div class="dir-bar"><div class="dir-tabs">${tabs.map(([id, label]) => `<button class="${tab === id ? 'active' : ''}" data-action="dir-tab" data-id="${id}">${label}<small>${counts[id]}</small></button>`).join('')}</div><div class="dir-filters">${dropdown('dirFilter', filter, [{id: 'all', name: '全部'}, {id: 'on', name: '已啟用'}, {id: 'off', name: '未啟用'}], 'data-dir-filter')}</div><input id="dir-search" class="dir-search" placeholder="搜尋" aria-label="搜尋" value="${esc(state.dirQuery || '')}"></div><p class="muted dir-intro">${intro}</p>${groups.length ? groups.map(g => `<section class="dir-section"><h2>${esc(g)}<small>${items.filter(i => i.group === g).length}</small></h2><div class="dir-grid">${items.filter(i => i.group === g).map(card).join('')}</div></section>`).join('') : '<div class="blank">沒有符合的項目。</div>'}`;
+    return `<div class="dir-bar"><div class="dir-tabs">${tabs.map(([id, label]) => `<button class="${tab === id ? 'active' : ''}" data-action="dir-tab" data-id="${id}">${label}<small>${counts[id]}</small></button>`).join('')}</div><div class="dir-filters">${dropdown('dirFilter', filter, [{id: 'all', name: '全部'}, {id: 'on', name: '已啟用'}, {id: 'off', name: '未啟用'}], 'data-dir-filter')}</div><input id="dir-search" class="dir-search" placeholder="搜尋" aria-label="搜尋" value="${esc(state.dirQuery || '')}"></div><p class="muted dir-intro">${intro}</p>${tab === 'mcp' ? '<div class="dir-add"><button class="primary" data-action="connector-add">＋ 新增連接器</button><span class="muted small">直接加在 Zook 裡，不需要先在 Codex 或 Claude 設定。</span></div>' : ''}${groups.length ? groups.map(g => `<section class="dir-section"><h2>${esc(g)}<small>${items.filter(i => i.group === g).length}</small></h2><div class="dir-grid">${items.filter(i => i.group === g).map(card).join('')}</div></section>`).join('') : '<div class="blank">沒有符合的項目。</div>'}`;
+  }
+  // A connector added in Zook itself: a command run on this Mac, or the address of a remote one.
+  function connectorModal(item) {
+    const c = item?.config || {}, http = item ? item.transport === 'http' : false;
+    const types = [{id: 'stdio', name: '本機指令', hint: '在這台 Mac 上執行的程式，例如用 npx 或 uvx 啟動的 MCP 伺服器'}, {id: 'http', name: '網址', hint: '遠端的 MCP 伺服器（Streamable HTTP）'}];
+    const kept = c.hasSecret ? '已儲存。留空表示不變更' : '';
+    modal(item ? '編輯連接器' : '新增連接器', `<form id="connector-form" data-id="${esc(item ? item.id.split(':')[1] : '')}"><div class="modal-body"><label class="field">名稱<input name="name" required maxlength="80" placeholder="例如：GitHub" value="${esc(item?.name || '')}"></label><div class="setting-list in-form">${settingRow('類型', '連接器在哪裡執行', dropdown('transport', http ? 'http' : 'stdio', types))}</div><div data-for="stdio" ${http ? 'hidden' : ''}><label class="field">啟動指令<input name="command" spellcheck="false" placeholder="例如：npx -y @modelcontextprotocol/server-github" value="${esc(c.command || '')}"><small class="muted">和你在終端機輸入的一樣。Zook 會在需要時啟動它。</small></label><label class="field">環境變數（選填，每行一個）<textarea name="env" rows="3" spellcheck="false" placeholder="NAME=value">${esc(Object.entries(c.env || {}).map(([k, v]) => k + '=' + v).join('\n'))}</textarea></label><div class="form-grid"><label class="field">金鑰的環境變數名稱（選填）<input name="secretName" spellcheck="false" placeholder="例如：GITHUB_TOKEN" value="${esc(http ? '' : c.secretName || '')}"></label><label class="field">金鑰<input name="secretStdio" type="password" autocomplete="off" spellcheck="false" placeholder="${esc(http ? '' : kept)}"></label></div></div><div data-for="http" ${http ? '' : 'hidden'}><label class="field">網址<input name="url" spellcheck="false" placeholder="https://example.com/mcp" value="${esc(c.url || '')}"></label><label class="field">存取權杖（選填）<input name="secretHttp" type="password" autocomplete="off" spellcheck="false" placeholder="${esc(http ? kept : '')}"><small class="muted">會以 Bearer 權杖送給這個網址。</small></label></div><p class="muted small">金鑰和權杖只存進 macOS 鑰匙圈，不會寫進 Zook 的資料檔，也不會傳到手機。${c.hasSecret ? ' <label class="inline-check"><input type="checkbox" name="clearSecret"> 移除已儲存的金鑰</label>' : ''}</p></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">${item ? '儲存' : '新增'}</button></div></form>`);
   }
   function mcpBotsModal(id) {
     const item = (state.integrations?.mcp || []).find(i => i.id === id);
@@ -1357,6 +1364,18 @@
             render(true);
           } finally { delete state.deciding[id]; if (el.isConnected) el.disabled = false; }
           break;
+        case 'connector-add':
+          connectorModal();
+          break;
+        case 'connector-edit':
+          connectorModal((state.integrations?.mcp || []).find(i => i.id === id));
+          break;
+        case 'connector-delete':
+          if (!confirm(`移除連接器「${el.dataset.name}」？所有 Bot 都會無法再使用它。`)) break;
+          await api('connectors/' + encodeURIComponent(id.split(':')[1]), {method: 'DELETE'});
+          delete state.mcpTests[id];
+          state.integrations = await api('integrations'); await refresh(); toast('已移除連接器');
+          break;
         case 'test-mcp':
           el.disabled = true;
           try { state.mcpTests[id] = await post('mcp/' + encodeURIComponent(id) + '/test'); }
@@ -1401,6 +1420,7 @@
   }
   document.addEventListener('change', e => {
     if (e.target.name === 'access' && e.target.closest('#bot-form')) e.target.closest('form').querySelector('[data-access-folder]').hidden = e.target.value !== 'folder';
+    if (e.target.name === 'transport' && e.target.closest('#connector-form')) e.target.closest('form').querySelectorAll('[data-for]').forEach(x => x.hidden = x.dataset.for !== e.target.value);
     if (e.target.name === 'accountType' && e.target.closest('#profile-form')) e.target.closest('form').querySelector('[data-key-field]').hidden = e.target.value !== 'key';
   });
   document.addEventListener('input', e => {
@@ -1626,6 +1646,21 @@
         delete d.providerId;
         await post('accounts/custom', d);
         closeModal(); await reloadAccounts(); toast('已儲存，Bot 現在可以選用這個 CLI');
+      } else if (form.id === 'connector-form') {
+        const d = new FormData(form), transport = d.get('transport'), id = form.dataset.id, env = {};
+        for (const line of (d.get('env') || '').split('\n').map(x => x.trim()).filter(Boolean)) {
+          const at = line.indexOf('=');
+          if (at < 1) { toast('環境變數每行要寫成 名稱=值'); return; }
+          env[line.slice(0, at).trim()] = line.slice(at + 1).trim();
+        }
+        const secret = (transport === 'http' ? d.get('secretHttp') : d.get('secretStdio')).trim();
+        const body = {name: d.get('name').trim(), transport, command: d.get('command').trim(), url: d.get('url').trim(), env: transport === 'http' ? {} : env, secretName: transport === 'http' ? '' : d.get('secretName').trim()};
+        if (secret) body.secret = secret;
+        if (d.has('clearSecret')) body.clearSecret = true;
+        const made = await post(id ? 'connectors/' + encodeURIComponent(id) : 'connectors', body, id ? 'PATCH' : 'POST');
+        closeModal(); delete state.mcpTests[made.id];
+        state.integrations = await api('integrations'); await refresh();
+        toast(id ? '已儲存' : '已新增，所有 Bot 都可以使用。按「測試連線」確認');
       } else if (form.id === 'profile-form') {
         const d = new FormData(form), type = d.get('accountType');
         if (type === 'key' && !d.get('key').trim()) { toast('請貼上 API 金鑰'); return; }

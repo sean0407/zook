@@ -85,7 +85,7 @@ class Store:
         self.data.setdefault('groups', []); self.data.setdefault('memories', []); self.data.setdefault('quota', {})
         self.data.setdefault('customProviders', [])
         _active['data'] = self.data; _active['dir'] = self.dir
-        self.data.setdefault('accounts', [])
+        self.data.setdefault('accounts', []); self.data.setdefault('connectors', [])
         self.data.setdefault('settings', {}).setdefault('disabledSkills', [])
         self.data['settings'].setdefault('disabledPlugins', [])
         self.data['settings'].setdefault('fallbacks', [])
@@ -724,6 +724,7 @@ def _secret_file(account_id):
 
 def secret_set(account_id, value):
     """Store an API key in the macOS Keychain. The key travels on stdin, never on a command line."""
+    _secret_cache.pop(account_id, None)
     if not ACCOUNT_ID.fullmatch(account_id or '') or not re.fullmatch(r'[A-Za-z0-9._~+/=:@-]{8,500}', value or ''): raise ValueError('API 金鑰無效：長度需為 8 到 500 個字元，且只能包含英數字與 . _ ~ + / = : @ -。')
     file = _secret_file(account_id)
     if file:
@@ -732,11 +733,19 @@ def secret_set(account_id, value):
         return
     command = 'add-generic-password -U -s %s -a %s -w %s\n' % (shlex.quote(KEYCHAIN_SERVICE), account_id, shlex.quote(value))
     p = subprocess.run(['/usr/bin/security', '-i'], input=command.encode(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
-    if p.returncode != 0 or secret_get(account_id) != value:
+    if p.returncode != 0 or _secret_read(account_id) != value:
         secret_delete(account_id); raise RuntimeError('無法把 API 金鑰存進鑰匙圈。')
 
 
+_secret_cache = {}  # Keychain lookups are slow; a value is read once per run and refreshed when it changes.
+
+
 def secret_get(account_id):
+    if account_id not in _secret_cache: _secret_cache[account_id] = _secret_read(account_id)
+    return _secret_cache[account_id]
+
+
+def _secret_read(account_id):
     if not ACCOUNT_ID.fullmatch(account_id or ''): return ''
     file = _secret_file(account_id)
     if file:
@@ -750,6 +759,7 @@ def secret_get(account_id):
 
 
 def secret_delete(account_id):
+    _secret_cache.pop(account_id, None)
     if not ACCOUNT_ID.fullmatch(account_id or ''): return
     file = _secret_file(account_id)
     if file:
@@ -976,9 +986,71 @@ def logout_args(provider):
     return [path, 'auth', 'logout'] if provider == 'claude' else [path, 'logout']
 
 
+ENV_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,80}')
+
+
+def connector_fields(body, existing=None):
+    """Validate a connector added in Zook. Returns (record, secret value or None). The secret is stored separately in the Keychain."""
+    old = existing or {}
+    name = body.get('name', old.get('name'))
+    if not isinstance(name, str) or not name.strip() or len(name) > 80: raise ValueError('請輸入連接器名稱。')
+    transport = body.get('transport', old.get('transport'))
+    record = dict(id=old.get('id') or ID(), name=name.strip(), transport=transport, command='', url='', env={}, secretName='', secretId=old.get('secretId', ''))
+    if transport == 'stdio':
+        command = body.get('command', old.get('command'))
+        if not isinstance(command, str) or not command.strip() or len(command) > 2000: raise ValueError('請輸入啟動連接器的指令。')
+        try: parts = shlex.split(command)
+        except ValueError: raise ValueError('指令的引號沒有成對。')
+        if not parts: raise ValueError('請輸入啟動連接器的指令。')
+        record['command'] = command.strip()
+    elif transport == 'http':
+        url = body.get('url', old.get('url'))
+        parsed = urlsplit(url if isinstance(url, str) else '')
+        local = parsed.hostname in ('localhost', '127.0.0.1', '::1')
+        if len(url or '') > 2000 or not parsed.hostname or parsed.username or parsed.password or not (parsed.scheme == 'https' or (parsed.scheme == 'http' and local)):
+            raise ValueError('請輸入 https:// 開頭的連接器網址（本機網址可以用 http://）。')
+        record['url'] = url.strip()
+    else: raise ValueError('連接器類型無效。')
+    env = body.get('env', old.get('env') or {})
+    if not isinstance(env, dict) or len(env) > 40 or any(not isinstance(k, str) or not ENV_NAME.fullmatch(k) or not isinstance(v, str) or len(v) > 2000 for k, v in env.items()):
+        raise ValueError('環境變數的格式不正確，每行寫成 名稱=值。')
+    if transport == 'http' and env: raise ValueError('網址類型的連接器不使用環境變數。')
+    record['env'] = dict(env)
+    clear = body.get('clearSecret') is True  # the user removed the key
+    secret = body.get('secret')
+    if secret is not None and not isinstance(secret, str): raise ValueError('金鑰無效。')
+    secret = secret.strip() if secret else None
+    if transport == 'http': secret_name = 'Authorization' if not clear and (secret or old.get('secretId')) else ''
+    else: secret_name = '' if clear else body.get('secretName', old.get('secretName') or '')
+    if not isinstance(secret_name, str) or (secret_name and not ENV_NAME.fullmatch(secret_name)): raise ValueError('金鑰的環境變數名稱不正確。')
+    record['secretName'] = secret_name
+    if secret and not secret_name: raise ValueError('請填寫金鑰要放進哪個環境變數。')
+    if secret_name and not secret and not old.get('secretId'): raise ValueError('請貼上金鑰。')
+    if not secret_name: secret = None
+    return record, secret
+
+
+def connector_view(record):
+    """What the interface may know about a Zook connector: everything except the secret itself."""
+    return dict(command=record.get('command', ''), url=record.get('url', ''), env=record.get('env') or {},
+                secretName=record.get('secretName', ''), hasSecret=bool(record.get('secretId')))
+
+
 def inventory_for(store):
     """Discovered Skills/MCP minus anything from disabled plugins (also removed from the private config)."""
     data = runtime_module().discover()
+    with store.lock: own = copy.deepcopy(store.data.get('connectors') or [])
+    for record in own:  # Connectors added in Zook itself; they do not depend on any other app's settings.
+        ident = 'zook:' + record['id']; secret = secret_get(record['secretId']) if record.get('secretId') else ''
+        if record['transport'] == 'stdio':
+            parts = shlex.split(record['command'])
+            config = dict(transport='stdio', command=parts[0], args=parts[1:], env=dict(record.get('env') or {}))
+            if secret and record.get('secretName'): config['env'][record['secretName']] = secret
+        else:
+            config = dict(transport='http', url=record['url'], headers={'Authorization': 'Bearer ' + secret} if secret else {})
+        data['_private']['mcp'][ident] = config
+        data['mcp'].insert(1 + own.index(record), {'id': ident, 'name': record['name'], 'source': 'zook', 'transport': record['transport'], 'status': 'configured',
+                            'editable': True, 'config': connector_view(record)})
     with store.lock: off = set(store.data['settings'].get('disabledPlugins') or [])
     for plugin in data.get('plugins', []): plugin['enabled'] = plugin['id'] not in off
     for key in ('skills', 'mcp'):
@@ -2380,6 +2452,35 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, self.quota())
             if path == '/api/usage/bots' and self.command == 'GET':
                 with store.lock: return self.respond(200, bot_usage(store))
+            if parts[:2] == ['api', 'connectors'] and len(parts) in (2, 3):
+                body = self.body() if self.command in ('POST', 'PATCH') else {}
+                try:
+                    with store.lock: existing = next((c for c in store.data['connectors'] if len(parts) == 3 and c['id'] == parts[2]), None)
+                    if len(parts) == 3 and not existing: return self.error(404, '找不到這個連接器。')
+                    if (len(parts) == 2 and self.command == 'POST') or (existing and self.command == 'PATCH'):
+                        record, secret = connector_fields(body, existing)
+                        with store.lock:
+                            if any(c['name'] == record['name'] and c['id'] != record['id'] for c in store.data['connectors']): raise ValueError('已經有同名的連接器。')
+                        if secret:
+                            record['secretId'] = record['secretId'] or ID(); secret_set(record['secretId'], secret)
+                        elif not record['secretName'] and record['secretId']:
+                            secret_delete(record['secretId']); record['secretId'] = ''
+                        with store.lock:
+                            store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]
+                            if not existing:  # a connector you just added is switched on for every Bot
+                                st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + ['zook:' + record['id']]))
+                            store.save()
+                        return self.respond(200 if existing else 201, dict(id='zook:' + record['id'], name=record['name']))
+                    if existing and self.command == 'DELETE':
+                        with store.lock:
+                            store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != existing['id']]
+                            st = store.data['settings']; st['sharedMcp'] = [x for x in st.get('sharedMcp') or [] if x != 'zook:' + existing['id']]
+                            store.save()
+                        if existing.get('secretId'): secret_delete(existing['secretId'])
+                        return self.respond(200, {'ok': True})
+                except ValueError as exc: return self.error(400, str(exc))
+                except RuntimeError as exc: return self.error(409, str(exc))
+                return self.error(404, '找不到資源。')
             if len(parts) == 4 and parts[:2] == ['api', 'mcp'] and parts[3] == 'test' and self.command == 'POST':
                 self.body()
                 return self.respond(200, runtime_module().test_connection(parts[2], inventory_for(self.server.store)))
