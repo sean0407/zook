@@ -9,6 +9,7 @@ Built-in entries come from each vendor's own install script and CLI help:
 Custom providers are any other CLI the user configures: a command, its arguments with
 {prompt}/{prompt_file}/{model} placeholders, and optional install/login/status commands.
 """
+import glob
 import os
 import re
 import shlex
@@ -35,7 +36,9 @@ CATALOG = {
 }
 DEFAULT_ADDED = ('codex', 'claude')
 CUSTOM_PREFIX = 'custom-'
-SEARCH_DIRS = ('~/.local/bin', '/opt/homebrew/bin', '/usr/local/bin')
+# An app opened from Finder does not get the shell's PATH, so the usual install folders are searched too.
+# ZOOK_CLI_DIRS (colon-separated) replaces the list.
+SEARCH_DIRS = tuple(filter(None, os.environ['ZOOK_CLI_DIRS'].split(':'))) if 'ZOOK_CLI_DIRS' in os.environ else ('~/.local/bin', '/opt/homebrew/bin', '/usr/local/bin', '~/.npm-global/bin', '~/.bun/bin', '~/.volta/bin', '~/.nvm/versions/node/*/bin')
 
 
 def _expand(path):
@@ -51,8 +54,8 @@ def find_binary(command, extra=()):
     found = shutil.which(command)
     if found: return found
     for candidate in [*extra, *(d + '/' + command for d in SEARCH_DIRS)]:
-        path = _expand(candidate)
-        if os.path.isfile(path) and os.access(path, os.X_OK): return path
+        for path in sorted(glob.glob(_expand(candidate)), reverse=True):
+            if os.path.isfile(path) and os.access(path, os.X_OK): return path
     return None
 
 

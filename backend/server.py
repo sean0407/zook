@@ -632,7 +632,7 @@ class LoginFlow:
         self.started = time.time(); self.lock = threading.Lock()
         self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                      env=provider_env(provider), start_new_session=True)
-        threading.Thread(target=self._read, daemon=True).start()
+        self.reader = threading.Thread(target=self._read, daemon=True); self.reader.start()
         threading.Thread(target=self._watch, daemon=True).start()
 
     def _read(self):
@@ -645,6 +645,7 @@ class LoginFlow:
         try: code = self.proc.wait(timeout=LOGIN_TIMEOUT)
         except subprocess.TimeoutExpired:
             terminate_tree(self.proc); code = None
+        self.reader.join(timeout=5)  # the last lines (who signed in) must be read before the result is announced
         with self.lock:
             if self.state != 'running': return
             if code == 0: self.state = 'succeeded'

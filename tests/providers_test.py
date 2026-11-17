@@ -48,7 +48,7 @@ class ProvidersTest(unittest.TestCase):
         (self.root / 'bin').mkdir()
         for name, body in (('grok', GROK), ('echo-cli', ECHO)):
             f = self.root / 'bin' / name; f.write_text(body); f.chmod(0o755)
-        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', FAKE_HOME=str(self.root), ZOOK_SKIP_UPDATE_CHECK='1')
+        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', FAKE_HOME=str(self.root), ZOOK_CLI_DIRS=str(self.root / 'bin'), ZOOK_SKIP_UPDATE_CHECK='1')
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')],
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
@@ -87,7 +87,7 @@ class ProvidersTest(unittest.TestCase):
         self.assertEqual([m['id'] for m in models['models']], ['grok-4.6', 'grok-4.5'])
         self.req('POST', '/api/accounts/grok/login', {'method': 'device'})
         for _ in range(50):
-            if next(p for p in self.accounts()['providers'] if p['id'] == 'grok')['status'] == 'logged_in': break
+            if next(p for p in self.accounts()['providers'] if p['id'] == 'grok')['email']: break  # the sign-in has finished and been recorded
             time.sleep(0.1)
         grok = next(p for p in self.accounts()['providers'] if p['id'] == 'grok')
         self.assertEqual((grok['status'], grok['email']), ('logged_in', 'me@example.com'))  # captured from the sign-in output
