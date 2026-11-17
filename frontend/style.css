@@ -1265,6 +1265,8 @@ button {
 .dir-section { margin-bottom: 26px; }
 .dir-section h2 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: baseline; gap: 8px; }
 .dir-section h2 small { font-size: 12px; color: #999; font-weight: 400; }
+.dir-fold { display: inline-flex; flex: none; white-space: nowrap; align-items: baseline; gap: 8px; padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
+.dir-chev { font-size: 12px; color: #999; }
 .dir-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; align-items: stretch; }
 .dir-card { display: flex; gap: 12px; padding: 14px; border-radius: 14px; background: #f7f7f7; min-height: 112px; min-width: 0; }
 .dir-card:hover { background: #f1f1f1; }
@@ -1439,6 +1441,9 @@ button {
 .update-btn:hover { background: #1a73e0; }
 .update-notes { margin: 10px 0; padding: 12px; border-radius: 10px; background: #f7f7f7; white-space: pre-wrap; font: inherit; font-size: 13px; max-height: 240px; overflow: auto; }
 
+/* Built-in Gmail setup */
+.steps { margin: 10px 0 14px; padding-left: 20px; display: grid; gap: 6px; font-size: 13px; }
+.small-btn { padding: 5px 12px; font-size: 13px; }
 /* Connectors added in Zook */
 .dir-add { display: flex; align-items: center; gap: 12px; margin: 4px 0 18px; }
 .dir-meta .link.danger { color: #b55; }

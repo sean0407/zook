@@ -244,7 +244,7 @@ def shared_skill_ids(store, inventory):
 
 def shared_mcp_ids(store, inventory):
     on = set(store.data['settings'].get('sharedMcp') or [])
-    return [x['id'] for x in inventory['mcp'] if x['id'] in on]
+    return [x['id'] for x in inventory['mcp'] if x['id'] in on and not x.get('needsSetup')]
 
 
 def arrange_bots(store, body):
@@ -987,6 +987,23 @@ def logout_args(provider):
 
 
 ENV_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]{0,80}')
+GMAIL_ID = 'builtin:gmail'
+
+
+def gmail_check(address, password):
+    """Sign in to Gmail once, so a wrong address or password is caught when it is saved. Tests skip the network."""
+    if os.environ.get('ZOOK_GMAIL_SKIP_CHECK'): return
+    import imaplib, ssl
+    try:
+        box = imaplib.IMAP4_SSL('imap.gmail.com', 993, ssl_context=ssl.create_default_context(), timeout=20)
+        try: box.login(address, password)
+        finally:
+            try: box.logout()
+            except (imaplib.IMAP4.error, OSError): pass
+    except imaplib.IMAP4.error:
+        raise RuntimeError('Gmail 不接受這組信箱和應用程式密碼。請確認帳號已開啟兩步驟驗證、Gmail 設定裡已啟用 IMAP，並重新產生應用程式密碼。')
+    except (OSError, ssl.SSLError):
+        raise RuntimeError('連不上 Gmail，請確認網路連線後再試。')
 
 
 def connector_fields(body, existing=None):
@@ -1039,7 +1056,16 @@ def connector_view(record):
 def inventory_for(store):
     """Discovered Skills/MCP minus anything from disabled plugins (also removed from the private config)."""
     data = runtime_module().discover()
-    with store.lock: own = copy.deepcopy(store.data.get('connectors') or [])
+    with store.lock: own = copy.deepcopy(store.data.get('connectors') or []); gmail = dict(store.data['settings'].get('gmail') or {})
+    # Built-in Gmail: listed always, usable once an address and app password have been saved.
+    item = {'id': GMAIL_ID, 'name': 'Gmail', 'source': 'builtin', 'transport': 'stdio', 'status': 'configured', 'gmail': True, 'address': gmail.get('address', ''),
+            'needsSetup': not gmail.get('address')}
+    password = secret_get(gmail['secretId']) if gmail.get('secretId') else ''
+    if gmail.get('address') and password:
+        data['_private']['mcp'][GMAIL_ID] = dict(transport='stdio', command=sys.executable, args=[str(pathlib.Path(__file__).with_name('gmail_mcp.py'))],
+                                                 env={'ZOOK_GMAIL_ADDRESS': gmail['address'], 'ZOOK_GMAIL_PASSWORD': password})
+    else: item['needsSetup'] = True
+    data['mcp'].insert(1, item)
     for record in own:  # Connectors added in Zook itself; they do not depend on any other app's settings.
         ident = 'zook:' + record['id']; secret = secret_get(record['secretId']) if record.get('secretId') else ''
         if record['transport'] == 'stdio':
@@ -1049,7 +1075,7 @@ def inventory_for(store):
         else:
             config = dict(transport='http', url=record['url'], headers={'Authorization': 'Bearer ' + secret} if secret else {})
         data['_private']['mcp'][ident] = config
-        data['mcp'].insert(1 + own.index(record), {'id': ident, 'name': record['name'], 'source': 'zook', 'transport': record['transport'], 'status': 'configured',
+        data['mcp'].insert(2 + own.index(record), {'id': ident, 'name': record['name'], 'source': 'zook', 'transport': record['transport'], 'status': 'configured',
                             'editable': True, 'config': connector_view(record)})
     with store.lock: off = set(store.data['settings'].get('disabledPlugins') or [])
     for plugin in data.get('plugins', []): plugin['enabled'] = plugin['id'] not in off
@@ -2452,6 +2478,26 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, self.quota())
             if path == '/api/usage/bots' and self.command == 'GET':
                 with store.lock: return self.respond(200, bot_usage(store))
+            if path == '/api/gmail' and self.command in ('POST', 'DELETE'):
+                with store.lock: saved = dict(store.data['settings'].get('gmail') or {})
+                if self.command == 'DELETE':
+                    with store.lock:
+                        st = store.data['settings']; st.pop('gmail', None)
+                        st['sharedMcp'] = [x for x in st.get('sharedMcp') or [] if x != GMAIL_ID]; store.save()
+                    if saved.get('secretId'): secret_delete(saved['secretId'])
+                    return self.respond(200, {'ok': True})
+                body = self.body(); address, password = body.get('address'), body.get('password')
+                if not isinstance(address, str) or not re.fullmatch(r'[^@\s]{1,64}@[^@\s]{1,255}\.[^@\s]{2,}', address.strip()): return self.error(400, '請輸入完整的 Gmail 信箱。')
+                password = re.sub(r'\s+', '', password) if isinstance(password, str) else ''
+                if not re.fullmatch(r'[A-Za-z0-9]{16}', password): return self.error(400, '應用程式密碼是 16 個英文字母。請貼上 Google 產生的那一組，不是你的 Google 登入密碼。')
+                try:
+                    gmail_check(address.strip(), password)
+                    secret_id = saved.get('secretId') or ID(); secret_set(secret_id, password)
+                except RuntimeError as exc: return self.error(409, str(exc))
+                with store.lock:
+                    st = store.data['settings']; st['gmail'] = dict(address=address.strip(), secretId=secret_id)
+                    st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + [GMAIL_ID])); store.save()
+                return self.respond(200, {'ok': True, 'address': address.strip()})
             if parts[:2] == ['api', 'connectors'] and len(parts) in (2, 3):
                 body = self.body() if self.command in ('POST', 'PATCH') else {}
                 try:
@@ -2657,6 +2703,10 @@ def update(target, body, kind):
         else:
             if not isinstance(value, list) or len(value) > 10 or any(not isinstance(x, str) or not P.spec(_active['data'], x) for x in value): raise ValueError('備用模型無效。')
             changes['fallbacks'] = list(dict.fromkeys(value))
+    if kind == 'settings' and 'dirCollapsed' in body:
+        value = body['dirCollapsed']
+        if not isinstance(value, list) or len(value) > 200 or any(not isinstance(x, str) or len(x) > 200 for x in value): raise ValueError('dirCollapsed 無效。')
+        changes['dirCollapsed'] = list(dict.fromkeys(value))
     if kind == 'settings' and 'sharedMcp' in body:
         value = body['sharedMcp']
         if not isinstance(value, list) or len(value) > 200 or any(not isinstance(x, str) or len(x) > 200 for x in value): raise ValueError('sharedMcp 無效。')

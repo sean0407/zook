@@ -616,6 +616,7 @@
   function mcpStatus(i) {
     const t = state.mcpTests[i.id];
     if (i.id === 'builtin:workspace') return ['ok', '可用'];
+    if (i.gmail && i.needsSetup) return ['', '尚未設定'];
     if (t?.status === 'ready') return ['ok', `已連線 · ${t.toolCount} 個工具`];
     if (t?.status === 'error') return ['bad', '連線失敗'];
     return ['', '尚未測試連線'];
@@ -631,9 +632,9 @@
       return (inv.mcp || []).map(i => {
         const on = (settings.sharedMcp || []).includes(i.id);
         const [cls, label] = mcpStatus(i);
-        const description = i.id === 'builtin:workspace' ? '讓 Bot 在自己的工作區讀寫檔案。寫入前會依權限設定請你核准。' : (t => t?.status === 'error' ? '連線失敗：' + t.error : t?.status === 'ready' ? '可用工具：' + (t.tools || []).slice(0, 8).map(x => x.name.replace(/_/g, ' ')).join('、') : i.editable ? (i.config.command || i.config.url) : sourceName(i.plugin || i.source, 'mcp') + '。按「測試連線」確認是否可以使用。')(state.mcpTests[i.id]);
+        const description = i.id === 'builtin:workspace' ? '讓 Bot 在自己的工作區讀寫檔案。寫入前會依權限設定請你核准。' : i.gmail && i.needsSetup ? '讓 Bot 搜尋、讀取你的 Gmail，建立草稿和寄信。用 Google 的應用程式密碼連接，寄信前一定會先請你核准。' : (t => t?.status === 'error' ? '連線失敗：' + t.error : t?.status === 'ready' ? '可用工具：' + (t.tools || []).slice(0, 8).map(x => x.name.replace(/_/g, ' ')).join('、') : i.gmail ? `已連接 ${i.address}。Bot 可以搜尋、讀信、建立草稿和寄信；寄信前一定會先請你核准。` : i.editable ? (i.config.command || i.config.url) : sourceName(i.plugin || i.source, 'mcp') + '。按「測試連線」確認是否可以使用。')(state.mcpTests[i.id]);
         return {id: i.id, icon: i.icon, name: i.id === 'builtin:workspace' ? 'Bot 工作區' : i.name, description, group: sourceName(i.plugin || i.source, 'mcp'), meta: on ? '所有 Bot 共用中' : '未開啟',
-          on, toggle: 'mcp', toggleLabel: on ? '停用這個連接器' : '開放給所有 Bot', status: [cls, label], test: i.id !== 'builtin:workspace', editable: !!i.editable};
+          on, toggle: 'mcp', toggleLabel: on ? '停用這個連接器' : '開放給所有 Bot', status: [cls, label], test: i.id !== 'builtin:workspace' && !i.needsSetup, editable: !!i.editable, gmail: !!i.gmail, needsSetup: !!i.needsSetup};
       });
     }
     return (inv.plugins || []).map(pl => ({id: pl.id, icon: pl.icon, name: pl.displayName, description: pl.description || '', group: pl.sourceName,
@@ -650,9 +651,14 @@
     const intro = {skills: 'Skills 由所有 Bot 共用。開啟的 Skill 每個 Bot 都能使用。', mcp: '連接器讓 Bot 使用外部服務或工具，開啟後所有 Bot 共用。開得越多，回覆越慢；連不上的建議關閉。', plugins: '插件會一次帶來一組 Skills 和連接器，來源是 Claude Code。'}[tab];
     const card = i => {
       const expanded = state.dirExpanded?.[i.id];
-      return `<article class="dir-card ${expanded ? 'expanded' : ''}">${itemIcon(i.name, i.icon)}<div class="dir-body"><div class="dir-title"><h3 title="${esc(i.name)}">${esc(i.name)}</h3>${toggle(`data-dir-switch data-kind="${i.toggle}" data-id="${esc(i.id)}" title="${esc(i.toggleLabel)}"`, i.on, i.toggleLabel)}</div><p class="dir-desc">${esc(i.description || '沒有說明。')}</p>${i.description.length > 70 ? `<button class="link dir-more" data-action="dir-expand" data-id="${esc(i.id)}">${expanded ? '收合' : '展開'}</button>` : ''}<div class="dir-meta">${i.status ? `<span class="dir-status ${i.status[0]}">${esc(i.status[1])}</span>` : ''}<span>${esc(i.meta)}</span>${i.test ? `<button class="link" data-action="test-mcp" data-id="${esc(i.id)}">測試連線</button>` : ''}${i.editable ? `<button class="link" data-action="connector-edit" data-id="${esc(i.id)}">編輯</button><button class="link danger" data-action="connector-delete" data-id="${esc(i.id)}" data-name="${esc(i.name)}">移除</button>` : ''}</div>${i.note ? `<p class="dir-note">${esc(i.note)}</p>` : ''}</div></article>`;
+      return `<article class="dir-card ${expanded ? 'expanded' : ''}">${itemIcon(i.name, i.icon)}<div class="dir-body"><div class="dir-title"><h3 title="${esc(i.name)}">${esc(i.name)}</h3>${i.needsSetup ? '<button class="primary small-btn" data-action="gmail-setup">設定</button>' : toggle(`data-dir-switch data-kind="${i.toggle}" data-id="${esc(i.id)}" title="${esc(i.toggleLabel)}"`, i.on, i.toggleLabel)}</div><p class="dir-desc">${esc(i.description || '沒有說明。')}</p>${i.description.length > 70 ? `<button class="link dir-more" data-action="dir-expand" data-id="${esc(i.id)}">${expanded ? '收合' : '展開'}</button>` : ''}<div class="dir-meta">${i.status ? `<span class="dir-status ${i.status[0]}">${esc(i.status[1])}</span>` : ''}<span>${esc(i.meta)}</span>${i.test ? `<button class="link" data-action="test-mcp" data-id="${esc(i.id)}">測試連線</button>` : ''}${i.gmail && !i.needsSetup ? '<button class="link" data-action="gmail-setup">重新設定</button><button class="link danger" data-action="gmail-remove">中斷連接</button>' : ''}${i.editable ? `<button class="link" data-action="connector-edit" data-id="${esc(i.id)}">編輯</button><button class="link danger" data-action="connector-delete" data-id="${esc(i.id)}" data-name="${esc(i.name)}">移除</button>` : ''}</div>${i.note ? `<p class="dir-note">${esc(i.note)}</p>` : ''}</div></article>`;
     };
-    return `<div class="dir-bar"><div class="dir-tabs">${tabs.map(([id, label]) => `<button class="${tab === id ? 'active' : ''}" data-action="dir-tab" data-id="${id}">${label}<small>${counts[id]}</small></button>`).join('')}</div><div class="dir-filters">${dropdown('dirFilter', filter, [{id: 'all', name: '全部'}, {id: 'on', name: '已啟用'}, {id: 'off', name: '未啟用'}], 'data-dir-filter')}</div><input id="dir-search" class="dir-search" placeholder="搜尋" aria-label="搜尋" value="${esc(state.dirQuery || '')}"></div><p class="muted dir-intro">${intro}</p>${tab === 'mcp' ? '<div class="dir-add"><button class="primary" data-action="connector-add">＋ 新增連接器</button><span class="muted small">直接加在 Zook 裡，不需要先在 Codex 或 Claude 設定。</span></div>' : ''}${groups.length ? groups.map(g => `<section class="dir-section"><h2>${esc(g)}<small>${items.filter(i => i.group === g).length}</small></h2><div class="dir-grid">${items.filter(i => i.group === g).map(card).join('')}</div></section>`).join('') : '<div class="blank">沒有符合的項目。</div>'}`;
+    return `<div class="dir-bar"><div class="dir-tabs">${tabs.map(([id, label]) => `<button class="${tab === id ? 'active' : ''}" data-action="dir-tab" data-id="${id}">${label}<small>${counts[id]}</small></button>`).join('')}</div><div class="dir-filters">${dropdown('dirFilter', filter, [{id: 'all', name: '全部'}, {id: 'on', name: '已啟用'}, {id: 'off', name: '未啟用'}], 'data-dir-filter')}</div><input id="dir-search" class="dir-search" placeholder="搜尋" aria-label="搜尋" value="${esc(state.dirQuery || '')}"></div><p class="muted dir-intro">${intro}</p>${tab === 'mcp' ? '<div class="dir-add"><button class="primary" data-action="connector-add">＋ 新增連接器</button><span class="muted small">直接加在 Zook 裡，不需要先在 Codex 或 Claude 設定。</span></div>' : ''}${groups.length ? groups.map(g => { const closed = (state.data.settings.dirCollapsed || []).includes(tab + ':' + g) && !q; return `<section class="dir-section"><h2><button class="dir-fold" data-action="dir-collapse" data-id="${esc(tab + ':' + g)}" aria-expanded="${!closed}"><span>${esc(g)}</span><small>${items.filter(i => i.group === g).length}</small><span class="dir-chev" aria-hidden="true">${closed ? '⌄' : '⌃'}</span></button></h2>${closed ? '' : `<div class="dir-grid">${items.filter(i => i.group === g).map(card).join('')}</div>`}</section>`; }).join('') : '<div class="blank">沒有符合的項目。</div>'}`;
+  }
+  // Built-in Gmail: an address and a Google app password. The password goes to the Keychain.
+  function gmailModal() {
+    const current = (state.integrations?.mcp || []).find(i => i.gmail)?.address || '';
+    modal('設定 Gmail', `<form id="gmail-form"><div class="modal-body"><p class="muted">Zook 用 Google 的「應用程式密碼」連接 Gmail。這是 Google 為單一 App 產生的專用密碼，不是你的 Google 登入密碼，可以隨時在 Google 帳戶裡撤銷。</p><ol class="steps"><li>Google 帳戶需已開啟「兩步驟驗證」。</li><li>開啟 <a href="https://myaccount.google.com/apppasswords" rel="noopener noreferrer">myaccount.google.com/apppasswords</a>，輸入名稱（例如 Zook）後建立。</li><li>把顯示的 16 個字母貼到下面。</li></ol><label class="field">Gmail 信箱<input name="address" type="email" required autocomplete="off" spellcheck="false" placeholder="you@gmail.com" value="${esc(current)}"></label><label class="field">應用程式密碼<input name="password" type="password" required autocomplete="off" spellcheck="false" placeholder="16 個英文字母"></label><p class="muted small">密碼只存進這台 Mac 的鑰匙圈，不會寫進 Zook 的資料檔，也不會傳到手機。公司或學校的 Google 帳號可能被管理員停用應用程式密碼。</p></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">連接</button></div></form>`);
   }
   // A connector added in Zook itself: a command run on this Mac, or the address of a remote one.
   function connectorModal(item) {
@@ -1271,6 +1277,14 @@
           await saveArrangement(state.data.bots, sectionNames().filter(x => x !== id));
           toast('已刪除分組');
           break;
+        case 'dir-collapse': {
+          // Remembered with the other settings, so a group you fold away stays folded next time.
+          const now = new Set(state.data.settings.dirCollapsed || []);
+          now.has(id) ? now.delete(id) : now.add(id);
+          state.data.settings.dirCollapsed = [...now]; render(true);
+          state.data.settings = await post('settings', {dirCollapsed: [...now]}, 'PATCH');
+          break;
+        }
         case 'collapse':
           state.collapsed[id] = !state.collapsed[id];
           render(true);
@@ -1363,6 +1377,15 @@
             for (const j of Object.values(state.jobDetails)) for (const a of j.approvals || []) if (a.id === id) a.status = action === 'approve' ? 'approved' : 'denied';
             render(true);
           } finally { delete state.deciding[id]; if (el.isConnected) el.disabled = false; }
+          break;
+        case 'gmail-setup':
+          gmailModal();
+          break;
+        case 'gmail-remove':
+          if (!confirm('中斷 Gmail 連接？所有 Bot 都會無法再使用 Gmail，儲存的應用程式密碼會從鑰匙圈刪除。')) break;
+          await api('gmail', {method: 'DELETE'});
+          delete state.mcpTests['builtin:gmail'];
+          state.integrations = await api('integrations'); await refresh(); toast('已中斷 Gmail 連接');
           break;
         case 'connector-add':
           connectorModal();
@@ -1646,6 +1669,13 @@
         delete d.providerId;
         await post('accounts/custom', d);
         closeModal(); await reloadAccounts(); toast('已儲存，Bot 現在可以選用這個 CLI');
+      } else if (form.id === 'gmail-form') {
+        const d = new FormData(form), button = form.querySelector('.primary');
+        button.disabled = true; button.textContent = '正在連接…';
+        try { await post('gmail', {address: d.get('address').trim(), password: d.get('password')}); }
+        finally { if (button.isConnected) { button.disabled = false; button.textContent = '連接'; } }
+        closeModal(); delete state.mcpTests['builtin:gmail'];
+        state.integrations = await api('integrations'); await refresh(); toast('Gmail 已連接，所有 Bot 都可以使用');
       } else if (form.id === 'connector-form') {
         const d = new FormData(form), transport = d.get('transport'), id = form.dataset.id, env = {};
         for (const line of (d.get('env') || '').split('\n').map(x => x.trim()).filter(Boolean)) {
