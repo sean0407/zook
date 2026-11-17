@@ -10,7 +10,8 @@ The layout is inspired by Grok Bot. The implementation is independent and uses n
 
 - **Bots**: create, edit, pin and categorize Bots, each with its own instructions, model, look and conversation history.
 - **Group chats**: 2–6 Bots in one conversation. Message everyone, direct a message with `@Bot`, and let Bots hand work to each other.
-- **Any CLI**: Codex, Claude, Grok and Gemini are built in, and you can add a custom CLI. No API key is requested or copied.
+- **Any CLI**: Codex, Claude, Grok and Gemini are built in, and you can add a custom CLI.
+- **Several accounts per model**: add more sign-ins or API keys for the same CLI and choose one for each Bot. Each sign-in stays in its own folder managed by the CLI; API keys are kept in the macOS Keychain.
 - **Access scope per Bot**: the whole Mac (default), one folder, or only Zook's workspace.
 - **Shared Skills, connectors and plugins**: configured once and available to every Bot.
 - **Usage**: provider quotas and token use per Bot.

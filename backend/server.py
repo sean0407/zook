@@ -83,7 +83,8 @@ class Store:
             bot.setdefault('enabledSkills', []); bot.setdefault('enabledMcp', []); bot.setdefault('allowCommands', True)
         self.data.setdefault('groups', []); self.data.setdefault('memories', []); self.data.setdefault('quota', {})
         self.data.setdefault('customProviders', [])
-        _active['data'] = self.data
+        _active['data'] = self.data; _active['dir'] = self.dir
+        self.data.setdefault('accounts', [])
         self.data.setdefault('settings', {}).setdefault('disabledSkills', [])
         self.data['settings'].setdefault('disabledPlugins', [])
         self.data['settings'].setdefault('fallbacks', [])
@@ -560,31 +561,119 @@ ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07')
 LOGIN_TIMEOUT = 600
 
 
-def provider_env(provider):
-    return claude_personal_env() if provider == 'claude' else os.environ.copy()
+# Extra accounts. Each CLI keeps a whole account in one folder, and reads an API key from its own environment variable.
+ACCOUNT_HOME = {'codex': 'CODEX_HOME', 'claude': 'CLAUDE_CONFIG_DIR', 'grok': 'GROK_HOME'}
+ACCOUNT_KEYS = {'codex': ('CODEX_API_KEY', 'OPENAI_API_KEY'), 'claude': ('ANTHROPIC_API_KEY',), 'grok': ('XAI_API_KEY',), 'gemini': ('GEMINI_API_KEY',)}
+ACCOUNT_ID = re.compile(r'[0-9a-f]{32}')
+KEYCHAIN_SERVICE = 'Zook account API key'
 
 
-def account_status(provider):
+def find_account(account_id, provider=None):
+    """An extra account by id; None for '' (the CLI's own sign-in) or when it belongs to another provider."""
+    if not account_id: return None
+    hit = next((a for a in _active['data'].get('accounts') or [] if a.get('id') == account_id), None)
+    return hit if hit and (provider is None or hit.get('provider') == provider) else None
+
+
+def account_dir(account_id):
+    if not ACCOUNT_ID.fullmatch(account_id or ''): raise ValueError('帳號無效。')
+    path = _active['dir'] / 'accounts' / account_id
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return path
+
+
+def _secret_file(account_id):
+    """Tests keep keys in a folder instead of the real Keychain."""
+    folder = os.environ.get('ZOOK_SECRETS_DIR')
+    return pathlib.Path(folder) / account_id if folder and ACCOUNT_ID.fullmatch(account_id or '') else None
+
+
+def secret_set(account_id, value):
+    """Store an API key in the macOS Keychain. The key travels on stdin, never on a command line."""
+    if not ACCOUNT_ID.fullmatch(account_id or '') or not re.fullmatch(r'[A-Za-z0-9._~+/=:@-]{8,500}', value or ''): raise ValueError('API 金鑰無效：長度需為 8 到 500 個字元，且只能包含英數字與 . _ ~ + / = : @ -。')
+    file = _secret_file(account_id)
+    if file:
+        fd = os.open(str(file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w') as f: f.write(value)
+        return
+    command = 'add-generic-password -U -s %s -a %s -w %s\n' % (shlex.quote(KEYCHAIN_SERVICE), account_id, shlex.quote(value))
+    p = subprocess.run(['/usr/bin/security', '-i'], input=command.encode(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+    if p.returncode != 0 or secret_get(account_id) != value:
+        secret_delete(account_id); raise RuntimeError('無法把 API 金鑰存進鑰匙圈。')
+
+
+def secret_get(account_id):
+    if not ACCOUNT_ID.fullmatch(account_id or ''): return ''
+    file = _secret_file(account_id)
+    if file:
+        try: return file.read_text().strip()
+        except OSError: return ''
+    try:
+        p = subprocess.run(['/usr/bin/security', 'find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', account_id, '-w'],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20)
+    except (OSError, subprocess.TimeoutExpired): return ''
+    return p.stdout.decode('utf-8', 'replace').strip() if p.returncode == 0 else ''
+
+
+def secret_delete(account_id):
+    if not ACCOUNT_ID.fullmatch(account_id or ''): return
+    file = _secret_file(account_id)
+    if file:
+        try: file.unlink()
+        except OSError: pass
+        return
+    try: subprocess.run(['/usr/bin/security', 'delete-generic-password', '-s', KEYCHAIN_SERVICE, '-a', account_id],
+                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+    except (OSError, subprocess.TimeoutExpired): pass
+
+
+def provider_env(provider, account=None):
+    """The CLI's environment. With an extra account, the CLI is pointed at that account's own folder, plus its API key if it is a key account."""
+    env = claude_personal_env() if provider == 'claude' else os.environ.copy()
+    account = find_account(account, provider) if isinstance(account, str) else account
+    if not account: return env
+    if provider in ACCOUNT_HOME: env[ACCOUNT_HOME[provider]] = str(account_dir(account['id']))
+    if account.get('type') == 'key':
+        key = secret_get(account['id'])
+        if not key: raise RuntimeError('找不到帳號「%s」的 API 金鑰，請到「模型帳號」頁重新新增。' % account.get('name', ''))
+        for name in ACCOUNT_KEYS.get(provider, ()): env[name] = key
+    return env
+
+
+def account_view(account):
+    """What the 模型帳號 page shows for one extra account."""
+    provider = account['provider']
+    item = dict(id=account['id'], name=account['name'], type=account['type'], status='unknown', method='', plan='', email='')
+    if account['type'] == 'key':
+        item.update(status='logged_in' if secret_get(account['id']) else 'not_logged_in', method='API 金鑰')
+        return item
+    full = account_status(provider, account)
+    item.update({k: full.get(k, '') for k in ('status', 'method', 'plan', 'email')})
+    return item
+
+
+def account_status(provider, account=None):
     """Login status from the CLI itself. Never reads credential files."""
     path = find_cli(provider); s = P.spec(_active['data'], provider) or {}
+    env = provider_env(provider, account); info_key = provider + ('@' + account['id'] if account else '')
     item = dict(id=provider, name=s.get('name', provider), installed=bool(path), status='not_installed' if not path else 'unknown', method='', plan='', email='',
                 kind=s.get('kind', ''), custom=bool(s.get('custom')), tools=bool(s.get('tools')), path=path or '', loginNote=s.get('login_note', ''))
     if not path: return item
     try:
         if s.get('kind') == 'grok':
-            p = subprocess.run([path, 'models'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15)
+            p = subprocess.run([path, 'models'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, timeout=15)
             text = ANSI.sub('', p.stdout.decode('utf-8', 'replace')).lower()
             item['status'] = 'not_logged_in' if 'not authenticated' in text or 'not logged in' in text else ('logged_in' if p.returncode == 0 else 'unknown')
             if item['status'] == 'logged_in':
                 item['method'] = 'Grok 帳號'
-                item['email'] = str((_active['data'].get('accountInfo') or {}).get(provider, {}).get('email') or '')
+                item['email'] = str((_active['data'].get('accountInfo') or {}).get(info_key, {}).get('email') or '')
         elif s.get('kind') == 'generic':
             if s.get('status'):
                 p = subprocess.run(shlex.split(s['status']), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
                 item['status'] = 'logged_in' if p.returncode == 0 else 'not_logged_in'
             else: item['status'] = 'installed'
         elif provider == 'claude':
-            p = subprocess.run([path, 'auth', 'status'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=provider_env(provider), timeout=8)
+            p = subprocess.run([path, 'auth', 'status'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, timeout=8)
             data = json.loads(p.stdout or b'{}')
             if isinstance(data.get('loggedIn'), bool): item['status'] = 'logged_in' if data['loggedIn'] else 'not_logged_in'
             if item['status'] == 'logged_in':
@@ -592,12 +681,12 @@ def account_status(provider):
                 item['plan'] = str(data.get('subscriptionType') or '')
                 item['email'] = str(data.get('email') or '')
         elif provider == 'codex':
-            p = subprocess.run([path, 'login', 'status'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=provider_env(provider), timeout=8)
+            p = subprocess.run([path, 'login', 'status'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, timeout=8)
             text = ANSI.sub('', p.stdout.decode('utf-8', 'replace')).strip()
             if p.returncode == 0 and 'logged in' in text.lower() and 'not logged in' not in text.lower():
                 item['status'] = 'logged_in'
                 item['method'] = 'ChatGPT 帳號' if 'chatgpt' in text.lower() else ('API 金鑰' if 'api key' in text.lower() else text[:60])
-                item.update(codex_account(path))
+                if not account: item.update(codex_account(path))  # the account details service only knows the CLI's own sign-in
             elif 'not logged in' in text.lower() or p.returncode != 0:
                 item['status'] = 'not_logged_in'
     except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -627,11 +716,11 @@ def codex_account(path):
 
 class LoginFlow:
     """Runs the provider CLI's own interactive login; Zook never sees credentials."""
-    def __init__(self, provider, args):
+    def __init__(self, provider, args, account=None):
         self.provider, self.lines, self.state, self.error = provider, [], 'running', ''
         self.started = time.time(); self.lock = threading.Lock()
         self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                     env=provider_env(provider), start_new_session=True)
+                                     env=provider_env(provider, account), start_new_session=True)
         self.reader = threading.Thread(target=self._read, daemon=True); self.reader.start()
         threading.Thread(target=self._watch, daemon=True).start()
 
@@ -1217,7 +1306,7 @@ class App(ThreadingHTTPServer):
             chain = provider_chain(store, bot, provider, model)
             skipped = {}
             for p, _ in chain[:]:
-                reason = '尚未安裝' if not find_cli(p) else '額度已用完' if quota_exhausted(store, p) else None
+                reason = '尚未安裝' if not find_cli(p) else '額度已用完' if quota_exhausted(store, p) and not find_account(bot.get('account'), p) else None
                 if reason and len(chain) > 1: skipped[p] = reason; chain.remove(next(x for x in chain if x[0] == p))
         why = skipped.get(provider)
         for index, (p, m) in enumerate(chain):
@@ -1264,7 +1353,8 @@ class App(ThreadingHTTPServer):
             scope, root = bot_access(bot, workspace) if native or kind in ('codex', 'claude') else ('workspace', workspace)
             # Grok reads Zook's tool settings from the folder it starts in, so it always starts in the workspace and is given the other folders.
             cli_cwd = workspace if kind == 'grok' else root
-            env = claude_personal_env() if provider == 'claude' else os.environ.copy()
+            account = find_account(bot.get('account'), provider)  # an extra account only applies to the provider it belongs to
+            env = provider_env(provider, account)
             if selected:
                 runtime = runtime_module(); inventory = inventory or inventory_for(store)
                 with store.lock: skill_ids = shared_skill_ids(store, inventory); mcp_ids = shared_mcp_ids(store, inventory)
@@ -1359,7 +1449,7 @@ class App(ThreadingHTTPServer):
                 raise RuntimeError('執行逾時。')
             if len(output) > MAX_BODY: raise RuntimeError('回覆超過大小限制。')
             parsed = parse_cli_output(kind if kind in ('codex', 'claude', 'grok') else 'plain', output.decode('utf-8', errors='replace'), model)
-            if parsed['quota']: self.record_quota(provider, parsed['quota'])
+            if parsed['quota'] and not account: self.record_quota(provider, parsed['quota'])  # the usage page tracks the CLI's own sign-in
             if parsed.get('web'):
                 with store.lock:
                     job = store.find('jobs', job_id)
@@ -1888,7 +1978,7 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) == 2 and self.command == 'GET':
             items = []
             data = self.server.store.data
-            for provider, flow in list(logins.items()):  # remember the account a Zook-run sign-in reported
+            for provider, flow in list(logins.items()):  # remember the account a Zook-run sign-in reported (keys are provider or provider@account)
                 if flow.state == 'succeeded' and not getattr(flow, 'recorded', False):
                     found = re.search(r'[Ss]igned in as\s+(\S+@\S+)', '\n'.join(flow.lines))
                     with self.server.store.lock:
@@ -1908,6 +1998,14 @@ class Handler(BaseHTTPRequestHandler):
                             requires=s.get('requires', ''), requirementMet=not s.get('requires') or bool(P.find_binary(s['requires'])),
                             config={k: s.get(k, '') for k in ('command', 'args', 'model_args', 'install', 'login', 'status')} if s.get('custom') else None,
                             models=s.get('models', []) if s.get('custom') else None)
+                profiles = []
+                for account in [a for a in data.get('accounts') or [] if a.get('provider') == provider]:
+                    try: view = account_view(account)
+                    except (OSError, ValueError, RuntimeError): view = dict(id=account['id'], name=account['name'], type=account['type'], status='unknown', method='', plan='', email='')
+                    sub = logins.get(provider + '@' + account['id'])
+                    view['login'] = sub.view() if sub else None
+                    profiles.append(view)
+                item.update(profiles=profiles, canAddLogin=bool(provider in ACCOUNT_HOME and login_methods(provider)), canAddKey=provider in ACCOUNT_KEYS)
                 items.append(item)
             return self.respond(200, {'providers': items, 'catalog': P.catalog_view(data)})
         if len(parts) == 3 and parts[2] == 'custom' and self.command == 'POST':
@@ -1920,8 +2018,39 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(201, item)
         if len(parts) < 4 or self.command != 'POST' or not P.spec(self.server.store.data, parts[2]): return self.error(404, '找不到資源。')
         provider, action = parts[2], '/'.join(parts[3:])
-        body = self.body(); flow = logins.get(provider)
+        body = self.body(); store = self.server.store
+        account = None
+        if body.get('account'):
+            account = find_account(body['account'], provider) if isinstance(body['account'], str) else None
+            if not account: return self.error(404, '找不到這個帳號。')
+        login_key = provider + ('@' + account['id'] if account else '')
+        flow = logins.get(login_key)
         try:
+            if action == 'profiles':
+                name, kind, key = body.get('name'), body.get('type'), body.get('key')
+                if not isinstance(name, str) or not name.strip() or len(name) > 60: raise ValueError('請輸入帳號名稱。')
+                if kind == 'login' and not (provider in ACCOUNT_HOME and login_methods(provider)): raise ValueError('這個模型不支援再登入一個帳號，請改用 API 金鑰。')
+                if kind == 'key' and provider not in ACCOUNT_KEYS: raise ValueError('這個模型不支援 API 金鑰。')
+                if kind not in ('login', 'key'): raise ValueError('帳號類型無效。')
+                with store.lock:
+                    if any(a['provider'] == provider and a['name'] == name.strip() for a in store.data['accounts']): raise ValueError('已經有同名的帳號。')
+                new = dict(id=ID(), provider=provider, name=name.strip(), type=kind, createdAt=NOW())
+                if kind == 'key': secret_set(new['id'], key.strip() if isinstance(key, str) else '')
+                if provider in ACCOUNT_HOME: account_dir(new['id'])
+                with store.lock: store.data['accounts'].append(new); store.save()
+                return self.respond(201, new)
+            if action == 'profiles/delete':
+                if not account: raise ValueError('帳號無效。')
+                if flow and flow.state == 'running': flow.cancel()
+                logins.pop(login_key, None)
+                with store.lock:
+                    store.data['accounts'] = [a for a in store.data['accounts'] if a['id'] != account['id']]
+                    for b in store.data['bots']:
+                        if b.get('account') == account['id']: b['account'] = ''  # back to the CLI's own sign-in
+                    (store.data.get('accountInfo') or {}).pop(login_key, None); store.save()
+                secret_delete(account['id'])
+                shutil.rmtree(str(_active['dir'] / 'accounts' / account['id']), ignore_errors=True)
+                return self.respond(200, {'ok': True})
             if action == 'add':
                 with self.server.store.lock:
                     st = self.server.store.data['settings']
@@ -1953,8 +2082,9 @@ class Handler(BaseHTTPRequestHandler):
             if action == 'login':
                 if flow and flow.state == 'running': return self.error(409, '登入流程已在進行中。')
                 default = (login_methods(provider) or [('', '')])[0][0]
-                logins[provider] = LoginFlow(provider, login_args(provider, body.get('method') or default))
-                return self.respond(202, logins[provider].view())
+                if account and account['type'] != 'login': raise ValueError('API 金鑰帳號不需要登入。')
+                logins[login_key] = LoginFlow(provider, login_args(provider, body.get('method') or default), account)
+                return self.respond(202, logins[login_key].view())
             if action == 'login/cancel':
                 if flow: flow.cancel()
                 return self.respond(200, flow.view() if flow else {'state': 'idle'})
@@ -1964,11 +2094,12 @@ class Handler(BaseHTTPRequestHandler):
                 flow.send(code); return self.respond(200, flow.view())
             if action == 'logout':
                 if flow and flow.state == 'running': flow.cancel()
-                p = subprocess.run(logout_args(provider), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=provider_env(provider), timeout=20)
-                logins.pop(provider, None)
+                p = subprocess.run(logout_args(provider), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=provider_env(provider, account), timeout=20)
+                logins.pop(login_key, None)
                 with self.server.store.lock:
-                    (self.server.store.data.get('accountInfo') or {}).pop(provider, None); self.server.store.save()
+                    (self.server.store.data.get('accountInfo') or {}).pop(login_key, None); self.server.store.save()
                 return self.respond(200, {'ok': p.returncode == 0})
+        except ValueError as exc: return self.error(400, str(exc))
         except (RuntimeError, OSError) as exc: return self.error(409, str(exc) if isinstance(exc, RuntimeError) else '無法執行 CLI。')
         except subprocess.TimeoutExpired: return self.error(504, 'CLI 沒有回應。')
         return self.error(404, '找不到資源。')
@@ -2087,7 +2218,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, png, 'image/png') if png else self.error(404, '沒有這個圖示。')
             if path == '/api/providers' and self.command == 'GET':
                 data = self.server.store.data
-                return self.respond(200, {'providers': [dict(id=pid, name=provider_label(pid), installed=bool(find_cli(pid)), tools=bool((P.spec(data, pid) or {}).get('tools')))
+                return self.respond(200, {'providers': [dict(id=pid, name=provider_label(pid), installed=bool(find_cli(pid)), tools=bool((P.spec(data, pid) or {}).get('tools')),
+                                                             accounts=[dict(id=a['id'], name=a['name'], type=a['type']) for a in data.get('accounts') or [] if a.get('provider') == pid])
                                                         for pid in P.active_ids(data)]})
             if parts[:2] == ['api', 'accounts']:
                 return self.accounts(parts)
@@ -2287,6 +2419,9 @@ def update(target, body, kind):
         value = body['disabledSkills']
         if not isinstance(value, list) or len(value) > 1000 or any(not isinstance(x, str) or len(x) > 200 for x in value): raise ValueError('disabledSkills 無效。')
         changes['disabledSkills'] = list(dict.fromkeys(value))
+    if kind == 'bot' and 'account' in body:
+        if body['account'] != '' and not find_account(body['account'] if isinstance(body['account'], str) else None): raise ValueError('帳號無效。')
+        changes['account'] = body['account']
     if kind == 'bot' and ('access' in body or 'accessFolder' in body):
         access = body.get('access', target.get('access') or 'full'); folder = body.get('accessFolder', target.get('accessFolder') or '')
         if access not in ACCESS_SCOPES or not isinstance(folder, str) or len(folder) > 1000: raise ValueError('存取範圍無效。')

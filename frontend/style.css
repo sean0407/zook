@@ -1424,3 +1424,12 @@ button {
 .device-row { padding: 12px 0; }
 .pairing { text-align: center; }
 .pairing-qr { width: 240px; height: 240px; image-rendering: pixelated; margin: 8px auto; display: block; border: 10px solid #fff; border-radius: 12px; box-shadow: 0 0 0 1px #eee; }
+
+/* Extra accounts under a provider */
+.profiles { margin-top: 16px; padding-top: 14px; border-top: 1px solid #ececec; display: grid; gap: 10px; }
+.profiles-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.profile-row { padding: 12px 14px; border-radius: 10px; background: #fafafa; }
+.profile-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.profile-head p { margin: 2px 0 0; }
+.profile-row .actions { margin-top: 10px; }
+.field[hidden] { display: none; }

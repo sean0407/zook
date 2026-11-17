@@ -392,11 +392,11 @@
     const list = state.accounts?.providers;
     if (!list) return '<div class="blank">正在讀取登入狀態…</div>';
     const badge = {logged_in: ['ok', '已登入'], not_logged_in: ['warn', '尚未登入'], installed: ['', '已安裝'], unknown: ['', '狀態不明'], not_installed: ['warn', '未安裝']};
-    const flowView = (l, kind, id) => {
+    const flowView = (l, kind, id, account = '') => {
       if (!l) return '';
       if (l.state === 'running') {
         if (kind === 'install') return `<div class="login-flow"><strong>正在安裝／更新…</strong>${l.log?.length ? `<pre class="flow-log">${esc(l.log.slice(-6).join('\n'))}</pre>` : ''}<button class="link" data-action="install-cancel" data-id="${esc(id)}">取消</button></div>`;
-        return `<div class="login-flow"><strong>${l.deviceCode ? '請在登入頁輸入這組代碼' : '已在瀏覽器開啟登入頁'}</strong>${l.deviceCode ? `<div class="device-code">${esc(l.deviceCode)}</div>` : ''}${l.url ? `<p class="muted">沒有自動開啟？<a href="${esc(l.url)}" rel="noopener noreferrer">點這裡開啟登入頁</a></p>` : '<p class="muted">正在等待 CLI 提供登入網址…</p>'}${l.needsCode ? `<form class="code-form" id="account-code-form" data-id="${esc(id)}"><input name="code" placeholder="如果頁面顯示授權碼，貼在這裡" aria-label="授權碼" autocomplete="off"><button class="primary">送出</button></form>` : ''}<button class="link" data-action="account-cancel" data-id="${esc(id)}">取消登入</button></div>`;
+        return `<div class="login-flow"><strong>${l.deviceCode ? '請在登入頁輸入這組代碼' : '已在瀏覽器開啟登入頁'}</strong>${l.deviceCode ? `<div class="device-code">${esc(l.deviceCode)}</div>` : ''}${l.url ? `<p class="muted">沒有自動開啟？<a href="${esc(l.url)}" rel="noopener noreferrer">點這裡開啟登入頁</a></p>` : '<p class="muted">正在等待 CLI 提供登入網址…</p>'}${l.needsCode ? `<form class="code-form" id="account-code-form" data-id="${esc(id)}" data-account="${esc(account)}"><input name="code" placeholder="如果頁面顯示授權碼，貼在這裡" aria-label="授權碼" autocomplete="off"><button class="primary">送出</button></form>` : ''}<button class="link" data-action="account-cancel" data-id="${esc(id)}" data-account="${esc(account)}">取消登入</button></div>`;
       }
       if (l.state === 'succeeded') return `<div class="login-flow done">${kind === 'install' ? '安裝／更新完成。' : '登入完成。'}</div>`;
       return `<div class="login-flow error-text">${esc(l.error || (kind === 'install' ? '安裝沒有完成。' : '登入沒有完成。'))}${kind === 'install' && l.log?.length ? `<pre class="flow-log">${esc(l.log.slice(-6).join('\n'))}</pre>` : ''}</div>`;
@@ -411,12 +411,23 @@
       const installLabel = !p.installed ? '一鍵安裝' : v?.updateAvailable ? `更新到 ${esc(v.latest)}` : p.canUpdate ? '檢查並更新' : '重新安裝';
       const installBtn = p.canInstall && (!p.requires || p.requirementMet || p.installed) && !(upToDate && p.installed) ? `<button class="${!p.installed || v?.updateAvailable ? 'primary' : 'secondary'}" data-action="provider-install" data-id="${esc(p.id)}" data-command="${esc(p.installed && p.canUpdate ? '' : p.installCommand)}">${installLabel}</button>` : '';
       const notes = [!p.tools ? 'Skill、MCP、記憶寫入等 Zook 工具目前只支援 Codex 和 Claude；用這個提供者的 Bot 會以純對話方式回覆。' : '', p.installed && !p.loginMethods.length && p.loginNote ? p.loginNote : ''].filter(Boolean);
-      return `<article class="account-card"><div class="account-head"><div><h3>${esc(p.name)}${p.custom ? ' <span class="pill">自訂</span>' : ''}</h3><p class="muted">${sub}</p>${versionLine}</div><span class="pill ${cls}">${label}</span></div>${notes.map(n => `<p class="muted small provider-note">${esc(n)}</p>`).join('')}${flowView(p.install, 'install', p.id)}${flowView(l, 'login', p.id)}${!running ? `<div class="actions">${loginButtons}${installBtn}${p.custom ? `<button class="secondary" data-action="provider-edit" data-id="${esc(p.id)}">編輯設定</button>` : ''}<span class="spacer"></span>${p.status === 'logged_in' && p.canLogout ? `<button class="link danger" data-action="account-logout" data-id="${esc(p.id)}">登出</button>` : ''}${p.removable ? `<button class="link danger" data-action="provider-remove" data-id="${esc(p.id)}">從 Zook 移除</button>` : ''}</div>` : ''}</article>`;
+      const profiles = (p.profiles || []).map(a => {
+        const [acls, alabel] = badge[a.status] || badge.unknown, busy = a.login?.state === 'running';
+        const info = [a.type === 'key' ? 'API 金鑰' : a.method || '登入帳號', a.plan && a.plan.toUpperCase(), a.email].filter(Boolean).map(esc).join(' · ');
+        const buttons = a.type === 'login' && !busy ? p.loginMethods.map((m, i) => `<button class="${i === 0 && a.status !== 'logged_in' ? 'primary' : 'secondary'}" data-action="account-login" data-id="${esc(p.id)}" data-account="${esc(a.id)}" data-method="${esc(m.id)}">${a.status === 'logged_in' && i === 0 ? '重新登入' : esc(m.label)}</button>`).join('') : '';
+        return `<div class="profile-row"><div class="profile-head"><div><strong>${esc(a.name)}</strong><p class="muted small">${info}</p></div><span class="pill ${acls}">${alabel}</span></div>${flowView(a.login, 'login', p.id, a.id)}${!busy ? `<div class="actions">${buttons}<span class="spacer"></span><button class="link danger" data-action="profile-delete" data-id="${esc(p.id)}" data-account="${esc(a.id)}" data-name="${esc(a.name)}">移除帳號</button></div>` : ''}</div>`;
+      }).join('');
+      const profileBlock = p.installed && (p.canAddLogin || p.canAddKey) ? `<div class="profiles"><div class="profiles-head"><strong>其他帳號</strong><button class="secondary" data-action="profile-add" data-id="${esc(p.id)}">＋ 新增帳號</button></div>${profiles || '<p class="muted small">可以再加入其他登入帳號或 API 金鑰，並在每個 Bot 的設定裡指定要用哪一個。</p>'}</div>` : '';
+      return `<article class="account-card"><div class="account-head"><div><h3>${esc(p.name)}${p.custom ? ' <span class="pill">自訂</span>' : ''}</h3><p class="muted">${sub}</p>${versionLine}</div><span class="pill ${cls}">${label}</span></div>${notes.map(n => `<p class="muted small provider-note">${esc(n)}</p>`).join('')}${flowView(p.install, 'install', p.id)}${flowView(l, 'login', p.id)}${!running ? `<div class="actions">${loginButtons}${installBtn}${p.custom ? `<button class="secondary" data-action="provider-edit" data-id="${esc(p.id)}">編輯設定</button>` : ''}<span class="spacer"></span>${p.status === 'logged_in' && p.canLogout ? `<button class="link danger" data-action="account-logout" data-id="${esc(p.id)}">登出</button>` : ''}${p.removable ? `<button class="link danger" data-action="provider-remove" data-id="${esc(p.id)}">從 Zook 移除</button>` : ''}</div>` : ''}${profileBlock}</article>`;
     }).join('')}</div>`;
   }
   function providerAddModal() {
     const catalog = state.accounts?.catalog || [];
     modal('新增模型', `<div class="modal-body"><p class="muted">選擇要加入 Zook 的模型。已經裝在電腦上的會直接加入；還沒安裝的，加入後可以一鍵安裝。</p>${catalog.length ? `<div class="catalog-list">${catalog.map(c => `<div class="catalog-item"><div><strong>${esc(c.name)}</strong><small>${c.installed ? '已安裝在這台電腦' : c.requires && !c.requirementMet ? `需要先安裝 ${esc(c.requires === 'npm' ? 'Node.js（npm）' : c.requires)}` : '尚未安裝，可一鍵安裝'} · 使用 ${esc(c.vendor)} 官方安裝程式</small></div><button class="secondary" data-action="provider-add-one" data-id="${esc(c.id)}">加入</button></div>`).join('')}</div>` : '<p class="muted">內建的模型都已經加入了。</p>'}<h3 class="modal-sub">不在清單裡？</h3><p class="muted">其他模型的命令列工具也可以手動加入（適合熟悉電腦設定的人）。</p><button class="secondary" data-action="provider-custom">＋ 手動新增</button></div>`);
+  }
+  function profileModal(p) {
+    const types = [p.canAddLogin && {id: 'login', name: '登入帳號', hint: '用另一個帳號在瀏覽器登入'}, p.canAddKey && {id: 'key', name: 'API 金鑰', hint: '依用量計費，金鑰存在這台 Mac 的鑰匙圈'}].filter(Boolean);
+    modal('新增帳號', `<form id="profile-form" data-id="${esc(p.id)}"><div class="modal-body"><p class="muted">為 ${esc(p.name)} 再加入一個帳號。加入後，到 Bot 的「進階設定」選擇要用哪個帳號。</p><label class="field">名稱<input name="name" required maxlength="60" placeholder="例如：公司、個人、API"></label><div class="setting-list in-form">${settingRow('類型', '這個帳號的登入方式', dropdown('accountType', types[0].id, types))}</div><label class="field" data-key-field ${types[0].id === 'key' ? '' : 'hidden'}>API 金鑰<input name="key" type="password" autocomplete="off" spellcheck="false" placeholder="貼上金鑰"><small class="muted">金鑰只會存進 macOS 鑰匙圈，不會寫進 Zook 的資料檔，也不會傳到手機。</small></label></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">新增</button></div></form>`);
   }
   function customProviderModal(p) {
     const c = p?.config || {};
@@ -432,7 +443,7 @@
     if (state.accountPolling) return;
     state.accountPolling = true;
     try {
-      while (state.page === 'accounts' && state.accounts?.providers?.some(p => p.login?.state === 'running' || p.install?.state === 'running')) {
+      while (state.page === 'accounts' && state.accounts?.providers?.some(p => p.login?.state === 'running' || p.install?.state === 'running' || (p.profiles || []).some(a => a.login?.state === 'running'))) {
         await new Promise(r => setTimeout(r, 1500));
         const next = await api('accounts');
         if (JSON.stringify(next) !== JSON.stringify(state.accounts)) { state.accounts = next; if (state.page === 'accounts' && !$('#account-code-form input:focus')) render(true); }
@@ -441,6 +452,11 @@
     } catch (e) { toast(e.message); }
     finally { state.accountPolling = false; }
   }
+  // Accounts a Bot can use for a provider: the CLI's own sign-in, plus any extra ones added on the 模型帳號 page.
+  const accountOptions = (provider, selected) => {
+    const list = ((state.providers || []).find(p => p.id === (provider || state.data.settings.provider || 'codex')) || {}).accounts || [];
+    return `<option value="">預設帳號</option>` + list.map(a => `<option value="${esc(a.id)}" ${selected === a.id ? 'selected' : ''}>${esc(a.name)}${a.type === 'key' ? '（API 金鑰）' : ''}</option>`).join('');
+  };
   const providerOptions = (selected, withDefault) => (withDefault ? `<option value="" ${!selected ? 'selected' : ''}>使用預設</option>` : '') + (state.providers || [{id: 'codex', name: 'Codex'}, {id: 'claude', name: 'Claude'}]).map(p => `<option value="${esc(p.id)}" ${selected === p.id ? 'selected' : ''}>${esc(p.name)}${p.installed === false ? '（未安裝）' : ''}</option>`).join('');
 
   // Usage page: provider quotas and per-Bot token usage.
@@ -795,7 +811,7 @@
     const editing = !!b.id;
     let c = /^#[0-9a-f]{6}$/i.test(b.color || '') ? b.color : colors[0],
       shape = shapeIndex(b.shape);
-    modal(editing ? '編輯 Bot' : '新增 Bot', `<form id="bot-form"><div class="modal-body"><div class="bot-preview">${avatar({color:c,shape},'hero')}<input name="name" required maxlength="80" placeholder="為 Bot 命名" value="${esc(b.name||'')}"></div><label class="field persona-field">人格檔案<textarea name="persona" ${editing ? '' : 'required'} maxlength="20000" rows="5" placeholder="描述這個 Bot 是誰：個性、說話語氣、價值觀、擅長與不擅長的事。例如：「冷靜、直接的資深工程師，回答先給結論，再用比喻解釋；不確定時會說不確定。」">${esc(b.persona||'')}</textarea><small class="muted">這個 Bot 的個性與說話方式，每次回覆都會帶入。之後可以在 Bot 的詳情面板「人格」中修改。</small></label><label class="field">形狀</label><div class="shapes">${Array.from({length:13},(_,i)=>`<button type="button" class="shape-btn ${shape===i?'selected':''}" data-action="shape" data-id="${i}" aria-label="形狀 ${i+1}">${avatar({color:c,shape:i})}</button>`).join('')}</div><label class="field">顏色</label><div class="swatches">${colors.map(x=>`<button type="button" class="swatch ${c===x?'selected':''}" style="background:${x}" data-action="color" data-id="${x}" aria-label="顏色 ${x}"></button>`).join('')}</div><input type="hidden" name="shape" value="${shape}"><input type="hidden" name="color" value="${c}"><div class="setting-list in-form">${settingRow('主動性', '執行動作前要不要先問你', dropdown('permissionMode', b.permissionMode || '', permissionOptions(true)))}${settingRow('存取範圍', '這個 Bot 可以動到 Mac 上的哪些檔案。主動性是「謹慎」時不適用', dropdown('access', ACCESS.some(a => a.id === b.access) ? b.access : 'full', ACCESS))}<div class="setting-row" data-access-folder ${b.access === 'folder' ? '' : 'hidden'}><div class="setting-copy"><strong>指定的資料夾</strong><span data-access-path>${esc(b.accessFolder || '尚未選擇')}</span></div><div class="setting-control"><input type="hidden" name="accessFolder" value="${esc(b.accessFolder || '')}"><button type="button" class="secondary" data-action="choose-folder">選擇資料夾…</button></div></div>${settingRow('備用模型', '這個 Bot 的模型不能用時，要換成哪一個', dropdown('fallbackChoice', !Array.isArray(b.fallbacks) ? '__default' : b.fallbacks.length ? b.fallbacks[0] : '__none', [{id: '__default', name: '使用預設', hint: (state.data.settings.fallbacks || []).length ? (state.data.settings.fallbacks || []).map(providerShort).join(' → ') : '目前設定為不自動換'}, {id: '__none', name: '不自動換'}, ...providerList()]))}${settingRow('分類', '顯示在左側的哪個分組', dropdown('section', b.section || sectionNames()[0] || '我的 Bots', [...new Set([...sectionNames(), b.section || '我的 Bots'])].map(x => ({id: x, name: x}))))}${settingRow('釘選', '固定在左側最上方', toggle('name="pinned"', b.pinned, '釘選'))}</div><details class="advanced"><summary>進階設定</summary><label class="field">工作指示（選填）<textarea name="instructions" placeholder="這個 Bot 負責的工作與做事方式，例如：負責審查程式碼，只列出會造成錯誤的問題。">${esc(b.instructions||'')}</textarea></label><div class="form-grid"><label class="field">提供者<select name="provider">${providerOptions(b.provider || '', true)}</select></label>${modelPicker(b.model||'')}</div></details></div><div class="modal-foot">${editing?'<button type="button" class="link" data-action="delete-bot" style="margin-right:auto;color:#b55">刪除 Bot</button>':''}<button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">${editing?'儲存':'建立 Bot'}</button></div></form>`);
+    modal(editing ? '編輯 Bot' : '新增 Bot', `<form id="bot-form"><div class="modal-body"><div class="bot-preview">${avatar({color:c,shape},'hero')}<input name="name" required maxlength="80" placeholder="為 Bot 命名" value="${esc(b.name||'')}"></div><label class="field persona-field">人格檔案<textarea name="persona" ${editing ? '' : 'required'} maxlength="20000" rows="5" placeholder="描述這個 Bot 是誰：個性、說話語氣、價值觀、擅長與不擅長的事。例如：「冷靜、直接的資深工程師，回答先給結論，再用比喻解釋；不確定時會說不確定。」">${esc(b.persona||'')}</textarea><small class="muted">這個 Bot 的個性與說話方式，每次回覆都會帶入。之後可以在 Bot 的詳情面板「人格」中修改。</small></label><label class="field">形狀</label><div class="shapes">${Array.from({length:13},(_,i)=>`<button type="button" class="shape-btn ${shape===i?'selected':''}" data-action="shape" data-id="${i}" aria-label="形狀 ${i+1}">${avatar({color:c,shape:i})}</button>`).join('')}</div><label class="field">顏色</label><div class="swatches">${colors.map(x=>`<button type="button" class="swatch ${c===x?'selected':''}" style="background:${x}" data-action="color" data-id="${x}" aria-label="顏色 ${x}"></button>`).join('')}</div><input type="hidden" name="shape" value="${shape}"><input type="hidden" name="color" value="${c}"><div class="setting-list in-form">${settingRow('主動性', '執行動作前要不要先問你', dropdown('permissionMode', b.permissionMode || '', permissionOptions(true)))}${settingRow('存取範圍', '這個 Bot 可以動到 Mac 上的哪些檔案。主動性是「謹慎」時不適用', dropdown('access', ACCESS.some(a => a.id === b.access) ? b.access : 'full', ACCESS))}<div class="setting-row" data-access-folder ${b.access === 'folder' ? '' : 'hidden'}><div class="setting-copy"><strong>指定的資料夾</strong><span data-access-path>${esc(b.accessFolder || '尚未選擇')}</span></div><div class="setting-control"><input type="hidden" name="accessFolder" value="${esc(b.accessFolder || '')}"><button type="button" class="secondary" data-action="choose-folder">選擇資料夾…</button></div></div>${settingRow('備用模型', '這個 Bot 的模型不能用時，要換成哪一個', dropdown('fallbackChoice', !Array.isArray(b.fallbacks) ? '__default' : b.fallbacks.length ? b.fallbacks[0] : '__none', [{id: '__default', name: '使用預設', hint: (state.data.settings.fallbacks || []).length ? (state.data.settings.fallbacks || []).map(providerShort).join(' → ') : '目前設定為不自動換'}, {id: '__none', name: '不自動換'}, ...providerList()]))}${settingRow('分類', '顯示在左側的哪個分組', dropdown('section', b.section || sectionNames()[0] || '我的 Bots', [...new Set([...sectionNames(), b.section || '我的 Bots'])].map(x => ({id: x, name: x}))))}${settingRow('釘選', '固定在左側最上方', toggle('name="pinned"', b.pinned, '釘選'))}</div><details class="advanced"><summary>進階設定</summary><label class="field">工作指示（選填）<textarea name="instructions" placeholder="這個 Bot 負責的工作與做事方式，例如：負責審查程式碼，只列出會造成錯誤的問題。">${esc(b.instructions||'')}</textarea></label><div class="form-grid"><label class="field">提供者<select name="provider">${providerOptions(b.provider || '', true)}</select></label>${modelPicker(b.model||'')}<label class="field">帳號<select name="account">${accountOptions(b.provider || '', b.account || '')}</select></label></div></details></div><div class="modal-foot">${editing?'<button type="button" class="link" data-action="delete-bot" style="margin-right:auto;color:#b55">刪除 Bot</button>':''}<button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">${editing?'儲存':'建立 Bot'}</button></div></form>`);
     const form = $('#bot-form');
     form.dataset.id = b.id || '';
     if (!b.id) restoreBotDraft(form);
@@ -1073,8 +1089,16 @@
           break;
         case 'account-login':
           el.disabled = true;
-          await post('accounts/' + encodeURIComponent(id) + '/login', {method: el.dataset.method});
+          await post('accounts/' + encodeURIComponent(id) + '/login', {method: el.dataset.method, account: el.dataset.account || ''});
           await reloadAccounts();
+          break;
+        case 'profile-add':
+          profileModal(state.accounts.providers.find(x => x.id === id));
+          break;
+        case 'profile-delete':
+          if (!confirm(`移除帳號「${el.dataset.name}」？使用它的 Bot 會改用預設帳號。`)) break;
+          await post('accounts/' + encodeURIComponent(id) + '/profiles/delete', {account: el.dataset.account});
+          await reloadAccounts(); toast('已移除帳號');
           break;
         case 'provider-add':
           providerAddModal();
@@ -1112,7 +1136,7 @@
           break;
         }
         case 'account-cancel':
-          await post('accounts/' + encodeURIComponent(id) + '/login/cancel');
+          await post('accounts/' + encodeURIComponent(id) + '/login/cancel', {account: el.dataset.account || ''});
           await reloadAccounts();
           break;
         case 'account-logout':
@@ -1336,6 +1360,7 @@
   }
   document.addEventListener('change', e => {
     if (e.target.name === 'access' && e.target.closest('#bot-form')) e.target.closest('form').querySelector('[data-access-folder]').hidden = e.target.value !== 'folder';
+    if (e.target.name === 'accountType' && e.target.closest('#profile-form')) e.target.closest('form').querySelector('[data-key-field]').hidden = e.target.value !== 'key';
   });
   document.addEventListener('input', e => {
     if (e.target.closest('#bot-form')) saveBotDraft(e.target.closest('form'));
@@ -1471,6 +1496,7 @@
       form.elements.modelCustom.value = '';
       form.elements.modelCustom.hidden = true;
       form.dataset.providerChanged = '1';
+      if (form.elements.account) form.elements.account.innerHTML = accountOptions(e.target.value, '');
       form.querySelector('.model-note').textContent = '提供者已變更，模型已切換為預設。';
       loadModels(form);
     } else if (e.target.name === 'modelSelect') {
@@ -1520,6 +1546,7 @@
           section: d.get('section'),
           pinned: d.has('pinned'),
           fallbacks: d.get('fallbackChoice') === '__none' ? [] : !d.get('fallbackChoice') || d.get('fallbackChoice') === '__default' ? null : [d.get('fallbackChoice')], permissionMode: d.get('permissionMode') || '',
+          account: d.get('account') || '',
           access: d.get('access') || 'full', accessFolder: d.get('access') === 'folder' ? d.get('accessFolder') || '' : ''
         };
         if (data.access === 'folder' && !data.accessFolder) { toast('請先選擇資料夾'); return; }
@@ -1553,10 +1580,15 @@
         delete d.providerId;
         await post('accounts/custom', d);
         closeModal(); await reloadAccounts(); toast('已儲存，Bot 現在可以選用這個 CLI');
+      } else if (form.id === 'profile-form') {
+        const d = new FormData(form), type = d.get('accountType');
+        if (type === 'key' && !d.get('key').trim()) { toast('請貼上 API 金鑰'); return; }
+        await post('accounts/' + encodeURIComponent(form.dataset.id) + '/profiles', {name: d.get('name').trim(), type, key: type === 'key' ? d.get('key').trim() : ''});
+        closeModal(); await reloadAccounts(); toast(type === 'key' ? '已新增，可以到 Bot 的設定選用' : '已新增，請按登入完成設定');
       } else if (form.id === 'account-code-form') {
         const code = new FormData(form).get('code').trim();
         if (!code) return;
-        await post('accounts/' + encodeURIComponent(form.dataset.id) + '/login/code', {code});
+        await post('accounts/' + encodeURIComponent(form.dataset.id) + '/login/code', {code, account: form.dataset.account || ''});
         toast('已送出授權碼');
         state.accounts = await api('accounts'); render(true); pollAccounts();
       } else if (form.id === 'group-form') {

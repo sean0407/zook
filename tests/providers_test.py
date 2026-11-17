@@ -48,7 +48,7 @@ class ProvidersTest(unittest.TestCase):
         (self.root / 'bin').mkdir()
         for name, body in (('grok', GROK), ('echo-cli', ECHO)):
             f = self.root / 'bin' / name; f.write_text(body); f.chmod(0o755)
-        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', FAKE_HOME=str(self.root), ZOOK_CLI_DIRS=str(self.root / 'bin'), ZOOK_SKIP_UPDATE_CHECK='1')
+        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', FAKE_HOME=str(self.root), ZOOK_CLI_DIRS=str(self.root / 'bin'), ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_SECRETS_DIR=str(self.root))
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')],
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
@@ -107,6 +107,38 @@ class ProvidersTest(unittest.TestCase):
         self.assertEqual(self.req('POST', '/api/accounts/grok/logout', {})[0], 200)
         grok = next(p for p in self.accounts()['providers'] if p['id'] == 'grok')
         self.assertEqual((grok['status'], grok['email']), ('not_logged_in', ''))
+
+    def test_extra_accounts_are_separate_and_chosen_per_bot(self):
+        def grok(): return next(p for p in self.accounts()['providers'] if p['id'] == 'grok')
+        self.assertEqual((grok()['profiles'], grok()['canAddLogin'], grok()['canAddKey']), ([], True, True))
+        self.assertEqual(self.req('POST', '/api/accounts/grok/profiles', {'name': '工作', 'type': 'key', 'key': 'short'})[0], 400)
+        status, key = self.req('POST', '/api/accounts/grok/profiles', {'name': '工作', 'type': 'key', 'key': 'xai-test-key-0001'})
+        self.assertEqual(status, 201)
+        self.assertEqual(self.req('POST', '/api/accounts/grok/profiles', {'name': '工作', 'type': 'key', 'key': 'xai-test-key-0002'})[0], 400)  # same name
+        status, login = self.req('POST', '/api/accounts/grok/profiles', {'name': '個人', 'type': 'login'})
+        self.assertEqual(status, 201)
+        self.assertEqual([(p['name'], p['type'], p['status']) for p in grok()['profiles']], [('工作', 'key', 'logged_in'), ('個人', 'login', 'not_logged_in')])
+        self.assertNotIn('xai-test-key-0001', json.dumps(self.req('GET', '/api/state')[1]) + json.dumps(self.accounts()))  # the key is never sent back
+        self.assertEqual(self.req('POST', '/api/accounts/grok/login', {'method': 'device', 'account': key['id']})[0], 400)  # a key account has no sign-in
+        self.assertEqual(self.req('POST', '/api/accounts/grok/login', {'method': 'device', 'account': 'nope'})[0], 404)
+        listed = next(p for p in self.req('GET', '/api/providers')[1]['providers'] if p['id'] == 'grok')['accounts']
+        self.assertEqual([a['name'] for a in listed], ['工作', '個人'])
+
+        (self.root / 'grok.login').touch()
+        bot = self.req('GET', '/api/state')[1]['bots'][0]
+        self.assertEqual(self.req('PATCH', '/api/bots/' + bot['id'], {'account': 'nope'})[0], 400)
+        self.assertEqual(self.req('PATCH', '/api/bots/' + bot['id'], {'account': key['id']})[0], 200)
+        self.assertEqual(self.chat('grok')['status'], 'completed')
+        self.assertRegex((self.root / 'grok.args').read_text(), r'GROK_HOME=\S*/data/accounts/' + key['id'])
+        self.assertEqual(self.req('PATCH', '/api/bots/' + bot['id'], {'account': ''})[0], 200)
+        self.chat('grok'); self.assertNotIn('GROK_HOME=', (self.root / 'grok.args').read_text())  # the CLI's own sign-in
+
+        self.req('PATCH', '/api/bots/' + bot['id'], {'account': login['id']})
+        self.assertEqual(self.req('POST', '/api/accounts/grok/profiles/delete', {'account': login['id']})[0], 200)
+        self.assertEqual(self.req('GET', '/api/state')[1]['bots'][0]['account'], '')  # the Bot falls back to the CLI's own sign-in
+        self.assertEqual(self.req('POST', '/api/accounts/grok/profiles/delete', {'account': key['id']})[0], 200)
+        self.assertFalse((self.root / key['id']).exists()); self.assertFalse((self.root / 'data/accounts' / key['id']).exists())
+        self.assertEqual(grok()['profiles'], [])
 
     def test_install_updates_existing_and_checks_requirements(self):
         status, view = self.req('POST', '/api/accounts/grok/install', {})
