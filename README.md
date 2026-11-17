@@ -15,6 +15,7 @@ The layout is inspired by Grok Bot. The implementation is independent and uses n
 - **Access scope per Bot**: the whole Mac (default), one folder, or only Zook's workspace.
 - **Shared Skills, connectors and plugins**: configured once and available to every Bot.
 - **Usage**: provider quotas and token use per Bot.
+- **Updates**: Zook checks this repository's releases and installs a new version with one click, after verifying its checksum and signature.
 - **iPhone app**: read and send messages, approve requests, create Bots and check usage. Settings that change what a Bot may do stay on the Mac.
 
 ## Build and open

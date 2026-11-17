@@ -113,6 +113,7 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == "zookWindow", let body = message.body as? [String: Any] else { return }
+        if body["quit"] as? Bool == true { NSApp.terminate(nil); return }  // an update is ready to be swapped in
         func rects(_ key: String) -> [CGRect] {
             ((body[key] as? [[Double]]) ?? []).prefix(400).compactMap { r in r.count == 4 ? CGRect(x: r[0], y: r[1], width: r[2], height: r[3]) : nil }
         }
@@ -123,7 +124,7 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
     @objc private func showAbout() {
         let alert = NSAlert()
         alert.messageText = "Zook"
-        alert.informativeText = "0.4.1\n你的本機 AI 工作空間\nBot 對話・知識庫・用量與工具管理"
+        alert.informativeText = "0.4.2\n你的本機 AI 工作空間\nBot 對話・知識庫・用量與工具管理"
         alert.runModal()
     }
 

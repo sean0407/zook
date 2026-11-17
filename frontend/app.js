@@ -194,7 +194,7 @@
       const tools = drag && !isPinned ? `<span class="section-tools"><button class="icon-btn mini" data-action="rename-section" data-id="${esc(name)}" aria-label="重新命名分組" title="重新命名">✎</button>${items.length ? '' : `<button class="icon-btn mini" data-action="delete-section" data-id="${esc(name)}" aria-label="刪除分組" title="刪除空分組">×</button>`}</span>` : '';
       return `<div class="side-section" data-drop-section="${esc(isPinned ? '__pinned' : name)}"><div class="section-head bot-section-head" ${drag && !isPinned ? `draggable="true" data-drag-section="${esc(name)}"` : ''}><button class="section-toggle" data-action="collapse" data-id="${esc(name)}"><span>${esc(name)} ${items.some(b=>pendingForBot(b.id).length)?'<span class="approval-badge">待核准</span>':''}</span><span>${closed?'⌄':'⌃'}</span></button>${tools}</div>${closed?'':items.map(botRow).join('') + (items.length || !drag ? '' : '<div class="drop-hint">把 Bot 拖到這裡</div>')}</div>`;
     };
-    return `<aside class="sidebar"><div class="side-top"><div class="brand">Zook<span>✳</span></div><div class="side-actions"><button class="icon-btn" data-action="search-focus" aria-label="搜尋">${svg('search')}</button><button class="icon-btn" data-action="new-bot" aria-label="新增 Bot">${svg('plus')}</button></div></div><div class="search"><span class="glass tiny-icon">${svg('search')}</span><input id="side-search" placeholder="搜尋 Bots 和知識" aria-label="搜尋 Bots 和知識" value="${esc(state.query)}"></div><div class="side-scroll">${groupsBlock()}${pinned.length?block('已釘選',pinned,true):''}${sections.map(s=>block(s,bots.filter(b=>!b.pinned&&(b.section||'我的 Bots')===s))).join('')}${state.query?'':'<button class="side-empty add-section" data-action="new-section">＋ 新增分組</button>'}${state.query&&state.data.knowledge.filter(n=>matches(n.title)||matches(n.content)).length?`<div class="section-head">知識搜尋結果</div>${state.data.knowledge.filter(n=>matches(n.title)||matches(n.content)).map(n=>`<button class="side-row" data-action="edit-note" data-id="${esc(n.id)}"><span>▤</span><span class="side-copy"><span class="side-name">${esc(n.title)}</span><span class="side-preview">${esc(n.content)}</span></span></button>`).join('')}`:''}</div><div class="side-footer"><div class="user-avatar">S</div><div class="user-name">我的工作區</div><div class="launcher"><button class="icon-btn launcher-btn" data-action="launcher" aria-label="開啟功能選單" aria-expanded="${state.launcher}">${svg('grid')}</button>${state.launcher?`<div class="popup">${[['usage','◷','使用量'],['knowledge','▤','知識庫'],['memory','◎','記憶'],['accounts','⚿','模型帳號'],['skills','✳','Skills 與連接器'],['settings','⚙','設定']].map(x=>`<button class="nav-item" data-action="page" data-id="${x[0]}"><span>${x[1]}</span>${x[2]}</button>`).join('')}</div>`:''}</div><button class="icon-btn" data-action="page" data-id="settings" aria-label="設定">${svg('settings')}</button></div></aside>`
+    return `<aside class="sidebar"><div class="side-top"><div class="brand">Zook<span>✳</span></div><div class="side-actions"><button class="icon-btn" data-action="search-focus" aria-label="搜尋">${svg('search')}</button><button class="icon-btn" data-action="new-bot" aria-label="新增 Bot">${svg('plus')}</button></div></div><div class="search"><span class="glass tiny-icon">${svg('search')}</span><input id="side-search" placeholder="搜尋 Bots 和知識" aria-label="搜尋 Bots 和知識" value="${esc(state.query)}"></div><div class="side-scroll">${groupsBlock()}${pinned.length?block('已釘選',pinned,true):''}${sections.map(s=>block(s,bots.filter(b=>!b.pinned&&(b.section||'我的 Bots')===s))).join('')}${state.query?'':'<button class="side-empty add-section" data-action="new-section">＋ 新增分組</button>'}${state.query&&state.data.knowledge.filter(n=>matches(n.title)||matches(n.content)).length?`<div class="section-head">知識搜尋結果</div>${state.data.knowledge.filter(n=>matches(n.title)||matches(n.content)).map(n=>`<button class="side-row" data-action="edit-note" data-id="${esc(n.id)}"><span>▤</span><span class="side-copy"><span class="side-name">${esc(n.title)}</span><span class="side-preview">${esc(n.content)}</span></span></button>`).join('')}`:''}</div>${state.update?.available ? `<button class="update-notice" data-action="update-open"><strong>有新版 ${esc(state.update.latest)}</strong><span>按這裡更新</span></button>` : ''}<div class="side-footer"><div class="user-avatar">S</div><div class="user-name">我的工作區</div><div class="launcher"><button class="icon-btn launcher-btn" data-action="launcher" aria-label="開啟功能選單" aria-expanded="${state.launcher}">${svg('grid')}</button>${state.launcher?`<div class="popup">${[['usage','◷','使用量'],['knowledge','▤','知識庫'],['memory','◎','記憶'],['accounts','⚿','模型帳號'],['skills','✳','Skills 與連接器'],['settings','⚙','設定']].map(x=>`<button class="nav-item" data-action="page" data-id="${x[0]}"><span>${x[1]}</span>${x[2]}</button>`).join('')}</div>`:''}</div><button class="icon-btn" data-action="page" data-id="settings" aria-label="設定">${svg('settings')}</button></div></aside>`
   }
 
   function jobsForBot(botId) { return Object.values(state.jobDetails).filter(j => j.botId === botId && !j.groupId); }
@@ -531,6 +531,34 @@
                   {id: 'workspace', name: '只限 Bot 工作區', hint: '只能讀寫 Zook 為它準備的資料夾'}];
   const permissionOptions = withDefault => (withDefault ? [{id: '', name: '使用預設（' + permissionName(state.data.settings.permissionMode) + '）', hint: '跟著「設定」裡的主動性'}] : []).concat(PERMISSIONS.map(p => ({id: p.id, name: p.name, hint: p.hint})));
   // Remote access: off unless turned on here. Pairing and revoking can only be done on this Mac.
+  // App updates: checked automatically unless turned off; installing is always the user's decision.
+  function updateSection() {
+    const u = state.update || {};
+    const status = u.state === 'checking' ? '正在檢查…' : u.available ? `有新版 ${esc(u.latest)}` : u.error ? esc(u.error) : u.latest ? '已是最新版' : '尚未檢查';
+    return `<h2 class="settings-h">更新</h2><div class="setting-list">${settingRow('目前版本', `${esc(u.current || '開發版本')} · ${status}`, u.available ? '<button class="primary" data-action="update-open">更新</button>' : '<button class="secondary" data-action="update-check">檢查更新</button>')}${settingRow('自動檢查更新', '開啟 Zook 時到 GitHub 查看有沒有新版。有新版只會提醒，不會自動安裝。', toggle('data-auto-update', state.data.settings.autoUpdateCheck !== false, '自動檢查更新'))}</div>`;
+  }
+  function updateModal() {
+    const u = state.update || {};
+    const busy = u.state === 'downloading' || u.state === 'ready' || u.state === 'applying';
+    const body = busy ? `<p><strong>${u.state === 'downloading' ? '正在下載並驗證新版…' : '正在安裝，Zook 會自動重新開啟…'}</strong></p><p class="muted">請不要關閉 Zook。</p>`
+      : `<p>目前版本 ${esc(u.current || '')}，新版 <strong>${esc(u.latest || '')}</strong>。</p>${u.notes ? `<pre class="update-notes">${esc(u.notes)}</pre>` : ''}${u.error ? `<p class="error-text">${esc(u.error)}</p>` : ''}${u.canInstall ? '<p class="muted">更新時 Zook 會重新開啟。Bot、對話和設定都會保留。</p>' : '<p class="muted">這個 Zook 無法自行更新（可能是從磁碟映像直接開啟，或是開發版本）。請把 Zook 拖到「應用程式」後再試，或到 GitHub 下載新版。</p>'}`;
+    modal('更新 Zook', `<div class="modal-body">${body}</div>${busy ? '' : `<div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">稍後</button>${u.canInstall ? '<button class="primary" data-action="update-install">下載並安裝</button>' : ''}</div>`}`);
+  }
+  async function refreshUpdate(redraw = true) {
+    try {
+      const before = JSON.stringify(state.update);
+      state.update = await api('update');
+      if (redraw && before !== JSON.stringify(state.update) && !state.modal && !document.querySelector('.dd.open')) render(true);
+    } catch (_) {}
+  }
+  async function installUpdate() {
+    state.update = await post('update/download'); updateModal();
+    while (state.update.state === 'downloading') { await new Promise(r => setTimeout(r, 1000)); state.update = await api('update'); }
+    if (state.update.state !== 'ready') { updateModal(); return; }
+    try { state.update = await post('update/apply'); } catch (e) { state.update = await api('update'); state.update.error = e.message; updateModal(); return; }
+    updateModal();
+    window.webkit?.messageHandlers?.zookWindow?.postMessage({quit: true});
+  }
   function remoteSection() {
     const r = state.remote;
     if (!r) return `<h2 class="settings-h">遠端連線</h2>${loadingBlock('正在讀取…')}`;
@@ -760,7 +788,7 @@
       content = accountsPage();
     } else if (state.page === 'settings') {
       let s = state.data.settings || {};
-      content = permissionSection(s.permissionMode || 'manual') + `<form id="settings-form" class="setting-list">${settingRow('預設提供者', '新對話預設使用的模型服務。登入狀態在「模型帳號」管理。', `<select name="provider" class="plain-select" aria-label="預設提供者">${providerOptions(s.provider || 'codex', false)}</select>`)}${settingRow('預設模型', '未個別指定模型的 Bot 會使用這個模型。', modelPicker(s.model||'', true))}${[0, 1].map(i => settingRow('備用模型 ' + (i + 1), i ? '第一個備用也不能用時，再換這一個。' : '預設模型額度用完、未登入或回覆失敗時，自動換這個模型，並在回覆下方註明。', dropdown('fallback' + i, (s.fallbacks || [])[i] || '', [{id: '', name: '不使用'}, ...providerList()], 'data-fallback-slot'))).join('')}<div class="setting-actions"><button class="primary">儲存模型設定</button><button type="button" class="secondary" data-action="export">匯出所有資料</button></div></form>` + remoteSection()
+      content = permissionSection(s.permissionMode || 'manual') + `<form id="settings-form" class="setting-list">${settingRow('預設提供者', '新對話預設使用的模型服務。登入狀態在「模型帳號」管理。', `<select name="provider" class="plain-select" aria-label="預設提供者">${providerOptions(s.provider || 'codex', false)}</select>`)}${settingRow('預設模型', '未個別指定模型的 Bot 會使用這個模型。', modelPicker(s.model||'', true))}${[0, 1].map(i => settingRow('備用模型 ' + (i + 1), i ? '第一個備用也不能用時，再換這一個。' : '預設模型額度用完、未登入或回覆失敗時，自動換這個模型，並在回覆下方註明。', dropdown('fallback' + i, (s.fallbacks || [])[i] || '', [{id: '', name: '不使用'}, ...providerList()], 'data-fallback-slot'))).join('')}<div class="setting-actions"><button class="primary">儲存模型設定</button><button type="button" class="secondary" data-action="export">匯出所有資料</button></div></form>` + updateSection() + remoteSection()
     }
     return `<main class="main"><header class="main-header"><div class="bot-pill">Zook</div></header><div class="page"><div class="page-inner"><div class="page-top"><h1>${name}</h1>${state.page==='knowledge'?'<button class="primary" data-action="new-note">＋ 新增知識</button>':''}</div>${content}</div></div></main>`
   }
@@ -1091,6 +1119,18 @@
           el.disabled = true;
           await post('accounts/' + encodeURIComponent(id) + '/login', {method: el.dataset.method, account: el.dataset.account || ''});
           await reloadAccounts();
+          break;
+        case 'update-open':
+          updateModal();
+          break;
+        case 'update-check':
+          el.disabled = true; el.textContent = '檢查中…';
+          state.update = await post('update/check'); render(true);
+          toast(state.update.available ? `有新版 ${state.update.latest}` : state.update.error || '已是最新版');
+          break;
+        case 'update-install':
+          el.disabled = true;
+          await installUpdate();
           break;
         case 'profile-add':
           profileModal(state.accounts.providers.find(x => x.id === id));
@@ -1443,6 +1483,11 @@
       } catch (err) { e.target.checked = !turnOn; e.target.disabled = false; toast(err.message); }
       return;
     }
+    if (e.target.dataset.autoUpdate !== undefined) {
+      try { state.data.settings = await post('settings', {autoUpdateCheck: e.target.checked}, 'PATCH'); toast(e.target.checked ? '會自動檢查更新' : '已關閉自動檢查更新'); }
+      catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
+      return;
+    }
     if (e.target.dataset.webSearch !== undefined) {
       try { state.data.settings = await post('settings', {webSearch: e.target.checked}, 'PATCH'); render(true); toast(e.target.checked ? '所有 Bot 已可上網搜尋' : '已關閉上網搜尋'); }
       catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
@@ -1677,6 +1722,7 @@
   refresh().then(() => {
     startPollers();
     setInterval(syncFromElsewhere, 3000);
+    setTimeout(refreshUpdate, 4000); setTimeout(refreshUpdate, 20000); setInterval(refreshUpdate, 3600 * 1000);
   }).catch(e => {
     app.innerHTML = `<div class="boot">無法開啟 Zook：${esc(e.message)}</div>`
   });

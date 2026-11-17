@@ -11,6 +11,7 @@ import json
 import mimetypes
 import os
 import pathlib
+import plistlib
 import queue
 import re
 import secrets
@@ -555,6 +556,139 @@ def provider_info():
             except (OSError, ValueError, AttributeError, subprocess.TimeoutExpired): pass
         result.append(item)
     return result
+
+
+# App updates come from this project's own GitHub releases.
+UPDATE_REPO = 'sean0407/zook'
+UPDATE_MAX_BYTES = 300 * 1024 * 1024
+UPDATE_HELPER = """#!/bin/bash
+# Waits for Zook to quit, swaps in the new app, and opens it. If anything goes wrong the old app is put back.
+PID="$1"; APP="$2"; NEW="$3"; OPEN="$4"
+if [ "$PID" != none ]; then
+  for i in $(seq 1 300); do kill -0 "$PID" 2>/dev/null || break; sleep 0.2; done
+  kill -0 "$PID" 2>/dev/null && exit 1
+fi
+OLD="$APP.old-$$"
+mv "$APP" "$OLD" || exit 1
+if mv "$NEW" "$APP"; then rm -rf "$OLD"; else mv "$OLD" "$APP"; fi
+[ "$OPEN" = 1 ] && /usr/bin/open "$APP"
+rm -f "$0"
+"""
+
+
+def version_tuple(text):
+    m = re.fullmatch(r'v?(\d{1,4})\.(\d{1,4})\.(\d{1,4})', str(text or '').strip())
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def bundle_info(app):
+    """(bundle id, version) of an app bundle, or ('', '')."""
+    try:
+        with open(pathlib.Path(app) / 'Contents/Info.plist', 'rb') as f: info = plistlib.load(f)
+        return str(info.get('CFBundleIdentifier') or ''), str(info.get('CFBundleShortVersionString') or '')
+    except (OSError, ValueError, plistlib.InvalidFileException): return '', ''
+
+
+def app_bundle():
+    """The app this server runs from; None when run from source."""
+    for parent in pathlib.Path(__file__).resolve().parents:
+        if parent.suffix == '.app' and (parent / 'Contents/Info.plist').is_file(): return parent
+    return None
+
+
+class Updater:
+    """Checks this project's GitHub releases and installs a newer Zook. Nothing is replaced until the download
+    has the published checksum, a valid signature, the same bundle identifier and a higher version."""
+    def __init__(self, busy):
+        self.lock = threading.Lock(); self.busy = busy  # busy(): True while a Bot is replying
+        self.app = app_bundle(); self.bundle_id, self.current = bundle_info(self.app) if self.app else ('', '')
+        self.url = os.environ.get('ZOOK_UPDATE_URL') or 'https://api.github.com/repos/%s/releases/latest' % UPDATE_REPO
+        self.state, self.error, self.latest, self.notes, self.asset, self.checked, self.staged = 'idle', '', '', '', None, 0, None
+
+    def can_install(self):
+        return bool(self.app and version_tuple(self.current) and os.access(str(self.app), os.W_OK) and os.access(str(self.app.parent), os.W_OK))
+
+    def view(self):
+        with self.lock:
+            newer = bool(version_tuple(self.latest) and version_tuple(self.current) and version_tuple(self.latest) > version_tuple(self.current))
+            return dict(current=self.current, latest=self.latest, available=newer and bool(self.asset), notes=self.notes, state=self.state, error=self.error,
+                        canInstall=self.can_install(), checkedAt=self.checked)
+
+    def check(self, force=False):
+        """Ask GitHub for the latest release (at most every 6 hours unless forced)."""
+        with self.lock:
+            if self.state in ('checking', 'downloading', 'ready') or (not force and time.time() - self.checked < 6 * 3600): return
+            if os.environ.get('ZOOK_SKIP_UPDATE_CHECK') and not os.environ.get('ZOOK_UPDATE_URL'): return
+            self.state, self.error = 'checking', ''
+        try:
+            request = urllib.request.Request(self.url, headers={'User-Agent': 'Zook-updater', 'Accept': 'application/vnd.github+json'})
+            with urllib.request.urlopen(request, timeout=15) as response: release = json.loads(response.read(2_000_000))
+            asset = next((a for a in release.get('assets') or [] if str(a.get('name', '')).endswith('.dmg')), None)
+            link = str((asset or {}).get('browser_download_url') or '')
+            trusted = link.startswith('https://github.com/%s/releases/download/' % UPDATE_REPO) or (os.environ.get('ZOOK_UPDATE_URL') and link.startswith('http://127.0.0.1:'))
+            with self.lock:
+                self.latest = str(release.get('tag_name') or '').lstrip('v'); self.notes = str(release.get('body') or '')[:3000]
+                self.asset = dict(url=link, digest=str(asset.get('digest') or ''), size=int(asset.get('size') or 0)) if asset and trusted else None
+                self.state, self.checked = 'idle', time.time()
+        except (OSError, ValueError, AttributeError, TypeError):
+            with self.lock: self.state, self.error, self.checked = 'idle', '無法連上更新伺服器，稍後會再試。', time.time() - 5 * 3600
+
+    def download(self):
+        """Fetch and verify the new app, and place it next to the current one ready to swap in."""
+        view = self.view()
+        if not view['available']: raise RuntimeError('目前沒有可安裝的新版。')
+        if not view['canInstall']: raise RuntimeError('這個 Zook 無法自行更新（可能是從磁碟映像直接開啟）。請把 Zook 拖到「應用程式」後再試。')
+        with self.lock:
+            if self.state in ('downloading', 'ready'): return
+            self.state, self.error = 'downloading', ''; asset = dict(self.asset); latest = self.latest
+        threading.Thread(target=self._download, args=(asset, latest), daemon=True).start()
+
+    def _download(self, asset, latest):
+        work = pathlib.Path(tempfile.mkdtemp(prefix='zook-update-')); mount = work / 'mount'; attached = False
+        try:
+            image = work / 'Zook.dmg'; digest = hashlib.sha256(); size = 0
+            request = urllib.request.Request(asset['url'], headers={'User-Agent': 'Zook-updater'})
+            with urllib.request.urlopen(request, timeout=60) as response, open(image, 'wb') as out:
+                while True:
+                    chunk = response.read(1 << 20)
+                    if not chunk: break
+                    size += len(chunk)
+                    if size > UPDATE_MAX_BYTES: raise RuntimeError('下載的檔案過大，已取消。')
+                    digest.update(chunk); out.write(chunk)
+            if asset['digest'].startswith('sha256:') and asset['digest'][7:].lower() != digest.hexdigest(): raise RuntimeError('下載的檔案和發佈的檢查碼不符，已取消。')
+            mount.mkdir()
+            run = lambda *argv: subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=180).returncode
+            if run('/usr/bin/hdiutil', 'attach', '-nobrowse', '-readonly', '-noautoopen', '-mountpoint', str(mount), str(image)) != 0: raise RuntimeError('無法開啟下載的安裝檔。')
+            attached = True
+            source = next((a for a in mount.glob('*.app') if not a.is_symlink() and bundle_info(a)[0] == self.bundle_id), None)
+            if not source: raise RuntimeError('安裝檔裡找不到 Zook。')
+            new = version_tuple(bundle_info(source)[1])
+            if not new or new != version_tuple(latest) or new <= version_tuple(self.current): raise RuntimeError('安裝檔的版本不正確，已取消。')
+            staged = self.app.parent / ('.' + self.app.name + '.update')
+            shutil.rmtree(str(staged), ignore_errors=True)
+            if run('/usr/bin/ditto', str(source), str(staged)) != 0: raise RuntimeError('無法複製新版。')
+            run('/usr/bin/xattr', '-dr', 'com.apple.quarantine', str(staged))
+            if run('/usr/bin/codesign', '--verify', '--deep', '--strict', str(staged)) != 0:
+                shutil.rmtree(str(staged), ignore_errors=True); raise RuntimeError('新版的簽章驗證失敗，已取消。')
+            with self.lock: self.staged, self.state = staged, 'ready'
+        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as exc:
+            with self.lock: self.state, self.error = 'idle', str(exc) if isinstance(exc, RuntimeError) else '下載更新失敗，請稍後再試。'
+        finally:
+            if attached: subprocess.run(['/usr/bin/hdiutil', 'detach', '-force', str(mount)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            shutil.rmtree(str(work), ignore_errors=True)
+
+    def apply(self):
+        """Hand over to a small script that swaps the app once Zook has quit. The caller then quits Zook."""
+        with self.lock:
+            if self.state != 'ready' or not self.staged or not self.staged.is_dir(): raise RuntimeError('新版還沒準備好。')
+            if self.busy(): raise RuntimeError('有 Bot 正在回覆。等它完成後再更新，以免回覆中斷。')
+            test = bool(os.environ.get('ZOOK_UPDATE_NO_RELAUNCH'))
+            fd, script = tempfile.mkstemp(prefix='zook-update-', suffix='.sh')
+            with os.fdopen(fd, 'w') as f: f.write(UPDATE_HELPER)
+            os.chmod(script, 0o700)
+            subprocess.Popen(['/bin/bash', script, 'none' if test else str(os.getppid()), str(self.app), str(self.staged), '0' if test else '1'],
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            self.state = 'applying'
 
 
 ANSI = re.compile(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07')
@@ -1151,6 +1285,7 @@ class App(ThreadingHTTPServer):
         self.pairing = None
         self.logins = {}
         self.installs = {}
+        self.updater = Updater(lambda: any(j.get('status') == 'running' for j in self.store.data['jobs']))
 
     def sync_remote(self):
         """Start or stop the connection to the relay so it matches 設定. Off by default; nothing leaves this Mac until it is turned on."""
@@ -2223,6 +2358,16 @@ class Handler(BaseHTTPRequestHandler):
                                                         for pid in P.active_ids(data)]})
             if parts[:2] == ['api', 'accounts']:
                 return self.accounts(parts)
+            if path == '/api/update' and self.command == 'GET':
+                if self.server.store.data['settings'].get('autoUpdateCheck', True): threading.Thread(target=self.server.updater.check, daemon=True).start()
+                return self.respond(200, self.server.updater.view())
+            if path in ('/api/update/check', '/api/update/download', '/api/update/apply') and self.command == 'POST':
+                try:
+                    if path.endswith('check'): self.server.updater.check(force=True)
+                    elif path.endswith('download'): self.server.updater.download()
+                    else: self.server.updater.apply()
+                except RuntimeError as exc: return self.error(409, str(exc))
+                return self.respond(200, self.server.updater.view())
             if path == '/api/quota' and self.command == 'GET':
                 if parse_qs(urlsplit(self.path).query).get('auto', [''])[0] == '1': self.server.auto_claude_quota()
                 return self.respond(200, self.quota())
@@ -2434,6 +2579,9 @@ def update(target, body, kind):
         allowed = ('manual', 'auto', 'bypass') + (('',) if kind == 'bot' else ())
         if body['permissionMode'] not in allowed: raise ValueError('主動性設定無效。')
         changes['permissionMode'] = body['permissionMode']
+    if kind == 'settings' and 'autoUpdateCheck' in body:
+        if not isinstance(body['autoUpdateCheck'], bool): raise ValueError('autoUpdateCheck 無效。')
+        changes['autoUpdateCheck'] = body['autoUpdateCheck']
     if kind == 'settings' and 'webSearch' in body:
         if not isinstance(body['webSearch'], bool): raise ValueError('webSearch 無效。')
         changes['webSearch'] = body['webSearch']
