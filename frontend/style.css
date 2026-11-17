@@ -1027,6 +1027,13 @@ button {
 .avatar:before, .avatar:after { transform: rotate(12deg); }
 .model-picker select, .model-picker input:not([type="hidden"]) { width: 100%; margin-top: 7px; border: 1px solid #e4e4e4; border-radius: 8px; padding: 10px; color: #222; background: white; font-size: 14px; font-weight: 400; }
 .model-picker input[hidden] { display: none; }
+/* The same look in every browser engine: the system's own menu button is drawn differently and sat a few pixels off. */
+.field select, .form-grid .model-picker select { -webkit-appearance: none; appearance: none; height: 41px; line-height: 1.3; padding-right: 30px; background: white url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 12px center; }
+.model-picker > label { display: block; }
+.form-grid { align-items: start; }
+.form-grid > .model-picker { grid-column: 1 / -1; }
+.field-hint { display: block; margin-top: 7px; font-weight: 400; font-size: 11px; line-height: 1.5; }
+.field-hint .link { font-size: 11px; }
 .model-tools { display: flex; align-items: flex-start; gap: 10px; margin-top: 7px; }
 .model-note { flex: 1; color: #999; line-height: 1.5; font-weight: 400; font-size: 11px; }
 .model-tools button { flex: none; white-space: nowrap; }
