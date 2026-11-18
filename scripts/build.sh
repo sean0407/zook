@@ -9,6 +9,8 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 /usr/bin/swiftc -O -target "$(uname -m)-apple-macosx12.0" -framework AppKit -framework WebKit -framework UserNotifications "$PROJECT_ROOT/native/Zook.swift" -o "$APP/Contents/MacOS/Zook"
 /usr/bin/swiftc -O -target "$(uname -m)-apple-macosx12.0" -framework AppKit "$PROJECT_ROOT/native/IconTool.swift" -o "$APP/Contents/MacOS/zook-icon"
 /usr/bin/swiftc -O -swift-version 5 -target "$(uname -m)-apple-macosx12.0" -framework AppKit -framework CoreImage "$PROJECT_ROOT/native/remote/RemoteCore.swift" "$PROJECT_ROOT/native/remote/main.swift" -o "$APP/Contents/MacOS/zook-remote"
+# Start from empty folders, so a file removed from the source does not stay in the app.
+/bin/rm -rf "$APP/Contents/Resources/backend" "$APP/Contents/Resources/frontend"
 /usr/bin/ditto "$PROJECT_ROOT/backend" "$APP/Contents/Resources/backend"
 /usr/bin/ditto "$PROJECT_ROOT/frontend" "$APP/Contents/Resources/frontend"
 /usr/bin/find "$APP/Contents/Resources" -name __pycache__ -type d -exec rm -rf {} +

@@ -68,6 +68,11 @@ def check_bundle(app):
     record('簽章', sign.returncode == 0, sign.stderr.strip()[:200])
     for name in ('Zook', 'zook-remote', 'zook-icon'):
         record('執行檔 ' + name, os.access(app / 'Contents/MacOS' / name, os.X_OK))
+    # The app holds exactly the source files: nothing missing, and nothing left over from an earlier build.
+    for folder, pattern in (('backend', '*.py'), ('backend/zook', '*.py'), ('frontend', '*.*'), ('frontend/js', '*.js')):
+        mine = sorted(p.name for p in (ROOT / folder).glob(pattern) if p.is_file()); built = sorted(p.name for p in (app / 'Contents/Resources' / folder).glob(pattern) if p.is_file())
+        extra, missing = sorted(set(built) - set(mine)), sorted(set(mine) - set(built))
+        record('檔案一致 ' + folder, not extra and not missing, ('多出 ' + '、'.join(extra) if extra else '') + (' 缺少 ' + '、'.join(missing) if missing else ''))
 
 
 def check_backend(b):
