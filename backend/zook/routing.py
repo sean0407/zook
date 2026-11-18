@@ -23,12 +23,39 @@ def auto_task(content, names=()):
 def auto_status(provider):
     """What the CLI reports about its sign-in. Runs the CLI, so it is never called while a reply is being sent."""
     account = account_status(provider)
-    return dict(signedIn=account['status'] == 'logged_in', billed=account['method'] in ('Anthropic Console', 'API 金鑰'))
+    return auto_state(provider, account['status'], account['method'])
+
+
+def auto_state(provider, status, method):
+    signed = True if status == 'logged_in' else False if status == 'not_logged_in' else None
+    return dict(signedIn=signed, billed=method in ('Anthropic Console', 'API 金鑰') or any(provider_env(provider).get(k) for k in ACCOUNT_KEYS.get(provider, ())))
 
 
 def refresh_auto_status(store):
     found = {p: auto_status(p) for p in AUTO_MODELS if P.spec(store.data, p) and find_cli(p)}
     with store.lock: store.data['autoStatus'] = found; store.save()
+
+
+def refresh_auto(app):
+    """Keep sign-ins and limits current for the next pick, at most every five minutes and without delaying this reply."""
+    if time.time() - app.__dict__.get('auto_refreshed', 0) < 300: return
+    app.auto_refreshed = time.time()
+    def work():
+        store = app.store
+        refresh_auto_status(store)
+        with store.lock: allowed = auto_allowed(store)
+        live = {}
+        try:
+            if 'codex' in allowed:
+                live['codex'] = normalize_quota('codex', codex_rpc(find_cli('codex'), 'account/rateLimits/read', {}, provider_env('codex', None)))
+                if live['codex']: live['codex'].update(updatedAt=NOW(), source='live')
+        except (OSError, ValueError, TimeoutError, AttributeError, RuntimeError): pass
+        try:
+            if 'antigravity' in allowed: live['antigravity'] = antigravity_quota(find_cli('antigravity'))
+        except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError): pass
+        with store.lock:
+            store.data.setdefault('quota', {}).update({k: v for k, v in live.items() if v}); store.save()
+    threading.Thread(target=work, daemon=True).start()
 
 
 def watch_auto_status(store, bot):
@@ -39,8 +66,8 @@ def watch_auto_status(store, bot):
 def auto_allowed(store):
     """The models 自動選擇 may use. Until the user chooses: signed-in subscriptions only, never API billing."""
     chosen = store.data['settings'].get('autoModels')
-    if isinstance(chosen, list): return [p for p in AUTO_MODELS if p in chosen]
     status = store.data.get('autoStatus') or {}
+    if isinstance(chosen, list): return [p for p in AUTO_MODELS if p in chosen and not (status.get(p) or {}).get('billed')]  # API billing is never picked automatically
     return [p for p in AUTO_MODELS if p not in AUTO_DEFAULT_OFF and (status.get(p) or {}).get('signedIn') and not status[p].get('billed')]
 
 
@@ -67,13 +94,13 @@ def auto_quota_low(store, provider):
 def pick_auto(store, content, names=(), plan=False):
     """(models to try in order, the note shown under the reply). Raises ValueError when nothing can answer."""
     task = auto_task(content, names); label, order = AUTO_TASKS[task]
-    status = store.data.get('autoStatus') or {}
+    if 'autoStatus' not in store.data:  # billing is not known yet, so nothing can be picked safely
+        threading.Thread(target=refresh_auto_status, args=(store,), daemon=True).start()
+        raise ValueError('正在確認各模型的登入狀態，請幾秒後再送一次。')
+    status = store.data['autoStatus']
     allowed = [p for p in order if p in auto_allowed(store) and P.spec(store.data, p) and find_cli(p) and (status.get(p) or {}).get('signedIn') is not False]
     if task == 'image': allowed = [p for p in allowed if ability_on(store, p, 'images')]
     if plan: allowed = [p for p in allowed if provider_kind(p) in PLAN_KINDS and ability_on(store, p, 'plan')]
-    if not allowed and 'autoStatus' not in store.data:
-        threading.Thread(target=refresh_auto_status, args=(store,), daemon=True).start()
-        raise ValueError('正在確認各模型的登入狀態，請幾秒後再送一次。')
     if not allowed: raise ValueError('自動選擇目前沒有可用的模型。請到「各模型使用量」開啟至少一個已登入的模型。')
     short = lambda p: provider_label(p).split('（')[0]
     usable = [p for p in allowed if not auto_quota_low(store, p)]

@@ -6,7 +6,8 @@ SERVER = Path(__file__).resolve().parents[1] / 'backend/server.py'
 CLI = '''#!/usr/bin/env python3
 import json, os, sys
 name = os.path.basename(sys.argv[0])
-if set(sys.argv) & {'login', 'auth', 'models', '--version', '--help', 'app-server'}: print('Logged in'); sys.exit(0)
+if 'auth' in sys.argv: print(json.dumps({'loggedIn': True, 'authMethod': os.environ.get('CLAUDE_METHOD', 'claude.ai')})); sys.exit(0)
+if set(sys.argv) & {'login', 'models', '--version', '--help', 'app-server'}: print('Logged in'); sys.exit(0)
 sys.stdin.read()
 open(os.environ['AUTO_LOG'], 'a').write(name + '\\n')
 if name == 'claude': print(json.dumps({'type': 'result', 'result': 'from ' + name, 'is_error': False}))
@@ -26,9 +27,16 @@ class AutoModelTest(unittest.TestCase):
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
         self.req('PATCH', '/api/settings', {'autoModels': ['codex', 'claude']})
         self.bot = self.req('POST', '/api/bots', {'name': 'Auto', 'provider': 'auto', 'model': 'x'})[1]
+        self.ready()
 
     def tearDown(self):
         self.proc.terminate(); self.proc.wait(timeout=5); self.proc.stdout.close(); self.temp.cleanup()
+
+    def ready(self):
+        for _ in range(100):
+            if len(self.req('GET', '/api/state')[1].get('autoStatus') or {}) >= 2: return
+            time.sleep(.1)
+        self.fail('sign-in status never arrived')
 
     def req(self, method, path, body=None):
         conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=15)
@@ -54,6 +62,7 @@ class AutoModelTest(unittest.TestCase):
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')],
                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
+        self.ready()
 
     def test_task_picks_model_and_says_why(self):
         self.assertEqual(self.bot['model'], '')
@@ -73,6 +82,29 @@ class AutoModelTest(unittest.TestCase):
         status, body = self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': '你好'})
         self.assertEqual(status, 400); self.assertIn('額度都低於 10%', body['error']); self.assertIn('付費', body['error'])
         self.assertFalse(self.log.exists())
+
+    def test_api_billing_is_never_picked_even_when_turned_on(self):
+        path = self.root / 'data/swarmr.json'
+        self.quota('none', 0)
+        self.proc.terminate(); self.proc.wait(timeout=5); self.proc.stdout.close()
+        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', AUTO_LOG=str(self.log), CLAUDE_METHOD='console')
+        self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+        ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
+        for _ in range(100):
+            if (self.req('GET', '/api/state')[1].get('autoStatus') or {}).get('claude', {}).get('billed'): break
+            time.sleep(.1)
+        reply = self.send('請分析這兩個方案')
+        self.assertEqual(reply['note'], '自動選用 Codex：長篇分析'); self.assertEqual(self.log.read_text().split(), ['codex'])
+
+    def test_named_redo_does_not_fall_back_to_other_models(self):
+        self.send('寫 python')
+        status, job = self.req('POST', '/api/chat/redo', {'botId': self.bot['id'], 'mode': 'again', 'provider': 'claude'})
+        self.assertEqual(status, 202)
+        for _ in range(100):
+            found = next(j for j in self.req('GET', '/api/state')[1]['jobs'] if j['id'] == job['jobId'])
+            if found['status'] != 'running': break
+            time.sleep(.1)
+        self.assertEqual(found['autoChain'], [['claude', '']])
 
     def test_settings_reject_unknown_models_and_auto_as_default(self):
         self.assertEqual(self.req('PATCH', '/api/settings', {'autoModels': ['nope']})[0], 400)

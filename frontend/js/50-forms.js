@@ -3,7 +3,7 @@
     if (!item) return;
     const was = item.autoOn;
     item.autoOn = input.checked;
-    try { state.data.settings = await post('settings', {autoModels: state.quota.providers.filter(p => p.autoOn).map(p => p.id)}, 'PATCH'); toast(input.checked ? '自動選擇可以用這個模型' : '自動選擇不會用這個模型'); }
+    try { state.data.settings = await post('settings', {autoModels: state.quota.providers.filter(p => p.autoOn || (p.autoBilled && (state.data.settings.autoModels || []).includes(p.id))).map(p => p.id)}, 'PATCH'); toast(input.checked ? '自動選擇可以用這個模型' : '自動選擇不會用這個模型'); }
     catch (error) { item.autoOn = was; input.checked = was; toast(error.message); }
   }
   document.addEventListener('change', e => {

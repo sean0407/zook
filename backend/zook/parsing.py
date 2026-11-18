@@ -3,12 +3,27 @@ def _int(value):
     return value if isinstance(value, int) and value >= 0 else 0
 
 
+_COMMAND_SECRETS = (
+    (re.compile(r'(?i)(authorization["\']?\s*[:=]\s*["\']?(?:bearer|basic|token)?\s*)[^\s"\']+'), r'\1[redacted]'),
+    (re.compile(r'(?i)(\bbearer\s+)[a-z0-9._~+/=-]{8,}'), r'\1[redacted]'),
+    (re.compile(r'\b(?:sk|pk|rk|xai|ghp|gho|ghs|github_pat|glpat|xox[abprs]|AIza)[-_A-Za-z0-9]{12,}'), '[redacted]'),
+    (re.compile(r'(?i)(://[^/\s:@]+:)[^/\s@]+@'), r'\1[redacted]@'),
+    (re.compile(r'(?i)(--?(?:password|passwd|token|secret|api-?key)[= ]+)[^\s"\']+'), r'\1[redacted]'),
+    (re.compile(r'(?i)([a-z0-9_-]*(?:token|secret|password|passwd|api[_-]?key|access[_-]?key|credential)[a-z0-9_-]*["\']?\s*[=:]\s*["\']?)[^\s"\'&]+'), r'\1[redacted]'),
+)
+
+
+def hide_command_secrets(text):
+    for pattern, replacement in _COMMAND_SECRETS: text = pattern.sub(replacement, text)
+    return text
+
+
 def native_action(kind, value):
     """Activity entry for something a CLI's built-in tool did (a file it changed or a command it ran)."""
     value = str(value or '').strip()
     if kind == 'command':
         match = re.match(r"^/bin/(?:zsh|bash|sh) -lc (['\"]?)(.*)\1$", value, re.S)
-        return dict(name='native_command', category='code', arguments={'command': (match.group(2) if match else value)[:300]})
+        return dict(name='native_command', category='code', arguments={'command': hide_command_secrets(match.group(2) if match else value)[:300]})
     return dict(name='native_write', category='internal', arguments={'path': value[:300]})
 
 

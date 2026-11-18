@@ -53,10 +53,10 @@ class Handler(BaseHTTPRequestHandler):
                                plan=(snap or {}).get('plan') or account['plan'], email=account['email'], workspace=account.get('workspace', ''), quota=snap,
                                apiBilling=account['method'] in ('Anthropic Console', 'API 金鑰'), profiles=profiles))
         with store.lock:
-            store.data.setdefault('autoStatus', {}).update({x['id']: dict(signedIn=x['status'] == 'logged_in', billed=x['apiBilling']) for x in result if x['id'] in AUTO_MODELS})
+            store.data.setdefault('autoStatus', {}).update({x['id']: auto_state(x['id'], x['status'], x['method']) for x in result if x['id'] in AUTO_MODELS})
             allowed = auto_allowed(store)
             for item in result:
-                if item['id'] in AUTO_MODELS: item['autoOn'] = item['id'] in allowed
+                if item['id'] in AUTO_MODELS: item.update(autoOn=item['id'] in allowed, autoBilled=bool(store.data['autoStatus'].get(item['id'], {}).get('billed')))
         return {'providers': result}
 
     def detect_usage(self):
@@ -834,6 +834,9 @@ def main():
     signal.signal(signal.SIGTERM, stop_server)
     threading.Thread(target=app.sync_remote, daemon=True).start()
     threading.Thread(target=app.schedule_loop, daemon=True).start()
+    for job in app.store.data['jobs']:  # activity saved by earlier versions
+        for call in job.get('toolCalls') or []:
+            if call.get('name') == 'native_command' and isinstance((call.get('arguments') or {}).get('command'), str): call['arguments']['command'] = hide_command_secrets(call['arguments']['command'])
     if any(b.get('provider') == AUTO for b in app.store.data['bots']): threading.Thread(target=refresh_auto_status, args=(app.store,), daemon=True).start()
     try: app.serve_forever()
     except KeyboardInterrupt: pass

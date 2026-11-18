@@ -67,8 +67,17 @@ class NativeSessions(unittest.TestCase):
         self.say('換模型後'); self.assertNotIn('resume', self.last()['args'])
         self.say('同模型'); self.assertIn('resume', self.last()['args'])
 
+    def test_changing_access_or_planning_starts_over(self):
+        self.say('問題'); self.req('PATCH', '/api/bots/' + self.bot['id'], {'access': 'workspace'})
+        self.say('換範圍後'); self.assertNotIn('resume', self.last()['args'])
+        self.say('同範圍'); self.assertIn('resume', self.last()['args'])
+        self.wait(self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': '先規劃', 'plan': True})[1])
+        self.say('開始做'); self.assertNotIn('resume', self.last()['args'])
+
     def test_a_failed_reply_is_not_continued(self):
-        self.say('開始'); self.assertEqual(self.say('PLEASE-FAIL')['status'], 'failed')
+        self.say('開始'); runs = len((self.root / 'bin/runs.jsonl').read_text().splitlines())
+        self.assertEqual(self.say('PLEASE-FAIL')['status'], 'failed')
+        self.assertEqual(len((self.root / 'bin/runs.jsonl').read_text().splitlines()), runs + 1)  # it may have acted, so it is not run again
         self.say('再來'); run = self.last(); self.assertNotIn('resume', run['args']); self.assertIn('開始', run['prompt'])
 
     def test_long_conversations_are_kept_when_starting_over(self):

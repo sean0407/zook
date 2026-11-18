@@ -184,7 +184,8 @@ class App(ThreadingHTTPServer):
         if placed or earlier: job['attachments'] = [str(x) for x in (earlier + placed)[-MAX_ATTACHMENTS:]]
         if replaces: job.update(redoOf=replaces, askedId=asked['id'])
         job['effort'] = effort
-        if auto_chain: job['autoChain'] = auto_chain
+        if use and bot.get('provider') == AUTO: job['autoChain'] = [[provider, model]]  # 換模型重答 stays on the model the user named
+        if auto_chain: job['autoChain'] = auto_chain; refresh_auto(self)
         if plan: job['plan'] = True
         if use or replaces: job['noResume'] = True  # another model, or a rewritten history: start a new CLI conversation
         self.__dict__.setdefault('short_prompts', {})[job['id']] = short
@@ -287,7 +288,7 @@ class App(ThreadingHTTPServer):
         with store.lock:
             bot = store.find('bots', job['botId']) or {}
             native = next((c.get('native') or {} for c in bot.get('chats') or [] if c['id'] == job['chatId']), {})
-        same = native.get('provider') == provider and native.get('account') == (account['id'] if account else '') and native.get('model') == model and native.get('folder') == str(folder) and native.get('features', []) == job.get('features', [])
+        same = native.get('provider') == provider and native.get('account') == (account['id'] if account else '') and native.get('model') == model and native.get('folder') == str(folder) and native.get('features', []) == job.get('features', []) and native.get('access') == job.get('nativeAccess') and (job.get('plan') or not native.get('planned'))
         return str(native.get('session') or '') if same else ''
 
     def remember_session(self, job, provider, model, account, folder, session):
@@ -296,11 +297,11 @@ class App(ThreadingHTTPServer):
         bot = self.store.find('bots', job['botId']) or {}
         chat = next((c for c in bot.get('chats') or [] if c['id'] == job['chatId']), None)
         if chat is None: return
-        if session: chat['native'] = dict(provider=provider, account=account['id'] if account else '', model=model, folder=str(folder), session=session, features=job.get('features', []))
+        if session: chat['native'] = dict(provider=provider, account=account['id'] if account else '', model=model, folder=str(folder), session=session, features=job.get('features', []), access=job.get('nativeAccess'), planned=bool(job.get('plan')))
         else: chat.pop('native', None)
         if job.get('resumeLost'):
             message = find_message(bot, job['messageId'])
-            if message: message['note'] = 'CLI 的對話接不上，這次改用 Zook 保存的對話內容'
+            if message: message['note'] = '；'.join(x for x in (message.get('note'), 'CLI 的對話接不上，這次改用 Zook 保存的對話內容') if x)
 
     def finish_session(self, job_id):
         """A reply that did not finish leaves the CLI conversation out of step with what Zook saved, so the next one starts fresh."""
@@ -395,8 +396,8 @@ class App(ThreadingHTTPServer):
             with store.lock:
                 job = store.find('jobs', job_id) or {}
                 acted = any(c.get('category') not in ('read', 'external_read') for c in (job.get('toolCalls') or [])[before:])
-                retry = job.get('status') == 'running' and job.get('resumed') and not acted
-                if retry: job.update(noResume=True, resumeLost=True, resumed=False); self.attempt_errors.pop(job_id, None)
+                retry = job.get('status') == 'running' and job.get('resumed') and job.get('resumeGone') and not acted
+                if retry: job.update(noResume=True, resumeLost=True, resumed=False, resumeGone=False); self.attempt_errors.pop(job_id, None)
             if retry: self._run_attempt(job_id, prompt, p, m, bot, inventory, final)  # the CLI could not continue: use the conversation Zook saved
             with store.lock:
                 job = store.find('jobs', job_id)
@@ -412,7 +413,8 @@ class App(ThreadingHTTPServer):
                 # This attempt failed and another model is available.
                 error = self.attempt_errors.pop(job_id, '')
                 if p == provider: why = fallback_reason(error)
-                acted = any(c.get('category') not in ('read', 'external_read') for c in (job.get('toolCalls') or [])[before:])
+                acted = job.get('mayHaveActed') or any(c.get('category') not in ('read', 'external_read') for c in (job.get('toolCalls') or [])[before:])
+                if provider_kind(p) == 'antigravity' and permission_mode(store, bot) in ('auto', 'bypass') and not job.get('plan') and fallback_reason(error) == '無法回覆': acted = True  # its output does not list what its tools did
                 if acted:  # It already changed something; repeating the work on another model could do it twice.
                     job.update(status='failed', error=error or 'CLI 執行失敗。', finishedAt=NOW())
                     store.finish_message(job, '', 'failed'); store.save(); return
@@ -444,7 +446,7 @@ class App(ThreadingHTTPServer):
             account = find_account(bot.get('account'), provider)  # an extra account only applies to the provider it belongs to
             env = provider_env(provider, account)
             features = active_features(bot, kind, native, planning, scope)
-            with store.lock: job['features'] = features
+            with store.lock: job.update(features=features, nativeAccess=[scope, str(root), bool(native)])
             resume = self.native_session(job, provider, model, account, cli_cwd)
             keep_session = bool(job.get('chatId')) and kind in PLAN_KINDS
             with store.lock: job['resumed'] = bool(resume)
@@ -578,10 +580,15 @@ class App(ThreadingHTTPServer):
                     except ProcessLookupError: pass
                     try: proc.communicate(timeout=2)
                     except subprocess.TimeoutExpired: pass
+                with store.lock: job['mayHaveActed'] = bool(native)  # stopped midway, so what its tools already did is unknown
                 raise RuntimeError('執行逾時。')
-            if len(output) > MAX_CLI_OUTPUT: raise RuntimeError('回覆超過大小限制。')
+            if len(output) > MAX_CLI_OUTPUT:
+                with store.lock: job['mayHaveActed'] = bool(native)
+                raise RuntimeError('回覆超過大小限制。')
             parsed = parse_cli_output(kind if kind in PLAN_KINDS else 'plain', output.decode('utf-8', errors='replace'), model)
             if parsed['quota']: self.record_quota(provider, parsed['quota'], account['id'] if account else '')
+            if resume and (proc.returncode != 0 or parsed['isError']) and session_lost((stderr or b'').decode('utf-8', 'replace') + parsed['error'] + output[-3000:].decode('utf-8', 'replace')):
+                with store.lock: job['resumeGone'] = True
             parsed['web'] = (parsed.get('web') or []) + feature_events(kind, output.decode('utf-8', errors='replace'), features, cli_cwd, started_at)
             if parsed.get('web'):
                 with store.lock:
@@ -631,7 +638,7 @@ class App(ThreadingHTTPServer):
             with store.lock:
                 job = store.find('jobs', job_id)
                 message = str(exc) if isinstance(exc, RuntimeError) else '無法啟動 CLI。'
-                if job and job['status'] == 'running' and (not final or job.get('resumed')): self.attempt_errors[job_id] = message
+                if job and job['status'] == 'running' and (not final or job.get('resumeGone')): self.attempt_errors[job_id] = message
                 elif job and job['status'] == 'running':
                     job.update(status='failed', error=message, finishedAt=NOW())
                     store.finish_message(job, '', 'failed'); store.save()
@@ -861,7 +868,7 @@ class App(ThreadingHTTPServer):
             job = dict(id=ID(), botId=bot_id, groupId=group_id, messageId=msg['id'], status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[],
                        effort=group.get('runEffort') if group.get('runEffort') not in (None, '', 'standard') else pick_effort(bot.get('effort')))
             if job['effort'] != 'standard': msg['effort'] = job['effort']
-            if auto_chain: job['autoChain'] = auto_chain; msg['note'] = auto_note
+            if auto_chain: job['autoChain'] = auto_chain; msg['note'] = auto_note; refresh_auto(self)
             files = place_attachments(store, bot_id, recent_attachments(store, group['messages'][-20:]))
             if files: job['attachments'] = [str(x) for x in files]
             group['messages'].append(msg); store.data['jobs'].append(job)

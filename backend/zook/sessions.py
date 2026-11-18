@@ -27,3 +27,11 @@ def cli_session(kind, text):
         elif kind == 'grok' and event.get('type') == 'end': found = event.get('sessionId') or found
         elif kind == 'antigravity' and event.get('event') == 'result' and isinstance(event.get('result'), dict): found = event['result'].get('conversation_id') or found
     return str(found) if re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}', str(found)) else ''
+
+
+_SESSION_LOST = re.compile(r'no rollout found|no conversation found|no saved copy of session|(?:session|conversation)[^\n]{0,60}not found', re.I)
+
+
+def session_lost(text):
+    """True only when the CLI says the conversation no longer exists, so nothing was done and starting over is safe."""
+    return bool(_SESSION_LOST.search(str(text or '')))
