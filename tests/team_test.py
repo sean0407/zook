@@ -19,6 +19,7 @@ runtime = load('zook_team_runtime', 'runtime.py')
 
 class TeamToolsTest(unittest.TestCase):
     def setUp(self):
+        server.watch_auto_status = lambda store, bot: None  # no background sign-in check while this test's folder is removed
         self.temp = tempfile.TemporaryDirectory()
         self.store = server.Store(Path(self.temp.name) / 'data')
         self.app = server.App(('127.0.0.1', 0), self.store, self.temp.name, 'token')

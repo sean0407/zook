@@ -50,7 +50,10 @@ def refresh_auto_status(store):
     if not _auto_checking.acquire(blocking=False): return  # one check at a time
     try:
         found = {p: auto_status(p) for p in AUTO_MODELS if P.spec(store.data, p) and find_cli(p)}
-        with store.lock: store.data['autoStatus'] = merge_auto_status(store.data.get('autoStatus') or {}, found); store.save()
+        with store.lock:
+            store.data['autoStatus'] = merge_auto_status(store.data.get('autoStatus') or {}, found)
+            try: store.save()
+            except OSError: pass  # kept in memory; the next save writes it
     finally: _auto_checking.release()
 
 
