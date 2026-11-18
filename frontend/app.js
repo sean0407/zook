@@ -408,7 +408,7 @@
       if (l.state === 'succeeded') return `<div class="login-flow done">${kind === 'install' ? '安裝／更新完成。' : '登入完成。'}</div>`;
       return `<div class="login-flow error-text">${esc(l.error || (kind === 'install' ? '安裝沒有完成。' : '登入沒有完成。'))}${kind === 'install' && l.log?.length ? `<pre class="flow-log">${esc(l.log.slice(-6).join('\n'))}</pre>` : ''}</div>`;
     };
-    return `<p class="muted model-intro">Zook 透過各家官方 CLI 使用你的帳號。登入由 CLI 在瀏覽器完成，帳密與權杖只由 CLI 保存，Zook 不會讀取。</p><div class="account-list">${list.map(p => {
+    return `<p class="muted model-intro">Zook 透過各家官方 CLI 使用你的帳號。登入由 CLI 在瀏覽器完成，帳密與權杖只由 CLI 保存，Zook 不會讀取。</p><div class="quota-grid model-grid">${list.map(p => {
       const [cls, label] = p.issue ? ['warn', '無法使用'] : badge[p.status] || badge.unknown, l = p.login, running = l?.state === 'running' || p.install?.state === 'running';
       const detail = [p.method, p.plan && p.plan.toUpperCase(), p.workspace, p.email].filter(Boolean).map(esc).join(' · ');
       const sub = detail || (p.installed ? (p.custom ? esc(p.config?.command || '') : '已安裝') : (p.requires && !p.requirementMet ? `需要先安裝 ${esc(p.requires === 'npm' ? 'Node.js（npm）' : p.requires)}` : '尚未安裝這個 CLI'));
@@ -417,15 +417,20 @@
       const versionLine = !p.installed ? '' : `<div class="version-line">${v?.current ? `<span>版本 ${esc(v.current)}</span>` : '<span>版本未知</span>'}${v?.updateAvailable ? `<span class="pill warn">有新版 ${esc(v.latest)}</span>` : upToDate ? '<span class="pill ok">已是最新版</span>' : v?.error ? `<span class="muted">${esc(v.error)}</span>` : ''}</div>`;
       const installLabel = !p.installed ? '一鍵安裝' : v?.updateAvailable ? `更新到 ${esc(v.latest)}` : p.canUpdate ? '檢查並更新' : '重新安裝';
       const installBtn = p.canInstall && (!p.requires || p.requirementMet || p.installed) && !(upToDate && p.installed) ? `<button class="${!p.installed || v?.updateAvailable ? 'primary' : 'secondary'}" data-action="provider-install" data-id="${esc(p.id)}" data-command="${esc(p.installed && p.canUpdate ? '' : p.installCommand)}">${installLabel}</button>` : '';
-      const notes = [!p.tools ? 'Skill、連接器、記憶等 Zook 工具目前不支援這個 CLI，用它的 Bot 會以純對話方式回覆。' : '', p.installed && !p.loginMethods.length && p.loginNote ? p.loginNote : ''].filter(Boolean);
-      const profiles = (p.profiles || []).map(a => {
-        const [acls, alabel] = badge[a.status] || badge.unknown, busy = a.login?.state === 'running';
-        const info = [a.type === 'key' ? 'API 金鑰' : a.method || '登入帳號', a.plan && a.plan.toUpperCase(), a.email].filter(Boolean).map(esc).join(' · ');
+      const notes = [!p.tools ? '這個 CLI 只能純對話，不能使用 Zook 的工具。' : '', p.installed && !p.loginMethods.length && p.loginNote ? p.loginNote : ''].filter(Boolean);
+      const shortName = p.name.split('（')[0], parts = p.installed ? usageParts(quotaFor(p.id)) : {body: '<p class="quota-empty">安裝後就能登入和查看用量。</p>', zook: '<div class="zook-usage empty"></div>', when: ''};
+      const chips = [p.plan && p.plan.toUpperCase(), p.workspace, p.method].filter(Boolean);
+      const addAccount = p.installed && (p.canAddLogin || p.canAddKey) ? `<button class="secondary" data-action="profile-add" data-id="${esc(p.id)}">＋ 新增帳號</button>` : '';
+      const terminal = p.installed && p.terminalLogin ? `<button class="${p.status === 'logged_in' ? 'secondary' : 'primary'}" data-action="terminal-login" data-id="${esc(p.id)}">${p.status === 'logged_in' ? '重新登入' : '用 Google 帳號登入'}</button>` : '';
+      const manage = `${p.custom ? `<button class="secondary" data-action="provider-edit" data-id="${esc(p.id)}">編輯設定</button>` : ''}${p.status === 'logged_in' && p.canLogout ? `<button class="link danger" data-action="account-logout" data-id="${esc(p.id)}">登出</button>` : ''}${p.removable ? `<button class="link danger" data-action="provider-remove" data-id="${esc(p.id)}">從 Zook 移除</button>` : ''}`;
+      const main = `<article class="quota-card model-card"><header class="quota-head"><div class="quota-title"><h3>${esc(shortName)}${p.custom ? ' <span class="pill">自訂</span>' : ''}</h3>${p.vendor ? `<span>${esc(p.vendor)}</span>` : ''}</div><span class="pill ${cls}">${label}</span></header><div class="quota-account"><div class="quota-email" title="${esc(p.email || '')}">${p.email ? esc(p.email) : sub}</div>${chips.length ? `<div class="quota-chips">${chips.map(c => `<span>${esc(c)}</span>`).join('')}</div>` : ''}${versionLine}</div><div class="quota-body">${p.issue ? `<p class="error-text small">${esc(p.issue)}</p>` : ''}${notes.map(n => `<p class="muted small">${esc(n)}</p>`).join('')}${parts.body}${flowView(p.install, 'install', p.id)}${flowView(l, 'login', p.id)}</div>${parts.zook}<footer class="quota-foot model-foot"><small>${esc(parts.when)}</small>${!running ? `<div class="card-actions">${terminal}${loginButtons}${installBtn}${addAccount}</div>${manage ? `<div class="card-manage">${manage}</div>` : ''}` : ''}</footer></article>`;
+      const extras = (p.profiles || []).map(a => {
+        const [acls, alabel] = badge[a.status] || badge.unknown, busy = a.login?.state === 'running', q = quotaFor(p.id, a.id), use = usageParts(q);
+        const achips = [a.type === 'key' ? 'API 金鑰' : a.method || '登入帳號', a.plan && a.plan.toUpperCase()].filter(Boolean);
         const buttons = a.type === 'login' && !busy ? p.loginMethods.map((m, i) => `<button class="${i === 0 && a.status !== 'logged_in' ? 'primary' : 'secondary'}" data-action="account-login" data-id="${esc(p.id)}" data-account="${esc(a.id)}" data-method="${esc(m.id)}">${a.status === 'logged_in' && i === 0 ? '重新登入' : esc(m.label)}</button>`).join('') : '';
-        return `<div class="profile-row"><div class="profile-head"><div><strong>${esc(a.name)}</strong><p class="muted small">${info}</p></div><span class="pill ${acls}">${alabel}</span></div>${usagePanel(quotaFor(p.id, a.id))}${flowView(a.login, 'login', p.id, a.id)}${!busy ? `<div class="actions">${buttons}<span class="spacer"></span><button class="link danger" data-action="profile-delete" data-id="${esc(p.id)}" data-account="${esc(a.id)}" data-name="${esc(a.name)}">移除帳號</button></div>` : ''}</div>`;
+        return `<article class="quota-card model-card"><header class="quota-head"><div class="quota-title"><h3>${esc(a.name)}</h3><span>${esc(shortName)}</span></div><span class="pill ${acls}">${alabel}</span></header><div class="quota-account"><div class="quota-email" title="${esc(a.email || '')}">${esc(a.email || '其他帳號')}</div><div class="quota-chips">${achips.map(c => `<span>${esc(c)}</span>`).join('')}</div></div><div class="quota-body">${use.body}${flowView(a.login, 'login', p.id, a.id)}</div>${use.zook}<footer class="quota-foot model-foot"><small>${esc(use.when)}</small>${!busy ? `${buttons ? `<div class="card-actions">${buttons}</div>` : ''}<div class="card-manage"><button class="link danger" data-action="profile-delete" data-id="${esc(p.id)}" data-account="${esc(a.id)}" data-name="${esc(a.name)}">移除帳號</button></div>` : ''}</footer></article>`;
       }).join('');
-      const profileBlock = p.installed && (p.canAddLogin || p.canAddKey) ? `<div class="profiles"><div class="profiles-head"><strong>其他帳號</strong><button class="secondary" data-action="profile-add" data-id="${esc(p.id)}">＋ 新增帳號</button></div>${profiles || '<p class="muted small">可以再加入其他登入帳號或 API 金鑰，並在每個 Bot 的設定裡指定要用哪一個。</p>'}</div>` : '';
-      return `<article class="account-card"><div class="account-head"><div><h3>${esc(p.name)}${p.custom ? ' <span class="pill">自訂</span>' : ''}</h3><p class="muted">${sub}</p>${versionLine}</div><span class="pill ${cls}">${label}</span></div>${notes.map(n => `<p class="muted small provider-note">${esc(n)}</p>`).join('')}${p.issue ? `<div class="login-flow error-text">${esc(p.issue)}</div>` : ''}${p.installed ? usagePanel(quotaFor(p.id)) : ''}${flowView(p.install, 'install', p.id)}${flowView(l, 'login', p.id)}${!running ? `<div class="actions">${p.installed && p.terminalLogin ? `<button class="${p.status === 'logged_in' ? 'secondary' : 'primary'}" data-action="terminal-login" data-id="${esc(p.id)}">${p.status === 'logged_in' ? '重新登入' : '用 Google 帳號登入'}</button>` : ''}${loginButtons}${installBtn}${p.custom ? `<button class="secondary" data-action="provider-edit" data-id="${esc(p.id)}">編輯設定</button>` : ''}<span class="spacer"></span>${p.status === 'logged_in' && p.canLogout ? `<button class="link danger" data-action="account-logout" data-id="${esc(p.id)}">登出</button>` : ''}${p.removable ? `<button class="link danger" data-action="provider-remove" data-id="${esc(p.id)}">從 Zook 移除</button>` : ''}</div>` : ''}${profileBlock}</article>`;
+      return main + extras;
     }).join('')}</div>`;
   }
   function providerAddModal() {
@@ -448,7 +453,7 @@
   async function loadAccounts() {
     state.accounts = await api('accounts');
     state.providers = (await api('providers')).providers;
-    if (state.page === 'usage' && !$('#account-code-form')) render(true);
+    if (state.page === 'usage' && !$('#account-code-form input:focus')) render(true);
     pollAccounts();
     for (const p of state.accounts.providers.filter(x => x.needsCheck)) checkSignIn(p.id);
   }
@@ -462,6 +467,11 @@
   }
   window.addEventListener('focus', () => { if (state.page === 'usage' && state.accounts) loadAccounts().catch(() => {}); });  // back from the browser or Terminal
   async function reloadAccounts() { await loadAccounts(); refreshQuota(); }
+  async function detectUsage() {
+    state.quota = await post('quota/detect');
+    await Promise.all((state.accounts?.providers || []).filter(p => p.terminalLogin && p.status === 'logged_in').map(p => post('accounts/' + encodeURIComponent(p.id) + '/check').catch(() => {})));
+    await loadAccounts();
+  }
   async function pollAccounts() {
     if (state.accountPolling) return;
     state.accountPolling = true;
@@ -498,16 +508,16 @@
     return `${rel}（${d.toLocaleString('zh-TW', {month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit'})}）`;
   }
   const loadingBlock = text => `<div class="loading-block" role="status"><span class="spinner" aria-hidden="true"></span><span>${esc(text)}</span></div>`;
-  // Limits and Zook's own usage of one sign-in, shown inside its model card.
-  function usagePanel(p) {
-    if (!state.quota) return loadingBlock('正在偵測使用量…');
-    if (state.quota.error) return `<div class="blank error-text">${esc(state.quota.error)}</div>`;
-    if (!p) return '';
+  // Limits and Zook's own usage of one sign-in, as the parts of its card.
+  function usageParts(p) {
+    if (!state.quota) return {body: loadingBlock('正在偵測使用量…'), zook: '<div class="zook-usage empty"></div>', when: ''};
+    if (state.quota.error) return {body: `<p class="error-text small">${esc(state.quota.error)}</p>`, zook: '<div class="zook-usage empty"></div>', when: ''};
+    if (!p) return {body: '', zook: '<div class="zook-usage empty"></div>', when: ''};
     const money = v => v == null ? '' : ' · $' + v.toFixed(v < 1 ? 3 : 2), s = p.quota, ready = ['logged_in', 'installed'].includes(p.status);
     let body;
     if (!ready) body = '<p class="quota-empty">登入後才能查看額度。</p>';
     else if (p.apiBilling) body = '<p class="quota-empty">使用 API 計費，沒有 5 小時／每週額度，費用依用量計算。</p>';
-    else if (p.noQuotaApi) body = '<p class="quota-empty">這個 CLI 不提供方案額度給 Zook，這裡顯示 Zook 記錄的用量。</p>';
+    else if (p.noQuotaApi) body = '<p class="quota-empty">這個 CLI 不提供方案額度給 Zook，下方是 Zook 記錄的用量。</p>';
     else if (!s || !(s.windows || []).length) body = '<p class="quota-empty">還沒有額度資料，按右上角「偵測使用量」讀取。</p>';
     else body = s.windows.map(w => {
       const used = Math.max(0, Math.min(100, w.usedPercent)), left = Math.round((100 - used) * 10) / 10, level = used >= 90 ? 'bad' : used >= 70 ? 'warn' : '';
@@ -516,10 +526,10 @@
       + (s.limitReached ? `<p class="error-text small">已達上限：${esc(s.limitReached)}</p>` : '');
     const z = p.zookUsage;
     const coupons = s?.resetCredits && ready ? `<span class="quota-coupon">額度重置券 ${s.resetCredits} 張（在 Codex 中使用）</span>` : '';
-    const zook = !(z && ready) ? '' : `<div class="zook-usage"><span class="zook-usage-title"><span>Zook 用量</span>${coupons}</span><div><span>近 5 小時</span><b>${fmtN(z.fiveHour.tokens)}</b><small>${z.fiveHour.replies} 次回覆${money(z.fiveHour.costUsd)}</small></div><div><span>近 7 天</span><b>${fmtN(z.week.tokens)}</b><small>${z.week.replies} 次回覆${money(z.week.costUsd)}</small></div></div>`;
+    const zook = !(z && ready) ? '<div class="zook-usage empty"></div>' : `<div class="zook-usage"><span class="zook-usage-title"><span>用量</span>${coupons}</span><div><span>近 5 小時</span><b>${fmtN(z.fiveHour.tokens)}</b><small>${z.fiveHour.replies} 次回覆${money(z.fiveHour.costUsd)}</small></div><div><span>近 7 天</span><b>${fmtN(z.week.tokens)}</b><small>${z.week.replies} 次回覆${money(z.week.costUsd)}</small></div></div>`;
     const stamp = d => { const t = new Date(d); return isNaN(t) ? '' : ` · ${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; };
-    const when = s?.updatedAt && (s.windows || []).length ? `<small class="usage-when">${esc((s.source === 'live' ? '即時查詢' : s.source === 'probe' ? '手動偵測' : '定時更新') + stamp(s.updatedAt))}</small>` : '';
-    return `<div class="model-usage"><div class="model-quota">${body}${when}</div>${zook}</div>`;
+    const when = s?.updatedAt && (s.windows || []).length ? (s.source === 'live' ? '即時查詢' : s.source === 'probe' ? '手動偵測' : '定時更新') + stamp(s.updatedAt) : '暫無資料';
+    return {body, zook, when};
   }
   const quotaFor = (id, account) => { const q = (state.quota?.providers || []).find(x => x.id === id); return account ? (q?.profiles || []).find(x => x.id === account) : q; };
   function botUsageSection() {
@@ -855,9 +865,9 @@
       }).join('')}</div>` : '<div class="blank">沒有偵測到插件。</div>'}`;
     } else if (state.page === 'settings') {
       let s = state.data.settings || {};
-      content = permissionSection(s.permissionMode || 'manual') + `<form id="settings-form" class="setting-list">${settingRow('預設提供者', '新對話預設使用的模型服務。登入狀態在「各模型使用量」管理。', `<select name="provider" class="plain-select" aria-label="預設提供者">${providerOptions(s.provider || 'codex', false)}</select>`)}${settingRow('預設模型', '未個別指定模型的 Bot 會使用這個模型。', modelPicker(s.model||'', true))}${[0, 1].map(i => settingRow('備用模型 ' + (i + 1), i ? '第一個備用也不能用時，再換這一個。' : '預設模型額度用完、未登入或回覆失敗時，自動換這個模型，並在回覆下方註明。', dropdown('fallback' + i, (s.fallbacks || [])[i] || '', [{id: '', name: '不使用'}, ...providerList()], 'data-fallback-slot'))).join('')}<div class="setting-actions"><button class="primary">儲存模型設定</button><button type="button" class="secondary" data-action="export">匯出所有資料</button></div></form>` + noticeSection() + updateSection() + remoteSection()
+      content = permissionSection(s.permissionMode || 'manual') + `<form id="settings-form" class="setting-list">${settingRow('預設提供者', '新對話預設使用的模型服務。登入狀態在「各模型使用量」管理。', `<select name="provider" class="plain-select" aria-label="預設提供者">${providerOptions(s.provider || 'codex', false)}</select>`)}${settingRow('預設模型', '未個別指定模型的 Bot 會使用這個模型。', modelPicker(s.model||'', true))}${[0, 1].map(i => settingRow('備用模型 ' + (i + 1), i ? '第一個備用也不能用時，再換這一個。' : '預設模型額度用完、未登入或回覆失敗時，自動換這個模型，並在回覆下方註明。', dropdown('fallback' + i, (s.fallbacks || [])[i] || '', [{id: '', name: '不使用'}, ...providerList()], 'data-fallback-slot'))).join('')}<div class="setting-actions"><button class="primary">儲存模型設定</button><button type="button" class="secondary" data-action="export">匯出所有資料</button></div></form>` + noticeSection() + remoteSection() + updateSection()
     }
-    return `<main class="main"><header class="main-header"><div class="bot-pill">Zook</div></header><div class="page"><div class="page-inner"><div class="page-top"><h1>${name}</h1>${state.page==='knowledge'?'<button class="primary" data-action="new-note">＋ 新增知識</button>':state.page==='usage'?'<div class="page-top-actions"><button class="secondary" data-action="detect-usage">偵測使用量</button><button class="primary" data-action="provider-add">＋ 新增模型</button></div>':state.page==='schedules'?'<button class="primary" data-action="new-schedule">＋ 新增排程</button>':''}</div>${content}</div></div></main>`
+    return `<main class="main"><header class="main-header"><div class="bot-pill">Zook</div></header><div class="page"><div class="page-inner"><div class="page-top"><h1>${name}</h1>${state.page==='knowledge'?'<button class="primary" data-action="new-note">＋ 新增知識</button>':state.page==='usage'?`<div class="page-top-actions"><button class="secondary" data-action="detect-usage" ${state.usageBusy ? 'disabled' : ''}>${state.usageBusy === 'detect' ? '偵測中…' : '偵測使用量'}</button><button class="secondary" data-action="update-all" ${state.usageBusy ? 'disabled' : ''}>${state.usageBusy === 'update' ? '更新中…' : '一鍵全更新'}</button><button class="primary" data-action="provider-add">＋ 新增模型</button></div>`:state.page==='schedules'?'<button class="primary" data-action="new-schedule">＋ 新增排程</button>':''}</div>${content}</div></div></main>`
   }
 
   function render(keepScroll = false) {
@@ -1355,11 +1365,28 @@
           toast('已開啟終端機，請在那裡選擇 Google 登入，完成後回到 Zook');
           break;
         case 'detect-usage':
-          el.disabled = true; el.textContent = '偵測中…';
-          try { state.quota = await post('quota/detect'); await Promise.all((state.accounts?.providers || []).filter(p => p.terminalLogin && p.status === 'logged_in').map(p => post('accounts/' + encodeURIComponent(p.id) + '/check').catch(() => {}))); await loadAccounts(); toast('已更新使用量'); }
+          if (state.usageBusy) break;
+          state.usageBusy = 'detect'; render(true);
+          try { await detectUsage(); toast('已更新使用量'); }
           catch (err) { toast(err.message); }
-          render(true);
+          state.usageBusy = ''; render(true);
           break;
+        case 'update-all': {
+          const list = (state.accounts?.providers || []).filter(p => p.installed && p.canInstall && p.version?.updateAvailable);
+          if (list.length && !confirm(`將更新 ${list.map(p => p.name.split('（')[0] + ' ' + p.version.latest).join('、')}，完成後重新偵測使用量。\n\n確定更新？`)) break;
+          if (state.usageBusy) break;
+          state.usageBusy = 'update'; render(true);
+          try {
+            const started = await Promise.all(list.map(p => post('accounts/' + encodeURIComponent(p.id) + '/install').then(() => p.id, () => null)));
+            await loadAccounts();
+            for (let i = 0; i < 400 && state.accounts.providers.some(p => p.install?.state === 'running'); i++) { await new Promise(r => setTimeout(r, 1500)); await loadAccounts(); }
+            await detectUsage();
+            const failed = state.accounts.providers.filter(p => started.includes(p.id) && p.install?.state !== 'succeeded').map(p => p.name.split('（')[0]);
+            toast(!list.length ? '全部都是最新版，使用量已更新' : failed.length ? `${failed.join('、')} 沒有更新成功，其他已完成` : '全部更新完成，使用量已更新');
+          } catch (err) { toast(err.message); }
+          state.usageBusy = ''; render(true);
+          break;
+        }
         case 'refresh-claude-quota':
           el.disabled = true; el.textContent = '更新中…';
           try { state.quota = await post('quota/claude/refresh'); render(true); toast('已更新 Claude 額度'); }

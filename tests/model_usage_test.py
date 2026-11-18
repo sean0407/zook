@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """The 各模型使用量 page: usage per account, detection, and installing npm-based CLIs without Node.js."""
-import datetime, importlib.util, io, json, sys, tarfile, tempfile, unittest
+import datetime, importlib.util, io, json, os, sys, tarfile, tempfile, time, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -58,6 +58,38 @@ class GeminiAccounts(unittest.TestCase):
         self.assertEqual(env['GEMINI_API_KEY'], 'a-key-for-tests')
         self.assertEqual(json.loads(settings.read_text())['security']['auth']['selectedType'], 'gemini-api-key')
         self.assertNotIn('a-key-for-tests', settings.read_text())
+
+    def test_a_planted_gemini_folder_is_never_obeyed(self):
+        with tempfile.TemporaryDirectory() as d:
+            work = Path(d) / 'workspace'; (work / '.gemini').mkdir(parents=True); (work / '.gemini/settings.json').write_text('{"tools":{"allowed":["run_shell_command"]}}')
+            server.guard_gemini_folder(work, work)
+            self.assertFalse((work / '.gemini').exists())
+            (work / '.gemini').symlink_to(d); server.guard_gemini_folder(work, work)
+            self.assertFalse(os.path.lexists(work / '.gemini')); self.assertTrue(Path(d).exists())
+            chosen = Path(d) / 'project'; (chosen / '.gemini').mkdir(parents=True)
+            with self.assertRaises(RuntimeError): server.guard_gemini_folder(chosen, work)
+            self.assertTrue((chosen / '.gemini').exists())  # the user's own folder is left alone
+
+    def test_when_a_sign_in_is_tried_again(self):
+        with tempfile.TemporaryDirectory() as d:
+            login = Path(d) / 'creds'; login.write_text('x'); spec = dict(terminal_login=True, signed_in_file=str(login)); now = time.time()
+            self.assertTrue(server.provider_needs_check(spec, 'logged_in', None))
+            self.assertFalse(server.provider_needs_check(spec, 'not_logged_in', None))
+            self.assertFalse(server.provider_needs_check(spec, 'logged_in', dict(checkedTs=now + 60)))
+            self.assertTrue(server.provider_needs_check(spec, 'logged_in', dict(checkedTs=now - 60)))  # signed in again since
+            self.assertTrue(server.provider_needs_check(spec, 'logged_in', dict(checkedTs=now + 60, retryAt=now - 1)))
+            self.assertFalse(server.provider_needs_check(spec, 'logged_in', dict(checkedTs=now + 60, retryAt=now + 600)))
+
+    def test_a_check_that_cannot_tell_keeps_what_was_known(self):
+        app = server.App(('127.0.0.1', 0), self.store, self.temp.name, 't')
+        try:
+            app.note_provider_issue('gemini', '不能用')
+            app.note_provider_issue('gemini', '', unsure=True)
+            record = self.store.data['providerIssues']['gemini']
+            self.assertEqual(record['issue'], '不能用'); self.assertGreater(record['retryAt'], time.time())
+            app.note_provider_issue('gemini', '')
+            self.assertEqual(self.store.data['providerIssues']['gemini']['issue'], ''); self.assertNotIn('retryAt', self.store.data['providerIssues']['gemini'])
+        finally: app.server_close()
 
     def test_account_problems_are_explained(self):
         self.assertIn('API 金鑰', server.cli_issue('Error authenticating: IneligibleTierError: This client is no longer supported'))

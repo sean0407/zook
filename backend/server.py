@@ -1092,6 +1092,25 @@ def cli_issue(text):
     return ''
 
 
+def guard_gemini_folder(folder, workspace):
+    """Gemini obeys a .gemini folder in the place it starts, and a Bot could have written one there to approve its own commands."""
+    folder, found = pathlib.Path(folder), pathlib.Path(folder) / '.gemini'
+    if folder == pathlib.Path.home() or not os.path.lexists(str(found)): return  # the home folder's .gemini is the user's own Gemini settings
+    if folder != pathlib.Path(workspace):
+        raise RuntimeError('這個資料夾裡有 .gemini 設定，為了安全，Gemini Bot 不會在這裡執行。請移除該設定，或改用其他資料夾。')
+    if found.is_dir() and not found.is_symlink(): shutil.rmtree(str(found))  # Zook's own Bot workspace
+    else: found.unlink()
+
+
+def provider_needs_check(spec, status, record):
+    """Whether to try a sign-in once more: never tried, signed in again since, or the last try could not tell."""
+    if not spec.get('terminal_login') or status != 'logged_in': return False
+    if record is None: return True
+    if record.get('retryAt') and time.time() >= record['retryAt']: return True
+    try: return os.path.getmtime(os.path.expanduser(spec.get('signed_in_file') or '')) > record.get('checkedTs', 0)
+    except OSError: return False
+
+
 def login_methods(provider):
     s = P.spec(_active['data'], provider) or {}
     if provider == 'claude': return [('claudeai', 'Claude 訂閱帳號登入'), ('console', 'Console（API 計費）')]
@@ -2492,6 +2511,7 @@ class App(ThreadingHTTPServer):
                                                     for cell in ('MCPS', 'AGENTS', 'RULES', 'SKILLS', 'HOOKS')})
                     stdin_prompt = False
                 else:
+                    if provider == 'gemini': guard_gemini_folder(cli_cwd, workspace)
                     args, stdin_prompt = P.command_args(P.spec(store.data, provider), str(prompt_file), prompt, model, full=scope == 'full', binary=binary)
             elif provider == 'codex':
                 images = [x for x in (job.get('attachments') or []) if pathlib.Path(x).suffix.lower() in IMAGE_TYPES]
@@ -2565,7 +2585,7 @@ class App(ThreadingHTTPServer):
                             raise RuntimeError('Claude 尚未登入。請到「各模型使用量」頁登入後重試。')
                     except (ValueError, AttributeError): pass
                 detail = (stderr or b'').decode('utf-8', errors='replace').lower() + output.decode('utf-8', errors='replace').lower() + parsed['error'].lower()
-                issue = cli_issue(detail)
+                issue = cli_issue((stderr or b'').decode('utf-8', errors='replace')) if provider == 'gemini' else ''  # what the CLI itself reports, not the Bot's text
                 if issue:
                     if not account: self.note_provider_issue(provider, issue)
                     raise RuntimeError(issue)
@@ -2767,10 +2787,13 @@ class App(ThreadingHTTPServer):
             if released: self.store.save()
         return released
 
-    def note_provider_issue(self, provider, issue):
-        """Remember whether the CLI's own sign-in can actually be used, for its card."""
+    def note_provider_issue(self, provider, issue, unsure=False):
+        """Remember whether the CLI's own sign-in can actually be used, for its card. When the check could not tell, keep what was known and try later."""
         with self.store.lock:
-            self.store.data.setdefault('providerIssues', {})[provider] = dict(issue=issue, checkedAt=NOW()); self.store.save()
+            issues = self.store.data.setdefault('providerIssues', {})
+            record = dict(issue=(issues.get(provider) or {}).get('issue', '') if unsure else issue, checkedAt=NOW(), checkedTs=time.time())
+            if unsure: record['retryAt'] = time.time() + 600
+            issues[provider] = record; self.store.save()
 
     def record_quota(self, provider, info, account_id='', source='reply'):
         snap = normalize_quota(provider, info)
@@ -3211,7 +3234,7 @@ class Handler(BaseHTTPRequestHandler):
                     view['login'] = sub.view() if sub else None
                     profiles.append(view)
                 record = (data.get('providerIssues') or {}).get(provider)
-                item.update(issue=(record or {}).get('issue', ''), needsCheck=bool(s.get('terminal_login') and item['status'] == 'logged_in' and record is None))
+                item.update(issue=(record or {}).get('issue', '') if item['status'] == 'logged_in' else '', needsCheck=provider_needs_check(s, item['status'], record))
                 item.update(profiles=profiles, canAddLogin=bool(provider in ACCOUNT_HOME and login_methods(provider)), canAddKey=provider in ACCOUNT_KEYS)
                 items.append(item)
             return self.respond(200, {'providers': items, 'catalog': P.catalog_view(data)})
@@ -3285,10 +3308,13 @@ class Handler(BaseHTTPRequestHandler):
             if action == 'check':  # one tiny request, to learn whether this sign-in can really be used
                 path = find_cli(provider); s = P.spec(self.server.store.data, provider) or {}
                 if not path or not s.get('terminal_login'): raise ValueError('這個模型不需要檢查。')
-                try: done = subprocess.run([path, '-p', 'Reply with OK'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=provider_env(provider), timeout=90, cwd=tempfile.gettempdir())
-                except subprocess.TimeoutExpired: return self.respond(200, {'issue': ''})
-                issue = cli_issue(done.stdout.decode('utf-8', 'replace')) if done.returncode else ''
-                self.server.note_provider_issue(provider, issue)
+                try:
+                    with tempfile.TemporaryDirectory() as empty:  # an empty folder: nothing there can change how Gemini behaves
+                        done = subprocess.run([path, '-p', 'Reply with OK'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=provider_env(provider), timeout=90, cwd=empty)
+                except subprocess.TimeoutExpired:
+                    self.server.note_provider_issue(provider, '', unsure=True); return self.respond(200, {'issue': ''})
+                issue = cli_issue(done.stderr.decode('utf-8', 'replace')) if done.returncode else ''
+                self.server.note_provider_issue(provider, issue, unsure=bool(done.returncode and not issue))
                 return self.respond(200, {'issue': issue})
             if action == 'terminal-login':
                 path = find_cli(provider); s = P.spec(self.server.store.data, provider) or {}
@@ -3320,7 +3346,7 @@ class Handler(BaseHTTPRequestHandler):
                 p = subprocess.run(logout_args(provider), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=provider_env(provider, account), timeout=20)
                 logins.pop(login_key, None)
                 with self.server.store.lock:
-                    (self.server.store.data.get('accountInfo') or {}).pop(login_key, None); self.server.store.save()
+                    (self.server.store.data.get('accountInfo') or {}).pop(login_key, None); (self.server.store.data.get('providerIssues') or {}).pop(login_key, None); self.server.store.save()
                 return self.respond(200, {'ok': p.returncode == 0})
         except ValueError as exc: return self.error(400, str(exc))
         except (RuntimeError, OSError) as exc: return self.error(409, str(exc) if isinstance(exc, RuntimeError) else '無法執行 CLI。')
