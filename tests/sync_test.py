@@ -143,6 +143,70 @@ class SyncTest(unittest.TestCase):
         self.assertIn('權限測試', self.b.bots())
         self.assertEqual(len([p for p in self.folder.glob('zook-sync-*.json')]), 3)
 
+    def chats(self, mac, name):
+        bot = mac.bots()[name]
+        return [[m['content'] for m in (bot['messages'] if c['id'] == bot['chatId'] else c.get('messages') or [])] for c in bot['chats']]
+
+    def test_restore_stops_syncing_instead_of_deleting_elsewhere(self):
+        self.join(self.a); self.join(self.b, 'replace')
+        made = self.b.req('POST', '/api/backups', {})[1]['name']
+        bot = self.a.req('POST', '/api/bots', {'name': '備份之後才有', 'provider': 'codex'})[1]
+        self.a.ask(bot['id'], '重要對話'); self.both()
+        self.assertIn('備份之後才有', self.b.bots())
+        out = self.b.req('POST', '/api/backups/%s/restore' % made, {})[1]
+        self.assertTrue(out['syncStopped']); self.assertFalse(self.b.req('GET', '/api/sync')[1]['on'])
+        self.both(3)
+        self.assertIn('備份之後才有', self.a.bots())  # the older copy on B did not turn into deletions on A
+        self.assertEqual(self.chats(self.a, '備份之後才有'), [['重要對話', 'reply']])
+
+    def test_rejoining_keeps_what_was_written_meanwhile(self):
+        bot = self.a.req('POST', '/api/bots', {'name': '常用', 'provider': 'codex'})[1]
+        other = self.a.req('POST', '/api/bots', {'name': 'B會刪掉的', 'provider': 'codex'})[1]
+        self.a.ask(bot['id'], '開頭'); self.a.req('PATCH', '/api/settings', {'rules': '原本的規則'})
+        self.join(self.a); self.join(self.b, 'replace'); self.both()
+        self.a.req('DELETE', '/api/sync')
+        self.a.ask(bot['id'], 'A 停止同步後問的')
+        self.b.ask(bot['id'], 'B 這邊問的'); self.b.req('DELETE', '/api/bots/' + other['id']); self.b.req('PATCH', '/api/settings', {'rules': ''}); self.b.sync()
+        self.join(self.a, 'merge'); self.both()
+        texts = self.chats(self.a, '常用')
+        self.assertIn(['開頭', 'reply', 'A 停止同步後問的', 'reply'], texts); self.assertIn(['開頭', 'reply', 'B 這邊問的', 'reply'], texts)
+        self.assertIn('B會刪掉的', self.a.bots())  # joining never deletes
+        self.assertEqual(self.a.state()['settings']['rules'], '原本的規則')
+        self.assertIn('safety', [x['kind'] for x in self.a.req('GET', '/api/backups')[1]['items']])
+
+    def test_a_fast_clock_elsewhere_does_not_undo_new_messages(self):
+        bot = self.a.req('POST', '/api/bots', {'name': '時鐘', 'provider': 'codex'})[1]
+        self.a.ask(bot['id'], '一'); self.join(self.a); self.join(self.b, 'replace'); self.both()
+        path = next(p for p in self.folder.glob('zook-sync-*.json') if self.a.req('GET', '/api/sync')[1]['deviceName'] and json.loads(p.read_text())['items'].get('bots:' + bot['id']))
+        mine = [p for p in self.folder.glob('zook-sync-*.json')]
+        # A third Mac whose clock is twelve hours ahead says the same conversation changed "later".
+        data = json.loads(mine[0].read_text()); key = next(k for k in data['items'] if k.startswith('chats:' + bot['id']))
+        ahead = dict(format=1, device={'name': '快鐘'}, at='', tombs={}, items={key: dict(data['items'][key], t=time.time() + 43200)})
+        (self.folder / 'zook-sync-00000000000000aa.json').write_text(json.dumps(ahead))
+        self.a.sync()
+        self.a.ask(bot['id'], '二'); self.a.sync(); self.a.ask(bot['id'], '三'); self.a.sync(); self.a.sync()
+        self.assertEqual(self.chats(self.a, '時鐘'), [['一', 'reply', '二', 'reply', '三', 'reply']])  # no bouncing back, no copies
+
+    def test_a_file_cannot_take_admin_or_break_a_conversation(self):
+        self.join(self.a)
+        admin = next(b for b in self.a.state()['bots'] if b['isAdmin']); now = time.time()
+        bot = self.a.req('POST', '/api/bots', {'name': '對話', 'provider': 'codex'})[1]; self.a.ask(bot['id'], '原本'); self.a.sync()
+        chat = self.a.bots()['對話']['chatId']
+        deep = self.folder / 'zook-sync-00000000000000fd.json'; deep.write_text('[' * 100000)
+        evil = dict(format=1, device={'name': 'x'}, at='', tombs={}, items={
+            'bots:' + admin['id']: dict(t=now + 5, h='', p=[], v=dict(name=admin['name'], isAdmin=False)),
+            'bots:zzzboss00001': dict(t=now + 5, h='', p=[], v=dict(name='外來總管', isAdmin=True)),
+            'chats:%s:%s' % (bot['id'], chat): dict(t=now + 5, h='', p=[], v=dict(title='t', messages=[{'id': 'm1', 'role': 'user', 'content': 'x', 'attachments': [1]}])),
+            'chats:%s:c2' % bot['id']: dict(t=now + 5, h='', p=[], v=dict(title='t', messages=[{'id': 'm2', 'role': 'user', 'content': 'x', 'weird': float('nan')}]))})
+        (self.folder / 'zook-sync-00000000000000ff.json').write_text(json.dumps(evil))
+        out = self.a.sync()
+        self.assertEqual(out['lastError'], '')  # the unreadable file did not stop the round
+        bots = self.a.bots()
+        self.assertTrue(bots[admin['name']]['isAdmin']); self.assertFalse(bots['外來總管']['isAdmin'])
+        self.assertEqual(self.chats(self.a, '對話')[0], ['原本', 'reply'])  # the malformed version was refused whole
+        self.assertNotIn('NaN', json.dumps(self.a.state()))
+        self.a.ask(bot['id'], '還能繼續')
+
 
 if __name__ == '__main__':
     unittest.main()

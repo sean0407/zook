@@ -55,8 +55,8 @@
       if (el.dataset.up === 'backup-pick') $('#backup-file')?.click();
       if (el.dataset.up === 'backup-delete' && confirm('確定刪除這份備份？')) { state.backups = (await post('backups/' + encodeURIComponent(id), {}, 'DELETE')).items; render(true); }
       if (el.dataset.up === 'backup-restore' && confirm('現在的資料會換成這份備份的內容。\n還原前的資料會另存一份，之後可以再還原回來。')) {
-        await post('backups/' + encodeURIComponent(id) + '/restore');
-        await refresh(); await loadUpkeep('settings'); toast('已還原');
+        const done = await post('backups/' + encodeURIComponent(id) + '/restore');
+        await refresh(); await loadUpkeep('settings'); toast(done.syncStopped ? '已還原。同步已停止，確認資料後再重新開啟' : '已還原');
       }
     } catch (err) { toast(err.message); }
   });

@@ -74,6 +74,11 @@ def backup_restore(app, name):
     # This Mac's own pairing, sign-ins and sync stay as they are: they belong to the machine, not to the copy.
     keep = {key: copy.deepcopy(store.data.get(key)) for key in ('remoteDevices', 'sync') if key in store.data}
     keep_remote = copy.deepcopy(store.data['settings'].get('remote'))
+    # A triggered schedule goes on from where it is now, so files and mails it has already handled do not start it again.
+    progress = {x['id']: {k: copy.deepcopy(x[k]) for k in ('watchSeen', 'mailState', 'mailWaiting') if k in x} for x in store.data['schedules']}
+    for item in data.get('schedules') or []:
+        now_at = store.find('schedules', item['id'])
+        if now_at and (now_at.get('trigger'), now_at.get('watchFolder'), now_at.get('mailFrom'), now_at.get('mailSubject')) == (item.get('trigger'), item.get('watchFolder'), item.get('mailFrom'), item.get('mailSubject')): item.update(progress[item['id']])
     previous = store.path.read_bytes()
     try:
         data.update(keep)
@@ -84,7 +89,14 @@ def backup_restore(app, name):
         store.path.write_bytes(previous); _active['data'] = store.data
         raise ValueError('這份備份無法讀取，資料沒有變動。')
     store.data = fresh.data; _active['data'] = store.data
-    return safety
+    # Older data must not be sent to the other Macs as if it were new, nor its gaps as deletions: syncing stops until it is switched on again.
+    sync = store.data.get('sync') or {}
+    stopped = bool(sync.get('folder'))
+    if stopped:
+        try: os.unlink(os.path.join(sync['folder'], 'zook-sync-%s.json' % sync.get('deviceId')))
+        except OSError: pass
+        sync.update(folder='', others=[], lastError=''); sync_marks(store, reset=True); store.save()
+    return safety, stopped
 
 
 # ---- Activity: who changed or approved what. Kept in its own file so restoring a backup does not rewrite history.
@@ -304,10 +316,10 @@ def upkeep_route(handler, store, parts, path):
         name = backup_write(store, 'file', backup_check(handler.body(MAX_BACKUP_FILE).get('data'))); log_activity(store, 'backup', '從檔案加入一份備份')
         return handler.respond(201, dict(name=name, items=backup_list(store)))
     if n == 4 and parts[3] == 'restore' and method == 'POST':
-        try: safety = backup_restore(handler.server, parts[2])
+        try: safety, stopped = backup_restore(handler.server, parts[2])
         except Busy as exc: return handler.error(409, str(exc))
-        log_activity(store, 'backup', '還原備份 %s（還原前的資料另存為 %s）' % (parts[2], safety))
-        return handler.respond(200, dict(ok=True, safety=safety))
+        log_activity(store, 'backup', '還原備份 %s（還原前的資料另存為 %s）%s' % (parts[2], safety, '，並停止同步' if stopped else ''))
+        return handler.respond(200, dict(ok=True, safety=safety, syncStopped=stopped))
     if n == 3 and method == 'DELETE':
         if not BACKUP_NAME.fullmatch(parts[2]) or not (backup_dir(store) / parts[2]).is_file(): return handler.error(404, '找不到這份備份。')
         (backup_dir(store) / parts[2]).unlink(); log_activity(store, 'backup', '刪除備份 ' + parts[2])

@@ -8,6 +8,9 @@ SYNC_FILE = re.compile(r'zook-sync-([0-9a-f]{16})\.json')
 MAX_SYNC_FILE = 100 * 1024 * 1024
 SYNC_BOT_TEXT = {'name': 100, 'color': 30, 'shape': 30, 'instructions': 10000, 'persona': 20000, 'provider': 20, 'model': 100, 'section': 100}
 SYNC_ID = re.compile(r'[A-Za-z0-9_-]{1,64}')
+SYNC_PROVIDERS = ('', 'auto', 'codex', 'claude', 'grok', 'antigravity', 'gemini')  # the same on every Mac; custom ones are not
+SYNC_MESSAGE_TEXT = {'createdAt': 40, 'status': 20, 'note': 300, 'auto': 100, 'autoWhy': 300, 'effort': 20, 'author': 100}
+_sync_unwritten = set()
 _sync_lock = threading.Lock()
 
 
@@ -60,8 +63,8 @@ def sync_items(store):
         if bot['id'] in busy: continue
         ensure_chats(bot)
         value = {k: bot.get(k) or '' for k in SYNC_BOT_TEXT}
-        value.update(pinned=bool(bot.get('pinned')), isAdmin=bool(bot.get('isAdmin')), createdAt=bot.get('createdAt') or '')
-        if value['provider'] and not P.spec(store.data, value['provider']) and value['provider'] != AUTO: value['provider'] = ''
+        value.update(pinned=bool(bot.get('pinned')), createdAt=bot.get('createdAt') or '')
+        if value['provider'] not in SYNC_PROVIDERS: value.update(provider='', model='')  # a model set up only on this Mac stays here
         items['bots:' + bot['id']] = value
         for chat in bot['chats']:
             messages = bot['messages'] if chat['id'] == bot['chatId'] else chat.get('messages') or []
@@ -74,7 +77,8 @@ def sync_items(store):
         items['memories:' + memory['id']] = {k: memory.get(k) for k in ('content', 'botId', 'createdBy', 'createdAt') if memory.get(k) is not None}
     settings = store.data['settings']
     items['settings:shared'] = dict(rules=settings.get('rules') or '', sections=list(settings.get('sections') or []))
-    return items
+    # What is sent is what would be accepted: both sides then agree on every item, byte for byte.
+    return {key: clean for key, clean in ((key, sync_clean(key, value)) for key, value in items.items()) if clean is not None}
 
 
 def _text(value, limit): return isinstance(value, str) and len(value) <= limit
@@ -87,7 +91,8 @@ def sync_clean(key, value):
     if parts[0] == 'bots' and len(parts) == 2:
         if any(not _text(value.get(k, ''), limit) for k, limit in SYNC_BOT_TEXT.items()) or not str(value.get('name') or '').strip(): return None
         out = {k: value.get(k, '') for k in SYNC_BOT_TEXT}
-        out.update(pinned=value.get('pinned') is True, isAdmin=value.get('isAdmin') is True, createdAt=value.get('createdAt') if _text(value.get('createdAt'), 40) else '')
+        out.update(pinned=value.get('pinned') is True, createdAt=value.get('createdAt') if _text(value.get('createdAt'), 40) else '')
+        if out['provider'] not in SYNC_PROVIDERS: out.update(provider='', model='')
         return out
     if parts[0] == 'chats' and len(parts) == 3:
         messages = value.get('messages')
@@ -96,7 +101,22 @@ def sync_clean(key, value):
         for m in messages:
             if not isinstance(m, dict) or not SYNC_ID.fullmatch(str(m.get('id') or '')) or m.get('role') not in ('user', 'assistant') or not _text(m.get('content'), 400000): return None
             if m.get('status') == 'running': continue
-            kept.append({k: v for k, v in m.items() if isinstance(k, str) and len(k) <= 40 and (v is None or isinstance(v, (str, int, float, bool, list, dict)))})
+            one = dict(id=m['id'], role=m['role'], content=m['content'])
+            for k, limit in SYNC_MESSAGE_TEXT.items():
+                if k in m and m[k] is not None:
+                    if not _text(m[k], limit): return None
+                    one[k] = m[k]
+            for k in ('plan', 'long'):
+                if m.get(k) is True: one[k] = True
+            if m.get('attachments'):
+                files = m['attachments']
+                if not isinstance(files, list) or len(files) > 20: return None
+                one['attachments'] = []
+                for a in files:
+                    if not isinstance(a, dict) or not SYNC_ID.fullmatch(str(a.get('id') or '')) or not _text(a.get('name'), 300) or not _text(a.get('kind', ''), 20): return None
+                    size = a.get('size')
+                    one['attachments'].append(dict(id=a['id'], name=a['name'], kind=a.get('kind', ''), size=size if type(size) is int and 0 <= size < 10 ** 12 else 0))
+            kept.append(one)
         return dict(title=value.get('title', ''), kind=value.get('kind', ''), createdAt=str(value.get('createdAt') or '')[:40], updatedAt=str(value.get('updatedAt') or '')[:40], messages=kept)
     if parts[0] == 'knowledge' and len(parts) == 2:
         tags = value.get('tags', [])
@@ -126,7 +146,7 @@ def sync_drop_bot(store, bot):
     store.data['bots'].remove(bot)
 
 
-def sync_put(store, key, value):
+def sync_put(store, key, value, gone=()):
     """Lock held. Write one accepted value into this Mac's data. Returns False when it cannot be applied yet."""
     parts = key.split(':'); busy = _busy_bots(store)
     if parts[0] == 'bots':
@@ -135,8 +155,8 @@ def sync_put(store, key, value):
         if not bot:
             bot = dict(id=parts[1], messages=[], chats=[], chatId=None, enabledSkills=[], enabledMcp=[], allowCommands=True, webSearch=False)
             store.data['bots'].append(bot)
-        if value['provider'] and value['provider'] != AUTO and not P.spec(store.data, value['provider']): value = dict(value, provider='', model='')  # a model this Mac does not have: use the default
-        if value['isAdmin'] and any(b.get('isAdmin') and b['id'] != bot['id'] for b in store.data['bots']): value = dict(value, isAdmin=False)
+        if not value['provider'] and bot.get('provider') and bot['provider'] not in SYNC_PROVIDERS: value = dict(value, provider=bot['provider'], model=bot.get('model') or '')  # this Mac's own model for it stays
+        bot.setdefault('isAdmin', False)  # who the 管理員 is, is decided on each Mac, never by a file
         bot.update(value)
         if bot.get('section') and not bot.get('pinned') and bot['section'] not in store.data['settings'].get('sections', []): store.data['settings'].setdefault('sections', []).append(bot['section'])
         return True
@@ -156,7 +176,9 @@ def sync_put(store, key, value):
             if newest: bot['chatId'] = newest['id']; bot['messages'] = newest.pop('messages', None) or []
         return True
     if parts[0] in ('knowledge', 'memories'):
-        if value.get('botId') and not store.find('bots', value['botId']): value = dict(value, botId='')
+        if value.get('botId') and not store.find('bots', value['botId']):
+            if 'bots:' + value['botId'] not in gone: return False  # its Bot has not arrived yet
+            value = dict(value, botId='')
         items = store.data.setdefault(parts[0], [])
         found = next((x for x in items if x['id'] == parts[1]), None)
         if found: found.update(value)
@@ -207,7 +229,7 @@ def sync_read_others(folder, own):
         try:
             if os.path.islink(path) or os.path.getsize(path) > MAX_SYNC_FILE: continue
             with open(path, encoding='utf-8') as f: data = json.load(f)
-        except (OSError, ValueError): continue
+        except (OSError, ValueError, RecursionError, MemoryError): continue
         if not isinstance(data, dict) or data.get('format') != 1 or not isinstance(data.get('items'), dict) or not isinstance(data.get('tombs', {}), dict): continue
         device = data.get('device') if isinstance(data.get('device'), dict) else {}
         out.append((dict(id=match.group(1), name=str(device.get('name') or 'Mac')[:40], at=str(data.get('at') or '')[:40]), data['items'], data.get('tombs') or {}))
@@ -250,12 +272,13 @@ def sync_pass(app):
             for key, value in local.items():
                 digest, old = _digest(value), stamps.get(key)
                 if not old or old[0] != digest:
-                    stamps[key] = [digest, 0 if joining else now, not joining, ((old[3] + [old[0]]) if old else [])[-20:]]; tombs.pop(key, None)
+                    # Never earlier than the version it replaces, even if that one came from a Mac whose clock runs ahead.
+                    stamps[key] = [digest, 0 if joining else max(now, old[1] + 0.001 if old else 0), not joining, ((old[3] + [old[0]]) if old else [])[-20:]]; tombs.pop(key, None)
             for key in [k for k in stamps if k not in local and not waiting(k)]:
-                stamps.pop(key); tombs[key] = now
+                tombs[key] = max(now, stamps.pop(key)[1] + 0.001)
             # 2. What is newer on the other Macs.
             for device, items, gone in others:
-                for key, when in gone.items():
+                for key, when in ({} if joining else gone).items():  # a Mac that is joining keeps what it has
                     if not isinstance(key, str) or len(key) > 200 or not isinstance(when, (int, float)) or isinstance(when, bool) or not 0 < when < now + 86400: continue
                     if key in stamps:
                         if when <= stamps[key][1] or not sync_remove(store, key): continue
@@ -268,21 +291,26 @@ def sync_pass(app):
                     if entry['t'] <= max(mine[1] if mine else -1, tombs.get(key, -1)): continue
                     value = sync_clean(key, entry.get('v'))
                     if value is None: continue
+                    if joining and key == 'settings:shared' and not value['rules'] and key in local: value = dict(value, rules=local[key]['rules'])
                     digest, history = _digest(value), _history(entry.get('p'))
                     if mine and mine[0] == digest: stamps[key] = [digest, entry['t'], False, history]; continue
-                    if key.startswith('chats:') and mine and mine[2] and mine[0] not in history and key in local and local[key]['messages']:
+                    theirs = {m['id'] for m in value['messages']} if key.startswith('chats:') else set()
+                    if key.startswith('chats:') and mine and (joining or (mine[2] and mine[0] not in history)) and key in local and any(m['id'] not in theirs for m in local[key]['messages']):
                         # Both Macs wrote in this conversation. The other one is newer and wins; this Mac's version is kept as a copy.
                         bot = store.find('bots', key.split(':')[1])
                         if not bot or bot['id'] in busy: continue
                         bot['chats'].append(dict(id=ID(), title=((local[key]['title'] or '對話') + '（這台 Mac 的版本）')[:200], createdAt=NOW(), updatedAt=NOW(), messages=copy.deepcopy(local[key]['messages'])))
                         conflicts += 1
-                    if sync_put(store, key, value):
+                    if sync_put(store, key, value, tombs):
                         stamps[key] = [digest, entry['t'], False, history]; tombs.pop(key, None); took += 1
+            if joining and not any(b.get('isAdmin') for b in store.data['bots']):  # every Mac keeps one 管理員, chosen the way a new workspace chooses it
+                for b in store.data['bots']:
+                    if b.get('name') == '管理員': b['isAdmin'] = True; break
             # 3. This Mac's file: everything it has, with when each item last changed.
             final = sync_items(store)
             for key, value in final.items():
                 digest, old = _digest(value), stamps.get(key)
-                if not old or old[0] != digest: stamps[key] = [digest, now, True, ((old[3] + [old[0]]) if old else [])[-20:]]  # what taking the others' changes made here
+                if not old or old[0] != digest: stamps[key] = [digest, max(now, old[1] + 0.001 if old else 0), True, ((old[3] + [old[0]]) if old else [])[-20:]]  # what taking the others' changes made here
                 elif old[1] == 0: old[1] = now
             for key in list(tombs):
                 if now - tombs[key] > 180 * 86400: tombs.pop(key)  # a Mac that has been away for half a year starts over
@@ -295,16 +323,17 @@ def sync_pass(app):
                 state.update(lastAt=NOW(), lastError='', others=names); store.save()
             else: state['lastAt'] = NOW()  # nothing to write down: the time is only shown
         target = os.path.join(folder, 'zook-sync-%s.json' % own)
-        if changed or took or not os.path.exists(target):
+        if changed or took or folder in _sync_unwritten or not os.path.exists(target):
             try:
                 fd, temp = tempfile.mkstemp(prefix='.zook-sync-', dir=folder)
                 try:
                     os.fchmod(fd, 0o600)
                     with os.fdopen(fd, 'w', encoding='utf-8') as f: json.dump(payload, f, ensure_ascii=False)
-                    os.replace(temp, target)
+                    os.replace(temp, target); _sync_unwritten.discard(folder)
                 finally:
                     if os.path.exists(temp): os.unlink(temp)
             except OSError:
+                _sync_unwritten.add(folder)  # written on the next round, whether or not anything else changes
                 with store.lock: state['lastError'] = '寫不進同步資料夾。'; store.save()
                 return dict(on=True, error='寫不進同步資料夾。')
         if conflicts: log_activity(store, 'backup', '同步時有 %d 個對話兩台都改過，這台的版本另存成副本' % conflicts, by='Zook')
@@ -338,7 +367,7 @@ def sync_route(handler, store, parts, path):
                 if any(j['status'] == 'running' for j in store.data['jobs']) or any(g.get('status') == 'running' for g in store.data['groups']): return handler.error(409, '有 Bot 正在回覆，等它結束再開始同步。')
                 own = sync_state(store)['deviceId']
                 if not sync_read_others(folder, own): raise ValueError('這個資料夾裡還沒有其他 Mac 的資料，無法取代。')
-                backup_write(store, 'safety', store.data)  # what was here can be put back from 備份與還原
+            backup_write(store, 'safety', store.data)  # what was here can be put back from 備份與還原
             state = sync_state(store)
             state.update(folder=folder, lastError='', lastAt=''); sync_marks(store, reset=True)
             if replace:

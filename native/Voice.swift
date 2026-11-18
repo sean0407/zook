@@ -10,6 +10,7 @@ final class VoiceInput {
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var limit: Timer?
+    private var round = 0
     private let report: ([String: Any]) -> Void
 
     init(report: @escaping ([String: Any]) -> Void) { self.report = report }
@@ -45,7 +46,7 @@ final class VoiceInput {
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }
         engine.prepare()
         do { try engine.start() } catch { input.removeTap(onBus: 0); fail("mic"); return }
-        self.request = request
+        self.request = request; round += 1
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
             DispatchQueue.main.async {
                 guard let self = self, self.task != nil else { return }
@@ -62,7 +63,8 @@ final class VoiceInput {
         guard task != nil else { return }
         stopAudio()
         request?.endAudio()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.finish() }  // in case the recognizer never says it is done
+        let stopping = round
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in if self?.round == stopping { self?.finish() } }  // in case the recognizer never says it is done; a new round is left alone
     }
 
     private func stopAudio() {
