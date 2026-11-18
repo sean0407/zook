@@ -443,12 +443,12 @@
   // Accounts and usage always change together: a new model or account shows its usage right away.
   async function refreshQuota() {
     try { state.quota = await api('quota'); } catch (e) { state.quota = {error: e.message}; }
-    if (state.page === 'usage' && !$('#account-code-form input:focus')) { const y = $('.page')?.scrollTop; render(true); if (y && $('.page')) $('.page').scrollTop = y; }
+    if (state.page === 'usage' && !$('#account-code-form input:focus')) render(true);
   }
   async function loadAccounts() {
     state.accounts = await api('accounts');
     state.providers = (await api('providers')).providers;
-    if (state.page === 'usage') { const y = $('.page')?.scrollTop; render(true); if (y && $('.page')) $('.page').scrollTop = y; }
+    if (state.page === 'usage') render(true);
     pollAccounts();
   }
   async function reloadAccounts() { await loadAccounts(); refreshQuota(); }
@@ -856,6 +856,7 @@
     settingsForm?.modelRequest?.abort();
     let conv = $('#conversation');
     let y = keepScroll ? conv?.scrollTop : null;
+    const pageY = keepScroll ? $('.page')?.scrollTop : null, localOpen = !!$('.usage-local')?.open;  // long pages stay where they were when data arrives
     let nearBottom = !conv || conv.scrollHeight - conv.scrollTop - conv.clientHeight < 120;
     let previousInput = $('#chat-input');
     let input = previousInput?.value || '';
@@ -867,6 +868,8 @@
       if (cursor !== null) { $('#chat-input').focus(); $('#chat-input').setSelectionRange(cursor[0], cursor[1]); }
     }
     updateMentionMenu();
+    if (localOpen && $('.usage-local')) $('.usage-local').open = true;
+    if (pageY && $('.page')) $('.page').scrollTop = pageY;
     document.querySelectorAll('[data-approval-details]').forEach(x => { if (openApprovals.includes(x.dataset.approvalDetails)) x.open = true; });
     if ($('#conversation')) {
       const c = $('#conversation');
@@ -1370,7 +1373,7 @@
           await installUpdate();
           break;
         case 'accounts-from-form':
-          closeModal(); state.page = 'usage'; state.accounts = null; render(); await reloadAccounts();
+          closeModal(); state.accounts = null; await loadPage('usage');
           break;
         case 'profile-add':
           profileModal(state.accounts.providers.find(x => x.id === id));

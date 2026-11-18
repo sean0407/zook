@@ -31,6 +31,7 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 | `backend/providers.py` | 各家 CLI 的定義 |
 | `backend/tool_server.py` | 提供給 CLI 的 Zook 工具（MCP） |
 | `backend/gmail_mcp.py` | 內建 Gmail |
+| `backend/cli_installer.py` | 把 npm 類 CLI（Gemini）連同 Node.js 裝進 Zook 自己的 tools 資料夾 |
 | `frontend/` | `index.html`、`app.js`、`style.css`，無框架、無建置步驟 |
 | `ios/` | iPhone App |
 | `relay/` | Cloudflare Worker 中繼 |

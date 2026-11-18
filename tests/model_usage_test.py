@@ -61,6 +61,22 @@ class ManagedInstall(unittest.TestCase):
             cli = self.store.dir / 'tools/bin/gemini'; cli.parent.mkdir(parents=True); cli.write_text('#!/bin/sh\n'); cli.chmod(0o755)
             self.assertEqual(server.find_cli('gemini'), str(cli))
 
+    def test_the_copy_zook_installed_comes_before_an_older_one(self):
+        cli = self.store.dir / 'tools/bin/gemini'; cli.parent.mkdir(parents=True); cli.write_text('#!/bin/sh\n'); cli.chmod(0o755)
+        with mock.patch.object(server.P, 'binary_for', return_value='/usr/local/bin/gemini'):
+            self.assertEqual(server.find_cli('gemini'), str(cli))
+
+    def test_phone_sees_only_the_main_sign_ins(self):
+        import types
+        self.store.data['settings']['addedProviders'] = ['codex', 'claude', 'gemini']
+        self.store.data['accounts'] = [dict(id=A, provider='claude', name='公司', type='key')]
+        fake = types.SimpleNamespace(server=types.SimpleNamespace(store=self.store), device={'id': 'phone'}, codex_live_quota=lambda *a: None)
+        status = dict(name='x', status='logged_in', method='', plan='', email='')
+        with mock.patch.object(server, 'account_status', return_value=status):
+            out = server.Handler.quota(fake)['providers']
+        self.assertNotIn('gemini', [p['id'] for p in out])
+        self.assertTrue(all(p['profiles'] == [] for p in out))
+
     def test_bots_start_the_installed_copy(self):
         argv, _ = server.P.command_args(server.P.spec(self.store.data, 'gemini'), 'f', 'hello', '', binary='/private/tools/bin/gemini')
         self.assertEqual(argv, ['/private/tools/bin/gemini', '-p', 'hello'])
@@ -77,6 +93,15 @@ class ManagedInstall(unittest.TestCase):
         for bad in (archive('../evil'), archive('/tmp/evil'), archive('node/link', '../../evil')):
             with tempfile.TemporaryDirectory() as d, tarfile.open(fileobj=bad, mode='r:gz') as t:
                 with self.assertRaises(RuntimeError): installer.safe_extract(t, Path(d))
+        chain = io.BytesIO()
+        with tarfile.open(fileobj=chain, mode='w:gz') as t:
+            for name, link in (('a/b', '..'), ('a/b/c', '../..')):
+                info = tarfile.TarInfo(name); info.type = tarfile.SYMTYPE; info.linkname = link; t.addfile(info)
+            info = tarfile.TarInfo('a/b/c/evil.txt'); info.size = 1; t.addfile(info, io.BytesIO(b'x'))
+        chain.seek(0)
+        with tempfile.TemporaryDirectory() as d, tarfile.open(fileobj=chain, mode='r:gz') as t:
+            with self.assertRaises(RuntimeError): installer.safe_extract(t, Path(d) / 'in')
+            self.assertFalse((Path(d) / 'evil.txt').exists())
         with tempfile.TemporaryDirectory() as d, tarfile.open(fileobj=archive('node/bin/npm-link', '../lib/npm'), mode='r:gz') as t:
             installer.safe_extract(t, Path(d))
 

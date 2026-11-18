@@ -683,11 +683,10 @@ def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, 
 
 
 def find_cli(provider):
-    found = P.binary_for(_active['data'], provider)
-    if found: return found
-    s = P.spec(_active['data'], provider) or {}  # installed by Zook into its own tools folder
+    s = P.spec(_active['data'], provider) or {}  # a copy Zook installed in its own tools folder comes first: it is the one Zook updates
     private = _active['dir'] / 'tools/bin' / str(s.get('binary')) if s.get('npm_package') else None
-    return str(private) if private and os.access(str(private), os.X_OK) else None
+    if private and os.access(str(private), os.X_OK): return str(private)
+    return P.binary_for(_active['data'], provider)
 
 
 def provider_kind(provider):
@@ -3111,13 +3110,14 @@ class Handler(BaseHTTPRequestHandler):
     def quota(self):
         store = self.server.store
         result = []
-        for provider in P.active_ids(store.data):
+        phone = bool(getattr(self, 'device', None))  # a paired phone only shows the main sign-ins of the three big CLIs
+        for provider in [x for x in P.active_ids(store.data) if not phone or x in ('codex', 'claude', 'grok')]:
             account = account_status(provider)
             with store.lock: snap = copy.deepcopy(store.data.get('quota', {}).get(provider))
             if provider == 'codex' and account['status'] == 'logged_in': snap = self.codex_live_quota() or snap
             if provider not in ('codex', 'claude'): snap = None  # the other CLIs do not report plan limits to Zook
             profiles = []
-            for extra in [a for a in store.data.get('accounts') or [] if a.get('provider') == provider]:
+            for extra in [] if phone else [a for a in store.data.get('accounts') or [] if a.get('provider') == provider]:
                 try: view = account_view(extra)
                 except (OSError, ValueError, RuntimeError): view = dict(id=extra['id'], name=extra['name'], type=extra['type'], status='unknown', method='', plan='', email='')
                 billed = extra['type'] == 'key' or view.get('method') in ('Anthropic Console', 'API 金鑰')

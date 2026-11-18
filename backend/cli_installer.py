@@ -34,14 +34,17 @@ def pick_node(sums, machine):
 
 def safe_extract(archive, target):
     """Unpack only regular files, folders and links that stay inside target."""
-    root = os.path.realpath(str(target)) + os.sep
-    inside = lambda path: (os.path.realpath(path) + os.sep).startswith(root)
-    members = archive.getmembers()
+    bad = RuntimeError('下載的檔案內容不正確。')
+    outside = lambda path: os.path.isabs(path) or path == '..' or path.startswith('../')
+    through = lambda path, links: any('/'.join(path.split('/')[:i]) in links for i in range(1, path.count('/') + 1))  # passes through a link
+    members, links = archive.getmembers(), set()
     for m in members:
-        path = os.path.join(str(target), m.name)
-        if os.path.isabs(m.name) or not inside(path): raise RuntimeError('下載的檔案內容不正確。')
-        if m.issym() and (os.path.isabs(m.linkname) or not inside(os.path.join(os.path.dirname(path), m.linkname))): raise RuntimeError('下載的檔案內容不正確。')
-        if not (m.isfile() or m.isdir() or m.issym()): raise RuntimeError('下載的檔案內容不正確。')
+        name = os.path.normpath(m.name)
+        if outside(m.name) or outside(name) or through(name, links) or not (m.isfile() or m.isdir() or m.issym()): raise bad
+        if m.issym():
+            goal = os.path.normpath(os.path.join(os.path.dirname(name), m.linkname))
+            if os.path.isabs(m.linkname) or outside(goal) or through(goal + '/', links): raise bad
+            links.add(name)
     archive.extractall(str(target), members=members)
 
 
