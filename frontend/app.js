@@ -278,7 +278,7 @@
     if (!b) return `<main class="main"><div class="empty-chat"><h1>歡迎使用 Zook</h1><p>建立一個 Bot，開始你的工作。</p><div class="quick-actions"><button data-action="new-bot">＋ 新增 Bot</button></div></div></main>`;
     const messages = b.messages || [];
     const running = Object.entries(state.pollers).find(([id, v]) => v.botId === b.id && (state.jobDetails[id]?.chatId || b.chatId) === b.chatId);
-    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-bot">${avatar(b)}${esc(b.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn chat-title-btn" data-action="chats" title="所有對話">☰ ${esc(chatName(b))}</button><button class="text-btn" data-action="new-chat">＋ 新對話</button><button class="text-btn" data-action="share">↑ 匯出對話</button>${!state.detailOpen?'<button class="text-btn" data-action="toggle-detail">顯示詳情</button>':''}</div></header><div class="conversation" id="conversation">${messages.length?`<div class="conversation-inner">${messages.map(m=>`<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message ${m.role==='user'?'user':'assistant'}" data-mid="${esc(m.id)}">${m.role==='user'?'':avatar(b)}${m.role!=='user'&&m.content&&m.status!=='running'?`<div class="bubble md ${m.status==='failed'?'error-text':''}">${markdown(m.content)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(m.status==='running'?'正在思考…':m.status==='cancelled'&&!m.content?'已停止回覆':m.status==='failed'&&!m.content?(Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。'):m.content)}</div>`}</div>`).join('')}</div>`:`<div class="empty-chat">${avatar(b,'hero')}<h1>今天想一起完成什麼？</h1><p>和 ${esc(b.name)} 開始一段對話。</p><div class="quick-actions"><button data-action="page" data-id="knowledge">▤ 管理知識庫</button><button data-action="page" data-id="usage">◷ 查看使用量</button><button data-action="page" data-id="settings">⚙ 設定模型</button></div></div>`}</div><div class="composer-wrap">${approvalCards(b.id)}<form class="composer" id="chat-form"><button type="button" class="icon-btn" data-action="composer-menu" aria-label="更多選項">${svg('plus')}</button><textarea id="chat-input" rows="1" placeholder="傳送訊息給 ${esc(b.name)}" aria-label="輸入訊息"></textarea><button type="button" class="icon-btn" data-action="voice" aria-label="語音輸入">${svg('mic')}</button>${running?`<button type="button" class="send" data-action="cancel-job" data-id="${esc(running[0])}" aria-label="停止回覆">■</button>`:`<button class="send" type="submit" aria-label="傳送訊息">↑</button>`}</form></div></main>${state.detailOpen?detail(b):''}`
+    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-bot">${avatar(b)}${esc(b.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn chat-title-btn" data-action="chats" title="所有對話">☰ ${esc(chatName(b))}</button><button class="text-btn" data-action="new-chat">＋ 新對話</button><button class="text-btn" data-action="share">↑ 匯出對話</button>${!state.detailOpen?'<button class="text-btn" data-action="toggle-detail">顯示詳情</button>':''}</div></header><div class="conversation" id="conversation">${messages.length?`<div class="conversation-inner">${messages.map(m=>`<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message ${m.role==='user'?'user':'assistant'}" data-mid="${esc(m.id)}">${m.role==='user'?'':avatar(b)}${m.role!=='user'&&m.content&&m.status!=='running'?`<div class="bubble md ${m.status==='failed'?'error-text':''}">${markdown(m.content)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(m.status==='running'?'正在思考…':m.status==='cancelled'&&!m.content?'已停止回覆':m.status==='failed'&&!m.content?(Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。'):m.content)}</div>`}${redoBar(b, m, running)}</div>`).join('')}</div>`:`<div class="empty-chat">${avatar(b,'hero')}<h1>今天想一起完成什麼？</h1><p>和 ${esc(b.name)} 開始一段對話。</p><div class="quick-actions"><button data-action="page" data-id="knowledge">▤ 管理知識庫</button><button data-action="page" data-id="usage">◷ 查看使用量</button><button data-action="page" data-id="settings">⚙ 設定模型</button></div></div>`}</div><div class="composer-wrap">${approvalCards(b.id)}<form class="composer" id="chat-form"><button type="button" class="icon-btn" data-action="composer-menu" aria-label="更多選項">${svg('plus')}</button><textarea id="chat-input" rows="1" placeholder="傳送訊息給 ${esc(b.name)}" aria-label="輸入訊息"></textarea><button type="button" class="icon-btn" data-action="voice" aria-label="語音輸入">${svg('mic')}</button>${running?`<button type="button" class="send" data-action="cancel-job" data-id="${esc(running[0])}" aria-label="停止回覆">■</button>`:`<button class="send" type="submit" aria-label="傳送訊息">↑</button>`}</form></div></main>${state.detailOpen?detail(b):''}`
   }
 
   function activeGroup() { return state.groupId ? (state.data.groups || []).find(g => g.id === state.groupId) : null; }
@@ -912,6 +912,27 @@
     const last = x => x.done ? '已完成' : !x.lastStatus ? '尚未執行' : (x.lastStatus === 'sent' ? '上次執行：' : x.lastStatus === 'missed' ? '上次錯過：' : '上次失敗：') + formatDate(x.lastAt) + (x.lastStatus !== 'sent' && x.lastError ? '（' + x.lastError + '）' : '');
     return intro + `<div class="cards">${items.map(x => `<article class="card sched-card"><div class="sched-head"><h3>${esc(scheduleWhen(x))}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><p>${esc(x.content)}</p>${scheduleTarget(x)}<span class="status ${x.lastStatus && x.lastStatus !== 'sent' && !x.done ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button>${(x.runs || []).length ? `<button class="link" data-action="schedule-history" data-id="${esc(x.id)}">紀錄</button>` : ''}<button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`).join('')}</div>`;
   }
+  // Under the last question: 編輯. Under the last reply: 重新回答 and 換模型重答. Not while a reply is running.
+  function redoBar(b, m, running) {
+    if (running) return '';
+    const msgs = b.messages || [], lastUser = [...msgs].reverse().find(x => x.role === 'user');
+    if (!lastUser) return '';
+    if (m.id === lastUser.id) return '<div class="msg-actions user-actions"><button type="button" class="link" data-action="edit-last">編輯</button></div>';
+    if (m.role !== 'user' && m.id === msgs[msgs.length - 1]?.id && m.status !== 'running')
+      return '<div class="msg-actions"><button type="button" class="link" data-action="redo-again">重新回答</button><button type="button" class="link" data-action="redo-model">換模型重答</button></div>';
+    return '';
+  }
+  // Redoing cannot undo what the last reply already did (files changed, mail sent): say so first.
+  function redoAllowed(b) {
+    const reply = (b.messages || []).filter(m => m.role !== 'user').slice(-1)[0];
+    const job = reply && Object.values(state.jobDetails).find(j => j.messageId === reply.id);
+    const acted = (job?.toolCalls || []).some(c => c.status === 'completed' && !['read', 'external_read'].includes(c.category));
+    return !acted || confirm('上一次回覆已經做過一些動作（例如改了檔案或對外送出），重來不會復原那些動作。確定要重來？');
+  }
+  async function redo(b, body) {
+    const sent = await post('chat/redo', {...body, botId: b.id});
+    await refresh(); poll(sent.jobId, b.id);
+  }
   // Conversations of a Bot: the open one is b.messages, the others carry their own messages.
   const chatName = (b, c) => { c = c || (b.chats || []).find(x => x.id === b.chatId) || {}; return c.title || (c.kind === 'schedule' ? '排程' : '新對話'); };
   const chatMessages = (b, c) => c.id === b.chatId ? (b.messages || []) : (c.messages || []);
@@ -1451,6 +1472,24 @@
         case 'open-run':
           await openConversation(el.dataset.kind, el.dataset.target, id);
           break;
+        case 'redo-again': {
+          const b = activeBot();
+          if (redoAllowed(b)) await redo(b, {mode: 'again'});
+          break;
+        }
+        case 'edit-last': {
+          const b = activeBot(), last = [...b.messages].reverse().find(m => m.role === 'user');
+          modal('編輯訊息', `<form id="edit-last-form"><div class="modal-body"><label class="field">改完後重新送出，之後的回覆會被取代<textarea name="content" required rows="6">${esc(last.content)}</textarea></label></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">重新送出</button></div></form>`);
+          break;
+        }
+        case 'redo-model': {
+          const b = activeBot(), installed = (state.providers || []).filter(p => p.installed !== false);
+          const options = installed.map(p => ({id: p.id, name: String(p.name).split('（')[0], hint: p.id === (b.provider || state.data.settings.provider) ? '這個 Bot 目前用的' : ''}));
+          if (!options.length) { toast('沒有其他可用的模型'); break; }
+          const other = options.find(o => !o.hint) || options[0];
+          modal('換模型重答', `<form id="redo-model-form"><div class="modal-body"><p class="muted">只有這一次用別的模型回答，不會改變 Bot 的設定。</p><div class="setting-list in-form">${settingRow('模型', '用預設版本回答', dropdown('provider', other.id, options))}</div></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">重答</button></div></form>`);
+          break;
+        }
         case 'open-message':
           state.query = ''; await openConversation('bot', el.dataset.bot, id);
           break;
@@ -1973,6 +2012,15 @@
         const bots = old ? state.data.bots.map(b => !b.pinned && (b.section || '我的 Bots') === old ? {...b, section: name} : b) : state.data.bots;
         closeModal(); await saveArrangement(bots, sections);
         toast(old ? '已重新命名分組' : '已新增分組，把 Bot 拖進去即可');
+      } else if (form.id === 'edit-last-form') {
+        const b = activeBot(), content = new FormData(form).get('content');
+        if (!String(content).trim()) return;
+        if (!redoAllowed(b)) return;
+        closeModal(); await redo(b, {mode: 'edit', content});
+      } else if (form.id === 'redo-model-form') {
+        const b = activeBot(), provider = new FormData(form).get('provider');
+        if (!redoAllowed(b)) return;
+        closeModal(); await redo(b, {mode: 'again', provider});
       } else if (form.id === 'chat-rename-form') {
         const b = activeBot();
         await post(`bots/${encodeURIComponent(b.id)}/chats/${encodeURIComponent(form.dataset.id)}`, {title: new FormData(form).get('title')}, 'PATCH');

@@ -1495,3 +1495,8 @@ button.run-row:hover { background: #f1f1f1; }
 .chat-open strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-open small { color: #7a7a7a; }
 .danger-link { color: #b3261e; }
+.msg-actions { display: flex; flex-basis: 100%; gap: 14px; margin: -6px 0 0 44px; }
+.msg-actions .link { font-size: 12.5px; color: #7a7a7a; }
+.msg-actions .link:hover { color: #222; }
+.message.user .msg-actions { margin: 4px 0 0; justify-content: flex-end; }
+.message { flex-wrap: wrap; }

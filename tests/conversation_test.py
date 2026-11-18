@@ -130,3 +130,42 @@ class ConversationTest(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+GEMINI = '''#!/usr/bin/env python3
+print('gemini answered')
+'''
+
+
+class RedoTest(ConversationTest):
+    def setUp(self):
+        super().setUp()
+        cli = self.root / 'bin/gemini'; cli.write_text(GEMINI); cli.chmod(0o755)
+
+    def redo(self, body, expect=202):
+        status, sent = self.req('POST', '/api/chat/redo', dict(body, botId=self.bot['id']))
+        self.assertEqual(status, expect, sent)
+        if status != 202: return sent
+        end = time.time() + 15
+        while self.req('GET', '/api/jobs/' + sent['jobId'])[1]['status'] == 'running' and time.time() < end: time.sleep(0.2)
+        return self.state_bot()['messages']
+
+    def test_again_edit_and_other_model(self):
+        self.say('first question'); self.say('second question')
+        before = self.state_bot()['messages']
+        after = self.redo({'mode': 'again'})
+        self.assertEqual(len(after), 4)
+        self.assertEqual([m['content'] for m in after if m['role'] == 'user'], ['first question', 'second question'])
+        self.assertNotEqual(after[-1]['id'], before[-1]['id'])  # the last reply was replaced
+        after = self.redo({'mode': 'edit', 'content': 'second question, edited'})
+        self.assertEqual([m['content'] for m in after if m['role'] == 'user'], ['first question', 'second question, edited'])
+        self.assertIn('second question, edited', after[-1]['content'])
+        after = self.redo({'mode': 'again', 'provider': 'gemini'})
+        self.assertEqual(after[-1]['content'], 'gemini answered')
+        self.assertIn('Gemini', after[-1]['note'])
+        self.assertEqual(self.state_bot().get('provider'), 'codex')  # the Bot's own setting is unchanged
+        for bad in ({'mode': 'edit', 'content': ' '}, {'mode': 'other'}, {'mode': 'again', 'provider': 'nope'}):
+            self.redo(bad, 400)
+
+    def test_nothing_to_redo(self):
+        self.redo({'mode': 'again'}, 400)
