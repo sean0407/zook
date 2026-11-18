@@ -1704,9 +1704,8 @@ def schedule_fields(store, body, record):
         if body['repeat'] not in SCHEDULE_REPEATS: raise ValueError('重複方式無效。')
         record['repeat'] = body['repeat']
     if 'date' in body:
-        try: datetime.datetime.strptime(str(body['date']), '%Y-%m-%d')
+        try: record['date'] = datetime.datetime.strptime(str(body['date']), '%Y-%m-%d').strftime('%Y-%m-%d')
         except ValueError: raise ValueError('日期無效。')
-        record['date'] = body['date']
     if 'day' in body:
         if type(body['day']) is not int or not 1 <= body['day'] <= 31: raise ValueError('每月的日期無效。')
         record['day'] = body['day']
@@ -2150,7 +2149,7 @@ class App(ThreadingHTTPServer):
             call = next((x for x in job.get('toolCalls', []) if x['id'] == call_id), {})
             approval = dict(id=approval_id, toolCallId=call_id, name=name, category=call.get('category', ''), label=call.get('label', name), sourceLabel=call.get('sourceLabel', source), arguments=copy.deepcopy(call.get('arguments', {})), status='pending')
             if name in SCHEDULE_TOOLS:
-                approval['text'] = describe_schedule_call(self.store, self.store.find('bots', job['botId']) or {'id': job['botId']}, job.get('groupId'), name, arguments)
+                approval['text'] = describe_schedule_call(self.store, self.store.find('bots', job['botId']) or {'id': job['botId']}, job.get('groupId'), name, approval['arguments'])
             elif describe_send(approval['label'], approval['arguments']):
                 approval['text'] = describe_send(approval['label'], approval['arguments'])
             job.setdefault('approvals', []).append(approval); self.approval_events[approval_id] = event
@@ -2316,6 +2315,7 @@ class App(ThreadingHTTPServer):
             try:
                 deadline, sent = time.monotonic() + JOB_TIMEOUT, False
                 while True:
+                    began = time.monotonic()
                     try:
                         output, stderr = proc.communicate(None if sent or not stdin_prompt else prompt.encode('utf-8'), timeout=max(1, min(30, deadline - time.monotonic())))
                         break
@@ -2323,7 +2323,7 @@ class App(ThreadingHTTPServer):
                         sent = True
                         with store.lock:
                             asking = any(a.get('status') == 'pending' for a in (store.find('jobs', job_id) or {}).get('approvals', []))
-                        if asking: deadline = max(deadline, time.monotonic() + 120)  # waiting for the user does not use up the time limit
+                        if asking: deadline += time.monotonic() - began  # time spent waiting for the user does not count
                         elif time.monotonic() >= deadline: raise
             except subprocess.TimeoutExpired:
                 terminate_tree(proc)
@@ -2471,6 +2471,7 @@ class App(ThreadingHTTPServer):
         def change(args):
             with store.lock:
                 item = find(args); candidate = apply(schedule_tool_body(store, bot, group_id, args, False), copy.deepcopy(item)); candidate.pop('held', None)
+                if 'runs' in item: candidate['runs'] = item['runs']
                 item.clear(); item.update(candidate); store.save()
                 return dict(id=item['id'], target=schedule_target_name(store, item), when=schedule_when(item), enabled=bool(item.get('on')), updated=True)
         def delete(args):
@@ -3335,6 +3336,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not item: return self.error(404, '找不到這個排程。')
                     if self.command == 'DELETE': store.data['schedules'].remove(item); store.save(); return self.respond(200, {'ok': True})
                     candidate = schedule_fields(store, self.body(), copy.deepcopy(item)); candidate.pop('held', None)
+                    if 'runs' in item: candidate['runs'] = item['runs']  # keep the same history entries a running reply may still update
                     item.clear(); item.update(candidate); store.save(); return self.respond(200, item)
                 if len(parts) == 4 and parts[:2] == ['api', 'schedules'] and parts[3] == 'run' and self.command == 'POST':
                     item = store.find('schedules', parts[2])

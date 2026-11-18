@@ -41,8 +41,10 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
     private var noticeSeq = 0
     private var noticeTimer: Timer?
     private var noticeBusy = false
+    private var pendingOpen: [String]?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if Bundle.main.bundleIdentifier != nil { UNUserNotificationCenter.current().delegate = self }  // before a click that launched Zook arrives
         buildMenu()
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
@@ -247,7 +249,6 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
     private func startNotices() {
         guard Bundle.main.bundleIdentifier != nil else { return }
         let center = UNUserNotificationCenter.current()
-        center.delegate = self
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
         noticeTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.pollNotices() }
     }
@@ -292,11 +293,21 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
             if self.window.isMiniaturized { self.window.deminiaturize(nil) }
             self.window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
-            if let json = try? JSONSerialization.data(withJSONObject: args), let list = String(data: json, encoding: .utf8) {
-                self.webView.evaluateJavaScript("window.zookOpen && window.zookOpen(...\(list))", completionHandler: nil)
-            }
+            if self.launched && self.webView.url?.scheme == "http" { self.open(args) } else { self.pendingOpen = args }
             completionHandler()
         }
+    }
+
+    private func open(_ args: [String]) {
+        if let json = try? JSONSerialization.data(withJSONObject: args), let list = String(data: json, encoding: .utf8) {
+            webView.evaluateJavaScript("window.zookOpen && window.zookOpen(...\(list))", completionHandler: nil)
+        }
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard webView.url?.scheme == "http", let args = pendingOpen else { return }
+        pendingOpen = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.open(args) }  // let the page load its data first
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

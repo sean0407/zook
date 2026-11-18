@@ -31,7 +31,7 @@ class PermissionTest(unittest.TestCase):
                                    inventory=INVENTORY, extra_tools=[(create, lambda a: 'ok', True), (listing, lambda a: 'ok', False)], permission_mode=mode)
         s.tools()
         s.routes.update({'ext_read': ('m', 'search_files'), 'ext_write': ('m', 'create_file'), 'ext_del': ('m', 'trash_file'),
-                         'ext_send': ('m', 'sendMessage'), 'ext_share': ('m', 'share_file')})
+                         'ext_send': ('m', 'sendMessage'), 'ext_share': ('m', 'share_file'), 'ext_sendmail': ('m', 'sendmail'), 'ext_draft': ('m', 'senddraft')})
         s.annotations.update({'ext_read': {'readOnlyHint': True}, 'ext_write': {'readOnlyHint': False}, 'ext_del': {'readOnlyHint': True}})
         return s
 
@@ -39,7 +39,7 @@ class PermissionTest(unittest.TestCase):
         s = self.session('manual', [])
         cases = [('zook_workspace_read', {}, 'read'), ('zook_list_team', {}, 'read'), ('zook_workspace_write', {}, 'internal'),
                  ('zook_create_bot', {}, 'internal'), ('ext_read', {}, 'external_read'), ('ext_write', {}, 'external_write'),
-                 ('ext_del', {}, 'danger'), ('ext_send', {}, 'danger'), ('ext_share', {}, 'danger'),
+                 ('ext_del', {}, 'danger'), ('ext_send', {}, 'danger'), ('ext_share', {}, 'danger'), ('ext_sendmail', {}, 'danger'), ('ext_draft', {}, 'danger'),
                  ('zook_run_skill_helper', {'argv': ['python3', 'build.py']}, 'code'),
                  ('zook_run_skill_helper', {'argv': ['rm', '-rf', 'out']}, 'danger'),
                  ('zook_run_skill_helper', {'argv': ['/usr/bin/curl', 'x']}, 'danger')]

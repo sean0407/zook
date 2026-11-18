@@ -16,7 +16,7 @@ The layout is inspired by Grok Bot. The implementation is independent and uses n
 - **Shared Skills, connectors and plugins**: configured once and available to every Bot. Connectors (MCP servers) can be added in Zook itself, as a local command or a web address, or picked up from your Codex and Claude settings.
 - **Zook's own copies**: import Skills from Claude, Codex or a plugin into Zook (same-named ones are kept once), copy connectors over with their keys moved to the Keychain, and see which Skills mention a connector or tool Zook does not have. Export everything as one settings pack to set up another Mac; keys are never included.
 - **Built-in Gmail**: search and read mail, save drafts and send, using a Google app password kept in the Keychain. Sending always asks for your approval.
-- **Schedules**: have a Bot do something at a set time, every day, on weekdays or once a week. Zook sends the message for you while it is open, and can catch up on a time it missed.
+- **Schedules**: have a Bot or a group do something at a set time: once, hourly, daily, on weekdays, weekly or monthly. You can also just tell a Bot "every morning at 10…"; it proposes the schedule and creates it once you approve. A Mac notification tells you when a run finishes, fails or needs approval, and each schedule keeps its last 20 runs. Zook runs schedules while it is open and can catch up on a time it missed.
 - **Usage**: provider quotas and token use per Bot.
 - **Updates**: Zook checks this repository's releases and installs a new version with one click, after verifying its checksum and signature.
 - **iPhone app**: read and send messages, approve requests, create Bots and check usage. Settings that change what a Bot may do stay on the Mac.

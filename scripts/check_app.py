@@ -74,7 +74,7 @@ def check_backend(b):
     for path in ('/', '/app.js', '/style.css'):
         status, _ = b.req('GET', path, cookie=True)
         record('介面檔案 ' + path, status == 200, 'HTTP %d' % status)
-    for path in ('/api/state', '/api/integrations', '/api/providers', '/api/models?provider=codex'):
+    for path in ('/api/state', '/api/integrations', '/api/providers', '/api/models?provider=codex', '/api/notifications?after=0'):
         status, _ = b.req('GET', path)
         record('API ' + path, status == 200, 'HTTP %d' % status)
     status, bot = b.req('POST', '/api/bots', {'name': '檢查用 Bot'})
@@ -84,6 +84,12 @@ def check_backend(b):
     record('建立排程', status == 201, 'HTTP %d' % status)
     if status == 201:
         record('刪除排程', b.req('DELETE', '/api/schedules/' + item['id'])[0] == 200)
+    status, group = b.req('POST', '/api/groups', {'name': '檢查用群組', 'botIds': [bot['id'], b.req('GET', '/api/state')[1]['bots'][0]['id']]})
+    record('建立群組', status == 201, 'HTTP %d' % status)
+    if status == 201:
+        status, item = b.req('POST', '/api/schedules', {'groupId': group['id'], 'content': '檢查', 'time': '09:15', 'repeat': 'monthly', 'day': 31})
+        record('建立群組的每月排程', status == 201, 'HTTP %d' % status)
+        record('刪除群組（連同排程）', b.req('DELETE', '/api/groups/' + group['id'])[0] == 200 and not b.req('GET', '/api/state')[1]['schedules'])
     record('刪除 Bot', b.req('DELETE', '/api/bots/' + bot['id'])[0] == 200)
 
 

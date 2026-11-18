@@ -102,4 +102,6 @@ GitHub Actions（`.github/workflows/test.yml`）會在每次推送跑測試和�
 
 - 需要登入授權、綁在 Claude 或 ChatGPT 帳號的遠端連接器（例如公司的 LogiQ／Google Chat）複製到 Zook 後會 403，原因未查明。
 - 每則訊息都重新啟動 CLI，只帶最近 12 則對話（ROADMAP A2 要改）。
+- Gemini 沒有接 Zook 工具（ROADMAP E6）。Grok 的檔案工具只在工作資料夾，新版 Grok 不接受 `--add-dir`（ROADMAP E7）。
+- Grok 的 Zook 工具伺服器必須用 `/usr/bin/python3` 啟動，嚴格沙箱擋得住 Xcode 內的 Python。
 - 後端和介面各是一個大檔案（ROADMAP G6 要拆）。

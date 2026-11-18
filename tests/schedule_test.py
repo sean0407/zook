@@ -168,6 +168,7 @@ class ScheduleTest(unittest.TestCase):
         self.wait(lambda s: s['schedules'][0]['runs'][-1]['status'] == 'done')
         self.assertEqual(self.req('GET', '/api/notifications?after=%d' % notes['seq'])[1]['items'], [])
         self.assertEqual(self.req('PATCH', '/api/schedules/' + item['id'], {'time': '11:30', 'repeat': 'weekdays', 'on': False})[1]['time'], '11:30')
+        self.assertEqual(len(self.req('GET', '/api/state')[1]['schedules'][0]['runs']), 2)  # editing keeps the history
         self.assertEqual(self.req('DELETE', '/api/bots/' + self.bot['id'])[0], 200)  # its schedules go with it
         self.assertEqual(self.req('GET', '/api/state')[1]['schedules'], [])
 
@@ -217,6 +218,9 @@ class ScheduleTest(unittest.TestCase):
         time.sleep(1)
         self.assertEqual(len([m for m in self.messages(self.req('GET', '/api/state')[1]) if m['role'] == 'user']), 1)
         # a monthly schedule keeps its day
+        later = now + datetime.timedelta(days=40)
+        status, item = self.req('POST', '/api/schedules', {'botId': self.bot['id'], 'content': 'x', 'repeat': 'once', 'date': '%d-%d-%d' % (later.year, later.month, later.day), 'time': '10:00'})
+        self.assertEqual(item['date'], later.strftime('%Y-%m-%d'))  # stored zero-padded
         status, item = self.req('POST', '/api/schedules', {'botId': self.bot['id'], 'content': 'rent', 'repeat': 'monthly', 'day': 31, 'time': '09:00'})
         self.assertEqual((status, item['day']), (201, 31))
 
