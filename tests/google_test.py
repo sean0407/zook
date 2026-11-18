@@ -9,12 +9,13 @@ ROOT = Path(__file__).resolve().parents[1]; SERVER = ROOT / 'backend/server.py'
 
 class Google(BaseHTTPRequestHandler):
     seen = []
+    email = 'me@example.com'
     def log_message(self, *args): pass
     def send(self, code, body):
         raw = json.dumps(body).encode(); self.send_response(code); self.send_header('Content-Type', 'application/json'); self.send_header('Content-Length', str(len(raw))); self.end_headers(); self.wfile.write(raw)
     def do_GET(self):
         path = urlsplit(self.path).path; Google.seen.append(('GET', path, self.headers.get('Authorization', '')))
-        if path == '/gmail/v1/users/me/profile': return self.send(200, {'emailAddress': 'me@example.com'})
+        if path == '/gmail/v1/users/me/profile': return self.send(200, {'emailAddress': Google.email})
         if path == '/gmail/v1/users/me/messages': return self.send(200, {'messages': [{'id': 'm1'}]})
         if path == '/gmail/v1/users/me/messages/m1': return self.send(200, {'id': 'm1', 'snippet': 'hello', 'labelIds': ['UNREAD'], 'payload': {'headers': [{'name': 'Subject', 'value': '週報'}, {'name': 'From', 'value': 'amy@example.com'}]}})
         if path == '/calendar/v3/calendars/primary/events': return self.send(200, {'items': [{'id': 'e1', 'summary': '站會', 'start': {'dateTime': '2026-11-19T09:00:00+08:00'}, 'end': {'dateTime': '2026-11-19T09:30:00+08:00'}}]})
@@ -32,7 +33,7 @@ class Google(BaseHTTPRequestHandler):
 
 class GoogleTest(unittest.TestCase):
     def setUp(self):
-        Google.seen = []
+        Google.seen = []; Google.email = 'me@example.com'
         self.google = ThreadingHTTPServer(('127.0.0.1', 0), Google); threading.Thread(target=self.google.serve_forever, daemon=True).start()
         self.api = 'http://127.0.0.1:%d' % self.google.server_address[1]
         self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name); (self.root / 'assets').mkdir(); (self.root / 'assets/index.html').write_text('x'); (self.root / 'secrets').mkdir()
@@ -71,6 +72,18 @@ class GoogleTest(unittest.TestCase):
         self.sign_in(True); tools = [t['name'] for t in self.req('POST', '/api/mcp/builtin:google/test', {})[1]['tools']]
         self.assertEqual(tools[5:], ['gmail_send', 'calendar_create', 'calendar_update', 'drive_upload', 'drive_update'])
         self.assertEqual(self.req('DELETE', '/api/google')[0], 200); self.assertTrue(self.item()['needsSetup']); self.assertEqual(list((self.root / 'secrets').iterdir()), [])
+
+    def test_a_second_google_account_can_be_added_and_made_the_default(self):
+        self.assertEqual(self.req('POST', '/api/google', {'add': True})[0], 400)   # nothing to add to yet
+        self.sign_in(True); Google.email = 'work@example.com'
+        status, body = self.req('POST', '/api/google', {'add': True}); self.assertEqual(status, 200, body)
+        query = {k: v[0] for k, v in parse_qs(urlsplit(body['url']).query).items()}; self.assertIn('select_account', query['prompt']); self.assertIn('gmail.send', query['scope'])
+        self.assertEqual(self.req('GET', '/oauth/callback?state=%s&code=abc' % query['state'], auth=False)[0], 200)
+        accounts = self.item()['accounts']; self.assertEqual([(a['name'], a['active']) for a in accounts], [('me@example.com', True), ('work@example.com', False)])
+        self.assertEqual(self.req('POST', '/api/google/account', {'account': accounts[1]['id']})[0], 200); self.assertEqual(self.item()['address'], 'work@example.com')
+        self.assertEqual(self.req('DELETE', '/api/google')[0], 200); self.assertEqual([a['name'] for a in self.item()['accounts']], ['me@example.com']); self.assertFalse(self.item()['needsSetup'])
+        saved = (self.root / 'data/swarmr.json').read_text()
+        for secret in ('GACCESS', 'GREFRESH', 'SECRET-123456'): self.assertNotIn(secret, saved)
 
     def test_bad_client_details_are_refused(self):
         self.assertEqual(self.req('POST', '/api/google', {'clientId': 'x', 'clientSecret': 'SECRET-123456'})[0], 400)

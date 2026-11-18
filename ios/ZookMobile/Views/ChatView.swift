@@ -42,6 +42,7 @@ struct ChatView: View {
                     .padding(.horizontal).padding(.top, 10)
                 }
                 .scrollDismissesKeyboard(.interactively)
+                .simultaneousGesture(TapGesture().onEnded { typing = false })   // tapping the conversation puts the keyboard away
                 .onChange(of: messages.last?.id) { _, _ in proxy.scrollTo("bottom") }
                 .onChange(of: messages.last?.content.count) { _, _ in proxy.scrollTo("bottom") }
                 .onChange(of: approvals.count) { _, _ in proxy.scrollTo("bottom") }

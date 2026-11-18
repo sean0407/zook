@@ -428,8 +428,18 @@
           } finally { delete state.deciding[id]; if (el.isConnected) el.disabled = false; }
           break;
         case 'google-setup': googleModal(); break;
+        case 'google-add': {
+          const before = ((state.integrations?.mcp || []).find(i => i.google)?.accounts || []).length;
+          await post('google', {add: true}); toast('已在瀏覽器開啟 Google 登入頁，選另一個帳號登入');
+          for (let n = 0; n < 90 && state.page === 'mcp'; n++) {
+            await new Promise(r => setTimeout(r, 2000));
+            let now; try { now = await api('integrations'); } catch (_) { continue; }
+            if (((now.mcp || []).find(i => i.google)?.accounts || []).length > before) { state.integrations = now; render(true); toast('已新增帳號，可以在卡片上選擇要用哪一個'); break; }
+          }
+          break;
+        }
         case 'google-remove':
-          if (!confirm('登出 Google？所有 Bot 都會無法再使用 Gmail、行事曆和雲端硬碟，儲存的授權會從鑰匙圈刪除。')) break;
+          if (!confirm('登出目前使用的這個 Google 帳號？它的授權會從鑰匙圈刪除。還有其他帳號時會改用下一個。')) break;
           await api('google', {method: 'DELETE'}); delete state.mcpTests['builtin:google'];
           state.integrations = await api('integrations'); await refresh(); toast('已登出 Google');
           break;
@@ -505,16 +515,19 @@
         case 'catalog-open': await catalogModal(); break;
         case 'catalog-add': await catalogAdd(id); break;
         case 'connector-login': {
-          await post('connectors/' + encodeURIComponent(id.split(':')[1]) + '/login');
+          const before = ((state.integrations?.mcp || []).find(i => i.id === id)?.accounts || []).length, adding = !!el.dataset.add;
+          await post('connectors/' + encodeURIComponent(id.split(':')[1]) + '/login', adding ? {add: true} : {});
           toast('已在瀏覽器開啟登入頁，完成後回到這裡');
           for (let n = 0; n < 90 && ['mcp', 'skills', 'plugins'].includes(state.page); n++) {  // wait for the browser to come back
             await new Promise(r => setTimeout(r, 2000));
             state.integrations = await api('integrations');
-            if ((state.integrations.mcp || []).find(i => i.id === id)?.signedIn) { render(true); toast('登入完成'); break; }
+            const now = (state.integrations.mcp || []).find(i => i.id === id);
+            if (adding ? (now?.accounts || []).length > before : now?.signedIn) { render(true); toast(adding ? '已新增帳號，可以在卡片上選擇要用哪一個' : '登入完成'); break; }
           }
           break;
         }
         case 'connector-logout':
+          if (!confirm('登出目前使用的這個帳號？它的授權會從鑰匙圈刪除。')) break;
           await post('connectors/' + encodeURIComponent(id.split(':')[1]) + '/logout');
           state.integrations = await api('integrations'); render(true); toast('已登出');
           break;

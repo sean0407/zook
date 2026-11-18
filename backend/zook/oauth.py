@@ -125,7 +125,7 @@ def oauth_discover(mcp_url):
     raise RuntimeError('這個連接器不支援在瀏覽器登入。如果它使用金鑰，請用「編輯」貼上金鑰。')
 
 
-def oauth_begin(app, record):
+def oauth_begin(app, record, add=False):
     """Start a sign-in. Returns the page to open in the browser."""
     if record.get('transport') != 'http': raise ValueError('只有遠端連接器可以登入。')
     meta = oauth_discover(record['url'])
@@ -138,7 +138,7 @@ def oauth_begin(app, record):
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
     flows = app.__dict__.setdefault('oauth_flows', {})
     for old in [k for k, v in flows.items() if time.time() - v['at'] > OAUTH_FLOW_MINUTES * 60]: flows.pop(old, None)
-    flows[state] = dict(connector=record['id'], url=record['url'], verifier=verifier, meta=meta, client=client['client_id'], secret=client.get('client_secret') or '', redirect=redirect, at=time.time())
+    flows[state] = dict(connector=record['id'], url=record['url'], add=bool(add), verifier=verifier, meta=meta, client=client['client_id'], secret=client.get('client_secret') or '', redirect=redirect, at=time.time())
     query = dict(response_type='code', client_id=client['client_id'], redirect_uri=redirect, state=state, code_challenge=challenge, code_challenge_method='S256', resource=meta['resource'])
     if meta['scope']: query['scope'] = meta['scope']
     return meta['authorize'] + ('&' if '?' in meta['authorize'] else '?') + urllib.parse.urlencode(query)
@@ -169,13 +169,19 @@ def oauth_finish(app, state, code):
     with store.lock:
         record = next((c for c in store.data['connectors'] if c['id'] == flow['connector']), None)
         if not record or record.get('url') != flow['url']: raise ValueError(changed)
+    old = None
     blob_id = ID(); blob_set(blob_id, kept)  # always a new Keychain item, so another address's sign-in is never written over
     with store.lock:
         record = next((c for c in store.data['connectors'] if c['id'] == flow['connector']), None)
         fits = bool(record) and record.get('url') == flow['url']
         if fits:
-            old = (record.get('oauth') or {}).get('secretId')
-            record['oauth'] = dict(secretId=blob_id, clientId=flow['client'], tokenEndpoint=flow['meta']['token'], resource=flow['meta']['resource'], url=flow['url'], local=flow['meta'].get('local', False), signedInAt=NOW())
+            now = record.get('oauth'); others = record.setdefault('otherAccounts', [])
+            new = dict(secretId=blob_id, clientId=flow['client'], tokenEndpoint=flow['meta']['token'], resource=flow['meta']['resource'], url=flow['url'], local=flow['meta'].get('local', False), signedInAt=NOW())
+            if flow.get('add') and now:  # another account beside the one in use; the default stays as it is
+                new['name'] = '帳號 %d' % (len(others) + 2); others.append(new)
+            else:
+                old = (now or {}).get('secretId'); new['name'] = (now or {}).get('name') or '帳號 1'; record['oauth'] = new
+            if not others: record.pop('otherAccounts', None)
             store.save()
     if not fits: blob_delete(blob_id); raise ValueError(changed)
     if old: blob_delete(old)
@@ -216,12 +222,71 @@ def _oauth_lost(store, connector_id):
     return ''
 
 
-def oauth_logout(store, connector_id):
+def _accounts_of(active, others):
+    return [dict(id=x['secretId'], name=x.get('name') or x.get('email') or '帳號', active=x is active, needsLogin=bool(x.get('needsLogin'))) for x in ([active] if active else []) + list(others or [])]
+
+
+def oauth_accounts(record):
+    """The sign-ins a connector has: the one in use first."""
+    return _accounts_of(record.get('oauth'), record.get('otherAccounts'))
+
+
+def _switch(holder, key, others_key, account_id):
+    """Make another saved sign-in the one in use. Returns False when there is no such account."""
+    others = holder.get(others_key) or []
+    pick = next((x for x in others if x.get('secretId') == account_id), None)
+    if not pick: return (holder.get(key) or {}).get('secretId') == account_id
+    others.remove(pick)
+    if holder.get(key): others.insert(0, holder[key])
+    holder[key] = pick; holder[others_key] = others
+    if not others: holder.pop(others_key, None)
+    return True
+
+
+def _remove(holder, key, others_key, account_id):
+    """Take one sign-in out (the one in use when no id is given). Returns its Keychain id; another account takes over when there is one."""
+    active, others = holder.get(key), holder.get(others_key) or []
+    if account_id and not (active and active.get('secretId') == account_id):
+        pick = next((x for x in others if x.get('secretId') == account_id), None)
+        if pick: others.remove(pick)
+    else:
+        pick = holder.pop(key, None)
+        if others: holder[key] = others.pop(0)
+    if others: holder[others_key] = others
+    else: holder.pop(others_key, None)
+    return (pick or {}).get('secretId')
+
+
+def oauth_switch(store, connector_id, account_id, name=None):
+    """Choose which account a connector uses, or rename one."""
     with store.lock:
         record = next((c for c in store.data['connectors'] if c['id'] == connector_id), None)
-        info = record.pop('oauth', None) if record else None
+        if not record: raise LookupError('找不到這個連接器。')
+        if name is not None:
+            if not isinstance(name, str) or not name.strip() or len(name) > 40: raise ValueError('請輸入 1–40 字的帳號名稱。')
+            pick = next((x for x in ([record.get('oauth')] if record.get('oauth') else []) + (record.get('otherAccounts') or []) if x.get('secretId') == account_id), None)
+            if not pick: raise LookupError('找不到這個帳號。')
+            pick['name'] = name.strip()
+        elif not _switch(record, 'oauth', 'otherAccounts', account_id): raise LookupError('找不到這個帳號。')
         store.save()
-    if info and info.get('secretId'): blob_delete(info['secretId'])
+
+
+def oauth_logout(store, connector_id, account_id=None, everything=False):
+    """Sign one account out of a connector (the one in use by default), or all of them."""
+    gone = []
+    with store.lock:
+        record = next((c for c in store.data['connectors'] if c['id'] == connector_id), None)
+        while record and (record.get('oauth') or record.get('otherAccounts')):
+            gone.append(_remove(record, 'oauth', 'otherAccounts', account_id))
+            if not everything: break
+        store.save()
+    for blob_id in gone:
+        if blob_id: blob_delete(blob_id)
+
+
+def connector_blob_ids(record):
+    """Every Keychain item holding a sign-in for this connector."""
+    return [x['secretId'] for x in ([record.get('oauth')] if record.get('oauth') else []) + list(record.get('otherAccounts') or []) if x.get('secretId')]
 
 
 def oauth_page(message):
@@ -242,8 +307,13 @@ def _google_endpoints():
     return 'https://accounts.google.com/o/oauth2/v2/auth', 'https://oauth2.googleapis.com/token', 'https://gmail.googleapis.com/gmail/v1/users/me/profile'
 
 
-def google_begin(app, client_id, client_secret, write):
-    """Start signing in to Google. Returns the page to open in the browser."""
+def google_begin(app, client_id, client_secret, write, add=False):
+    """Start signing in to Google. Returns the page to open in the browser. Adding an account reuses the client already saved."""
+    if add:
+        with app.store.lock: saved = dict(app.store.data['settings'].get('google') or {})
+        kept = blob_get(saved.get('secretId')) or {}
+        if not saved.get('clientId') or not kept.get('secret'): raise ValueError('請先登入第一個 Google 帳號。')
+        client_id, client_secret, write = saved['clientId'], kept['secret'], bool(saved.get('write'))
     if not isinstance(client_id, str) or not re.fullmatch(r'[A-Za-z0-9._-]{10,200}', client_id.strip()): raise ValueError('用戶端編號格式不對，請從 Google Cloud 複製完整的一串。')
     if not isinstance(client_secret, str) or not re.fullmatch(r'[A-Za-z0-9._~+/=-]{8,200}', client_secret.strip()): raise ValueError('用戶端密鑰格式不對，請從 Google Cloud 複製完整的一串。')
     authorize, token, _ = _google_endpoints()
@@ -251,9 +321,9 @@ def google_begin(app, client_id, client_secret, write):
     state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(64)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
     flows = app.__dict__.setdefault('oauth_flows', {})
-    flows[state] = dict(kind='google', connector='', url='', verifier=verifier, meta=dict(token=token, resource='', local=_same_place(token, None)), client=client_id.strip(), secret=client_secret.strip(), redirect=redirect, write=bool(write), at=time.time())
+    flows[state] = dict(kind='google', connector='', url='', verifier=verifier, meta=dict(token=token, resource='', local=_same_place(token, None)), client=client_id.strip(), secret=client_secret.strip(), redirect=redirect, write=bool(write), add=bool(add), at=time.time())
     query = dict(response_type='code', client_id=client_id.strip(), redirect_uri=redirect, state=state, code_challenge=challenge, code_challenge_method='S256',
-                 scope=' '.join(GOOGLE_READ + (GOOGLE_WRITE if write else ())), access_type='offline', prompt='consent')
+                 scope=' '.join(GOOGLE_READ + (GOOGLE_WRITE if write else ())), access_type='offline', prompt='consent select_account' if add else 'consent')
     return authorize + '?' + urllib.parse.urlencode(query)
 
 
@@ -261,12 +331,19 @@ def google_finish(store, flow, kept):
     if not kept.get('refresh'): raise RuntimeError('Google 沒有給長期授權，請再登入一次並同意所有項目。')
     try: _, _, profile = _oauth_request(_google_endpoints()[2], headers={'Authorization': 'Bearer ' + kept['access']}, local=flow['meta']['local'])
     except RuntimeError: profile = {}
-    with store.lock: old = dict(store.data['settings'].get('google') or {})
-    blob_id = old.get('secretId') or ID(); blob_set(blob_id, kept)
+    email = str(profile.get('emailAddress') or '')[:200]
+    blob_id = ID(); blob_set(blob_id, kept); gone = []
+    new = dict(secretId=blob_id, clientId=flow['client'], tokenEndpoint=flow['meta']['token'], local=flow['meta']['local'], write=flow['write'], email=email, name=email or 'Google 帳號', signedInAt=NOW())
     with store.lock:
-        st = store.data['settings']
-        st['google'] = dict(secretId=blob_id, clientId=flow['client'], tokenEndpoint=flow['meta']['token'], local=flow['meta']['local'], write=flow['write'], email=str(profile.get('emailAddress') or '')[:200], signedInAt=NOW())
+        st = store.data['settings']; now = st.get('google'); others = st.setdefault('googleOthers', [])
+        same = next((x for x in others if email and x.get('email') == email), None)
+        if same: others.remove(same); gone.append(same.get('secretId'))  # signing in again to an account already listed
+        if flow.get('add') and now and not (email and now.get('email') == email): others.append(new)  # the default stays as it is
+        else: gone.append((now or {}).get('secretId')); st['google'] = new
+        if not others: st.pop('googleOthers', None)
         st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + [GOOGLE_ID])); store.save()
+    for old in gone:
+        if old: blob_delete(old)
 
 
 def google_access(store):
@@ -279,11 +356,23 @@ def google_access(store):
     return oauth_token(info, '', lost)
 
 
-def google_logout(store):
+def google_accounts(store):
+    with store.lock: st = store.data['settings']; return _accounts_of(st.get('google'), st.get('googleOthers'))
+
+
+def google_switch(store, account_id):
     with store.lock:
-        st = store.data['settings']; info = st.pop('google', None)
-        st['sharedMcp'] = [x for x in st.get('sharedMcp') or [] if x != GOOGLE_ID]; store.save()
-    if info and info.get('secretId'): blob_delete(info['secretId'])
+        if not _switch(store.data['settings'], 'google', 'googleOthers', account_id): raise LookupError('找不到這個帳號。')
+        store.save()
+
+
+def google_logout(store, account_id=None):
+    """Sign one Google account out (the one in use by default). The connector is switched off when none is left."""
+    with store.lock:
+        st = store.data['settings']; gone = _remove(st, 'google', 'googleOthers', account_id)
+        if not st.get('google'): st['sharedMcp'] = [x for x in st.get('sharedMcp') or [] if x != GOOGLE_ID]
+        store.save()
+    if gone: blob_delete(gone)
 
 
 def oauth_needs_login(store, connector_id):

@@ -142,6 +142,22 @@ class OAuthTest(unittest.TestCase):
             self.assertRaises(RuntimeError, z._oauth_url, url)
         self.assertEqual(z._oauth_url('https://example.com/x'), 'https://example.com/x'); self.assertEqual(z._oauth_url('http://127.0.0.1:9/x', True), 'http://127.0.0.1:9/x')
 
+    def test_several_accounts_with_a_default_that_can_be_changed(self):
+        def sign_in(add):
+            status, body = self.req('POST', '/api/connectors/%s/login' % self.cid, {'add': True} if add else {}); self.assertEqual(status, 200, body)
+            query = {k: v[0] for k, v in parse_qs(urlsplit(body['url']).query).items()}; Provider.state['challenge'] = query['code_challenge']
+            self.assertEqual(self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % query['state'], auth=False)[0], 200)
+        sign_in(False); sign_in(True); accounts = self.item()['accounts']
+        self.assertEqual([(a['name'], a['active']) for a in accounts], [('帳號 1', True), ('帳號 2', False)]); parts = len(list((self.root / 'secrets').iterdir()))
+        self.assertEqual(self.req('POST', '/api/connectors/%s/account' % self.cid, {'account': accounts[1]['id']})[0], 200)
+        self.assertEqual([(a['name'], a['active']) for a in self.item()['accounts']], [('帳號 2', True), ('帳號 1', False)])
+        self.assertEqual(self.req('POST', '/api/connectors/%s/account' % self.cid, {'account': accounts[1]['id'], 'name': '公司'})[0], 200); self.assertEqual(self.item()['accounts'][0]['name'], '公司')
+        self.assertEqual(self.req('POST', '/api/connectors/%s/account' % self.cid, {'account': 'nope'})[0], 404)
+        self.req('PATCH', '/api/connectors/' + self.cid, {'name': 'Renamed'}); self.assertEqual(len(self.item()['accounts']), 2)   # editing keeps both
+        self.req('POST', '/api/connectors/%s/logout' % self.cid, {}); left = self.item()['accounts']
+        self.assertEqual([(a['name'], a['active']) for a in left], [('帳號 1', True)]); self.assertTrue(self.item()['signedIn']); self.assertEqual(len(list((self.root / 'secrets').iterdir())), parts // 2)
+        self.req('DELETE', '/api/connectors/' + self.cid); self.assertEqual(list((self.root / 'secrets').iterdir()), [])
+
     def test_cancelled_sign_in_and_wrong_host(self):
         state = self.login(); status, page = self.req('GET', '/oauth/callback?state=%s&error=access_denied' % state, auth=False); self.assertIn('取消', page)
         self.assertEqual(self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % state, auth=False)[0], 400)

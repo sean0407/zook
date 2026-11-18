@@ -1,3 +1,12 @@
+  async function switchConnectorAccount(input) {
+    const id = input.dataset.connector;
+    try {
+      if (id === 'builtin:google') await post('google/account', {account: input.value});
+      else await post('connectors/' + encodeURIComponent(id.split(':')[1]) + '/account', {account: input.value});
+      toast('所有 Bot 改用這個帳號');
+    } catch (error) { toast(error.message); }
+    state.integrations = await api('integrations'); render(true);
+  }
   async function saveAutoModel(input) {
     const item = (state.quota?.providers || []).find(p => p.id === input.dataset.autoModel);
     if (!item) return;
@@ -10,6 +19,7 @@
     if (e.target.name === 'provider' && e.target.closest('#bot-form')) syncFeatureRows(e.target.closest('#bot-form'));
     if (e.target.dataset.autoModel) saveAutoModel(e.target);
     if (e.target.name === 'projectFilter') { state.projectId = e.target.value; render(true); }
+    if (e.target.name === 'connectorAccount') switchConnectorAccount(e.target);
     if (e.target.name === 'groupMode' && activeGroup()) { state.groupMode[activeGroup().id] = e.target.value; updateGroupEstimate(); }
     if (e.target.name === 'botIds' && e.target.closest('#group-form')) syncGroupHost(e.target.closest('#group-form'));
     if (e.target.id === 'group-file-input' && activeGroup()) uploadGroupFiles(activeGroup(), [...e.target.files]);

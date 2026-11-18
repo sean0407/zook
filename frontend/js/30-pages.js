@@ -265,6 +265,11 @@
   }
   // Dropdown: open/close, pick an option, close on outside click or Escape.
   const closeDropdowns = except => document.querySelectorAll('.dd.open').forEach(d => { if (d !== except) { d.classList.remove('open'); d.querySelector('.dd-btn').setAttribute('aria-expanded', 'false'); } });
+  // The launcher menu closes when anything outside it is clicked, or Escape is pressed.
+  document.addEventListener('click', e => {
+    if (state.launcher && !e.target.closest?.('.launcher') && !e.target.closest?.('[data-action="launcher"]')) setTimeout(() => { if (state.launcher) { state.launcher = false; render(true); } }, 0);
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.launcher) { state.launcher = false; render(true); } });
   document.addEventListener('click', e => {
     const opt = e.target.closest?.('.dd-opt'), btn = e.target.closest?.('.dd-btn');
     if (btn) {

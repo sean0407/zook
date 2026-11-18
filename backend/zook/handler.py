@@ -421,9 +421,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self.respond(200, {'ok': True})
                 return self.error(404, '找不到資源。')
             if path == '/api/google' and self.command in ('POST', 'DELETE') and not self.device:
-                if self.command == 'DELETE': google_logout(store); return self.respond(200, {'ok': True})
+                if self.command == 'DELETE': google_logout(store, (parse_qs(urlsplit(self.path).query).get('account') or [None])[0]); return self.respond(200, {'ok': True})
                 body = self.body()
-                try: url = google_begin(self.server, body.get('clientId'), body.get('clientSecret'), body.get('write') is True)
+                try: url = google_begin(self.server, body.get('clientId'), body.get('clientSecret'), body.get('write') is True, add=body.get('add') is True)
                 except ValueError as exc: return self.error(400, str(exc))
                 if not os.environ.get('ZOOK_NO_BROWSER'): subprocess.run(['/usr/bin/open', _oauth_url(url, _same_place(url, None))], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
                 return self.respond(200, {'url': url})
@@ -509,11 +509,22 @@ class Handler(BaseHTTPRequestHandler):
                 except OSError: return self.error(500, '沒有加入：無法儲存設定。')
                 if url and not os.environ.get('ZOOK_NO_BROWSER'): subprocess.run(['/usr/bin/open', _oauth_url(url)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
                 return self.respond(200, dict(id='zook:' + record['id'], name=record['name'], login=bool(url)))
+            if len(parts) == 4 and parts[:2] == ['api', 'connectors'] and parts[3] == 'account' and self.command == 'POST' and not self.device:
+                body = self.body()
+                try: oauth_switch(store, parts[2], body.get('account'), body.get('name'))
+                except LookupError as exc: return self.error(404, str(exc))
+                except ValueError as exc: return self.error(400, str(exc))
+                return self.respond(200, {'ok': True})
+            if path == '/api/google/account' and self.command == 'POST' and not self.device:
+                try: google_switch(store, self.body().get('account'))
+                except LookupError as exc: return self.error(404, str(exc))
+                return self.respond(200, {'ok': True})
             if len(parts) == 4 and parts[:2] == ['api', 'connectors'] and parts[3] in ('login', 'logout') and self.command == 'POST' and not self.device:
                 with store.lock: record = copy.deepcopy(next((c for c in store.data['connectors'] if c['id'] == parts[2]), None))
                 if not record: return self.error(404, '找不到這個連接器。')
-                if parts[3] == 'logout': oauth_logout(store, record['id']); return self.respond(200, {'ok': True})
-                try: url = oauth_begin(self.server, record)
+                body = self.body()
+                if parts[3] == 'logout': oauth_logout(store, record['id'], body.get('account') if isinstance(body.get('account'), str) else None); return self.respond(200, {'ok': True})
+                try: url = oauth_begin(self.server, record, add=body.get('add') is True)
                 except ValueError as exc: return self.error(400, str(exc))
                 except RuntimeError as exc: return self.error(409, str(exc))
                 if not os.environ.get('ZOOK_NO_BROWSER'): subprocess.run(['/usr/bin/open', _oauth_url(url, _is_local_host(urllib.parse.urlparse(record['url']).hostname or ''))], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
@@ -538,9 +549,12 @@ class Handler(BaseHTTPRequestHandler):
                         with store.lock:
                             current = next((c for c in store.data['connectors'] if c['id'] == record['id']), None) or {}
                             stale = current.get('oauth')  # read now, so a sign-in that just finished is not lost
-                            if stale and record['transport'] == 'http' and record['url'] == current.get('url') and not secret: record['oauth'] = stale; stale = None  # still the same sign-in
+                            drop = connector_blob_ids(current)
+                            if stale and record['transport'] == 'http' and record['url'] == current.get('url') and not secret:  # still the same sign-ins
+                                record['oauth'] = stale; drop = []
+                                if current.get('otherAccounts'): record['otherAccounts'] = current['otherAccounts']
                             store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]
-                            if stale and stale.get('secretId'): blob_delete(stale['secretId'])  # the address or the way to sign in changed
+                            for blob in drop: blob_delete(blob)  # the address or the way to sign in changed
                             if not existing:  # a connector you just added is switched on for every Bot
                                 st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + ['zook:' + record['id']]))
                             store.save()
@@ -551,7 +565,7 @@ class Handler(BaseHTTPRequestHandler):
                             st = store.data['settings']; st['sharedMcp'] = [x for x in st.get('sharedMcp') or [] if x != 'zook:' + existing['id']]
                             store.save()
                         for secret_id in connector_secret_ids(existing): secret_delete(secret_id)
-                        if (existing.get('oauth') or {}).get('secretId'): blob_delete(existing['oauth']['secretId'])
+                        for blob in connector_blob_ids(existing): blob_delete(blob)
                         return self.respond(200, {'ok': True})
                 except ValueError as exc: return self.error(400, str(exc))
                 except RuntimeError as exc: return self.error(409, str(exc))

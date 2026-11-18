@@ -1588,3 +1588,5 @@ button.run-row:hover { background: #f1f1f1; }
 .catalog-item .dir-icon, .catalog-item .item-icon { flex: none; }
 .dir-add { gap: 8px; }
 .catalog-item > div { flex: 1; }
+.account-pick { margin: 6px 0 2px; max-width: 260px; }
+.account-pick .dd-btn { height: 30px; min-height: 30px; border-radius: 8px; font-size: 12.5px; }

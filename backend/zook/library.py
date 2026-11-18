@@ -121,7 +121,7 @@ def inventory_for(store):
     with store.lock: google = dict(store.data['settings'].get('google') or {})
     access = google_access(store) if google else ''
     data['mcp'].insert(2, {'id': GOOGLE_ID, 'name': 'Google（Gmail、行事曆、雲端硬碟）', 'source': 'builtin', 'transport': 'stdio', 'status': 'configured', 'google': True,
-                           'address': google.get('email', ''), 'write': bool(google.get('write')), 'needsSetup': not access, 'needsLogin': bool(google) and google_needs_login(store)})
+                           'address': google.get('email', ''), 'write': bool(google.get('write')), 'needsSetup': not access, 'needsLogin': bool(google) and google_needs_login(store), 'accounts': google_accounts(store)})
     if access:
         data['_private']['mcp'][GOOGLE_ID] = dict(transport='stdio', command=sys.executable, args=[str(pathlib.Path(__file__).with_name('google_mcp.py'))],
                                                   env=dict({'ZOOK_GOOGLE_TOKEN': access, 'ZOOK_GOOGLE_WRITE': '1' if google.get('write') else '0'},
@@ -149,7 +149,7 @@ def inventory_for(store):
                             'editable': True, 'config': connector_view(record), 'needsKey': waiting,
                             'canLogin': record['transport'] == 'http' and not record.get('secretName') and not secret,
                             'signedIn': bool(record.get('oauth')) and not oauth_needs_login(store, record['id']),
-                            'needsLogin': bool(record.get('oauth')) and oauth_needs_login(store, record['id'])})
+                            'needsLogin': bool(record.get('oauth')) and oauth_needs_login(store, record['id']), 'accounts': oauth_accounts(record)})
     copied = {record.get('origin') for record in own if record.get('origin')}
     for item in data['mcp']:
         if item['id'] in copied: item['copied'] = True  # Zook now has its own copy, so this one is no longer handed to Bots
