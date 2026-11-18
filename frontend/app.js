@@ -278,7 +278,7 @@
     if (!b) return `<main class="main"><div class="empty-chat"><h1>歡迎使用 Zook</h1><p>建立一個 Bot，開始你的工作。</p><div class="quick-actions"><button data-action="new-bot">＋ 新增 Bot</button></div></div></main>`;
     const messages = b.messages || [];
     const running = Object.entries(state.pollers).find(([id, v]) => v.botId === b.id && (state.jobDetails[id]?.chatId || b.chatId) === b.chatId);
-    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-bot">${avatar(b)}${esc(b.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn chat-title-btn" data-action="chats" title="所有對話">☰ ${esc(chatName(b))}</button><button class="text-btn" data-action="new-chat">＋ 新對話</button><button class="text-btn" data-action="share">↑ 匯出對話</button>${!state.detailOpen?'<button class="text-btn" data-action="toggle-detail">顯示詳情</button>':''}</div></header><div class="conversation" id="conversation">${messages.length?`<div class="conversation-inner">${messages.map(m=>`<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message ${m.role==='user'?'user':'assistant'}" data-mid="${esc(m.id)}">${m.role==='user'?'':avatar(b)}${m.role!=='user'&&m.content&&m.status!=='running'?`<div class="bubble md ${m.status==='failed'?'error-text':''}">${markdown(m.content)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(m.status==='running'?'正在思考…':m.status==='cancelled'&&!m.content?'已停止回覆':m.status==='failed'&&!m.content?(Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。'):m.content)}</div>`}${attachmentsView(m)}${redoBar(b, m, running)}</div>`).join('')}</div>`:`<div class="empty-chat">${avatar(b,'hero')}<h1>今天想一起完成什麼？</h1><p>和 ${esc(b.name)} 開始一段對話。</p><div class="quick-actions"><button data-action="page" data-id="knowledge">▤ 管理知識庫</button><button data-action="page" data-id="usage">◷ 查看使用量</button><button data-action="page" data-id="settings">⚙ 設定模型</button></div></div>`}</div><div class="composer-wrap">${approvalCards(b.id)}${pendingFiles()}<form class="composer" id="chat-form"><button type="button" class="icon-btn" data-action="composer-menu" aria-label="更多選項">${svg('plus')}</button><textarea id="chat-input" rows="1" placeholder="傳送訊息給 ${esc(b.name)}" aria-label="輸入訊息"></textarea>${effortControl()}<button type="button" class="icon-btn" data-action="voice" aria-label="語音輸入">${svg('mic')}</button>${running?`<button type="button" class="send" data-action="cancel-job" data-id="${esc(running[0])}" aria-label="停止回覆">■</button>`:`<button class="send" type="submit" aria-label="傳送訊息">↑</button>`}</form></div></main>${state.detailOpen?detail(b):''}`
+    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-bot">${avatar(b)}${esc(b.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn chat-title-btn" data-action="chats" title="所有對話">☰ ${esc(chatName(b))}</button><button class="text-btn" data-action="new-chat">＋ 新對話</button><button class="text-btn" data-action="share">↑ 匯出對話</button>${!state.detailOpen?'<button class="text-btn" data-action="toggle-detail">顯示詳情</button>':''}</div></header><div class="conversation" id="conversation">${messages.length?`<div class="conversation-inner">${messages.map(m=>`<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message ${m.role==='user'?'user':'assistant'}" data-mid="${esc(m.id)}">${m.role==='user'?'':avatar(b)}${m.role!=='user'&&m.content&&m.status!=='running'?`<div class="bubble md ${m.status==='failed'?'error-text':''}">${markdown(m.content)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(m.status==='running'?'正在思考…':m.status==='cancelled'&&!m.content?'已停止回覆':m.status==='failed'&&!m.content?(Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。'):m.content)}</div>`}${attachmentsView(m)}${redoBar(b, m, running)}</div>`).join('')}</div>`:`<div class="empty-chat">${avatar(b,'hero')}<h1>今天想一起完成什麼？</h1><p>和 ${esc(b.name)} 開始一段對話。</p><div class="quick-actions"><button data-action="page" data-id="knowledge">▤ 管理知識庫</button><button data-action="page" data-id="usage">◷ 查看使用量</button><button data-action="page" data-id="settings">⚙ 設定模型</button></div></div>`}</div><div class="composer-wrap">${approvalCards(b.id)}${pendingFiles()}<form class="composer" id="chat-form"><button type="button" class="icon-btn" data-action="composer-menu" aria-label="更多選項">${svg('plus')}</button><textarea id="chat-input" rows="1" placeholder="傳送訊息給 ${esc(b.name)}" aria-label="輸入訊息"></textarea>${planControl(b)}${effortControl()}<button type="button" class="icon-btn" data-action="voice" aria-label="語音輸入">${svg('mic')}</button>${running?`<button type="button" class="send" data-action="cancel-job" data-id="${esc(running[0])}" aria-label="停止回覆">■</button>`:`<button class="send" type="submit" aria-label="傳送訊息">↑</button>`}</form></div></main>${state.detailOpen?detail(b):''}`
   }
 
   function activeGroup() { return state.groupId ? (state.data.groups || []).find(g => g.id === state.groupId) : null; }
@@ -540,6 +540,9 @@
     const p = (state.providers || []).find(x => x.id === id);
     return !p || p.tools !== false;
   }
+  // 先規劃: for the next message only; the Bot proposes a plan and changes nothing.
+  if (!state.plan) state.plan = {};
+  const planControl = b => `<label class="plan-toggle" title="這則訊息只請 Bot 提出計畫，不動手">${toggle(`data-plan`, !!state.plan[b.id], '先規劃')}<span>先規劃</span></label>`;
   function effortControl() {
     if (!effortSupported()) return `<span class="effort-off" title="這個模型不支援調整思考強度">思考強度：這個模型不支援</span>`;
     return `<div class="effort-pick" title="思考強度">${dropdown('effort', currentEffort(), EFFORTS, 'data-effort')}</div>`;
@@ -988,7 +991,7 @@
     if (!lastUser) return '';
     if (m.id === lastUser.id) return '<div class="msg-actions user-actions"><button type="button" class="link" data-action="edit-last">編輯</button></div>';
     if (m.role !== 'user' && m.id === msgs[msgs.length - 1]?.id && m.status !== 'running')
-      return '<div class="msg-actions"><button type="button" class="link" data-action="redo-again">重新回答</button><button type="button" class="link" data-action="redo-model">換模型重答</button></div>';
+      return '<div class="msg-actions">' + (m.plan && m.status === 'completed' ? '<button type="button" class="primary small-btn" data-action="run-plan">照計畫執行</button>' : '') + '<button type="button" class="link" data-action="redo-again">重新回答</button><button type="button" class="link" data-action="redo-model">換模型重答</button></div>';
     return '';
   }
   // Redoing cannot undo what the last reply already did (files changed, mail sent): say so first.
@@ -1553,6 +1556,12 @@
         case 'view-image':
           modal(el.dataset.name || '圖片', `<div class="modal-body image-view"><img src="/api/uploads/${esc(id)}" alt="${esc(el.dataset.name || '')}"></div>`, '', true);
           break;
+        case 'run-plan': {
+          const b = activeBot();
+          const sent = await post('chat', {botId: b.id, content: '請照上面的計畫執行。', effort: currentEffort()});
+          await refresh(); poll(sent.jobId, b.id);
+          break;
+        }
         case 'redo-again': {
           const b = activeBot();
           if (redoAllowed(b)) await redo(b, {mode: 'again'});
@@ -1870,6 +1879,11 @@
       catch (err) { toast(err.message); }
       return;
     }
+    if (e.target.dataset.plan !== undefined) {
+      state.plan[state.selected] = e.target.checked;
+      if (e.target.checked) toast('這則訊息 Bot 只會提出計畫，不會動手');
+      return;
+    }
     if (e.target.dataset.effort !== undefined && e.target.closest('#chat-form')) {
       state.effort[effortKey()] = e.target.value;
       return;
@@ -1996,9 +2010,10 @@
           botId,
           content,
           attachments,
-          effort: currentEffort()
+          effort: currentEffort(),
+          plan: !!state.plan[botId]
         });
-        input.value = ''; updateInputMirror(); state.pending = [];
+        input.value = ''; updateInputMirror(); state.pending = []; state.plan[botId] = false;
         await refresh();
         poll(result.jobId, botId)
       } else if (form.id === 'bot-form') {
