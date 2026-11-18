@@ -3,6 +3,8 @@ import argparse
 import socket
 import base64
 import calendar
+import contextlib
+import stat
 import ctypes
 import hashlib
 import datetime
@@ -258,13 +260,63 @@ def attachments_for(store, ids):
 def place_attachments(store, bot_id, attachments):
     """Copy attached files into a Bot's workspace (attachments/). Returns their paths there."""
     folder = store.dir / 'workspaces' / bot_id / 'attachments'
-    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     paths = []
-    for a in attachments:
-        target = folder / ('%s-%s' % (a['id'][:8], a['name']))
-        if not target.exists(): clone_file(store.dir / 'uploads' / a['id'] / 'file', target)
-        paths.append(target)
+    with bot_folder(store, bot_id, 'attachments') as fd:
+        for a in attachments:
+            name = '%s-%s' % (a['id'][:8], a['name'])
+            with open(store.dir / 'uploads' / a['id'] / 'file', 'rb') as source: write_into_folder(fd, name, source, keep=True)
+            paths.append(folder / name)
     return paths
+
+
+@contextlib.contextmanager
+def bot_folder(store, bot_id, *names):
+    """A folder inside a Bot's workspace, held open. A Bot controls its workspace and may leave links there, so every step refuses to follow one."""
+    workspace = store.dir / 'workspaces' / bot_id; workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(str(workspace), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for name in names:
+            fd_next = _enter_folder(fd, name); os.close(fd); fd = fd_next
+        yield fd
+    finally: os.close(fd)
+
+
+def _enter_folder(parent, name):
+    try: return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+    except FileNotFoundError: pass
+    except OSError:  # a link, a file or a pipe is in the way
+        os.unlink(name, dir_fd=parent)
+    os.mkdir(name, 0o700, dir_fd=parent)
+    return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+
+
+def clear_folder(fd, depth=0):
+    """Empty an open folder without following anything inside it."""
+    if depth > 32: raise OSError('folder is too deep')
+    for name in os.listdir(fd):
+        info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+        if stat.S_ISDIR(info.st_mode):
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            try: clear_folder(child, depth + 1)
+            finally: os.close(child)
+            os.rmdir(name, dir_fd=fd)
+        else: os.unlink(name, dir_fd=fd)
+
+
+def write_into_folder(fd, name, source, keep=False):
+    """Write a new regular file into an open folder. With keep, a regular file already there stays as it is."""
+    try: info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+    except FileNotFoundError: info = None
+    if info is not None:
+        if keep and stat.S_ISREG(info.st_mode): return
+        if stat.S_ISDIR(info.st_mode):
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            try: clear_folder(child)
+            finally: os.close(child)
+            os.rmdir(name, dir_fd=fd)
+        else: os.unlink(name, dir_fd=fd)
+    target = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd)
+    with os.fdopen(target, 'wb') as out: shutil.copyfileobj(source, out, 1 << 20)
 
 
 def clone_file(source, target):

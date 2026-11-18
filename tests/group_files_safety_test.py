@@ -23,6 +23,31 @@ class GroupFileSafety(unittest.TestCase):
         server.sync_group_files_in(self.store, 'g1', 'b1')
         self.assertEqual((self.shared / 'keep.txt').read_text(), 'keep'); self.assertFalse((self.bot / 'attachments').is_symlink())
 
+    def test_things_planted_in_place_of_folders_are_replaced(self):
+        for make in (lambda p: p.write_text('x'), lambda p: os.mkfifo(str(p)), lambda p: p.symlink_to(self.root / 'missing')):
+            target = self.bot / 'attachments'
+            if target.is_dir() and not target.is_symlink(): server.shutil.rmtree(str(target))
+            elif os.path.lexists(str(target)): target.unlink()
+            make(target); self.assertEqual(list(server.sync_group_files_in(self.store, 'g1', 'b1')), ['keep.txt'])
+            self.assertEqual((target / 'group-files/keep.txt').read_text(), 'keep')
+
+    def test_attachments_never_follow_a_planted_link(self):
+        outside = self.root / 'outside'; outside.mkdir(); upload = self.store.dir / 'uploads/aaaaaaaa11'; upload.mkdir(parents=True); (upload / 'file').write_text('private')
+        item = dict(id='aaaaaaaa11', name='r.txt'); (self.bot / 'attachments').symlink_to(outside)
+        server.place_attachments(self.store, 'b1', [item]); self.assertEqual(list(outside.iterdir()), [])
+        link = self.bot / 'attachments/aaaaaaaa-r.txt'; link.unlink(); link.symlink_to(outside / 'made.txt')
+        server.place_attachments(self.store, 'b1', [item]); self.assertFalse((outside / 'made.txt').exists()); self.assertEqual(link.read_text(), 'private')
+
+    def test_a_subfolder_does_not_stop_the_other_files_coming_back(self):
+        seen = server.sync_group_files_in(self.store, 'g1', 'b1'); copy = server.group_copy_folder(self.store, 'b1')
+        (copy / 'a.txt').write_text('a'); (copy / 'drafts').mkdir(); (copy / 'z.txt').write_text('z')
+        self.assertEqual(server.sync_group_files_out(self.store, 'g1', 'B', 'b1', seen)[0], ['a.txt', 'z.txt'])
+
+    def test_hidden_answers_are_not_copied_to_later_members(self):
+        (self.shared / 'other.txt').write_text('answer')
+        self.assertEqual(list(server.sync_group_files_in(self.store, 'g1', 'b1', {'other.txt'})), ['keep.txt'])
+        self.assertFalse((server.group_copy_folder(self.store, 'b1') / 'other.txt').exists())
+
     def test_a_planted_folder_link_brings_nothing_back(self):
         secret = self.root / 'private'; secret.mkdir(); (secret / 'id_rsa').write_text('secret')
         seen = server.sync_group_files_in(self.store, 'g1', 'b1'); folder = server.group_copy_folder(self.store, 'b1')

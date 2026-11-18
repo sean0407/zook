@@ -1,6 +1,4 @@
 # Files a group shares. Each Bot gets its own copy for a turn, so no Bot's access is widened. Loaded by backend/server.py into one shared namespace.
-import stat as _stat
-
 GROUP_FILES_TOTAL = 200 * 1024 * 1024
 GROUP_FILES_FOLDER = 'group-files'  # inside a Bot's workspace attachments folder
 _group_files_lock = threading.Lock()  # choosing a name and saving a file happen as one step
@@ -71,33 +69,25 @@ def group_copy_folder(store, bot_id):
     return store.dir / 'workspaces' / bot_id / 'attachments' / GROUP_FILES_FOLDER
 
 
-def _own_copy_folder(store, bot_id):
-    """The Bot's copy folder, after removing any link the Bot left in its place. A Bot controls its workspace, so nothing there is trusted."""
-    parent = store.dir / 'workspaces' / bot_id / 'attachments'
-    if parent.is_symlink(): parent.unlink()
-    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    folder = parent / GROUP_FILES_FOLDER
-    if folder.is_symlink(): folder.unlink()
-    elif folder.exists(): shutil.rmtree(str(folder), ignore_errors=True)
-    folder.mkdir(mode=0o700)
-    return folder
-
-
-def sync_group_files_in(store, group_id, bot_id):
+def sync_group_files_in(store, group_id, bot_id, skip=()):
     """Give this Bot a fresh copy for its turn. Returns what the copy looked like."""
-    folder = _own_copy_folder(store, bot_id); seen = {}
-    for entry in _plain_files(group_files_dir(store, group_id)):
-        clone_file(entry.path, folder / entry.name); seen[entry.name] = _file_hash(entry.path)
+    seen = {}
+    with bot_folder(store, bot_id, 'attachments', GROUP_FILES_FOLDER) as fd:
+        clear_folder(fd)
+        for entry in _plain_files(group_files_dir(store, group_id)):
+            if entry.name in skip: continue
+            with open(entry.path, 'rb') as source: write_into_folder(fd, entry.name, source)
+            seen[entry.name] = _file_hash(entry.path)
     return seen
 
 
 def _read_bot_file(folder_fd, name, target):
-    """Copy one regular file out of the Bot's folder, refusing links. Returns (size, hash), or None when it is not a plain file or is too large."""
+    """Copy one regular file out of the Bot's folder, refusing links. Returns (size, hash), or None when it is not a plain file."""
     try: source = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=folder_fd)
     except OSError: return None
+    if not stat.S_ISREG(os.fstat(source).st_mode): os.close(source); return None
     digest = hashlib.sha256(); size = 0
     with os.fdopen(source, 'rb') as f, open(str(target), 'wb') as out:
-        if not _stat.S_ISREG(os.fstat(f.fileno()).st_mode): return None
         for chunk in iter(lambda: f.read(1 << 20), b''):
             size += len(chunk)
             if size > MAX_UPLOAD: return (size, '')
@@ -108,9 +98,11 @@ def _read_bot_file(folder_fd, name, target):
 def sync_group_files_out(store, group_id, bot_name, bot_id, seen):
     """Bring back what the Bot added or changed. A file someone else changed meanwhile is kept, and this version gets its own name."""
     shared = group_files_dir(store, group_id); shared.mkdir(parents=True, exist_ok=True, mode=0o700)
-    parent = store.dir / 'workspaces' / bot_id / 'attachments'
-    if parent.is_symlink() or os.path.realpath(str(parent)) != os.path.join(os.path.realpath(str(store.dir)), 'workspaces', bot_id, 'attachments'): return [], []
-    try: folder_fd = os.open(str(parent / GROUP_FILES_FOLDER), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        with bot_folder(store, bot_id) as workspace:
+            attachments = os.open('attachments', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=workspace)
+            try: folder_fd = os.open(GROUP_FILES_FOLDER, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=attachments)
+            finally: os.close(attachments)
     except OSError: return [], []
     saved, skipped = [], []
     try:
@@ -118,7 +110,8 @@ def sync_group_files_out(store, group_id, bot_name, bot_id, seen):
             if entry_name.startswith('.'): continue
             temp = shared / ('.incoming-' + ID())
             try:
-                copied = _read_bot_file(folder_fd, entry_name, temp)
+                try: copied = _read_bot_file(folder_fd, entry_name, temp)
+                except OSError: skipped.append(_short_name(entry_name)); continue
                 if copied is None or copied[1] == seen.get(entry_name): continue
                 size, digest = copied
                 with _group_files_lock:

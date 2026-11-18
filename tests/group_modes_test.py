@@ -117,6 +117,15 @@ class GroupModes(unittest.TestCase):
         self.req('POST', '/api/groups/%s/continue' % g['id'], {}); self.settle(g)
         self.assertEqual([r for r in self.order()][4:], [('Eps', 'compare'), ('Alpha', 'compare_diff')])
 
+    def test_refused_continue_keeps_the_paused_discussion(self):
+        g = self.group(hostId='', mode='debate', turnLimit=4); self.say(g); self.req('POST', '/api/groups/%s/summarize' % g['id'], {})
+        self.assertEqual(self.req('POST', '/api/groups/%s/continue' % g['id'], {})[0], 409); found = self.settle(g); self.assertIn('paused', found)
+
+    def test_verdict_moves_when_the_closer_leaves_during_a_pause(self):
+        g = self.group(hostId=self.bots['Alpha']['id'], mode='debate', turnLimit=4); self.say(g)
+        self.req('PATCH', '/api/groups/' + g['id'], {'botIds': [self.bots['Beta']['id'], self.bots['Gamma']['id']], 'hostId': self.bots['Beta']['id']})
+        self.req('POST', '/api/groups/%s/continue' % g['id'], {}); self.settle(g); self.assertEqual(self.order()[-1], ('Beta', 'verdict'))
+
     def test_host_removed_in_the_form_gets_a_notice(self):
         g = self.group(hostId=self.bots['Gamma']['id'])
         found = self.req('PATCH', '/api/groups/' + g['id'], {'botIds': [self.bots['Alpha']['id'], self.bots['Beta']['id']], 'hostId': ''})[1]
