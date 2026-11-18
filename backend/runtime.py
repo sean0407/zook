@@ -6,6 +6,7 @@ skills/mcp catalog arrays may be returned to the UI.
 import copy
 import glob
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -29,182 +30,24 @@ PROTOCOL = '2025-06-18'
 SECRET_KEY = re.compile(r'(?i)(token|password|secret|authorization|api[_-]?key|cookie|credential)')
 
 
-def _json_file(path):
-    try:
-        if path.stat().st_size > MAX_MESSAGE:
-            return {}
-        value = json.loads(path.read_text())
-        return value if isinstance(value, dict) else {}
-    except (OSError, ValueError):
-        return {}
+def _sibling(name):
+    """Another file of the backend, loaded by path so it works wherever the app is installed."""
+    spec = importlib.util.spec_from_file_location('zook_' + name, Path(__file__).with_name(name + '.py'))
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    return module
 
 
-def _toml_file(path):
-    if not path.exists():
-        return {}
-    try:
-        try:
-            import tomllib
-        except ImportError:
-            try:
-                import tomli as tomllib
-            except ImportError:
-                try:
-                    from ._vendor import tomli as tomllib
-                except ImportError:
-                    from _vendor import tomli as tomllib
-        if path.stat().st_size > MAX_MESSAGE:
-            return {}
-        return tomllib.loads(path.read_text())
-    except (ImportError, OSError, ValueError):
-        return {}
-
-
-def _sid(source, name):
-    return source + ':' + hashlib.sha256(name.encode()).hexdigest()[:20]
-
-
-def _frontmatter(text):
-    name, description = '', ''
-    if text.startswith('---'):
-        for line in text.split('---', 2)[1].splitlines()[:80]:
-            if line.startswith('name:'):
-                name = line[5:].strip().strip('\"\'')
-            if line.startswith('description:'):
-                description = line[12:].strip().strip('\"\'')
-    return name, description
-
-
-PLUGIN_SOURCES = {'claude-code': 'Claude Code'}
-
-
-def _plugin_dirs(home):
-    """Install folders of the plugins installed in Claude Code."""
-    found = []
-    installed = _json_file(home / '.claude/plugins/installed_plugins.json').get('plugins', {})
-    if isinstance(installed, dict):
-        for entries in list(installed.values())[:200]:
-            entry = entries[0] if isinstance(entries, list) and entries and isinstance(entries[0], dict) else {}
-            if isinstance(entry.get('installPath'), str): found.append(('claude-code', Path(entry['installPath'])))
-    return found
-
-
-def _plugin_expand(value, root):
-    if isinstance(value, str): return value.replace('${CLAUDE_PLUGIN_ROOT}', str(root))
-    if isinstance(value, list): return [_plugin_expand(v, root) for v in value]
-    if isinstance(value, dict): return {k: _plugin_expand(v, root) for k, v in value.items()}
-    return value
-
-
-def _inside(root, relative):
-    if not isinstance(relative, str) or not relative: return None
-    try:
-        path = (root / relative).resolve()
-        path.relative_to(root)
-        return path
-    except (OSError, ValueError):
-        return None
-
-
-def _plugin_servers(root, spec):
-    specs = spec if isinstance(spec, list) else [spec]
-    servers = {}
-    for item in specs[:20]:
-        if isinstance(item, str):
-            path = _inside(root, item)
-            item = _json_file(path) if path else {}
-        if isinstance(item, dict):
-            item = item.get('mcpServers', item)
-            for name, config in list(item.items())[:64]:
-                if isinstance(name, str) and isinstance(config, dict): servers[name] = _plugin_expand(config, root)
-    return servers
-
-
-def discover(home=None):
-    home = Path(home) if home is not None else Path.home()
-    private = {'skills': {}, 'mcp': {}}
-    result = {'skills': [], 'mcp': [{'id': 'builtin:workspace', 'name': 'Bot workspace',
-              'source': 'builtin', 'transport': 'builtin', 'status': 'ready'}], 'plugins': [], '_private': private}
-    sources = [('codex', _toml_file(home / '.codex/config.toml').get('mcp_servers', {})),
-               ('claude', _json_file(home / '.claude.json').get('mcpServers', {}))]
-    for source, servers in sources:
-        if not isinstance(servers, dict):
-            continue
-        for name, config in list(servers.items())[:256]:
-            if not isinstance(config, dict) or not isinstance(name, str):
-                continue
-            ident = _sid(source, name)
-            transport = config.get('type') or ('stdio' if config.get('command') else 'http')
-            transport = {'streamable-http': 'http', 'streamable_http': 'http'}.get(transport, transport)
-            private['mcp'][ident] = copy.deepcopy(config)
-            private['mcp'][ident]['transport'] = transport
-            result['mcp'].append({'id': ident, 'name': name[:160], 'source': source,
-                                  'transport': transport, 'status': 'disabled' if config.get('enabled') is False else 'configured'})
-    plugin_skill_roots = []
-    for source, root in _plugin_dirs(home):
-        try:
-            root = root.resolve()
-            manifest = _json_file(root / '.claude-plugin/plugin.json')
-        except OSError:
-            continue
-        name = manifest.get('name') if isinstance(manifest.get('name'), str) else root.name
-        plugin_id = 'plugin:' + re.sub('[^A-Za-z0-9_.-]', '_', name)[:80]
-        if any(p['id'] == plugin_id for p in result['plugins']):
-            continue  # Same plugin installed in several places: first source wins.
-        ui = manifest.get('interface') if isinstance(manifest.get('interface'), dict) else {}
-        skills_spec = manifest.get('skills', 'skills' if (root / 'skills').is_dir() else [])
-        skill_dirs = [d for d in (_inside(root, x) for x in (skills_spec if isinstance(skills_spec, list) else [skills_spec])[:20]) if d and d.is_dir()]
-        servers = _plugin_servers(root, manifest.get('mcpServers', '.mcp.json' if (root / '.mcp.json').is_file() else []))
-        before = len(result['skills'])
-        for d in skill_dirs: plugin_skill_roots.append((plugin_id, d))
-        for server, config in servers.items():
-            ident = _sid('plugin-' + name, server)
-            transport = config.get('type') or ('stdio' if config.get('command') else 'http')
-            transport = {'streamable-http': 'http', 'streamable_http': 'http'}.get(transport, transport)
-            private['mcp'][ident] = copy.deepcopy(config); private['mcp'][ident]['transport'] = transport
-            result['mcp'].append({'id': ident, 'name': server[:160], 'source': plugin_id, 'plugin': plugin_id, 'transport': transport, 'status': 'configured'})
-        author = manifest.get('author', {})
-        result['plugins'].append({'id': plugin_id, 'name': name[:120], 'displayName': str(ui.get('displayName') or name)[:120],
-            'description': str(ui.get('shortDescription') or manifest.get('description') or '')[:500],
-            'version': str(manifest.get('version') or '')[:40], 'author': str(author.get('name') if isinstance(author, dict) else author or '')[:120],
-            'source': source, 'sourceName': PLUGIN_SOURCES.get(source, source), 'mcpCount': len(servers), 'skillCount': 0,
-            'hasHooks': (root / 'hooks').is_dir() or 'hooks' in manifest, 'hasCommands': (root / 'commands').is_dir() or 'commands' in manifest})
-    roots = [('agents', home / '.agents/skills'), ('codex', home / '.codex/skills'), ('claude', home / '.claude/skills')]
-    repo = _json_file(home / '.config/sean-agents/config.json').get('repo')
-    if isinstance(repo, str):
-        private['shared_rules'] = [str(Path(repo) / name) for name in ('SHARED-AGENT-RULES.md', 'SERVICE-AUTH.md')]
-        roots.append(('shared', Path(repo) / 'skills'))
-    seen = set()
-    plugins = {p['id']: p for p in result['plugins']}
-    for source, root in roots + [(pid, d) for pid, d in plugin_skill_roots]:
-        pending = [(root, 0)]
-        visited = 0
-        while pending and visited < 4000 and len(result['skills']) < 1024:
-            directory, depth = pending.pop()
-            visited += 1
-            try:
-                resolved = directory.resolve()
-                if resolved in seen or not directory.is_dir():
-                    continue
-                seen.add(resolved)
-                skill = directory / 'SKILL.md'
-                if skill.is_file() and skill.stat().st_size <= MAX_TEXT:
-                    name, description = _frontmatter(skill.read_text(errors='replace'))
-                    plugin = plugins.get(source)
-                    ident = _sid('skill-' + source + ('' if not plugin else ':' + str(root)), str(directory.relative_to(root)))
-                    private['skills'][ident] = {'path': str(skill.resolve()), 'root': str(resolved)}
-                    entry = {'id': ident, 'name': name or directory.name, 'description': description[:1500], 'path': str(skill), 'source': source}
-                    if plugin: entry['plugin'] = source; plugin['skillCount'] += 1
-                    result['skills'].append(entry)
-                    continue
-                if depth < 5:
-                    children = sorted(directory.iterdir(), key=lambda p: p.name)[:512]
-                    pending.extend((p, depth + 1) for p in reversed(children)
-                                   if p.name not in ('.git', 'node_modules', '__pycache__', '.venv') and p.is_dir())
-            except (OSError, ValueError):
-                continue
-    result['skills'].sort(key=lambda x: (x['name'].lower(), x['id']))
-    return result
+_discovery = _sibling('discovery')
+discover = _discovery.discover
+PLUGIN_SOURCES = _discovery.PLUGIN_SOURCES
+_json_file = _discovery._json_file
+_toml_file = _discovery._toml_file
+_sid = _discovery._sid
+_frontmatter = _discovery._frontmatter
+_plugin_dirs = _discovery._plugin_dirs
+_plugin_expand = _discovery._plugin_expand
+_inside = _discovery._inside
+_plugin_servers = _discovery._plugin_servers
 
 
 class Redactor:
@@ -632,6 +475,7 @@ class RuntimeSession:
         self.lazy = {}     # connector name -> id, for the ones loaded only when asked for
         self.loaded = {}   # connector id -> its tools, once connected
         self.load_lock = threading.RLock()
+        self.load_locks = {}  # one per connector, so a slow one does not hold up the others
 
     def tools(self):
         with self.init_lock:
@@ -660,7 +504,7 @@ class RuntimeSession:
                 # Zook's own small connectors are listed straight away. Every other connector is loaded only when the Bot asks for it:
                 # their tool lists can run to tens of thousands of words, and sending them with every message made each reply slow.
                 for ident in sorted(self.mcp_ids - {'builtin:workspace'}):
-                    if not ident.startswith('builtin:'): self.lazy[self._connector_name(ident)] = ident; continue
+                    if not ident.startswith('builtin:'): self.lazy[self._free_label(ident)] = ident; continue
                     try: catalog += self._load_connector(ident)
                     except Exception as exc: self._left_out(ident, exc)
                 if self.lazy:
@@ -678,7 +522,14 @@ class RuntimeSession:
                 raise RuntimeError(self.redactor.text(exc))
 
     def _connector_name(self, ident):
-        return next((x['name'] for x in self.inventory.get('mcp', []) if x['id'] == ident), ident)
+        return next((label for label, i in self.lazy.items() if i == ident), None) or next((x['name'] for x in self.inventory.get('mcp', []) if x['id'] == ident), ident)
+
+    def _free_label(self, ident):
+        """A name no other connector in this reply has: two called Notion become Notion and Notion（Codex）."""
+        item = next((x for x in self.inventory.get('mcp', []) if x['id'] == ident), None) or {'name': ident}
+        name = str(item['name']); taken = {label.lower() for label in self.lazy}
+        if name.lower() not in taken: return name
+        return next(c for c in ['%s（%s）' % (name, item.get('source') or 'other')] + ['%s %d' % (name, n) for n in range(2, 99)] if c.lower() not in taken)
 
     def _left_out(self, ident, exc):
         """One connector that cannot be reached does not stop the reply. It is left out, and both the Bot and the user are told."""
@@ -691,57 +542,70 @@ class RuntimeSession:
 
     def _load_connector(self, ident):
         """Connect to one connector and register its tools. Returns their descriptions under Zook's own names."""
-        with self.load_lock:
+        if ident in self.loaded: return self.loaded[ident]  # no waiting behind another connector that is still starting
+        with self.load_lock: lock = self.load_locks.setdefault(ident, threading.Lock())
+        with lock:
             if ident in self.loaded: return self.loaded[ident]
             if self.closed: raise RuntimeError('Runtime session is closed.')
-            config, schemas = self.inventory['_private']['mcp'][ident], []
+            config, schemas, routes, notes = self.inventory['_private']['mcp'][ident], [], {}, {}
+            client = None
             try:
-                client = ProtocolClient(config); self.clients[ident] = client; found = client.tools()
-                for tool in found:
+                client = ProtocolClient(config)
+                self.clients[ident] = client          # from here close() can reach it
+                if self.closed: raise RuntimeError('Runtime session is closed.')
+                for tool in client.tools():
                     original = tool.get('name')
                     if not isinstance(original, str) or not isinstance(tool.get('inputSchema'), dict):
                         raise RuntimeError('MCP returned an invalid tool schema.')
                     prefix = hashlib.sha256(ident.encode()).hexdigest()[:10]
                     suffix = hashlib.sha256(original.encode()).hexdigest()[:8]
                     name = 'zook_' + prefix + '_' + re.sub('[^A-Za-z0-9_]', '_', original)[:36] + '_' + suffix
-                    if name in self.routes:
+                    if name in self.routes or name in routes:
                         raise RuntimeError('MCP returned duplicate tools.')
                     schema = copy.deepcopy(tool)
                     schema['name'] = name
                     schema['description'] = self.redactor.text(tool.get('description', original))[:4000]
-                    self.routes[name] = (ident, original)
-                    self.annotations[name] = tool.get('annotations') if isinstance(tool.get('annotations'), dict) else {}
+                    routes[name] = (ident, original)
+                    notes[name] = tool.get('annotations') if isinstance(tool.get('annotations'), dict) else {}
                     schemas.append(self.redactor.value(schema, redact_keys=False))
+                if self.closed: raise RuntimeError('Runtime session is closed.')  # stopped while this connector was still starting
             except Exception:
-                stale = self.clients.pop(ident, None)
-                if stale: stale.close()
-                for name in [n for n, route in self.routes.items() if route[0] == ident]: self.routes.pop(name, None); self.annotations.pop(name, None)
+                self.clients.pop(ident, None)
+                if client: client.close()
                 raise
-            self.loaded[ident] = schemas
+            self.routes.update(routes); self.annotations.update(notes); self.loaded[ident] = schemas
+            if self.closed: client.close()  # close() may have run between the check and here
             return schemas
 
     def _connector(self, name):
         """The id of a connector the Bot named, loaded and ready. Raises with a reason the Bot can pass on."""
-        wanted = str(name or '').strip().lower()
-        ident = next((i for label, i in self.lazy.items() if label.lower() == wanted), None) or next((i for label, i in self.lazy.items() if wanted and wanted in label.lower()), None)
-        if not ident: raise RuntimeError('沒有這個連接器。可用的有：' + '、'.join(sorted(self.lazy)))
+        wanted = str(name or '').strip(); listed = '可用的有：' + '、'.join(sorted(self.lazy))
+        hits = [i for label, i in self.lazy.items() if label == wanted] or [i for label, i in self.lazy.items() if label.lower() == wanted.lower()]
+        if not hits and len(wanted) >= 3: hits = [i for label, i in self.lazy.items() if wanted.lower() in label.lower()]
+        if not hits: raise RuntimeError('沒有這個連接器。' + listed)
+        if len(hits) > 1: raise RuntimeError('有不只一個連接器符合「%s」，請用完整名稱。%s' % (wanted[:40], listed))  # never guess which service to act on
+        ident = hits[0]
         try: self._load_connector(ident)
         except Exception as exc: raise RuntimeError('連接器「%s」這次無法使用：%s' % (self._connector_name(ident), self._left_out(ident, exc)))
         return ident
 
     def _gateway(self, name, args):
         """The two tools that stand in for every connector's own list."""
+        allowed = {'connector', 'tool'} | ({'arguments'} if name == 'zook_connector_call' else set())
+        if set(args) - allowed: raise RuntimeError('多了不認得的欄位：%s。工具的參數要放在 arguments 裡面。' % '、'.join(sorted(str(k)[:30] for k in set(args) - allowed)[:5]))
         ident = self._connector(args.get('connector'))
         tools = {self.routes[t['name']][1]: t for t in self.loaded[ident]}
+        wanted = args.get('tool') if isinstance(args.get('tool'), str) else ''
         if name == 'zook_connector_tools':
-            if args.get('tool'):
-                if args['tool'] not in tools: raise RuntimeError('這個連接器沒有這個工具。先不帶 tool 查一次完整清單。')
-                return _content({'tool': args['tool'], 'description': tools[args['tool']].get('description', ''), 'inputSchema': tools[args['tool']]['inputSchema']})
+            if 'tool' in args and args['tool']:
+                if wanted not in tools: raise RuntimeError('這個連接器沒有這個工具。先不帶 tool 查一次完整清單。')
+                return _content({'tool': wanted, 'description': tools[wanted].get('description', ''), 'inputSchema': tools[wanted]['inputSchema']})
             return _content({'connector': self._connector_name(ident), 'tools': [{'name': n, 'description': str(t.get('description') or '')[:240], 'arguments': sorted((t['inputSchema'].get('properties') or {}))[:20],
                                                                       'required': list(t['inputSchema'].get('required') or [])[:20]} for n, t in tools.items()],
                              'next': 'Call zook_connector_call with connector, tool and arguments. Ask for one tool by name here when you need its full input schema.'})
-        if args.get('tool') not in tools: raise RuntimeError('這個連接器沒有這個工具。先用 zook_connector_tools 查清單。')
-        return self.call(tools[args['tool']]['name'], args.get('arguments') if isinstance(args.get('arguments'), dict) else {})
+        if wanted not in tools: raise RuntimeError('這個連接器沒有這個工具。先用 zook_connector_tools 查清單。')
+        if 'arguments' in args and not isinstance(args['arguments'], dict): raise RuntimeError('arguments 要是一個物件，例如 {"title": "…"}，不是文字或清單。')  # never run a tool with its arguments silently dropped
+        return self.call(tools[wanted]['name'], args.get('arguments', {}))
 
     def current_mode(self):
         mode = self.permission_mode() if callable(self.permission_mode) else self.permission_mode
@@ -807,8 +671,13 @@ class RuntimeSession:
                 raise RuntimeError('Runtime session is closed.')
             self.tools()
             if name in ('zook_connector_tools', 'zook_connector_call') and self.lazy:
-                if not isinstance(args, dict): raise RuntimeError('Tool arguments must be a bounded JSON object.')
-                return self._gateway(name, args)  # the real tool is then checked, approved and recorded like any other
+                # Looking a connector up changes nothing and is not an action of its own, so a failure here is only told to the Bot.
+                # The real tool, once found, is checked, approved and recorded like any other.
+                try:
+                    if not isinstance(args, dict): raise RuntimeError('Tool arguments must be a JSON object.')
+                    return self._gateway(name, args)
+                except RecursionError: raise
+                except Exception as exc: return dict(_content(self.redactor.text(exc)), isError=True)
             # Serialize before approval; callbacks cannot mutate the executed arguments.
             encoded = json.dumps(args, ensure_ascii=False, allow_nan=False)
             if len(encoded.encode()) > MAX_MESSAGE or not isinstance(args, dict):

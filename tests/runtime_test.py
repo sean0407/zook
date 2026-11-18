@@ -60,6 +60,28 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(json.loads(result['content'][0]['text'])['message'], 'through the gateway')
         self.assertEqual([e['status'] for e in events], ['waiting_approval', 'running', 'completed'])   # asked and recorded as the real tool
 
+    def test_two_connectors_with_one_name_are_both_reachable_and_never_guessed(self):
+        self.inventory['mcp'] = [{'id': 'fixture:mcp', 'name': 'Notes', 'source': 'codex'}, {'id': 'fixture:two', 'name': 'notes', 'source': 'claude'}, {'id': 'fixture:cal', 'name': 'Team Notes Calendar', 'source': 'zook'}]
+        for ident in ('fixture:two', 'fixture:cal'): self.inventory['_private']['mcp'][ident] = dict(self.config)
+        session, events = self.session(mcp=['fixture:mcp', 'fixture:two', 'fixture:cal'])
+        session.tools(); self.assertEqual(sorted(session.lazy), ['Notes', 'Team Notes Calendar', 'notes（claude）'])
+        ask = lambda name: session.call('zook_connector_tools', {'connector': name})
+        self.assertFalse(ask('Notes').get('isError')); self.assertFalse(ask('notes（claude）').get('isError'))
+        self.assertIn('不只一個', ask('note')['content'][0]['text']); self.assertTrue(ask('o')['isError']); self.assertFalse(ask('calendar').get('isError'))
+        self.assertEqual(events, [])   # a lookup that fails is not recorded as something the Bot did
+
+    def test_misplaced_arguments_are_refused_instead_of_dropped(self):
+        session, events = self.session(mcp=['fixture:mcp'])
+        for bad in ({'connector': 'fixture:mcp', 'tool': 'side_effect', 'arguments': '{"marker": "x"}'}, {'connector': 'fixture:mcp', 'tool': 'side_effect', 'arguments': ['x']},
+                    {'connector': 'fixture:mcp', 'tool': 'side_effect', 'marker': 'outside'}):
+            self.assertTrue(session.call('zook_connector_call', bad)['isError'], bad)
+        self.assertEqual(events, []); self.assertFalse((self.root / 'side-effect.txt').exists())
+
+    def test_closing_while_a_connector_starts_leaves_nothing_running(self):
+        session, _ = self.session(mcp=['fixture:mcp'])
+        session.tools(); session.closed = True
+        self.assertTrue(session.call('zook_connector_tools', {'connector': 'fixture:mcp'})['isError']); self.assertEqual(session.clients, {})
+
     def test_the_gateway_cannot_skip_approval_or_reach_other_tools(self):
         session, events = self.session(mcp=['fixture:mcp'], approve=lambda *a: False)
         denied = session.call('zook_connector_call', {'connector': 'fixture:mcp', 'tool': 'side_effect', 'arguments': {'marker': 'gateway-denied'}})

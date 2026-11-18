@@ -55,3 +55,7 @@ def latest_ask_note(content):
     """Ends the prompt with what the user just asked, so the model answers it and not the background above."""
     if not content: return ''
     return '\n\n以上都是背景說明。請回應使用者這次的訊息：\n' + (content if len(content) <= 4000 else '（內容較長，請看上方「使用者：」後面的完整訊息）')
+
+
+def skipped_connectors(session):
+    return ['%s（%s）' % (name, session.unavailable_why.get(name, '連不上')) for name in session.unavailable]

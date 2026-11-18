@@ -282,6 +282,14 @@ class App(GroupRuns, ThreadingHTTPServer):
             try: self.run_schedules()
             except Exception: pass
 
+    def note_skipped(self, job, session):
+        """Under the reply: which connectors could not be used this time, including ones that failed when the Bot reached for them."""
+        if not session or not session.unavailable: return
+        with self.store.lock:
+            owner = self.store.find('groups', job['groupId']) if job.get('groupId') else self.store.find('bots', job['botId'])
+            message = find_message(owner, job['messageId']) if owner else None
+            if message: message['skipped'] = skipped_connectors(session)[:10]; self.store.save()
+
     def native_session(self, job, provider, model, account, folder):
         """The CLI conversation this reply can continue, or '' to start one from what Zook saved."""
         store = self.store
@@ -465,12 +473,8 @@ class App(GroupRuns, ThreadingHTTPServer):
                 tools = session.tools()  # May start external servers; never hold store.lock.
                 if session.lazy: prompt += '\n已連接的外部服務：%s。需要用到時，先用 zook_connector_tools 查它能做什麼，再用 zook_connector_call 執行；用不到就不必查。' % '、'.join(sorted(session.lazy))
                 if session.unavailable:
-                    skipped = ['%s（%s）' % (name, session.unavailable_why.get(name, '連不上')) for name in session.unavailable]
-                    prompt += '\n這些連接器這次無法使用：%s。使用者問到相關內容時，直接說明原因，請他到連接器頁處理，不要假裝查過。' % '、'.join(skipped)
-                    with store.lock:
-                        owner = store.find('groups', job['groupId']) if job.get('groupId') else store.find('bots', job['botId'])
-                        message = find_message(owner, job['messageId']) if owner else None
-                        if message: message['skipped'] = skipped[:10]; store.save()
+                    prompt += '\n這些連接器這次無法使用：%s。使用者問到相關內容時，直接說明原因，請他到連接器頁處理，不要假裝查過。' % '、'.join(skipped_connectors(session))
+                    self.note_skipped(job, session)
                 with store.lock:
                     if job['status'] != 'running' or job_id not in self.workers: return
                     self.workers[job_id]['tools'] = tools
@@ -597,6 +601,7 @@ class App(GroupRuns, ThreadingHTTPServer):
                 raise RuntimeError('回覆超過大小限制。')
             parsed = parse_cli_output(kind if kind in PLAN_KINDS else 'plain', output.decode('utf-8', errors='replace'), model)
             if parsed['quota']: self.record_quota(provider, parsed['quota'], account['id'] if account else '')
+            self.note_skipped(job, session)
             if resume and proc.returncode != 0 and session_lost((stderr or b'').decode('utf-8', 'replace')):
                 with store.lock: job['resumeGone'] = True
             if native and cli_used_tools(kind, output.decode('utf-8', errors='replace')):
