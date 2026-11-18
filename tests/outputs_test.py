@@ -37,7 +37,9 @@ class OutputsTest(unittest.TestCase):
         path = self.root / 'data/swarmr.json'; data = json.loads(path.read_text()); now = __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat()
         for bot in data['bots']:
             if bot['id'] == self.bot['id']: bot['access'] = 'full'
-        data['jobs'].append(dict(id='j1', botId=self.bot['id'], status='completed', createdAt=now, content='', toolCalls=[dict(name='native_write', arguments={'path': p}) for p in (str(secret), str(real), str(self.work / 'notes.md'), str(path))]))
+        (self.work / 'l').symlink_to(self.work / 'a/b/c'); (self.work / 'a/b/c').mkdir(parents=True)
+        tricks = (str(secret), str(real), str(self.work / 'notes.md'), str(path), str(self.work / 'l/../../../swarmr.json'), str(self.root / 'DATA/swarmr.json'))
+        data['jobs'].append(dict(id='j1', botId=self.bot['id'], status='completed', createdAt=now, content='', toolCalls=[dict(name='native_write', arguments={'path': p}) for p in tricks]))
         path.write_text(json.dumps(data)); real.write_text('made by the bot')
         env = dict(os.environ, ZOOK_SKIP_UPDATE_CHECK='1', HOME=str(self.root), PATH='/usr/bin:/bin')
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)

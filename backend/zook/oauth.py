@@ -39,11 +39,23 @@ def blob_delete(blob_id):
 
 
 def _is_local_host(host):
-    """This Mac, or an address inside a private network."""
-    if host in ('localhost',) or str(host).endswith('.localhost'): return True
+    """This Mac, or an address inside a private network, in any of the spellings a system accepts (127.1, 2130706433, localhost.)."""
+    host = str(host or '').strip().rstrip('.').lower()
+    if not host or host == 'localhost' or host.endswith('.localhost'): return True
     try: address = ipaddress.ip_address(host)
-    except ValueError: return False
-    return address.is_loopback or address.is_private or address.is_link_local or address.is_unspecified
+    except ValueError:
+        try: address = ipaddress.ip_address(socket.inet_aton(host)) if re.fullmatch(r'[0-9a-fx.]+', host) else None
+        except OSError: address = None
+    if address is None: return False
+    return address.is_loopback or address.is_private or address.is_link_local or address.is_unspecified or address.is_reserved or address in ipaddress.ip_network('100.64.0.0/10') if address.version == 4 else \
+        address.is_loopback or address.is_private or address.is_link_local or address.is_unspecified or address.is_reserved or bool(address.ipv4_mapped and _is_local_host(str(address.ipv4_mapped)))
+
+
+def _place(parsed):
+    """Scheme, host and port, with the default port filled in, for comparing two addresses."""
+    try: port = parsed.port
+    except ValueError: port = -1
+    return parsed.scheme, (parsed.hostname or '').rstrip('.').lower(), port or {'https': 443, 'http': 80}.get(parsed.scheme)
 
 
 def _oauth_url(url, local=False):
@@ -93,7 +105,7 @@ def oauth_discover(mcp_url):
         if code == 200 and found.get('authorization_servers'): resource = found; break
     # The token must be meant for this connector. A connector naming some other service as its resource would be handed that service's token.
     named = urllib.parse.urlparse(str(resource.get('resource') or mcp_url)); named_path = named.path.rstrip('/')
-    if (named.scheme, named.netloc.lower()) != (parsed.scheme, parsed.netloc.lower()) or not (path == named_path or path.startswith(named_path + '/')):
+    if _place(named) != _place(parsed) or named.username or named.password or not (path == named_path or path.startswith(named_path + '/')):
         raise RuntimeError('這個連接器宣告的登入對象和它的網址不一致，為了安全不進行登入。')
     servers = resource.get('authorization_servers') if isinstance(resource.get('authorization_servers'), list) else []
     issuer = str(servers[0]).rstrip('/') if servers else origin
@@ -135,9 +147,10 @@ def oauth_begin(app, record):
 def _oauth_keep(token, previous=None):
     """What is stored: the tokens and when the access token runs out."""
     if not isinstance(token.get('access_token'), str) or not token['access_token']: raise RuntimeError('登入服務沒有回傳授權。')
-    try: life = max(60, int(token.get('expires_in') or 3600))
+    try: life = int(token.get('expires_in')) if token.get('expires_in') is not None else 3600
     except (TypeError, ValueError): life = 3600
-    return dict(access=token['access_token'], refresh=token.get('refresh_token') or (previous or {}).get('refresh') or '', expiresAt=time.time() + life)
+    life = max(1, life)
+    return dict(access=token['access_token'], refresh=token.get('refresh_token') or (previous or {}).get('refresh') or '', expiresAt=time.time() + life, life=life)
 
 
 def oauth_finish(app, state, code):
@@ -152,16 +165,20 @@ def oauth_finish(app, state, code):
     kept = dict(_oauth_keep(token), secret=flow['secret'])
     store = app.store
     if flow.get('kind') == 'google': return google_finish(store, flow, kept)
+    changed = '這個連接器在登入期間被改過，請再登入一次。'
     with store.lock:
         record = next((c for c in store.data['connectors'] if c['id'] == flow['connector']), None)
-        if not record: raise ValueError('找不到這個連接器。')
-        blob_id = (record.get('oauth') or {}).get('secretId') or ID()
-    blob_set(blob_id, kept)
+        if not record or record.get('url') != flow['url']: raise ValueError(changed)
+    blob_id = ID(); blob_set(blob_id, kept)  # always a new Keychain item, so another address's sign-in is never written over
     with store.lock:
         record = next((c for c in store.data['connectors'] if c['id'] == flow['connector']), None)
-        if not record or record.get('url') != flow['url']: blob_delete(blob_id); raise ValueError('這個連接器在登入期間被改過，請再登入一次。')
-        record['oauth'] = dict(secretId=blob_id, clientId=flow['client'], tokenEndpoint=flow['meta']['token'], resource=flow['meta']['resource'], url=flow['url'], local=flow['meta'].get('local', False), signedInAt=NOW())
-        store.save()
+        fits = bool(record) and record.get('url') == flow['url']
+        if fits:
+            old = (record.get('oauth') or {}).get('secretId')
+            record['oauth'] = dict(secretId=blob_id, clientId=flow['client'], tokenEndpoint=flow['meta']['token'], resource=flow['meta']['resource'], url=flow['url'], local=flow['meta'].get('local', False), signedInAt=NOW())
+            store.save()
+    if not fits: blob_delete(blob_id); raise ValueError(changed)
+    if old: blob_delete(old)
 
 
 def oauth_access(store, record):
@@ -177,18 +194,18 @@ def oauth_token(info, resource, lost):
     with _oauth_lock:
         kept = blob_get(info['secretId'])
         if not kept: return lost()
-        if kept['expiresAt'] - time.time() > 1200: return kept['access']  # a reply can run for 15 minutes
-        if not kept.get('refresh'): return kept['access'] if kept['expiresAt'] - time.time() > 30 else lost()
+        if kept['expiresAt'] - time.time() > min(1200, kept.get('life', 3600) / 2): return kept['access']  # a reply can run for 15 minutes
+        if not kept.get('refresh'): return kept['access'] if kept['expiresAt'] - time.time() > min(30, kept.get('life', 3600) / 4) else lost()
         form = dict(grant_type='refresh_token', refresh_token=kept['refresh'], client_id=info['clientId'])
         if resource: form['resource'] = resource
         if kept.get('secret'): form['client_secret'] = kept['secret']
-        still = kept['access'] if kept['expiresAt'] - time.time() > 30 else ''
+        still = kept['access'] if kept['expiresAt'] - time.time() > min(30, kept.get('life', 3600) / 4) else ''
         try: status, _, token = _oauth_request(info['tokenEndpoint'], form=form, local=bool(info.get('local')))
         except RuntimeError: return still  # offline: try again next time
         if status >= 300:  # only a clear refusal means signing in again; a busy or broken service is tried again later
             return lost() if status in (400, 401) and token.get('error') in ('invalid_grant', 'invalid_client', 'unauthorized_client', 'invalid_token') else still
         try: fresh = dict(_oauth_keep(token, kept), secret=kept.get('secret') or ''); blob_set(info['secretId'], fresh)
-        except RuntimeError: return lost()
+        except RuntimeError: return still  # an answer without a token is a fault on their side, not a refusal
         return fresh['access']
 
 
@@ -267,3 +284,15 @@ def google_logout(store):
         st = store.data['settings']; info = st.pop('google', None)
         st['sharedMcp'] = [x for x in st.get('sharedMcp') or [] if x != GOOGLE_ID]; store.save()
     if info and info.get('secretId'): blob_delete(info['secretId'])
+
+
+def oauth_needs_login(store, connector_id):
+    """True only after the sign-in was really refused, not while its service is merely unreachable."""
+    with store.lock:
+        record = next((c for c in store.data['connectors'] if c['id'] == connector_id), None) or {}
+        info = record.get('oauth') or {}
+        return bool(info.get('needsLogin')) or bool(info) and info.get('url') != record.get('url')
+
+
+def google_needs_login(store):
+    with store.lock: return bool((store.data['settings'].get('google') or {}).get('needsLogin'))

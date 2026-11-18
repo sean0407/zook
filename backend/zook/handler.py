@@ -516,8 +516,6 @@ class Handler(BaseHTTPRequestHandler):
                     if len(parts) == 3 and not existing: return self.error(404, '找不到這個連接器。')
                     if (len(parts) == 2 and self.command == 'POST') or (existing and self.command == 'PATCH'):
                         record, secret = connector_fields(body, existing)
-                        stale = (existing or {}).get('oauth')
-                        if stale and record['transport'] == 'http' and record['url'] == existing.get('url') and not secret: record['oauth'] = stale; stale = None  # still the same sign-in
                         with store.lock:
                             if any(c['name'] == record['name'] and c['id'] != record['id'] for c in store.data['connectors']): raise ValueError('已經有同名的連接器。')
                         if secret:
@@ -529,6 +527,9 @@ class Handler(BaseHTTPRequestHandler):
                             if key in record['moreSecrets'] and isinstance(value, str) and value.strip():
                                 record['moreSecrets'][key] = record['moreSecrets'][key] or ID(); secret_set(record['moreSecrets'][key], value.strip())
                         with store.lock:
+                            current = next((c for c in store.data['connectors'] if c['id'] == record['id']), None) or {}
+                            stale = current.get('oauth')  # read now, so a sign-in that just finished is not lost
+                            if stale and record['transport'] == 'http' and record['url'] == current.get('url') and not secret: record['oauth'] = stale; stale = None  # still the same sign-in
                             store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]
                             if stale and stale.get('secretId'): blob_delete(stale['secretId'])  # the address or the way to sign in changed
                             if not existing:  # a connector you just added is switched on for every Bot

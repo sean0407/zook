@@ -121,7 +121,7 @@ def inventory_for(store):
     with store.lock: google = dict(store.data['settings'].get('google') or {})
     access = google_access(store) if google else ''
     data['mcp'].insert(2, {'id': GOOGLE_ID, 'name': 'Google（Gmail、行事曆、雲端硬碟）', 'source': 'builtin', 'transport': 'stdio', 'status': 'configured', 'google': True,
-                           'address': google.get('email', ''), 'write': bool(google.get('write')), 'needsSetup': not access, 'needsLogin': bool(google) and not access})
+                           'address': google.get('email', ''), 'write': bool(google.get('write')), 'needsSetup': not access, 'needsLogin': bool(google) and google_needs_login(store)})
     if access:
         data['_private']['mcp'][GOOGLE_ID] = dict(transport='stdio', command=sys.executable, args=[str(pathlib.Path(__file__).with_name('google_mcp.py'))],
                                                   env=dict({'ZOOK_GOOGLE_TOKEN': access, 'ZOOK_GOOGLE_WRITE': '1' if google.get('write') else '0'},
@@ -138,6 +138,7 @@ def inventory_for(store):
             elif record.get('oauth'):
                 access = oauth_access(store, record)
                 if access: config['headers']['Authorization'] = 'Bearer ' + access
+            config['noCredentials'] = 'Authorization' not in config['headers']  # nothing to be refused: it has simply never been signed in
         waiting = bool(record.get('secretName')) and not secret  # brought in from a pack: the key has not been pasted yet
         for key, sid in (record.get('moreSecrets') or {}).items():
             value = secret_get(sid) if sid else ''
@@ -147,8 +148,8 @@ def inventory_for(store):
         data['mcp'].insert(3 + own.index(record), {'id': ident, 'name': record['name'], 'source': 'zook', 'transport': record['transport'], 'status': 'configured',
                             'editable': True, 'config': connector_view(record), 'needsKey': waiting,
                             'canLogin': record['transport'] == 'http' and not record.get('secretName') and not secret,
-                            'signedIn': bool(record.get('oauth')) and 'Authorization' in config.get('headers', {}),
-                            'needsLogin': bool(record.get('oauth')) and 'Authorization' not in config.get('headers', {})})
+                            'signedIn': bool(record.get('oauth')) and not oauth_needs_login(store, record['id']),
+                            'needsLogin': bool(record.get('oauth')) and oauth_needs_login(store, record['id'])})
     copied = {record.get('origin') for record in own if record.get('origin')}
     for item in data['mcp']:
         if item['id'] in copied: item['copied'] = True  # Zook now has its own copy, so this one is no longer handed to Bots
@@ -611,18 +612,30 @@ def tool_wait(scheduled):
 def describe_send(label, args):
     """The approval card's sentence for sending mail: who gets it and the subject."""
     if str(label or '').lower().replace('-', '_') not in SEND_TOOLS or not isinstance(args, dict) or not args.get('to'): return None
-    to = args['to'] if isinstance(args['to'], list) else [args['to']]
-    return '寄信給 %s，主旨「%s」%s' % ('、'.join(str(x) for x in to[:5]), str(args.get('subject') or '')[:80], '，內容開頭：' + re.sub(r'\s+', ' ', str(args['body']))[:80] if args.get('body') else '')
+    text = '寄信給 %s' % _people(args['to'])
+    for key, name in (('cc', '副本'), ('bcc', '密件副本')):
+        if args.get(key): text += '，%s %s' % (name, _people(args[key]))
+    return text + '，主旨「%s」%s' % (str(args.get('subject') or '')[:80], '，內容開頭：' + re.sub(r'\s+', ' ', str(args['body']))[:80] if args.get('body') else '')
+
+
+def _people(value, most=10):
+    """Every address, so nobody is added out of sight; a very long list says how many more there are."""
+    people = [str(x) for x in (value if isinstance(value, list) else [value] if value else [])]
+    return '、'.join(people[:most]) + ('，以及另外 %d 位' % (len(people) - most) if len(people) > most else '')
 
 
 def describe_write(label, args):
     """The approval card's sentence for Google's calendar and Drive changes, so a phone shows what is being approved."""
     name = str(label or '').lower(); args = args if isinstance(args, dict) else {}
     short = lambda key, n=60: str(args.get(key) or '')[:n]
-    if name == 'calendar_create': return '建立行程「%s」，%s 到 %s%s' % (short('title'), short('start', 25), short('end', 25), '，邀請 ' + '、'.join(str(x) for x in (args.get('attendees') or [])[:5]) if args.get('attendees') else '')
-    if name == 'calendar_update': return '修改行程%s' % ('：' + '、'.join('%s 改成「%s」' % (n, short(k, 40)) for k, n in (('title', '標題'), ('start', '開始'), ('end', '結束'), ('location', '地點')) if args.get(k)) or '')
+    if name == 'calendar_create':
+        return '建立行程「%s」，%s 到 %s%s%s' % (short('title'), short('start', 25), short('end', 25), '，地點 ' + short('location', 40) if args.get('location') else '', '，邀請 ' + _people(args['attendees']) if args.get('attendees') else '')
+    if name == 'calendar_update':
+        changes = ['%s 改成「%s」' % (n, short(k, 40)) for k, n in (('title', '標題'), ('start', '開始'), ('end', '結束'), ('location', '地點'), ('description', '說明')) if args.get(k) is not None]
+        if args.get('attendees') is not None: changes.append('與會者改成 ' + (_people(args['attendees']) or '沒有人'))
+        return '修改行程（編號 %s）：%s' % (short('event_id', 40), '、'.join(changes) or '沒有指定要改什麼')
     if name == 'drive_upload': return '上傳檔案「%s」到 Google 雲端硬碟（%d 字）' % (short('name'), len(str(args.get('content') or '')))
-    if name == 'drive_update': return '覆寫 Google 雲端硬碟上的一個檔案（%d 字）' % len(str(args.get('content') or ''))
+    if name == 'drive_update': return '覆寫 Google 雲端硬碟上的檔案（編號 %s，%d 字）' % (short('file_id', 60), len(str(args.get('content') or '')))
     return None
 
 

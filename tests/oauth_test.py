@@ -90,13 +90,13 @@ class OAuthTest(unittest.TestCase):
         self.assertEqual([p for p in (self.root / 'secrets').iterdir()], [])
 
     def test_expired_access_is_refreshed_and_a_dead_refresh_asks_again(self):
-        Provider.state['life'] = 61; state = self.login(); self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % state, auth=False)
-        time.sleep(1.5); self.assertTrue(self.item()['signedIn']); self.assertEqual(Provider.state['grants'], ['authorization_code', 'refresh_token'])
+        Provider.state['life'] = 4; state = self.login(); self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % state, auth=False)
+        time.sleep(2.5); self.assertTrue(self.item()['signedIn']); self.assertEqual(Provider.state['grants'], ['authorization_code', 'refresh_token'])
         self.stop(); self.start(); self.assertTrue(self.item()['signedIn']); self.assertEqual(len(Provider.state['grants']), 2)  # kept across a restart
 
     def test_a_dead_refresh_shows_sign_in_again(self):
-        Provider.state['life'] = 61; Provider.state['revoked'] = True; state = self.login(); self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % state, auth=False)
-        time.sleep(1.5); found = self.item(); self.assertTrue(found['needsLogin']); self.assertFalse(found['signedIn'])
+        Provider.state['life'] = 4; Provider.state['revoked'] = True; state = self.login(); self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % state, auth=False)
+        time.sleep(2.5); found = self.item(); self.assertTrue(found['needsLogin']); self.assertFalse(found['signedIn'])
 
     def test_a_connector_waiting_for_sign_in_does_not_stop_replies(self):
         import importlib.util
@@ -114,17 +114,31 @@ class OAuthTest(unittest.TestCase):
         self.req('PATCH', '/api/connectors/' + self.cid, {'url': self.base + '/other'}); self.assertFalse(self.item()['signedIn']); self.assertEqual(list((self.root / 'secrets').iterdir()), [])
 
     def test_a_busy_token_service_does_not_force_signing_in_again(self):
-        Provider.state['life'] = 61; Provider.state['busy'] = True; state = self.login(); self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % state, auth=False)
-        time.sleep(1.5); self.assertFalse(self.item()['needsLogin']); Provider.state['busy'] = False; self.assertTrue(self.item()['signedIn'])
+        Provider.state['life'] = 4; Provider.state['busy'] = True; state = self.login(); self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % state, auth=False)
+        time.sleep(2.5); self.assertFalse(self.item()['needsLogin']); time.sleep(2); self.assertFalse(self.item()['needsLogin'])
+        Provider.state['busy'] = False; self.assertTrue(self.item()['signedIn'])
 
     def test_a_connector_naming_another_service_is_refused(self):
         Provider.state['resource'] = 'https://victim.example/mcp'
         status, body = self.req('POST', '/api/connectors/%s/login' % self.cid, {}); self.assertEqual(status, 409); self.assertIn('不一致', body['error'])
 
+    def test_a_late_sign_in_for_an_old_address_cannot_touch_the_new_one(self):
+        old = self.login()                                                     # started for the first address, not finished
+        self.req('PATCH', '/api/connectors/' + self.cid, {'url': self.base + '/mcp?v=2'})
+        self.assertEqual(self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % old, auth=False)[0], 400)
+        self.assertEqual(list((self.root / 'secrets').iterdir()), []); self.assertFalse(self.item()['signedIn'])
+
+    def test_default_port_and_case_still_match(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('zook_oauth_place', SERVER); z = importlib.util.module_from_spec(spec); spec.loader.exec_module(z)
+        place = lambda u: z._place(z.urllib.parse.urlparse(u))
+        self.assertEqual(place('https://C.example:443/mcp'), place('https://c.example/mcp')); self.assertNotEqual(place('https://c.example:8443/mcp'), place('https://c.example/mcp'))
+
     def test_remote_services_cannot_point_sign_in_at_this_mac(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location('zook_oauth_urls', SERVER); z = importlib.util.module_from_spec(spec); spec.loader.exec_module(z)
-        for url in ('http://127.0.0.1:9/x', 'https://127.0.0.1/x', 'https://10.0.0.5/x', 'https://localhost/x', 'http://example.com/x', 'file:///etc/passwd', 'https://a:b@example.com/'):
+        for url in ('http://127.0.0.1:9/x', 'https://127.0.0.1/x', 'https://10.0.0.5/x', 'https://localhost/x', 'http://example.com/x', 'file:///etc/passwd', 'https://a:b@example.com/',
+                    'https://localhost./x', 'https://127.1/x', 'https://2130706433/x', 'https://0x7f.0.0.1/x', 'https://0/x', 'https://100.64.0.1/x', 'https://[::1]/x', 'https://[::ffff:127.0.0.1]/x', 'https://LOCALHOST/x'):
             self.assertRaises(RuntimeError, z._oauth_url, url)
         self.assertEqual(z._oauth_url('https://example.com/x'), 'https://example.com/x'); self.assertEqual(z._oauth_url('http://127.0.0.1:9/x', True), 'http://127.0.0.1:9/x')
 

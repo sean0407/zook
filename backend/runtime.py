@@ -653,7 +653,7 @@ class RuntimeSession:
             try:
                 for ident in sorted(self.mcp_ids - {'builtin:workspace'}):
                     config = self.inventory['_private']['mcp'][ident]; label = next((x['name'] for x in self.inventory.get('mcp', []) if x['id'] == ident), ident)
-                    signed = any(str(k).lower() == 'authorization' for k in list(config.get('headers') or {}) + list(config.get('http_headers') or {}) + list(config.get('env_http_headers') or {})) or bool(config.get('bearer_token_env_var'))
+                    signed = not config['noCredentials'] if 'noCredentials' in config else bool(config.get('headers') or config.get('http_headers') or config.get('env_http_headers') or config.get('bearer_token_env_var'))
                     try:
                         client = ProtocolClient(config); self.clients[ident] = client; found = client.tools()
                     except AuthorizationNeeded:

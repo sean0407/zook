@@ -97,6 +97,11 @@ class ScheduleNotices(unittest.TestCase):
         say = load().describe_send
         self.assertEqual(say('send_email', {'to': 'amy@example.com', 'subject': '週報', 'body': '...'}), '寄信給 amy@example.com，主旨「週報」，內容開頭：...')
         self.assertEqual(say('gmail_send', {'to': ['amy@example.com'], 'subject': '嗨'}), '寄信給 amy@example.com，主旨「嗨」')
+        many = say('gmail_send', {'to': ['p%d@example.com' % i for i in range(12)], 'cc': ['boss@example.com'], 'bcc': ['x@evil.example'], 'subject': 's'})
+        for text in ('p9@example.com', '以及另外 2 位', '副本 boss@example.com', '密件副本 x@evil.example'): self.assertIn(text, many)
+        changed = load().describe_write('calendar_update', {'event_id': 'e1', 'attendees': ['new@example.com'], 'description': '改地點'})
+        for text in ('編號 e1', '與會者改成 new@example.com', '說明 改成「改地點」'): self.assertIn(text, changed)
+        self.assertIn('編號 f1', load().describe_write('drive_update', {'file_id': 'f1', 'content': 'abc'}))
         self.assertIn('建立行程「站會」', load().describe_write('calendar_create', {'title': '站會', 'start': '2026-11-19T09:00:00+08:00', 'end': '2026-11-19T09:30:00+08:00', 'attendees': ['amy@example.com']}))
         self.assertIn('上傳檔案「計畫.txt」', load().describe_write('drive_upload', {'name': '計畫.txt', 'content': 'abc'}))
         self.assertEqual(say('send_message', {'to': ['a@x.com', 'b@x.com'], 'subject': 'Hi'}), '寄信給 a@x.com、b@x.com，主旨「Hi」')
