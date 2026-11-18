@@ -128,7 +128,8 @@
   }
   window.zookOpen = async (kind, id, messageId) => {  // from a Mac notification: the reply may be newer than this page
     try { await refresh(); startPollers(); } catch (_) {}
-    if (state.data) await openConversation(kind, id, messageId);
+    if (state.data && kind === 'page') await loadPage(id);
+    else if (state.data) await openConversation(kind, id, messageId);
   };
   // Who a schedule talks to: a Bot or a group, with its avatar.
   function scheduleTarget(x) {
@@ -194,6 +195,7 @@
       return
     }
     state.page = p;
+    loadUpkeep(p);
     if (p === 'skills' || p === 'mcp' || p === 'plugins') state.integrations = await api('integrations');
     if (p === 'usage') {
       // Open the page right away; each section fills in as its data arrives (earlier data stays on screen while refreshing).

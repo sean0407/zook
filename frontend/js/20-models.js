@@ -370,6 +370,7 @@
       skills: 'Skills 與連接器',
       mcp: 'Skills 與連接器',
       settings: '設定',
+      activity: '活動紀錄',
       memory: '記憶',
       schedules: '排程',
       plugins: 'Skills 與連接器'
@@ -378,6 +379,8 @@
     if (state.page === 'knowledge') {
       let notes = state.data.knowledge.filter(n => !state.query || matches(n.title) || matches(n.content) || (n.tags || []).some(matches));
       content = notes.length ? `<div class="cards">${notes.map(n=>`<article class="card"><h3>${esc(n.title)}</h3><p>${esc(n.content)}</p><span class="status">${esc(state.data.bots.find(b=>b.id===n.botId)?.name||'共用知識')}</span><div class="actions"><button class="link" data-action="edit-note" data-id="${esc(n.id)}">編輯</button><button class="link" data-action="delete-note" data-id="${esc(n.id)}">刪除</button></div></article>`).join('')}</div>` : '<div class="blank">目前沒有知識。新增筆記，為 Bot 提供背景資料。</div>'
+    } else if (state.page === 'activity') {
+      content = activityPage();
     } else if (state.page === 'schedules') {
       content = schedulesPage();
     } else if (state.page === 'skills' || state.page === 'mcp' || state.page === 'plugins') {
@@ -402,8 +405,8 @@
         ['輸入 Token', groups.reduce((a, g) => a + (g.inputTokens || 0), 0)],
         ['輸出 Token', groups.reduce((a, g) => a + (g.outputTokens || 0), 0)]
       ];
-      content = accountsPage() + botUsageSection() + `<details class="usage-local"><summary>本機 CLI 全部紀錄（包含 Zook 以外的使用）</summary><p>${esc(u.note||'本機記錄的使用情況。')} ${u.truncated?'資料已截斷。':''}</p><div class="stats">${metrics.map(([k,v])=>`<div class="card"><span class="muted">${k}</span><div class="stat-num">${v.toLocaleString()}</div></div>`).join('')}</div>${groups.length?`<div class="usage-chart">${groups.slice(0,14).map(g=>`<div class="usage-row"><span>${esc(g.date)} · ${esc(g.provider)}</span><div class="usage-track"><div class="usage-bar" style="width:${Math.round(100*((g.inputTokens||0)+(g.outputTokens||0))/Math.max(1,...groups.map(x=>(x.inputTokens||0)+(x.outputTokens||0))))}%"></div></div><small>${((g.inputTokens||0)+(g.outputTokens||0)).toLocaleString()} tokens</small></div>`).join('')}</div><div class="cards">${groups.map(g=>`<div class="card"><h3>${esc(g.date)} · ${esc(g.provider)}</h3><p>${esc(g.model)}<br>${(g.inputTokens||0).toLocaleString()} 輸入 / ${(g.outputTokens||0).toLocaleString()} 輸出</p></div>`).join('')}</div>`:'<div class="blank">尚無使用紀錄。</div>'}` + '</details>';
-      if (!state.usage || state.usage.error) content = accountsPage() + botUsageSection() + `<details class="usage-local"><summary>本機 CLI 全部紀錄（包含 Zook 以外的使用）</summary>${state.usage?.error ? `<div class="blank error-text">${esc(state.usage.error)}</div>` : loadingBlock('正在讀取本機紀錄…')}</details>`;
+      content = accountsPage() + budgetSection() + botUsageSection() + `<details class="usage-local"><summary>本機 CLI 全部紀錄（包含 Zook 以外的使用）</summary><p>${esc(u.note||'本機記錄的使用情況。')} ${u.truncated?'資料已截斷。':''}</p><div class="stats">${metrics.map(([k,v])=>`<div class="card"><span class="muted">${k}</span><div class="stat-num">${v.toLocaleString()}</div></div>`).join('')}</div>${groups.length?`<div class="usage-chart">${groups.slice(0,14).map(g=>`<div class="usage-row"><span>${esc(g.date)} · ${esc(g.provider)}</span><div class="usage-track"><div class="usage-bar" style="width:${Math.round(100*((g.inputTokens||0)+(g.outputTokens||0))/Math.max(1,...groups.map(x=>(x.inputTokens||0)+(x.outputTokens||0))))}%"></div></div><small>${((g.inputTokens||0)+(g.outputTokens||0)).toLocaleString()} tokens</small></div>`).join('')}</div><div class="cards">${groups.map(g=>`<div class="card"><h3>${esc(g.date)} · ${esc(g.provider)}</h3><p>${esc(g.model)}<br>${(g.inputTokens||0).toLocaleString()} 輸入 / ${(g.outputTokens||0).toLocaleString()} 輸出</p></div>`).join('')}</div>`:'<div class="blank">尚無使用紀錄。</div>'}` + '</details>';
+      if (!state.usage || state.usage.error) content = accountsPage() + budgetSection() + botUsageSection() + `<details class="usage-local"><summary>本機 CLI 全部紀錄（包含 Zook 以外的使用）</summary>${state.usage?.error ? `<div class="blank error-text">${esc(state.usage.error)}</div>` : loadingBlock('正在讀取本機紀錄…')}</details>`;
     } else if (state.page === 'plugins-legacy') {
       const list = state.integrations?.plugins || [];
       content = `<p class="muted">來自 Claude Code 的插件。啟用後所有 Bot 共用。</p>${list.length ? `<div class="cards">${list.map(pl => {
@@ -413,7 +416,7 @@
       }).join('')}</div>` : '<div class="blank">沒有偵測到插件。</div>'}`;
     } else if (state.page === 'settings') {
       let s = state.data.settings || {};
-      content = permissionSection(s.permissionMode || 'manual') + `<form id="settings-form" class="setting-list">${settingRow('預設提供者', '', `<select name="provider" class="plain-select" aria-label="預設提供者">${providerOptions(s.provider || 'codex', false)}</select>`)}${settingRow('預設模型', '沒指定模型的 Bot 使用', modelPicker(s.model||'', true))}${[0, 1].map(i => settingRow('備用模型 ' + (i + 1), i ? '第一個備用也不能用時' : '模型不能用時改用', dropdown('fallback' + i, (s.fallbacks || [])[i] || '', [{id: '', name: '不使用'}, ...providerList()], 'data-fallback-slot'))).join('')}<div class="setting-actions"><button class="primary">儲存模型設定</button><button type="button" class="secondary" data-action="export">匯出所有資料</button></div></form>` + noticeSection() + remoteSection() + updateSection()
+      content = permissionSection(s.permissionMode || 'manual') + rulesSection() + `<h2 class="settings-h">模型</h2><form id="settings-form" class="setting-list">${settingRow('預設提供者', '', `<select name="provider" class="plain-select" aria-label="預設提供者">${providerOptions(s.provider || 'codex', false)}</select>`)}${settingRow('預設模型', '沒指定模型的 Bot 使用', modelPicker(s.model||'', true))}${[0, 1].map(i => settingRow('備用模型 ' + (i + 1), i ? '第一個備用也不能用時' : '模型不能用時改用', dropdown('fallback' + i, (s.fallbacks || [])[i] || '', [{id: '', name: '不使用'}, ...providerList()], 'data-fallback-slot'))).join('')}<div class="setting-actions"><button class="primary">儲存模型設定</button></div></form>` + noticeSection() + remoteSection() + backupSection() + updateSection()
     }
     return `<main class="main"><header class="main-header"><div class="bot-pill">Zook</div></header><div class="page"><div class="page-inner"><div class="page-top"><h1>${name}</h1>${state.page==='knowledge'?'<button class="primary" data-action="new-note">＋ 新增知識</button>':state.page==='usage'?`<div class="page-top-actions"><button class="secondary" data-action="detect-usage" ${state.usageBusy ? 'disabled' : ''}>${state.usageBusy === 'detect' ? '偵測中…' : '偵測使用量'}</button><button class="secondary" data-action="update-all" ${state.usageBusy ? 'disabled' : ''}>${state.usageBusy === 'update' ? '更新中…' : '一鍵全更新'}</button><button class="primary" data-action="provider-add">＋ 新增模型</button></div>`:state.page==='schedules'?'<button class="primary" data-action="new-schedule">＋ 新增排程</button>':''}</div>${content}</div></div></main>`
   }
