@@ -156,6 +156,23 @@ class UpkeepTest(unittest.TestCase):
         self.assertEqual(job['status'], 'completed', job)
         self.assertEqual((job.get('fallback') or {}).get('reason'), '用量預算已用完')
 
+    def test_skill_template_becomes_a_shared_skill(self):
+        items = self.req('GET', '/api/skill-templates')[1]['items']
+        self.assertGreaterEqual(len(items), 8); self.assertFalse(any(x['added'] for x in items))
+        status, made = self.req('POST', '/api/skills/template', {'id': 'meeting-notes'})
+        self.assertEqual((status, made['name']), (201, '會議記錄整理'))
+        text = (self.root / 'data/skills' / made['folder'] / 'SKILL.md').read_text()
+        self.assertTrue(text.startswith('---\nname: 會議記錄整理\n')); self.assertIn('待辦事項', text)
+        self.assertEqual(self.req('POST', '/api/skills/template', {'id': 'meeting-notes'})[0], 400)  # not twice
+        self.assertEqual(self.req('POST', '/api/skills/template', {'id': '../x'})[0], 400)
+        self.assertTrue(next(x for x in self.req('GET', '/api/skill-templates')[1]['items'] if x['id'] == 'meeting-notes')['added'])
+        skills = self.req('GET', '/api/integrations')[1]['skills']
+        mine = next(x for x in skills if x['name'] == '會議記錄整理')
+        self.assertEqual((mine['source'], mine.get('origin')), ('zook', 'template'))
+        self.assertIn('從範本加入 Skill「會議記錄整理」', [x['text'] for x in self.req('GET', '/api/activity')[1]['items']])
+        self.assertEqual(self.req('DELETE', '/api/skills/' + made['id'])[0], 200)
+        self.assertFalse((self.root / 'data/skills' / made['folder']).exists())
+
 
 if __name__ == '__main__':
     unittest.main()
