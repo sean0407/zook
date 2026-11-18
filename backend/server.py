@@ -971,6 +971,9 @@ def account_view(account):
     return item
 
 
+_agy_status = {}  # `agy models` can take seconds; the page asks often
+
+
 def account_status(provider, account=None):
     """Login status from the CLI itself. Never reads credential files."""
     path = find_cli(provider); s = P.spec(_active['data'], provider) or {}
@@ -987,9 +990,15 @@ def account_status(provider, account=None):
                 item['method'] = 'Grok 帳號'
                 item['email'] = str((_active['data'].get('accountInfo') or {}).get(info_key, {}).get('email') or '')
         elif s.get('kind') == 'antigravity':
-            p = subprocess.run([path, 'models'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, timeout=25)
-            text = ANSI.sub('', p.stdout.decode('utf-8', 'replace')).lower()
-            item['status'] = 'not_logged_in' if 'authentication required' in text or 'not logged in' in text or 'sign in' in text else ('logged_in' if p.returncode == 0 else 'unknown')
+            hit = _agy_status.get(path)
+            if not hit or time.time() - hit[0] > 30:
+                try:
+                    p = subprocess.run([path, 'models'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, timeout=15)
+                    text = ANSI.sub('', p.stdout.decode('utf-8', 'replace')).lower()
+                    state = 'not_logged_in' if 'authentication required' in text or 'not logged in' in text else ('logged_in' if p.returncode == 0 else 'unknown')
+                except subprocess.TimeoutExpired: state = 'unknown'
+                hit = _agy_status[path] = (time.time(), state)
+            item['status'] = hit[1]
             if item['status'] == 'logged_in': item['method'] = 'Google 帳號'
         elif s.get('kind') == 'generic':
             if s.get('signed_in_file'):  # only whether the CLI has signed in; the file is never opened
@@ -1132,37 +1141,44 @@ def antigravity_settings(native, scope, web):
     return settings
 
 
-def antigravity_args(binary, prompt, model, effort, native, planning, scope, folder, web):
-    args = [binary, '-p', prompt, '--output-format', 'json', '--disable-slash-commands', '--settings', json.dumps(antigravity_settings(native, scope, web))]
+def antigravity_args(binary, model, effort, native, planning, scope, folder, web):
+    """The conversation goes in over stdin (stream-json), so it never shows on a command line."""
+    args = [binary, '--input-format', 'stream-json', '--output-format', 'stream-json', '--disable-slash-commands', '--settings', json.dumps(antigravity_settings(native, scope, web))]
     if planning: args += ['--mode', 'plan']
     elif native and scope == 'full': args += ['--dangerously-skip-permissions']
     elif native: args += ['--mode', 'accept-edits', '--sandbox'] + (['--add-dir', str(folder)] if scope == 'folder' else [])
     return args + (['--model', model] if model else []) + effort_args('antigravity', effort)
 
 
+AGY_ROOTS = ('.agents', '.agent', '_agents', '_agent')  # agy loads hooks, tools, skills and plugins from any of these
+
+
 def prepare_antigravity_folder(workspace, scope, folder, wait):
     """Zook's tools reach agy through the workspace's .agents/mcp_config.json. The worker token stays in the environment, never in this file."""
-    if scope == 'folder' and os.path.lexists(str(pathlib.Path(folder) / '.agents' / 'mcp_config.json')):
-        raise RuntimeError('這個資料夾裡有 .agents/mcp_config.json，為了安全，Antigravity Bot 不會在這裡執行。請移除該設定，或改用其他資料夾。')
+    found = [name for name in AGY_ROOTS if scope == 'folder' and os.path.lexists(str(pathlib.Path(folder) / name))]
+    if found: raise RuntimeError('這個資料夾裡有 %s 設定，為了安全，Antigravity Bot 不會在這裡執行。請移除該設定，或改用其他資料夾。' % found[0])
+    for name in AGY_ROOTS:  # hooks or tools a Bot left here must not carry over to the next run
+        old = pathlib.Path(workspace) / name
+        if old.is_symlink() or old.is_file(): old.unlink()
+        elif old.exists(): shutil.rmtree(str(old))
     agents = pathlib.Path(workspace) / '.agents'
-    if agents.is_symlink() or agents.is_file(): agents.unlink()
-    elif agents.exists(): shutil.rmtree(str(agents))  # nothing a Bot left here may carry over
     agents.mkdir(mode=0o700)
     python = GROK_PYTHON if os.path.exists(GROK_PYTHON) else sys.executable
     (agents / 'mcp_config.json').write_text(json.dumps({'mcpServers': {'zook': {'command': python, 'args': [str(pathlib.Path(__file__).with_name('tool_server.py'))], 'timeoutSeconds': wait}}}), encoding='utf-8')
 
 
-def antigravity_error(text):
-    text = str(text or '').lower()
-    if 'authentication required' in text: return 'Antigravity 尚未登入，請到「各模型使用量」登入。'
-    if 'no capacity' in text or 'unavailable' in text: return 'Antigravity 的這個模型目前太忙，請稍後再試或換一個模型。'
-    if 'resource_exhausted' in text or 'quota' in text or 'rate limit' in text: return 'Antigravity 的額度已用完，請等額度重置或換一個模型。'
+def antigravity_error(error, stderr=''):
+    """A plain explanation of the error agy reported for this run."""
+    text = str(error or '').lower()
+    if 'authentication required' in text or 'authentication required' in str(stderr or '').lower(): return 'Antigravity 尚未登入，請到「各模型使用量」登入。'
+    if 'no capacity' in text or 'code 503' in text: return 'Antigravity 的這個模型目前太忙，請稍後再試或換一個模型。'
+    if 'resource_exhausted' in text or 'code 429' in text or 'quota exceeded' in text: return 'Antigravity 的額度已用完，請等額度重置或換一個模型。'
     return ''
 
 
 def antigravity_quota(path):
     """Remaining limits from `agy -p /usage`, which uses no model quota itself."""
-    done = subprocess.run([path, '-p', '/usage', '--output-format', 'json'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=40, cwd=tempfile.gettempdir())
+    done = subprocess.run([path, '-p', '/usage', '--output-format', 'json'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20, cwd=tempfile.gettempdir())
     data = json.loads(done.stdout.decode('utf-8', 'replace'))
     windows = []
     for group in ((data.get('command') or {}).get('data') or {}).get('groups') or []:
@@ -2590,7 +2606,8 @@ class App(ThreadingHTTPServer):
             elif kind == 'antigravity':
                 prepare_antigravity_folder(workspace, scope, root, wait)
                 if scope != 'workspace': prompt += '\n你目前在 Bot 的工作資料夾，要處理的檔案在 %s。' % root
-                args, stdin_prompt = antigravity_args(binary, prompt, model, job.get('effort'), native, planning, scope, root, web), False
+                args = antigravity_args(binary, model, job.get('effort'), native, planning, scope, root, web)
+                prompt = json.dumps({'event': 'user', 'message': {'content': prompt}}, ensure_ascii=False) + '\n'
             elif provider == 'codex':
                 images = [x for x in (job.get('attachments') or []) if pathlib.Path(x).suffix.lower() in IMAGE_TYPES]
                 args = [binary, 'exec'] + [a for x in images for a in ('-i', x)] + ['--json'] + ((['--dangerously-bypass-approvals-and-sandbox'] if scope == 'full' else codex_permission_args(binary)) if native and selected else ['--sandbox', 'read-only']) + ['--skip-git-repo-check', '--ephemeral', '--ignore-user-config', '--color', 'never',
@@ -2663,8 +2680,8 @@ class App(ThreadingHTTPServer):
                             raise RuntimeError('Claude 尚未登入。請到「各模型使用量」頁登入後重試。')
                     except (ValueError, AttributeError): pass
                 detail = (stderr or b'').decode('utf-8', errors='replace').lower() + output.decode('utf-8', errors='replace').lower() + parsed['error'].lower()
-                if kind == 'antigravity' and antigravity_error(parsed['error'] + (stderr or b'').decode('utf-8', errors='replace')):
-                    raise RuntimeError(antigravity_error(parsed['error'] + (stderr or b'').decode('utf-8', errors='replace')))
+                if kind == 'antigravity' and antigravity_error(parsed['error'], (stderr or b'').decode('utf-8', errors='replace')):
+                    raise RuntimeError(antigravity_error(parsed['error'], (stderr or b'').decode('utf-8', errors='replace')))
                 issue = cli_issue((stderr or b'').decode('utf-8', errors='replace')) if provider == 'gemini' else ''  # what the CLI itself reports, not the Bot's text
                 if issue:
                     if not account: self.note_provider_issue(provider, issue)
@@ -2675,6 +2692,7 @@ class App(ThreadingHTTPServer):
                     raise RuntimeError('CLI 尚未登入。請到「各模型使用量」頁登入後重試。')
                 raise RuntimeError('CLI 執行失敗，請檢查登入狀態及模型設定。')
             if parsed['isError']:
+                if kind == 'antigravity' and antigravity_error(parsed['error']): raise RuntimeError(antigravity_error(parsed['error']))
                 if 'out of credits' in parsed['error'].lower() or 'usage limit' in parsed['error'].lower() or 'rate limit' in parsed['error'].lower():
                     raise RuntimeError('CLI 帳號額度不足或已達使用上限，請到「使用量」頁查看額度。')
                 raise RuntimeError('CLI 執行失敗，請檢查登入狀態及模型設定。')
@@ -2701,7 +2719,8 @@ class App(ThreadingHTTPServer):
                 self.processes.pop(job_id, None)
                 self.expire_job(job_id); store.save()
             if session: session.close()
-            if provider_kind(provider) == 'antigravity': shutil.rmtree(str(store.dir / 'workspaces' / bot['id'] / '.agents'), ignore_errors=True)
+            with store.lock: busy = any(j['botId'] == bot['id'] and j['id'] != job_id and j['status'] == 'running' for j in store.data['jobs'])
+            if provider_kind(provider) == 'antigravity' and not busy: shutil.rmtree(str(store.dir / 'workspaces' / bot['id'] / '.agents'), ignore_errors=True)
             for leftover in (store.dir / 'workspaces').glob('*/.grok/.zook-prompt-%s.txt' % job_id):
                 shutil.rmtree(str(leftover.parent), ignore_errors=True)  # per-job .grok dir: prompt, MCP config, adapter copy
 
@@ -3023,7 +3042,7 @@ def parse_cli_output(provider, text, model=''):
     if provider == 'plain':
         out['content'] = ANSI.sub('', text).strip(); return out
     if provider == 'antigravity':
-        d = next((o for o in reversed(objs) if 'status' in o), None)
+        d = next((o['result'] for o in reversed(objs) if o.get('event') == 'result' and isinstance(o.get('result'), dict)), None)
         if d is None: out['unparsable'] = True; return out
         out['content'] = str(d.get('response') or '').strip()
         if d.get('status') != 'SUCCESS': out['isError'] = True; out['error'] = str(d.get('error') or out['content'])[:2000]
@@ -3251,8 +3270,8 @@ class Handler(BaseHTTPRequestHandler):
         if hit and time.time() - hit[0] < 60: return hit[1]
         try: live = antigravity_quota(find_cli('antigravity'))
         except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError): live = None
+        caches['antigravity'] = (time.time(), live)  # a failed read is not retried on every page load either
         if not live: return None
-        caches['antigravity'] = (time.time(), live)
         with store.lock: store.data.setdefault('quota', {})['antigravity'] = live; store.save()
         return live
 
@@ -3422,7 +3441,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not path or not s.get('terminal_login'): raise ValueError('這個模型不能用終端機登入。')
                 folder = _active['dir'] / 'tools'; folder.mkdir(parents=True, exist_ok=True, mode=0o700)
                 script = folder / (provider + '-login.command')
-                script.write_text('#!/bin/sh\nexec %s\n' % shlex.quote(path), encoding='utf-8'); script.chmod(0o700)
+                script.write_text('#!/bin/sh\nexec %s\n' % shlex.quote(path), encoding='utf-8'); script.chmod(0o700); _agy_status.clear()
                 subprocess.run(['/usr/bin/open', str(script)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=True)
                 return self.respond(200, {'ok': True})
             if action == 'install/cancel':

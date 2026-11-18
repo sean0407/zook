@@ -16,36 +16,44 @@ if a == ['models']: print('Fetching available models...\\ngemini-3.8-flash-low\\
 if a == ['--version']: print('1.5.10'); sys.exit(0)
 if a[:2] == ['-p', '/usage']: print(open(os.path.join(here, 'usage.json')).read()); sys.exit(0)
 config = open('.agents/mcp_config.json').read() if os.path.exists('.agents/mcp_config.json') else ''
-json.dump(dict(args=a, cwd=os.getcwd(), config=config, token=os.environ.get('ZOOK_WORKER_TOKEN', '')), open(os.path.join(here, 'run.json'), 'w'))
-if 'BUSY' in a[1]: print(json.dumps(dict(status='ERROR', error='UNAVAILABLE: No capacity available for model'))); sys.exit(3)
-print(json.dumps(dict(status='SUCCESS', response='agy says hi\\n', usage=dict(input_tokens=100, output_tokens=7, thinking_tokens=2, cache_read_tokens=40, total_tokens=107))))
+prompt = json.loads(sys.stdin.readline())['message']['content']
+json.dump(dict(args=a, cwd=os.getcwd(), config=config, token=os.environ.get('ZOOK_WORKER_TOKEN', ''), prompt=prompt), open(os.path.join(here, 'run.json'), 'w'))
+print(json.dumps(dict(event='init', init=dict(cwd=os.getcwd()))))
+if 'BUSY' in prompt: print(json.dumps(dict(event='result', result=dict(status='ERROR', error='UNAVAILABLE: No capacity available for model')))); sys.exit(3)
+print(json.dumps(dict(event='result', result=dict(status='SUCCESS', response='agy says hi\\n', usage=dict(input_tokens=100, output_tokens=7, thinking_tokens=2, cache_read_tokens=40, total_tokens=107)))))
 """
 
 
 class Units(unittest.TestCase):
     def test_reply_and_usage(self):
-        out = server.parse_cli_output('antigravity', json.dumps(dict(status='SUCCESS', response='OK\n', usage=dict(input_tokens=10, output_tokens=2, cache_read_tokens=4))), 'm')
+        out = server.parse_cli_output('antigravity', json.dumps(dict(event='result', result=dict(status='SUCCESS', response='OK\n', usage=dict(input_tokens=10, output_tokens=2, cache_read_tokens=4)))), 'm')
         self.assertEqual((out['content'], out['usage']['input'], out['usage']['cachedInput'], out['usage']['output']), ('OK', 10, 4, 2))
-        self.assertTrue(server.parse_cli_output('antigravity', json.dumps(dict(status='ERROR', error='boom')))['isError'])
+        self.assertTrue(server.parse_cli_output('antigravity', json.dumps(dict(event='result', result=dict(status='ERROR', error='boom'))))['isError'])
+        self.assertTrue(server.parse_cli_output('antigravity', 'not json')['unparsable'])
+        self.assertEqual(server.antigravity_error('the MCP server is unavailable'), '')
 
     def test_careful_runs_cannot_change_anything_and_credits_stay_off(self):
         s = server.antigravity_settings(False, 'workspace', False)
         self.assertFalse(s['useG1Credits'])
         for rule in ('write_file(*)', 'command(*)', 'execute_url(*)', 'read_url(*)'): self.assertIn(rule, s['permissions']['deny'])
         self.assertIn('mcp(zook/*)', s['permissions']['allow'])
-        args = server.antigravity_args('agy', 'hi', '', 'standard', False, True, 'full', '/x', True)
+        args = server.antigravity_args('agy', '', 'standard', False, True, 'full', '/x', True)
         self.assertEqual(args[args.index('--mode') + 1], 'plan'); self.assertNotIn('--dangerously-skip-permissions', args)
-        self.assertIn('--dangerously-skip-permissions', server.antigravity_args('agy', 'hi', '', 'deep', True, False, 'full', '/x', True))
-        self.assertIn('--sandbox', server.antigravity_args('agy', 'hi', '', 'deep', True, False, 'workspace', '/x', True))
-        self.assertEqual(server.antigravity_args('agy', 'hi', 'm', 'deep', False, False, 'workspace', '/x', True)[-4:], ['--model', 'm', '--effort', 'high'])
+        self.assertIn('--dangerously-skip-permissions', server.antigravity_args('agy', '', 'deep', True, False, 'full', '/x', True))
+        self.assertIn('--sandbox', server.antigravity_args('agy', '', 'deep', True, False, 'workspace', '/x', True))
+        self.assertEqual(server.antigravity_args('agy', 'm', 'deep', False, False, 'workspace', '/x', True)[-4:], ['--model', 'm', '--effort', 'high'])
 
     def test_a_planted_tool_config_is_not_trusted(self):
         with tempfile.TemporaryDirectory() as d:
-            work, chosen = Path(d) / 'w', Path(d) / 'c'; (work / '.agents').mkdir(parents=True); (work / '.agents/rules.md').write_text('x'); (chosen / '.agents').mkdir(parents=True)
+            work, chosen = Path(d) / 'w', Path(d) / 'c'; chosen.mkdir()
+            for name in server.AGY_ROOTS: (work / name).mkdir(parents=True); (work / name / 'hooks.json').write_text('{}')
             server.prepare_antigravity_folder(work, 'workspace', work, 100)
-            self.assertEqual([p.name for p in (work / '.agents').iterdir()], ['mcp_config.json'])
-            (chosen / '.agents/mcp_config.json').write_text('{}')
-            with self.assertRaises(RuntimeError): server.prepare_antigravity_folder(work, 'folder', chosen, 100)
+            self.assertEqual(sorted(p.name for p in work.iterdir()), ['.agents']); self.assertEqual([p.name for p in (work / '.agents').iterdir()], ['mcp_config.json'])
+            for name in server.AGY_ROOTS:
+                (chosen / name).mkdir()
+                with self.assertRaises(RuntimeError): server.prepare_antigravity_folder(work, 'folder', chosen, 100)
+                (chosen / name).rmdir()
+            server.prepare_antigravity_folder(work, 'folder', chosen, 100)
 
 
 class Chat(unittest.TestCase):
@@ -81,7 +89,7 @@ class Chat(unittest.TestCase):
         run = json.loads((self.root / 'bin/run.json').read_text())
         self.assertEqual(run['cwd'], str((self.root / 'data/workspaces' / self.bot['id']).resolve()))
         self.assertIn('tool_server.py', run['config']); self.assertTrue(run['token']); self.assertNotIn(run['token'], run['config'])
-        self.assertNotIn(run['token'], ' '.join(run['args']))
+        self.assertNotIn(run['token'], ' '.join(run['args'])); self.assertIn('hello', run['prompt']); self.assertNotIn('hello', ' '.join(run['args']))  # the conversation is not on the command line
         self.assertFalse((self.root / 'data/workspaces' / self.bot['id'] / '.agents').exists())
         card = next(p for p in self.req('GET', '/api/quota')[1]['providers'] if p['id'] == 'antigravity')
         self.assertEqual((card['status'], card['noQuotaApi']), ('logged_in', False))
