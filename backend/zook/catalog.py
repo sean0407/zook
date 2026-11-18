@@ -57,22 +57,56 @@ def catalog_view(store):
     return dict(items=[dict(item, added=item['url'] in have, connector='zook:' + have[item['url']] if item['url'] in have else '') for item in CONNECTOR_CATALOG])
 
 
+_catalog_lock = threading.Lock()  # one add at a time, so a double click cannot make two connectors
+
+
+def _catalog_check(item, key):
+    """Connect once and list the tools, so a wrong key or an unreachable service is found before anything is saved."""
+    client = None
+    try:
+        client = runtime_module().ProtocolClient(dict(transport='http', url=item['url'], headers={'Authorization': 'Bearer ' + key} if key else {}))
+        client.tools()
+    except Exception as exc:
+        refused = type(exc).__name__ == 'AuthorizationNeeded'
+        raise ValueError('%s 不接受這組金鑰，請確認後再貼一次。' % item['name'] if refused and key else '連不上 %s，請確認網路後再試。' % item['name'])
+    finally:
+        if client: client.close()
+
+
 def catalog_add(app, item_id, key=None):
-    """Add one catalog entry as a connector. Returns the connector's record and, for a sign-in, the page to open."""
+    """Add one catalog entry as a connector. Returns the connector's record and, for a sign-in, the page to open. Nothing is saved unless every step worked."""
     store = app.store
     item = next((x for x in CONNECTOR_CATALOG if x['id'] == item_id), None)
     if not item: raise LookupError('目錄裡沒有這個連接器。')
     if item['auth'] == 'manual': raise ValueError('%s 目前不開放應用程式自行登記，還不能一鍵連結。' % item['name'])
-    if item['auth'] == 'key' and not (isinstance(key, str) and key.strip()): raise ValueError('請貼上金鑰。')
-    with store.lock: record = copy.deepcopy(next((c for c in store.data['connectors'] if c.get('url') == item['url']), None))
-    if not record:
-        record, secret = connector_fields(dict(name=item['name'], transport='http', url=item['url'], **({'secret': key.strip()} if item['auth'] == 'key' else {})))
-        if secret: record['secretId'] = ID(); secret_set(record['secretId'], secret)
-        with store.lock:
-            name = record['name']; taken = {c['name'] for c in store.data['connectors']}
-            record['name'] = next(n for n in [name] + ['%s %d' % (name, i) for i in range(2, 50)] if n not in taken)
-            store.data['connectors'].append(record)
-            st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + ['zook:' + record['id']]))
-            store.save()
-    url = oauth_begin(app, record) if item['auth'] == 'login' and not record.get('oauth') else ''
-    return record, url
+    key = key.strip() if item['auth'] == 'key' and isinstance(key, str) else ''
+    if item['auth'] == 'key' and not key: raise ValueError('請貼上金鑰。')
+    with _catalog_lock:
+        with store.lock: existing = copy.deepcopy(next((c for c in store.data['connectors'] if c.get('url') == item['url']), None))
+        if existing and existing.get('oauth'): return existing, ''
+        if existing and item['auth'] == 'open': return existing, ''
+        record = existing
+        if not record: record, _ = connector_fields(dict(name=item['name'], transport='http', url=item['url'], **({'secret': key} if key else {})))
+        url, auth = '', item['auth']
+        if auth == 'login':
+            try: url = oauth_begin(app, record)
+            except RuntimeError as exc:
+                if '不需要登入' not in str(exc): raise RuntimeError('%s 目前無法登入：%s' % (item['name'], exc))
+                auth = 'open'  # the service turned out to need no sign-in
+        if auth != 'login': _catalog_check(item, key)
+        made = ''
+        try:
+            if key:
+                if not record.get('secretId'): record['secretId'] = made = ID()
+                record['secretName'] = 'Authorization'; secret_set(record['secretId'], key)
+            with store.lock:
+                taken = {c['name'] for c in store.data['connectors'] if c['id'] != record['id']}
+                record['name'] = next((n for n in [record['name']] + ['%s %d' % (item['name'], i) for i in range(2, 200)] if n not in taken), '%s %s' % (item['name'], record['id'][:6]))
+                store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]
+                st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + ['zook:' + record['id']]))
+                store.save()
+        except Exception:
+            if made: secret_delete(made)  # the connector was not saved, so its key does not stay behind
+            with store.lock: store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + ([existing] if existing else [])
+            raise
+        return record, url

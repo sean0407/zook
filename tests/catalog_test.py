@@ -28,16 +28,45 @@ class CatalogTest(unittest.TestCase):
             self.assertIn(item['auth'], ('login', 'open', 'key', 'manual')); self.assertTrue(item['about'] and item['category'])
         self.assertFalse(z.device_may('GET', '/api/connector-catalog')); self.assertFalse(z.device_may('POST', '/api/connector-catalog/notion'))
 
-    def test_adding_a_key_connector_keeps_the_key_out_of_the_data_file(self):
-        self.assertEqual(self.req('POST', '/api/connector-catalog/github', {})[0], 400)
-        status, made = self.req('POST', '/api/connector-catalog/github', {'key': 'ghp_exampleexample123456'}); self.assertEqual((status, made['login']), (200, False))
-        self.assertNotIn('ghp_exampleexample123456', (self.root / 'data/swarmr.json').read_text())
-        items = {i['id']: i for i in self.req('GET', '/api/connector-catalog')[1]['items']}; self.assertTrue(items['github']['added']); self.assertFalse(items['notion']['added'])
-        self.assertEqual(self.req('POST', '/api/connector-catalog/github', {'key': 'ghp_exampleexample123456'})[1]['id'], made['id'])  # not added twice
-        self.assertIn(made['id'], self.req('GET', '/api/state')[1]['settings']['sharedMcp'])
+    def load(self):
+        """The backend in this process, with the catalog pointed at a stand-in service on this Mac."""
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        spec = importlib.util.spec_from_file_location('zook_catalog_live', SERVER); z = importlib.util.module_from_spec(spec); spec.loader.exec_module(z)
+        class Service(BaseHTTPRequestHandler):
+            def log_message(self, *args): pass
+            def do_POST(self):
+                msg = json.loads(self.rfile.read(int(self.headers.get('Content-Length', '0'))))
+                if self.headers.get('Authorization') != 'Bearer good-key-12345': self.send_response(401); self.send_header('Content-Length', '0'); self.end_headers(); return
+                result = {'tools': []} if msg.get('method') == 'tools/list' else {'protocolVersion': '2025-06-18', 'capabilities': {}, 'serverInfo': {'name': 's', 'version': '1'}}
+                raw = json.dumps({'jsonrpc': '2.0', 'id': msg.get('id'), 'result': result}).encode()
+                self.send_response(200 if 'id' in msg else 202); self.send_header('Content-Type', 'application/json'); self.send_header('Content-Length', str(len(raw))); self.end_headers(); self.wfile.write(raw)
+        service = ThreadingHTTPServer(('127.0.0.1', 0), Service); threading.Thread(target=service.serve_forever, daemon=True).start(); self.addCleanup(service.server_close); self.addCleanup(service.shutdown)
+        os.environ['ZOOK_SECRETS_DIR'] = str(self.root / 'secrets2'); (self.root / 'secrets2').mkdir(); self.addCleanup(os.environ.pop, 'ZOOK_SECRETS_DIR', None)
+        z.CONNECTOR_CATALOG[:] = [z._c('svc', 'Svc', '測試', 'http://127.0.0.1:%d/mcp' % service.server_address[1], 'key', '測試。'), z._c('gone', 'Gone', '測試', 'http://127.0.0.1:9/mcp', 'open', '測試。')]
+        store = z.Store(self.root / 'data2'); app = type('App', (), {'store': store, 'server_address': ('127.0.0.1', 1)})()
+        return z, app, store
+
+    def test_a_wrong_key_or_an_unreachable_service_adds_nothing(self):
+        z, app, store = self.load()
+        self.assertRaisesRegex(ValueError, '不接受這組金鑰', z.catalog_add, app, 'svc', 'wrong-key-12345'); self.assertRaisesRegex(ValueError, '連不上', z.catalog_add, app, 'gone')
+        self.assertEqual(store.data['connectors'], []); self.assertEqual(list((self.root / 'secrets2').iterdir()), [])
+
+    def test_a_good_key_is_added_once_and_a_new_key_replaces_the_old(self):
+        z, app, store = self.load()
+        first, _ = z.catalog_add(app, 'svc', 'good-key-12345'); again, _ = z.catalog_add(app, 'svc', 'good-key-12345')
+        self.assertEqual((len(store.data['connectors']), first['id']), (1, again['id'])); self.assertEqual(len(list((self.root / 'secrets2').iterdir())), 1)
+        self.assertEqual(z.secret_get(first['secretId']), 'good-key-12345'); self.assertNotIn('good-key-12345', json.dumps(store.data))
+
+    def test_a_failed_save_leaves_no_key_behind(self):
+        z, app, store = self.load()
+        def broken(): raise OSError('disk full')
+        store.save = broken
+        self.assertRaises(OSError, z.catalog_add, app, 'svc', 'good-key-12345')
+        self.assertEqual(store.data['connectors'], []); self.assertEqual(list((self.root / 'secrets2').iterdir()), [])
 
     def test_entries_that_cannot_be_linked_yet_and_unknown_ones_are_refused(self):
-        self.assertEqual(self.req('POST', '/api/connector-catalog/slack', {})[0], 400); self.assertEqual(self.req('POST', '/api/connector-catalog/nope', {})[0], 404)
+        self.assertEqual(self.req('POST', '/api/connector-catalog/slack', {})[0], 400); self.assertEqual(self.req('POST', '/api/connector-catalog/nope', {})[0], 404); self.assertEqual(self.req('POST', '/api/connector-catalog/github', {})[0], 400)
         self.assertEqual(self.req('GET', '/api/state')[1]['connectors'], [])
 
 

@@ -505,7 +505,8 @@ class Handler(BaseHTTPRequestHandler):
                 try: record, url = catalog_add(self.server, parts[2], self.body().get('key'))
                 except LookupError as exc: return self.error(404, str(exc))
                 except ValueError as exc: return self.error(400, str(exc))
-                except RuntimeError as exc: return self.error(409, '已加入，但還沒登入：' + str(exc))
+                except RuntimeError as exc: return self.error(409, str(exc))
+                except OSError: return self.error(500, '沒有加入：無法儲存設定。')
                 if url and not os.environ.get('ZOOK_NO_BROWSER'): subprocess.run(['/usr/bin/open', _oauth_url(url)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
                 return self.respond(200, dict(id='zook:' + record['id'], name=record['name'], login=bool(url)))
             if len(parts) == 4 and parts[:2] == ['api', 'connectors'] and parts[3] in ('login', 'logout') and self.command == 'POST' and not self.device:
