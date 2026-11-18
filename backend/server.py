@@ -34,6 +34,8 @@ from urllib.parse import urlsplit, unquote, parse_qs
 
 MAX_BODY = 1024 * 1024
 JOB_TIMEOUT = 900
+# Grok's strict sandbox cannot start the Python inside Xcode or the Command Line Tools (sys.executable), only the system one.
+GROK_PYTHON = '/usr/bin/python3'
 APPROVAL_TIMEOUT = 600
 GROUP_MIN_BOTS, GROUP_MAX_BOTS = 2, 6
 GROUP_MAX_TURNS = 8  # Bot replies per user message, including handoffs.
@@ -202,7 +204,12 @@ def bot_access(bot, workspace):
     return scope, folder
 
 
-def access_note(scope, root, commands):
+def access_note(scope, root, commands, grok=False):
+    if grok and scope == 'full':  # Grok's file tools stay in the workspace; its shell reaches the rest of the Mac
+        return ('你的檔案工具只能用在目前的工作資料夾；要讀寫這台 Mac 上其他地方的檔案，用終端機指令（例如 ls、cat、cp）。使用者的個人資料夾是 %s，'
+                '桌面是 %s/Desktop。刪除或覆寫既有檔案前，先向使用者確認。' % (root, root))
+    if grok and scope == 'folder':
+        return '你只能在目前的工作資料夾內讀寫檔案，碰不到使用者指定的資料夾（%s）；需要那裡的檔案時，請使用者把檔案放進對話或改用其他 Bot。' % root
     if scope == 'full':
         return ('你可以用內建工具讀寫這台 Mac 上使用者可以存取的任何檔案與資料夾，並執行指令。目前所在位置是使用者的個人資料夾（%s），'
                 '桌面是 %s/Desktop。刪除或覆寫既有檔案前，先向使用者確認。' % (root, root))
@@ -2214,7 +2221,8 @@ class App(ThreadingHTTPServer):
                 if bot.get('isAdmin'): prompt += '\n你是團隊總管：可以用 zook_list_team 查看所有 Bot 和群組，用 zook_create_bot 新增 Bot，用 zook_create_group 把 Bot 拉成群組，用 zook_start_group_discussion 在群組發起討論。新增前先確認沒有重複的 Bot。'
                 prompt += schedule_instructions()
                 prompt += '\n記憶：使用者告訴你值得長期記住的偏好、事實或決定時，用 zook_remember 記下（scope=bot 只給你自己，scope=shared 給所有 Bot）。不要記錄密碼、金鑰或一次性的內容。'
-                if native: prompt += '\n工具說明：' + access_note(scope, root, kind == 'codex') + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。'
+                if kind == 'grok': prompt += '\nZook 工具在這裡的完整名稱是 zook__ 加上工具名，例如 zook__zook_create_schedule。'
+                if native: prompt += '\n工具說明：' + access_note(scope, root, kind == 'codex', kind == 'grok') + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。'
                 else: prompt += '\n工具說明：檔案讀寫與其他動作請使用 zook 工具。zook 工具會依使用者設定的主動性決定是否先請使用者核准，與本機 CLI 沙箱是否唯讀無關；需要時直接呼叫，被拒絕再說明即可。'
             if not selected and scope != 'workspace': prompt += '\n工具說明：' + access_note(scope, root, True)
             adapter = str(pathlib.Path(__file__).with_name('tool_server.py'))
@@ -2234,15 +2242,15 @@ class App(ThreadingHTTPServer):
                     (grok_dir / 'config.toml').write_text(
                         '[mcp_servers.zook]\ncommand = %s\nargs = [%s]\nstartup_timeout_sec = 20\n'
                         'env = { ZOOK_WORKER_URL = "${ZOOK_WORKER_URL}", ZOOK_WORKER_TOKEN = "${ZOOK_WORKER_TOKEN}" }\n'
-                        % (json.dumps(sys.executable), json.dumps(str(grok_dir / 'zook_tool_server.py'))), encoding='utf-8')
+                        % (json.dumps(GROK_PYTHON if os.path.exists(GROK_PYTHON) else sys.executable), json.dumps(str(grok_dir / 'zook_tool_server.py'))), encoding='utf-8')
+                    # Grok no longer accepts --add-dir in a run like this ("a session works only in its cwd"), so its file tools
+                    # stay in the workspace. With the whole Mac, its shell runs unsandboxed and reaches everything else.
                     if scope == 'full':   # the whole Mac: no sandbox, nothing asks, shell included
-                        access_args = ['--permission-mode', 'bypassPermissions', '--no-subagents', '--trust', '--allow', 'Bash', '--allow', 'Read', '--allow', 'Write', '--allow', 'Edit',
-                                       '--add-dir', str(root), '--add-dir', '/']
+                        access_args = ['--permission-mode', 'bypassPermissions', '--no-subagents', '--trust', '--allow', 'Bash', '--allow', 'Read', '--allow', 'Write', '--allow', 'Edit']
                     else:
                         access_args = ['--permission-mode', 'dontAsk', '--no-subagents', '--trust', '--sandbox', 'strict'] + (['--deny', 'Bash', '--allow', 'Read', '--allow', 'Write', '--allow', 'Edit'] if native else ['--deny', 'Bash', '--deny', 'Edit'])
-                        if scope == 'folder': access_args += ['--add-dir', str(root)]
                     args = [binary, '--prompt-file', str(prompt_file), '--output-format', 'streaming-json'] + access_args + [
-                            '--allow', 'MCPTool(zook__*)', '--cwd', str(workspace)] + (['--model', model] if model else [])
+                            '--allow', 'MCPTool(zook_*)', '--cwd', str(workspace)]  # zook_* also lets a short name through, so Grok gets "use zook__…" instead of a refusal + (['--model', model] if model else [])
                     args += ['--allow', 'WebSearch', '--allow', 'WebFetch'] if web else ['--disable-web-search']
                     env.update(GROK_MEMORY='0', **{'GROK_%s_%s_ENABLED' % (vendor, cell): 'false' for vendor in ('CLAUDE', 'CURSOR')
                                                     for cell in ('MCPS', 'AGENTS', 'RULES', 'SKILLS', 'HOOKS')})

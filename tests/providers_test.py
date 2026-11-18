@@ -95,7 +95,7 @@ class ProvidersTest(unittest.TestCase):
         self.assertEqual((job['status'], job['content']), ('completed', 'grok says: memory-ok'))
         args = (self.root / 'grok.args').read_text()
         for flag in ('GROK_MEMORY=0', 'GROK_CLAUDE_AGENTS_ENABLED=false', 'GROK_CLAUDE_RULES_ENABLED=false', 'GROK_CLAUDE_SKILLS_ENABLED=false',
-                     'GROK_CLAUDE_MCPS_ENABLED=false', 'GROK_CURSOR_RULES_ENABLED=false', 'GROK_CURSOR_MCPS_ENABLED=false', '--permission-mode dontAsk', '--sandbox strict', '--deny Bash', '--deny Edit', '--allow MCPTool(zook__*)', '--trust', '--no-subagents', '--disable-web-search', '--model grok-4.5'):
+                     'GROK_CLAUDE_MCPS_ENABLED=false', 'GROK_CURSOR_RULES_ENABLED=false', 'GROK_CURSOR_MCPS_ENABLED=false', '--permission-mode dontAsk', '--sandbox strict', '--deny Bash', '--deny Edit', '--allow MCPTool(zook_*)', '--trust', '--no-subagents', '--disable-web-search', '--model grok-4.5'):
             self.assertIn(flag, args)
         self.assertEqual(list((self.root / 'data/workspaces').glob('*/.grok')), [])  # per-reply prompt + MCP config removed
         bot = self.req('GET', '/api/state')[1]['bots'][0]
