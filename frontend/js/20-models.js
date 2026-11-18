@@ -185,7 +185,7 @@
     let h = 0; for (const ch of text) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
     return `<span class="dir-icon" style="--ic:${ICON_COLORS[h % ICON_COLORS.length]}">${esc((text[0] || '?').toUpperCase())}</span>`;
   }
-  const MCP_SOURCE_NAMES = {zook: '已連接', codex: '來自 Codex 設定', claude: '來自 Claude 設定', builtin: 'Zook 內建'};
+  const MCP_SOURCE_NAMES = {zook: '已連接', codex: 'Codex 設定', claude: 'Claude 設定', builtin: 'Zook 內建'};
   function sourceName(source, kind) {
     if (!source) return '其他';
     if (kind === 'mcp' && MCP_SOURCE_NAMES[source]) return MCP_SOURCE_NAMES[source];
@@ -206,11 +206,25 @@
     if (t?.status === 'error') return ['bad', '連線失敗'];
     return ['', '尚未測試連線'];
   }
+  const SKILLS_ON = '已開啟';
+  // What a Skill is for, read from its name and description. The first match wins.
+  const SKILL_CATEGORIES = [
+    ['公司流程', /^(logi|works)[-_ ]|logitech|沃克思|posm|報價|發票|開案|展示品|贈品|駐點|月刊|活動通知/i],
+    ['文件與簡報', /docx|pptx|pdf|xlsx|word|excel|powerpoint|簡報|slides?\b|deck|試算表|spreadsheet|文件|翻譯|translate/i],
+    ['信件與行事曆', /mail|gmail|信件|郵件|calendar|行事曆|早報|morning|會議|meeting/i],
+    ['設計與圖像', /design|canvas|theme|figma|圖卡|carousel|視覺|poster|海報|image|圖片|素材|pexels|art\b/i],
+    ['資料分析', /data|sql|analy|dashboard|viz|統計|報表|chart|圖表|\bbi\b/i],
+    ['研究與知識', /research|wiki|notebook|obsidian|知識|研究|摘要|summar/i],
+    ['開發', /code|api|mcp|git|debug|test|frontend|webapp|程式|開發|skill-creator|routing|plugin/i],
+  ];
+  // The name says most; the description is only asked when the name says nothing.
+  const skillCategory = i => (SKILL_CATEGORIES.find(c => c[1].test(i.name)) || SKILL_CATEGORIES.find(c => c[1].test(i.description || '')) || ['其他'])[0];
   function directoryItems(tab) {
     const inv = state.integrations || {}, settings = state.data.settings || {};
     if (tab === 'skills') {
       const off = new Set(settings.disabledSkills || []);
-      return (inv.skills || []).map(i => ({id: i.id, icon: i.icon, name: i.name, description: i.description || '', group: sourceName(i.plugin || i.source),
+      // A Skill that is on sits under 已開啟; the rest are sorted by what they are for. A copy already imported into Zook is not shown twice.
+      return (inv.skills || []).filter(i => !i.imported).map(i => ({id: i.id, icon: i.icon, name: i.name, description: i.description || '', group: !off.has(i.id) ? SKILLS_ON : skillCategory(i),
         meta: i.imported ? '改用 Zook 裡的那一份' : i.source === 'zook' && SOURCE_NAMES[i.origin] ? '匯入自 ' + SOURCE_NAMES[i.origin] : i.source === 'zook' && i.origin === 'pack' ? '來自設定包' : sourceName(i.plugin || i.source),
         on: !i.imported && !off.has(i.id), toggle: 'skill', toggleLabel: off.has(i.id) ? '開放給所有 Bot' : '所有 Bot 共用中',
         moved: i.imported ? '已匯入' : '', importable: i.source !== 'zook' && !i.imported, removable: !!i.removable, canUpdate: !!i.canUpdate, note: (i.notes || []).join(' ')}));
@@ -233,7 +247,9 @@
     if (!state.integrations) return '<div class="blank">正在讀取…</div>';
     const q = (state.dirQuery || '').toLowerCase(), filter = state.dirFilter || 'all';
     const items = directoryItems(tab).filter(i => (!q || (i.name + ' ' + i.description + ' ' + i.group).toLowerCase().includes(q)) && (filter === 'all' || (filter === 'on') === i.on));
-    const groups = [...new Set(items.map(i => i.group))].sort((a, b) => (b === SOURCE_NAMES.zook) - (a === SOURCE_NAMES.zook));
+    const first = tab === 'skills' ? [SKILLS_ON, ...SKILL_CATEGORIES.map(c => c[0]), '其他'] : [SOURCE_NAMES.builtin, MCP_SOURCE_NAMES.zook];
+    const rank = g => first.includes(g) ? first.indexOf(g) : first.length;
+    const groups = [...new Set(items.map(i => i.group))].sort((a, b) => rank(a) - rank(b));
     const counts = {skills: (state.integrations.skills || []).filter(i => !i.imported).length, mcp: (state.integrations.mcp || []).filter(i => !i.copied).length, plugins: (state.integrations.plugins || []).length};
     const tabs = [['skills', 'Skills'], ['mcp', '連接器'], ['plugins', '插件']];
     const intro = {skills: '所有 Bot 共用。匯入後不受原工具影響。', mcp: '所有 Bot 共用。開得越多回覆越慢，用不到的建議關閉。', plugins: '插件會一次帶來一組 Skills 和連接器，來源是 Claude Code。'}[tab];

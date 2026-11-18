@@ -16,7 +16,7 @@ CONNECTOR_CATALOG = [
     _c('clickup', 'ClickUp', '專案管理', 'https://mcp.clickup.com/mcp', 'login', '查看和建立 ClickUp 的任務。'),
     _c('airtable', 'Airtable', '專案管理', 'https://mcp.airtable.com/mcp', 'login', '查詢和更新 Airtable 的資料表。'),
     _c('canva', 'Canva', '設計', 'https://mcp.canva.com/mcp', 'login', '搜尋、建立和匯出 Canva 設計。'),
-    _c('figma', 'Figma', '設計', 'https://mcp.figma.com/mcp', 'login', '讀取 Figma 設計稿的內容與規格。'),
+    _c('figma', 'Figma', '設計', 'https://mcp.figma.com/mcp', 'manual', '讀取 Figma 設計稿的內容與規格。'),
     _c('cloudinary', 'Cloudinary', '設計', 'https://asset-management.mcp.cloudinary.com/mcp', 'login', '管理 Cloudinary 的圖片與影片素材。'),
     _c('webflow', 'Webflow', '設計', 'https://mcp.webflow.com/mcp', 'login', '管理 Webflow 網站的內容。'),
     _c('wix', 'Wix', '設計', 'https://mcp.wix.com/mcp', 'login', '管理 Wix 網站與商店。'),
