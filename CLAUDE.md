@@ -27,7 +27,7 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 | `native/Zook.swift` | macOS 視窗、啟動與關閉後端、檔案選取與下載 |
 | `native/remote/` | `zook-remote`，與中繼伺服器的加密連線 |
 | `backend/server.py` | 啟動入口：依序載入 `backend/zook/` 的檔案，全部共用同一個命名空間 |
-| `backend/zook/` | `core` 資料儲存、`accounts` 帳號與更新、`library` 設定包與排程規則、`app` 回覆、`groups` 群組討論、`groupfiles` 群組共用檔案、`oauth` 連接器與 Google 登入、`outputs` 產出、`mobile` 手機、`projects` 專案、`fields` 欄位檢查、`parsing` 解讀 CLI 輸出、`abilities` 各家能力對照與版本檢查、`sessions` 接續 CLI 原生對話、`routing` 自動選擇模型、`handler` API |
+| `backend/zook/` | `core` 資料儲存、`accounts` 帳號與更新、`library` 設定包與排程規則、`app` 回覆、`groups` 群組討論、`groupfiles` 群組共用檔案、`oauth` 連接器與 Google 登入、`catalog` 連接器目錄、`outputs` 產出、`mobile` 手機、`projects` 專案、`fields` 欄位檢查、`parsing` 解讀 CLI 輸出、`abilities` 各家能力對照與版本檢查、`sessions` 接續 CLI 原生對話、`routing` 自動選擇模型、`handler` API |
 | `backend/runtime.py` | Skill 與連接器探索、MCP 客戶端、工具執行 |
 | `backend/providers.py` | 各家 CLI 的定義 |
 | `backend/tool_server.py` | 提供給 CLI 的 Zook 工具（MCP） |

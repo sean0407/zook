@@ -500,6 +500,14 @@ class Handler(BaseHTTPRequestHandler):
                     if not raw or len(raw) > PACK_BYTES: raise ValueError('設定包超過 150 MB，無法匯入。')
                     return self.respond(200, pack_import(store, raw))
                 except ValueError as exc: return self.error(400, str(exc) if '設定包' in str(exc) else '這不是 Zook 的設定包，或檔案已損壞。')
+            if path == '/api/connector-catalog' and self.command == 'GET' and not self.device: return self.respond(200, catalog_view(store))
+            if len(parts) == 3 and parts[:2] == ['api', 'connector-catalog'] and self.command == 'POST' and not self.device:
+                try: record, url = catalog_add(self.server, parts[2], self.body().get('key'))
+                except LookupError as exc: return self.error(404, str(exc))
+                except ValueError as exc: return self.error(400, str(exc))
+                except RuntimeError as exc: return self.error(409, '已加入，但還沒登入：' + str(exc))
+                if url and not os.environ.get('ZOOK_NO_BROWSER'): subprocess.run(['/usr/bin/open', _oauth_url(url)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                return self.respond(200, dict(id='zook:' + record['id'], name=record['name'], login=bool(url)))
             if len(parts) == 4 and parts[:2] == ['api', 'connectors'] and parts[3] in ('login', 'logout') and self.command == 'POST' and not self.device:
                 with store.lock: record = copy.deepcopy(next((c for c in store.data['connectors'] if c['id'] == parts[2]), None))
                 if not record: return self.error(404, '找不到這個連接器。')

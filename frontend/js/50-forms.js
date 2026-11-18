@@ -19,6 +19,7 @@
   });
   document.addEventListener('input', e => {
     if (e.target.id === 'chat-input' && activeGroup()) scheduleGroupEstimate();
+    if (e.target.id === 'catalog-search') { state.catalogQuery = e.target.value; renderCatalog(); const again = $('#catalog-search'); if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); } }
     if (e.target.closest('#bot-form')) saveBotDraft(e.target.closest('form'));
     if (e.target.name === 'modelCustom') {
       const f = e.target.closest('form');
@@ -276,6 +277,8 @@
         delete d.providerId;
         await post('accounts/custom', d);
         closeModal(); await reloadAccounts(); toast('已儲存，Bot 現在可以選用這個 CLI');
+      } else if (form.id === 'catalog-key-form') {
+        await catalogAdd(form.dataset.id, new FormData(form).get('key').trim());
       } else if (form.id === 'project-form') {
         await saveProject(form);
       } else if (form.id === 'google-form') {

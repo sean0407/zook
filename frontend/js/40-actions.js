@@ -502,6 +502,8 @@
           input.click();
           break;
         }
+        case 'catalog-open': await catalogModal(); break;
+        case 'catalog-add': await catalogAdd(id); break;
         case 'connector-login': {
           await post('connectors/' + encodeURIComponent(id.split(':')[1]) + '/login');
           toast('已在瀏覽器開啟登入頁，完成後回到這裡');
