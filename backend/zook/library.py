@@ -549,6 +549,7 @@ REPEAT_NAMES = dict(daily='每天', weekdays='週一到週五', mon='每週一',
 def schedule_when(item):
     """When a schedule runs, in words."""
     repeat, at = item.get('repeat'), item.get('time') or ''
+    if trigger_when(item): return trigger_when(item)
     if repeat == 'hourly': return '每小時的 %s 分' % at[3:]
     if repeat == 'monthly': return '每月 %s 號 %s' % (item.get('day'), at)
     if repeat == 'once': return '%s %s（只一次）' % (item.get('date'), at)

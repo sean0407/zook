@@ -1,5 +1,5 @@
 # The running service: schedules, replies, group discussions. Loaded by backend/server.py into one shared namespace.
-class App(GroupRuns, ThreadingHTTPServer):
+class App(GroupRuns, Triggers, ThreadingHTTPServer):
     daemon_threads = True
     def __init__(self, address, store, assets, token):
         super().__init__(address, Handler)
@@ -195,7 +195,7 @@ class App(GroupRuns, ThreadingHTTPServer):
         store.data['jobs'].append(job); store.save(); self.start_job(job, prompt, provider, model, copy.deepcopy(bot), inventory)
         return job
 
-    def run_schedule(self, item, inventory):
+    def run_schedule(self, item, inventory, extra=''):
         """Send a schedule's message now and add it to the schedule's history. Returns None when sent,
         or the reason it could not be. Raises Busy when the Bot or group is working on something else. Lock held."""
         run = dict(kind='group' if item.get('groupId') else 'bot', targetId=item.get('groupId') or item.get('botId'), status='running')
@@ -204,13 +204,13 @@ class App(GroupRuns, ThreadingHTTPServer):
                 group = self.store.find('groups', item['groupId'])
                 if not group: raise RuntimeError('找不到這個群組。')
                 if group['status'] == 'running': raise Busy('群組正在討論，等討論結束再執行。')
-                run['runId'] = self.post_group_message(group, item['content'], author='排程')
+                run['runId'] = self.post_group_message(group, item['content'] + extra, author='排程')
                 run['messageId'] = next(m['id'] for m in reversed(group['messages']) if m['role'] == 'user')
             else:
                 bot = self.store.find('bots', item.get('botId'))
                 if not bot: raise RuntimeError('找不到這個 Bot。')
                 run['chatId'] = schedule_chat(bot)
-                run['jobId'] = self.send_to_bot(bot, item['content'], inventory, author='排程', chat_id=run['chatId'])['id']
+                run['jobId'] = self.send_to_bot(bot, item['content'] + extra, inventory, author='排程', chat_id=run['chatId'])['id']
                 run['messageId'] = next(m['id'] for m in reversed(chat_messages(bot, run['chatId'])) if m['role'] == 'user')
         except Busy: raise
         except (ValueError, RuntimeError) as exc:
@@ -249,7 +249,7 @@ class App(GroupRuns, ThreadingHTTPServer):
         now = now or datetime.datetime.now(); store = self.store
         def waiting():
             for item in store.data['schedules']:
-                due = item.get('on') and schedule_last_due(item, now)
+                due = item.get('on') and (item.get('trigger') or 'time') == 'time' and schedule_last_due(item, now)
                 if due and due.isoformat() > item.get('since', ''): yield item, due
         with store.lock:
             self.settle_schedule_runs()
@@ -282,6 +282,8 @@ class App(GroupRuns, ThreadingHTTPServer):
         while True:
             time.sleep(wait)
             try: self.run_schedules()
+            except Exception: pass
+            try: self.run_triggers()
             except Exception: pass
             try:
                 with self.store.lock: backup_daily(self.store)

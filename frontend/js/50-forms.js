@@ -121,6 +121,7 @@
       state.effort[effortKey()] = e.target.value;
       return;
     }
+    if (e.target.name === 'trigger' && e.target.closest('#schedule-form')) { e.target.closest('#schedule-form').dataset.trigger = e.target.value; return; }
     if (e.target.name === 'repeat' && e.target.closest('#schedule-form')) {
       e.target.closest('.sched-when').dataset.repeat = e.target.value;
       return;
@@ -379,10 +380,12 @@
       } else if (form.id === 'schedule-form') {
         const d = new FormData(form), id = form.dataset.id;
         const [kind, targetId] = String(d.get('target')).split(':');
-        const repeat = d.get('repeat');
-        const data = {[kind === 'group' ? 'groupId' : 'botId']: targetId, content: d.get('content'), repeat, time: (repeat === 'hourly' ? '00' : d.get('hour')) + ':' + d.get('minute'), on: d.get('on') === 'on', catchUp: d.get('catchUp') === 'on'};
+        const trigger = d.get('trigger') || 'time', repeat = trigger === 'time' ? d.get('repeat') : 'daily';
+        const data = {trigger, [kind === 'group' ? 'groupId' : 'botId']: targetId, content: d.get('content'), repeat, time: trigger !== 'time' ? '00:00' : (repeat === 'hourly' ? '00' : d.get('hour')) + ':' + d.get('minute'), on: d.get('on') === 'on', catchUp: d.get('catchUp') === 'on'};
         if (repeat === 'once') data.date = d.get('date');
         if (repeat === 'monthly') data.day = Number(d.get('day'));
+        if (trigger === 'folder') data.watchFolder = d.get('watchFolder');
+        if (trigger === 'mail') { data.mailFrom = d.get('mailFrom'); data.mailSubject = d.get('mailSubject'); }
         await post(id ? 'schedules/' + encodeURIComponent(id) : 'schedules', data, id ? 'PATCH' : 'POST');
         closeModal();
         await refresh();

@@ -701,12 +701,14 @@ class Handler(BaseHTTPRequestHandler):
                 if path == '/api/schedules' and self.command == 'POST':
                     if len(store.data['schedules']) >= MAX_SCHEDULES: return self.error(409, '排程已達上限 %d 個，請先刪除不用的排程。' % MAX_SCHEDULES)
                     item = schedule_fields(store, self.body(), dict(id=ID(), botId='', content='', time='', repeat='daily', on=True, catchUp=True, createdAt=NOW()))
+                    if not self.device: trigger_fields(store, self.last_body, item)
                     store.data['schedules'].append(item); store.save(); return self.respond(201, item)
                 if len(parts) == 3 and parts[:2] == ['api', 'schedules'] and self.command in ('PATCH', 'DELETE'):
                     item = store.find('schedules', parts[2])
                     if not item: return self.error(404, '找不到這個排程。')
                     if self.command == 'DELETE': store.data['schedules'].remove(item); store.save(); return self.respond(200, {'ok': True})
                     candidate = schedule_fields(store, self.body(), copy.deepcopy(item)); candidate.pop('held', None)
+                    if not self.device: trigger_fields(store, self.last_body, candidate)
                     if 'runs' in item: candidate['runs'] = item['runs']  # keep the same history entries a running reply may still update
                     item.clear(); item.update(candidate); store.save(); return self.respond(200, item)
                 if len(parts) == 4 and parts[:2] == ['api', 'schedules'] and parts[3] == 'run' and self.command == 'POST':

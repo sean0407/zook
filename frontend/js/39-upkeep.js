@@ -104,3 +104,13 @@
       render(true); toast('已加入「' + made.name + '」');
     } catch (err) { el.disabled = false; toast(err.message); }
   });
+
+  // Schedule form: choosing the folder a triggered schedule watches.
+  document.addEventListener('click', async e => {
+    const el = e.target.closest?.('[data-up="pick-watch"]');
+    if (!el) return;
+    try {
+      const picked = (await post('choose-folder')).path, box = el.closest('.watch-pick');
+      if (picked && box) { box.querySelector('input').value = picked; box.querySelector('.watch-path').textContent = picked; }
+    } catch (err) { toast(err.message); }
+  });

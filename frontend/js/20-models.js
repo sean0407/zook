@@ -514,7 +514,10 @@
   const WEEKDAY = '日一二三四五六';
   const dayLabel = iso => { const d = new Date(iso + 'T00:00:00'); return `${d.getMonth() + 1}/${d.getDate()}（週${WEEKDAY[d.getDay()]}）`; };
   // When a schedule runs, in words: 每天 10:00, 每小時的 15 分, 每月 5 號 10:00, 11/20（週五）10:00.
+  const TRIGGER_OPTIONS = [{id: 'time', name: '時間到', hint: ''}, {id: 'folder', name: '資料夾有新檔案', hint: '約 20 秒內開始'}, {id: 'mail', name: '收到新信件', hint: '需要先連接 Gmail，約 2 分鐘內開始'}];
   function scheduleWhen(x) {
+    if (x.trigger === 'folder') return `「${(x.watchFolder || '').split('/').filter(Boolean).pop() || ''}」有新檔案時`;
+    if (x.trigger === 'mail') { const c = [x.mailFrom && `寄件者含「${x.mailFrom}」`, x.mailSubject && `主旨含「${x.mailSubject}」`].filter(Boolean).join('、'); return '收到新信件時' + (c ? `（${c}）` : ''); }
     if (x.repeat === 'hourly') return `每小時的 ${x.time.slice(3)} 分`;
     if (x.repeat === 'monthly') return `每月 ${x.day} 號 ${x.time}`;
     if (x.repeat === 'once') return `${x.date ? dayLabel(x.date) : ''} ${x.time}`;
@@ -522,7 +525,7 @@
   }
   function schedulesPage() {
     const items = state.data.schedules || [];
-    const intro = '<p class="muted sched-intro">時間到自動送出訊息。Mac 和 Zook 要開著。</p>';
+    const intro = '<p class="muted sched-intro">時間到，或有新檔案、新信件時，自動送出訊息。Mac 和 Zook 要開著。</p>';
     if (!items.length) return intro + '<div class="blank">還沒有排程。</div>';
     const last = x => x.done ? '已完成' : !x.lastStatus ? '尚未執行' : (x.lastStatus === 'sent' ? '上次執行：' : x.lastStatus === 'missed' ? '上次錯過：' : '上次失敗：') + formatDate(x.lastAt) + (x.lastStatus !== 'sent' && x.lastError ? '（' + x.lastError + '）' : '');
     return intro + `<div class="cards">${items.map(x => `<article class="card sched-card"><div class="sched-head"><h3>${esc(scheduleWhen(x))}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><p>${esc(x.content)}</p>${scheduleTarget(x)}<span class="status ${x.lastStatus && x.lastStatus !== 'sent' && !x.done ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button>${(x.runs || []).length ? `<button class="link" data-action="schedule-history" data-id="${esc(x.id)}">紀錄</button>` : ''}<button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`).join('')}</div>`;
