@@ -33,6 +33,13 @@
     if (!list.length) return html;
     const byName = {}; list.forEach(o => { byName[esc(o.name)] = byName[esc(o.name)] || o; });
     const re = new RegExp('(' + Object.keys(byName).sort((a, b) => b.length - a.length).map(x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'g');
+    // A Markdown link straight to the file would try to open a local path in the window; make it open the preview instead.
+    const byPath = {}; list.forEach(o => { byPath[o.path] = o; });
+    const plain = text => { const t = document.createElement('textarea'); t.innerHTML = text; let v = t.value.replace(/^file:\/\//, ''); try { v = decodeURIComponent(v); } catch (_) {} return v; };
+    html = html.replace(/<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g, (whole, href, label) => {
+      const o = byPath[plain(href)] || byPath[plain(href).replace(/^\/private(?=\/(tmp|var)\/)/, '')] || byPath['/private' + plain(href)];
+      return o ? `<button type="button" class="link output-link" data-action="output-open" data-id="${esc(o.id)}">${label}</button>` : whole;
+    });
     let skip = 0;
     return html.split(/(<[^>]+>)/).map(part => {
       if (part.startsWith('<')) { if (/^<(pre|a|button)\b/i.test(part)) skip++; else if (/^<\/(pre|a|button)>/i.test(part)) skip = Math.max(0, skip - 1); return part; }

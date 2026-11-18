@@ -459,7 +459,7 @@ def shared_skill_ids(store, inventory):
 
 def shared_mcp_ids(store, inventory):
     on = set(store.data['settings'].get('sharedMcp') or [])
-    return [x['id'] for x in inventory['mcp'] if x['id'] in on and not x.get('needsSetup') and not x.get('needsKey') and not x.get('copied')]
+    return [x['id'] for x in inventory['mcp'] if x['id'] in on and not x.get('needsSetup') and not x.get('needsKey') and not x.get('needsLogin') and not x.get('copied')]
 
 
 def arrange_bots(store, body):

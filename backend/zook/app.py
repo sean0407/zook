@@ -463,6 +463,7 @@ class App(GroupRuns, ThreadingHTTPServer):
                     if not job or job['status'] != 'running': return
                     self.workers[job_id] = {'token': token, 'session': session, 'tools': []}
                 tools = session.tools()  # May start external servers; never hold store.lock.
+                if session.unavailable: prompt += '\n這些連接器需要使用者先登入，這次無法使用：%s。使用者問到時，請他到連接器頁登入。' % '、'.join(session.unavailable)
                 with store.lock:
                     if job['status'] != 'running' or job_id not in self.workers: return
                     self.workers[job_id]['tools'] = tools

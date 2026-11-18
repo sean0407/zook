@@ -321,6 +321,10 @@ def _environment(config=None):
     return env
 
 
+class AuthorizationNeeded(RuntimeError):
+    """The connector wants a sign-in first."""
+
+
 class ProtocolClient:
     def __init__(self, config):
         config = dict(config)
@@ -466,7 +470,7 @@ class ProtocolClient:
                 return json.loads(body)
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
-                raise RuntimeError('MCP authorization was rejected. Sign in or refresh access in the owning app, then reconnect.')
+                raise AuthorizationNeeded('這個連接器需要登入。請到連接器頁按「登入」，或在來源 App 重新授權。')
             raise RuntimeError('MCP HTTP request failed (status %s). Verify the configured MCP endpoint.' % exc.code)
         except (urllib.error.URLError, OSError, ValueError):
             raise RuntimeError('MCP endpoint did not return a valid response. Check connectivity and its configured transport.')
@@ -621,6 +625,7 @@ class RuntimeSession:
         # A callable is read on every tool call, so a change in Settings applies mid-reply.
         self.permission_mode = permission_mode if callable(permission_mode) or permission_mode in PERMISSION_MODES else 'manual'
         self.annotations = {}
+        self.unavailable = []  # connectors left out of this reply because they need a sign-in
 
     def tools(self):
         with self.init_lock:
@@ -647,9 +652,12 @@ class RuntimeSession:
                      'cwd': _str('Relative Bot workspace directory, default .')}, ['skill_id', 'argv'], False))
             try:
                 for ident in sorted(self.mcp_ids - {'builtin:workspace'}):
-                    client = ProtocolClient(self.inventory['_private']['mcp'][ident])
+                    try:
+                        client = ProtocolClient(self.inventory['_private']['mcp'][ident]); found = client.tools()
+                    except AuthorizationNeeded:  # one connector waiting for a sign-in does not stop the whole reply
+                        self.unavailable.append(next((x['name'] for x in self.inventory.get('mcp', []) if x['id'] == ident), ident)); continue
                     self.clients[ident] = client
-                    for tool in client.tools():
+                    for tool in found:
                         original = tool.get('name')
                         if not isinstance(original, str) or not isinstance(tool.get('inputSchema'), dict):
                             raise RuntimeError('MCP returned an invalid tool schema.')

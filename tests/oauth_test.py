@@ -97,6 +97,13 @@ class OAuthTest(unittest.TestCase):
         Provider.state['life'] = 61; Provider.state['revoked'] = True; state = self.login(); self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % state, auth=False)
         time.sleep(1.5); found = self.item(); self.assertTrue(found['needsLogin']); self.assertFalse(found['signedIn'])
 
+    def test_a_connector_waiting_for_sign_in_does_not_stop_replies(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('zook_rt_oauth', Path(SERVER).with_name('runtime.py')); rt = importlib.util.module_from_spec(spec); spec.loader.exec_module(rt)
+        inventory = {'skills': [], 'mcp': [{'id': 'x', 'name': 'Remote'}], '_private': {'skills': {}, 'mcp': {'x': {'transport': 'http', 'url': self.base + '/mcp'}}}}
+        session = rt.RuntimeSession([], ['x'], False, self.root / 'w', None, None, inventory=inventory)
+        self.assertEqual(session.tools(), []); self.assertEqual(session.unavailable, ['Remote']); session.close()
+
     def test_cancelled_sign_in_and_wrong_host(self):
         state = self.login(); status, page = self.req('GET', '/oauth/callback?state=%s&error=access_denied' % state, auth=False); self.assertIn('取消', page)
         self.assertEqual(self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % state, auth=False)[0], 400)
