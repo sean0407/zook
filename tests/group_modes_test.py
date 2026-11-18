@@ -110,6 +110,18 @@ class GroupModes(unittest.TestCase):
         self.assertNotIn('paused', self.req('POST', '/api/groups/%s/continue' % g['id'], {'discard': True})[1])
         self.assertEqual(self.req('POST', '/api/groups/%s/continue' % g['id'], {})[0], 400)
 
+    def test_turn_limit_is_never_exceeded_and_answers_stay_independent(self):
+        g = self.group(hostId='', mode='compare', turnLimit=4); self.bots['Delta'] = self.req('POST', '/api/bots', {'name': 'Delta', 'provider': 'codex'})[1]; self.bots['Eps'] = self.req('POST', '/api/bots', {'name': 'Eps', 'provider': 'codex'})[1]
+        self.req('PATCH', '/api/groups/' + g['id'], {'botIds': [self.bots[n]['id'] for n in ('Alpha', 'Beta', 'Gamma', 'Delta', 'Eps')]}); found = self.say(g)
+        self.assertEqual(len(self.runs()), 4); self.assertEqual(found['paused']['steps'][0]['bots'], [self.bots['Eps']['id']])
+        self.req('POST', '/api/groups/%s/continue' % g['id'], {}); self.settle(g)
+        self.assertEqual([r for r in self.order()][4:], [('Eps', 'compare'), ('Alpha', 'compare_diff')])
+
+    def test_host_removed_in_the_form_gets_a_notice(self):
+        g = self.group(hostId=self.bots['Gamma']['id'])
+        found = self.req('PATCH', '/api/groups/' + g['id'], {'botIds': [self.bots['Alpha']['id'], self.bots['Beta']['id']], 'hostId': ''})[1]
+        self.assertIn('主持人', found['messages'][-1]['content'])
+
     def test_invalid_settings_are_refused(self):
         g = self.group(hostId='')
         for field in ({'mode': 'chaos'}, {'turnLimit': 99}, {'hostId': 'nobody'}): self.assertEqual(self.req('PATCH', '/api/groups/' + g['id'], field)[0], 400, field)

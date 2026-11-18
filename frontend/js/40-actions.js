@@ -173,7 +173,7 @@
         case 'group-verify': await verifyGroupMessage(activeGroup(), id); break;
         case 'card-copy': { const m = activeGroup().messages.find(x => x.id === id); await navigator.clipboard.writeText(cardText(m.card)); toast('已複製結論'); break; }
         case 'card-save': { const g = activeGroup(), m = g.messages.find(x => x.id === id); await post('knowledge', {title: g.name + ' 討論結論', content: cardText(m.card)}); toast('已存到知識庫'); break; }
-        case 'group-tab': state.groupTab = id; render(true); break;
+        case 'group-tab': state.groupTab = id; if (activeGroup()) delete state.groupFiles[activeGroup().id]; render(true); break;
         case 'group-file-pick': $('#group-file-input').click(); break;
         case 'group-file-delete': { const g = activeGroup(); if (!confirm(`刪除「${id}」？刪除後無法復原。`)) break; await api('groups/' + encodeURIComponent(g.id) + '/files/' + encodeURIComponent(id), {method: 'DELETE'}); await loadGroupFiles(g); toast('已刪除檔案'); break; }
         case 'stop-group':

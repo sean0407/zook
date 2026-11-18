@@ -512,12 +512,12 @@ class Handler(BaseHTTPRequestHandler):
                     if not store.find('groups', parts[2]): self.close_connection = True; return self.error(404, '找不到群組。')
                 incoming = store.dir / 'group-files'; incoming.mkdir(parents=True, exist_ok=True, mode=0o700)
                 temp = incoming / ('.incoming-' + ID()); remaining = size
-                with open(temp, 'wb') as out:
-                    while remaining:
-                        chunk = self.rfile.read(min(remaining, 1 << 20))
-                        if not chunk: break
-                        out.write(chunk); remaining -= len(chunk)
                 try:
+                    with open(temp, 'wb') as out:
+                        while remaining:
+                            chunk = self.rfile.read(min(remaining, 1 << 20))
+                            if not chunk: break
+                            out.write(chunk); remaining -= len(chunk)
                     if remaining: return self.error(400, '檔案沒有傳完整。')
                     with store.lock:
                         group = store.find('groups', parts[2])
@@ -630,7 +630,9 @@ class Handler(BaseHTTPRequestHandler):
                         return self.respond(200, {'group': group, 'jobs': [j for j in (store.find('jobs', x) for x in ids) if j]})
                     if len(parts) == 3 and self.command == 'PATCH':
                         candidate = copy.deepcopy(group); set_group_fields(store, candidate, self.body())
-                        group.clear(); group.update(candidate); store.save(); return self.respond(200, group)
+                        added = candidate['messages'][len(group['messages']):]  # the discussion may still be running, so its messages stay as they are
+                        group.update({k: candidate[k] for k in ('name', 'botIds', 'hostId', 'mode', 'turnLimit') if k in candidate}); group['messages'].extend(added)
+                        store.save(); return self.respond(200, group)
                     if len(parts) == 3 and self.command == 'DELETE':
                         if group['status'] == 'running': return self.error(409, '群組討論進行中，請先停止。')
                         store.data['groups'].remove(group)
@@ -733,8 +735,9 @@ class Handler(BaseHTTPRequestHandler):
                     if any(g['status'] == 'running' and bot['id'] in g['botIds'] for g in store.data['groups']): return self.error(409, '此機器人正在群組討論中。')
                     for g in store.data['groups']:
                         if bot['id'] in g['botIds']:
+                            was_host = group_host(store, g) == bot['id']
                             g['botIds'].remove(bot['id'])
-                            if g.get('hostId') == bot['id']: drop_group_host(store, g)
+                            if was_host: drop_group_host(store, g)
                     store.data['schedules'][:] = [x for x in store.data['schedules'] if x.get('botId') != bot['id']]
                     store.data['bots'].remove(bot); store.save(); return self.respond(200, {'ok': True})
                 if path == '/api/settings' and self.command == 'PATCH':
@@ -764,6 +767,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def set_group_fields(store, group, body, creating=False):
+    old_host = group_host(store, group) if group.get('botIds') else None
     if 'botIds' in body or creating:
         ids = body.get('botIds')
         if not isinstance(ids, list) or any(not isinstance(x, str) for x in ids): raise ValueError('成員無效。')
@@ -775,7 +779,7 @@ def set_group_fields(store, group, body, creating=False):
     if 'hostId' in body:
         if body['hostId'] != '' and body['hostId'] not in group['botIds']: raise ValueError('主持人要是這個群組的成員。')
         group['hostId'] = body['hostId']
-    elif group.get('hostId') and group['hostId'] not in group['botIds']: drop_group_host(store, group)
+    if old_host and old_host not in group['botIds'] and not (body.get('hostId') in group['botIds']): drop_group_host(store, group)
     if 'mode' in body:
         if body['mode'] not in GROUP_MODES: raise ValueError('討論方式無效。')
         group['mode'] = body['mode']

@@ -359,7 +359,7 @@
         if (i >= 0) groups[i] = data.group;
         for (const j of data.jobs || []) { if (JSON.stringify(state.jobDetails[j.id]) !== JSON.stringify(j)) changed = true; state.jobDetails[j.id] = j; }
         if (changed) render(true);
-        if (data.group.status !== 'running') break;
+        if (data.group.status !== 'running') { if (state.groupTab === 'files') delete state.groupFiles[groupId]; if (state.groupId === groupId) render(true); break; }
         await new Promise(r => setTimeout(r, 1200));
       }
     } catch (e) { toast(e.message); }

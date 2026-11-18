@@ -36,7 +36,8 @@ def group_card(content):
     """The four parts of a closing summary, or None when the reply does not follow that format."""
     pieces = re.split(r'【(%s)】' % '|'.join(_CARD_PARTS), str(content or ''))
     card = {_CARD_PARTS[pieces[i]]: pieces[i + 1].strip(' \n*#：:') for i in range(1, len(pieces) - 1, 2)}
-    return {k: ('' if v in ('無', '沒有', '暫無') else v) for k, v in card.items()} if card.get('conclusion') else None
+    if not card.get('conclusion'): return None
+    return dict({k: ('' if v in ('無', '沒有', '暫無') else v) for k, v in card.items()}, body=pieces[0].strip(' \n*#'))
 
 
 def group_verdict(content):
@@ -58,7 +59,7 @@ def group_verifier(store, group, message):
     return next((x for x in options if not x[3]), options[0] if options else None)
 
 
-def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, blind=False, target=None, writable=False):
+def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, blind=False, target=None, writable=False, hidden=()):
     members = [store.find('bots', x) for x in group['botIds']]
     members = [m for m in members if m]
     names = {m['id']: m['name'] for m in store.data['bots']}
@@ -66,7 +67,7 @@ def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, 
     knowledge = [x for x in store.data['knowledge'] if not x.get('botId') or x.get('botId') == bot['id']][-10:]
     transcript = []
     for m in group['messages'][-20:]:
-        if not m.get('content') or m.get('role') == 'system': continue
+        if not m.get('content') or m.get('role') == 'system' or m['id'] in hidden: continue
         speaker = '使用者' if m['role'] == 'user' else names.get(m.get('botId'), '已刪除的 Bot')
         transcript.append(speaker + '：' + m['content'][:3000])
         if m.get('attachments'):  # the files were copied into every member's workspace when the message was sent
@@ -98,6 +99,13 @@ def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, 
         '\n'.join('- ' + r for r in rules),
         '\n'.join(x['title'] + ': ' + x['content'][:4000] for x in knowledge),
         '\n'.join(transcript), bot['name'])
+
+
+def group_everyone(content, members):
+    """@所有人, but not a member whose name merely starts with those words."""
+    text = str(content or '')
+    for name in sorted((m['name'] for m in members), key=len, reverse=True): text = text.replace('@' + name, '')
+    return bool(re.search(r'@(?:%s)' % '|'.join(map(re.escape, GROUP_ALL)), text, re.I))
 
 
 def group_host(store, group):
@@ -142,7 +150,7 @@ def group_estimate(store, group, content, mode):
     """How many replies a message would start, and roughly how many tokens they use. Costs no model request."""
     members = [b for b in (store.find('bots', x) for x in group['botIds']) if b]
     targets = group_mentions(content or '', members)
-    everyone = not targets or bool(re.search(r'@(?:%s)' % '|'.join(map(re.escape, GROUP_ALL)), content or '', re.I))
+    everyone = not targets or group_everyone(content, members)
     limit = group_limit(store, group); open_ended = False
     if not everyone: count = len(targets)
     elif mode != 'free' and len(members) > 1: count = sum(len(s['bots']) for s in group_steps(store, group, mode))
@@ -170,7 +178,7 @@ class GroupRuns:
         members = [b for b in (self.store.find('bots', x) for x in group['botIds']) if b]
         if not members: raise RuntimeError('群組沒有可用的 Bot。')
         targets = group_mentions(content, members)
-        broadcast = not targets or bool(re.search(r'@(?:%s)' % '|'.join(map(re.escape, GROUP_ALL)), content, re.I))
+        broadcast = not targets or group_everyone(content, members)
         if not targets: targets = [b['id'] for b in members]
         message = dict(id=ID(), role='user', content=content, createdAt=NOW())
         if author: message['author'] = author
@@ -236,7 +244,7 @@ class GroupRuns:
                 store.save(); return None
             writable = not readonly and permission_mode(store, bot) in ('auto', 'bypass')
             target = find_message(group, step['targetId']) if step.get('targetId') else None
-            prompt = group_prompt(store, group, bot, may_pass, moderator=role, moderated=moderated, blind=blind, target=target, writable=writable)
+            prompt = group_prompt(store, group, bot, may_pass, moderator=role, moderated=moderated, blind=blind, target=target, writable=writable, hidden=set(step.get('hide') or ()))
             msg = dict(id=ID(), role='assistant', botId=bot_id, content='', createdAt=NOW(), status='running')
             job = dict(id=ID(), botId=bot_id, groupId=group_id, messageId=msg['id'], status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[],
                        effort=group.get('runEffort') if group.get('runEffort') not in (None, '', 'standard') else pick_effort(bot.get('effort')))
@@ -247,6 +255,8 @@ class GroupRuns:
             if auto_chain: job['autoChain'] = auto_chain; msg.update(auto_mark)
             if auto_mark: refresh_auto(self)
             files = place_attachments(store, bot_id, recent_attachments(store, group['messages'][-20:]))
+            if provider_kind(provider) == 'codex' and not writable:  # without its shell, Codex can still be shown the group's pictures
+                files = files + [group_copy_folder(store, bot_id) / e.name for e in _plain_files(group_files_dir(store, group_id)) if pathlib.Path(e.name).suffix.lower() in IMAGE_TYPES][:5]
             if files: job['attachments'] = [str(x) for x in files]
             group['messages'].append(msg); store.data['jobs'].append(job)
             group['activeJobIds'] = (group.get('activeJobIds') or []) + [job['id']]; group['activeJobId'] = group['activeJobIds'][0]
@@ -256,12 +266,13 @@ class GroupRuns:
     def _group_job(self, group_id, turn):
         """One Bot's turn, with its own copy of the group's files."""
         store = self.store; bot = turn['bot']
-        try: seen = sync_group_files_in(store, group_id, bot['id'])
-        except (OSError, ValueError): seen = None
-        self.run_job(turn['job']['id'], turn['prompt'], turn['provider'], turn['model'], bot, None)
-        if seen is None or not turn['writable'] or turn['job']['status'] != 'completed': return
-        try: saved, skipped = sync_group_files_out(store, group_id, bot['name'], bot['id'], seen)
-        except (OSError, ValueError): saved, skipped = [], []
+        with self.__dict__.setdefault('group_copy_locks', {}).setdefault(bot['id'], threading.Lock()):  # a Bot in two groups has one copy folder
+            try: seen = sync_group_files_in(store, group_id, bot['id'])
+            except (OSError, ValueError): seen = None
+            self.run_job(turn['job']['id'], turn['prompt'], turn['provider'], turn['model'], bot, None)
+            if seen is None or not turn['writable'] or turn['job']['status'] != 'completed': return
+            try: saved, skipped = sync_group_files_out(store, group_id, bot['name'], bot['id'], seen)
+            except (OSError, ValueError): saved, skipped = [], []
         with store.lock:
             group = store.find('groups', group_id)
             if not group: return
@@ -300,11 +311,14 @@ class GroupRuns:
         """A structured discussion: every step in order, stopping at the turn limit."""
         store = self.store; turns = 0
         while steps:
-            step = steps[0]
-            if turns and turns + len(step['bots']) > limit: break
-            done = self._group_batch(group_id, run_id, [(x, False, step['role']) for x in step['bots']], True, step.get('blind'), step)
+            step = steps[0]; room = limit - turns
+            if room <= 0: break
+            now, later = step['bots'][:room], step['bots'][room:]
+            done = self._group_batch(group_id, run_id, [(x, False, step['role']) for x in now], True, step.get('blind'), step)
             if done is False: return
-            turns += len(done); steps = steps[1:]
+            turns += len(now)
+            # Members who answer independently still do not see each other's answers after 繼續.
+            steps = ([dict(step, bots=later, hide=list(step.get('hide') or []) + [t['msg']['id'] for t in done])] if later else []) + steps[1:]
         if steps:
             with store.lock:
                 group = store.find('groups', group_id)
@@ -326,7 +340,7 @@ class GroupRuns:
         if resume and planned is None: pending = [tuple(x) for x in resume.get('pending') or []]
         elif moderated: pending = [(host, False, 'kickoff')]
         else: pending = [(t, broadcast, None) for t in targets]
-        rounds = (resume or {}).get('rounds', 0); blind_next = (resume or {}).get('blind', False)
+        rounds = (resume or {}).get('rounds', 0); blind_next = (resume or {}).get('blind', False); hidden = list((resume or {}).get('hide') or [])
         try:
             if planned is not None: return self._run_steps(group_id, run_id, planned, limit)
             while turns < limit:
@@ -337,10 +351,12 @@ class GroupRuns:
                 # The first round after the kickoff runs together and blind; everything else one at a time.
                 batch = pending[:limit - turns] if blind_next else pending[:1]
                 del pending[:len(batch)]
-                turns_here = self._group_batch(group_id, run_id, batch, moderated, blind_next)
+                still_blind = blind_next and bool(pending)  # the turn limit cut this independent round short
+                turns_here = self._group_batch(group_id, run_id, batch, moderated, blind_next, dict(hide=hidden) if blind_next else None)
                 if turns_here is False: return
-                blind_next = False
-                turns += len(turns_here)
+                hidden = hidden + [t['msg']['id'] for t in turns_here] if still_blind else []
+                blind_next = still_blind
+                turns += len(batch)
                 with store.lock:
                     group = store.find('groups', group_id)
                     if not group or group.get('runId') != run_id: return
@@ -368,7 +384,7 @@ class GroupRuns:
                 group = store.find('groups', group_id)
                 unfinished = pending or (moderated and rounds <= GROUP_MODERATION_ROUNDS)
                 if group and group.get('runId') == run_id and turns >= limit and unfinished:
-                    self._pause_group(group, limit, dict(kind='free', pending=pending, rounds=rounds, moderated=moderated, blind=blind_next, broadcast=broadcast))
+                    self._pause_group(group, limit, dict(kind='free', pending=pending, rounds=rounds, moderated=moderated, blind=blind_next, hide=hidden, broadcast=broadcast))
                 elif group and group.get('runId') == run_id and turns and not spoke and broadcast:
                     group['messages'].append(dict(id=ID(), role='system', content='沒有成員認為需要回覆。可以用 @ 指定由誰回答。', createdAt=NOW()))
         finally:
