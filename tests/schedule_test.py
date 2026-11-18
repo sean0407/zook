@@ -25,6 +25,18 @@ class ScheduleTimes(unittest.TestCase):
         self.assertEqual(due(dict(time='10:01', repeat='daily'), wed), datetime.datetime(2026, 11, 17, 10, 1))
         self.assertEqual(due(dict(time='09:00', repeat='mon'), wed), datetime.datetime(2026, 11, 16, 9, 0))
         self.assertEqual(due(dict(time='09:00', repeat='weekdays'), datetime.datetime(2026, 11, 22, 12, 0)), datetime.datetime(2026, 11, 20, 9, 0))
+        # every hour at the chosen minute; the hour part is ignored
+        self.assertEqual(due(dict(time='00:15', repeat='hourly'), wed), datetime.datetime(2026, 11, 18, 9, 15))
+        self.assertEqual(due(dict(time='23:00', repeat='hourly'), wed), datetime.datetime(2026, 11, 18, 10, 0))
+        # once: only on that date
+        self.assertEqual(due(dict(time='09:30', repeat='once', date='2026-11-18'), wed), datetime.datetime(2026, 11, 18, 9, 30))
+        self.assertIsNone(due(dict(time='10:30', repeat='once', date='2026-11-18'), wed))
+        # monthly: a day the month lacks runs on its last day
+        self.assertEqual(due(dict(time='10:00', repeat='monthly', day=18), wed), datetime.datetime(2026, 11, 18, 10, 0))
+        self.assertEqual(due(dict(time='11:00', repeat='monthly', day=18), wed), datetime.datetime(2026, 10, 18, 11, 0))
+        self.assertEqual(due(dict(time='08:00', repeat='monthly', day=31), wed), datetime.datetime(2026, 10, 31, 8, 0))
+        self.assertEqual(due(dict(time='08:00', repeat='monthly', day=31), datetime.datetime(2027, 3, 1)), datetime.datetime(2027, 2, 28, 8, 0))
+        self.assertEqual(due(dict(time='08:00', repeat='monthly', day=30), datetime.datetime(2026, 11, 30, 9)), datetime.datetime(2026, 11, 30, 8, 0))
 
 
 class ScheduleTest(unittest.TestCase):
@@ -70,7 +82,9 @@ class ScheduleTest(unittest.TestCase):
 
     def test_checks_and_runs_on_request(self):
         base = {'botId': self.bot['id'], 'content': 'morning report', 'time': '10:00', 'repeat': 'daily'}
-        for bad in ({'time': '25:00'}, {'repeat': 'hourly'}, {'content': ' '}, {'botId': 'nope'}, {'on': 'yes'}):
+        for bad in ({'time': '25:00'}, {'repeat': 'yearly'}, {'content': ' '}, {'botId': 'nope'}, {'on': 'yes'},
+                    {'repeat': 'once'}, {'repeat': 'once', 'date': '2020-01-01'}, {'repeat': 'once', 'date': '2026-02-30'},
+                    {'repeat': 'monthly'}, {'repeat': 'monthly', 'day': 32}, {'repeat': 'monthly', 'day': '5'}):
             self.assertEqual(self.req('POST', '/api/schedules', dict(base, **bad))[0], 400, bad)
         status, item = self.req('POST', '/api/schedules', base)
         self.assertEqual((status, item['on'], item['catchUp']), (201, True, True))
@@ -113,6 +127,21 @@ class ScheduleTest(unittest.TestCase):
         self.assertEqual(self.req('PATCH', '/api/schedules/' + item['id'], {'groupId': group['id']})[1]['botId'], '')
         self.assertEqual(self.req('DELETE', '/api/groups/' + group['id'])[0], 200)  # its schedules go with it
         self.assertEqual(self.req('GET', '/api/state')[1]['schedules'], [])
+
+    def test_once_runs_then_turns_itself_off(self):
+        now = datetime.datetime.now(); later = now + datetime.timedelta(days=2)
+        status, item = self.req('POST', '/api/schedules', {'botId': self.bot['id'], 'content': 'just once', 'repeat': 'once',
+                                                           'date': later.strftime('%Y-%m-%d'), 'time': '10:00'})
+        self.assertEqual((status, item['date']), (201, later.strftime('%Y-%m-%d')))
+        hour_ago = now - datetime.timedelta(hours=1)
+        self.backdate(now - datetime.timedelta(hours=2), date=hour_ago.strftime('%Y-%m-%d'), time=hour_ago.strftime('%H:%M'))
+        state = self.wait(lambda s: s['schedules'][0].get('lastStatus') == 'sent')
+        self.assertEqual((state['schedules'][0]['on'], state['schedules'][0]['done']), (False, True))
+        time.sleep(1)
+        self.assertEqual(len([m for m in self.messages(self.req('GET', '/api/state')[1]) if m['role'] == 'user']), 1)
+        # a monthly schedule keeps its day
+        status, item = self.req('POST', '/api/schedules', {'botId': self.bot['id'], 'content': 'rent', 'repeat': 'monthly', 'day': 31, 'time': '09:00'})
+        self.assertEqual((status, item['day']), (201, 31))
 
     def test_missed_is_skipped_when_catch_up_is_off(self):
         earlier = datetime.datetime.now() - datetime.timedelta(minutes=30)

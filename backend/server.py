@@ -3,6 +3,7 @@
 import argparse
 import socket
 import base64
+import calendar
 import hashlib
 import datetime
 import glob
@@ -1668,7 +1669,8 @@ def model_list(provider):
 class Busy(Exception): pass
 
 
-SCHEDULE_REPEATS = dict(daily=range(7), weekdays=range(5), mon=[0], tue=[1], wed=[2], thu=[3], fri=[4], sat=[5], sun=[6])
+SCHEDULE_WEEKLY = dict(daily=range(7), weekdays=range(5), mon=[0], tue=[1], wed=[2], thu=[3], fri=[4], sat=[5], sun=[6])
+SCHEDULE_REPEATS = set(SCHEDULE_WEEKLY) | {'once', 'hourly', 'monthly'}
 
 
 def schedule_fields(store, body, record):
@@ -1689,19 +1691,48 @@ def schedule_fields(store, body, record):
     if 'repeat' in body:
         if body['repeat'] not in SCHEDULE_REPEATS: raise ValueError('重複方式無效。')
         record['repeat'] = body['repeat']
+    if 'date' in body:
+        try: datetime.datetime.strptime(str(body['date']), '%Y-%m-%d')
+        except ValueError: raise ValueError('日期無效。')
+        record['date'] = body['date']
+    if 'day' in body:
+        if type(body['day']) is not int or not 1 <= body['day'] <= 31: raise ValueError('每月的日期無效。')
+        record['day'] = body['day']
     for key in ('on', 'catchUp'):
         if key in body:
             if not isinstance(body[key], bool): raise ValueError('設定無效。')
             record[key] = body[key]
     if not (record.get('botId') or record.get('groupId')) or not record.get('content') or not record.get('time'): raise ValueError('請選擇 Bot 或群組、填寫內容和時間。')
-    record['since'] = datetime.datetime.now().isoformat()  # only times after this moment count
+    now = datetime.datetime.now()
+    if record.get('repeat') == 'monthly' and not record.get('day'): raise ValueError('請選擇每月幾號。')
+    if record.get('repeat') == 'once':
+        if not record.get('date'): raise ValueError('請選擇日期。')
+        if record.get('on') and datetime.datetime.strptime(record['date'] + ' ' + record['time'], '%Y-%m-%d %H:%M') <= now:
+            raise ValueError('這個時間已經過了，請改日期或時間。')
+    if record.get('on'): record.pop('done', None)
+    record['since'] = now.isoformat()  # only times after this moment count
     return record
 
 
 def schedule_last_due(item, now):
     """The most recent moment this schedule was meant to run, at or before now (local time)."""
     hour, minute = int(item['time'][:2]), int(item['time'][3:])
-    days = SCHEDULE_REPEATS.get(item.get('repeat'), range(7))
+    repeat = item.get('repeat')
+    if repeat == 'hourly':
+        moment = now.replace(minute=minute, second=0, microsecond=0)
+        return moment if moment <= now else moment - datetime.timedelta(hours=1)
+    if repeat == 'once':
+        try: moment = datetime.datetime.strptime('%s %s' % (item.get('date'), item['time']), '%Y-%m-%d %H:%M')
+        except ValueError: return None
+        return moment if moment <= now else None
+    if repeat == 'monthly':
+        year, month = now.year, now.month
+        for _ in range(2):
+            moment = datetime.datetime(year, month, min(int(item.get('day') or 1), calendar.monthrange(year, month)[1]), hour, minute)
+            if moment <= now: return moment
+            year, month = (year, month - 1) if month > 1 else (year - 1, 12)
+        return None
+    days = SCHEDULE_WEEKLY.get(repeat, range(7))
     for back in range(8):
         moment = (now - datetime.timedelta(days=back)).replace(hour=hour, minute=minute, second=0, microsecond=0)
         if moment <= now and moment.weekday() in days: return moment
@@ -1870,18 +1901,21 @@ class App(ThreadingHTTPServer):
         with store.lock:
             if not list(waiting()): return
         inventory = inventory_for(store)
+        def handled(item, due, status, error=''):
+            item.pop('held', None)
+            item.update(since=due.isoformat(), lastAt=NOW(), lastStatus=status, lastError=error)
+            if item.get('repeat') == 'once': item.update(on=False, done=True)  # a one-time schedule is finished either way
         with store.lock:
             for item, due in list(waiting()):
                 late = (now - due).total_seconds()
                 if late > 86400 or (late > 180 and not item.get('catchUp', True) and not item.get('held')):
-                    item.update(since=due.isoformat(), lastStatus='missed', lastAt=NOW(), lastError='到時間時 Zook 沒有開著。'); item.pop('held', None); continue
+                    handled(item, due, 'missed', '到時間時 Zook 沒有開著。'); continue
                 try: problem = self.run_schedule(item, inventory)
                 except Busy:
-                    item['held'] = True  # the Bot is replying to something else: try again shortly
-                    if late > 6 * 3600: item.update(since=due.isoformat(), lastStatus='missed', lastAt=NOW(), lastError='Bot 一直在忙，這次沒有執行。'); item.pop('held', None)
+                    item['held'] = True  # the Bot or group is busy with something else: try again shortly
+                    if late > 6 * 3600: handled(item, due, 'missed', '一直在忙，這次沒有執行。')
                     continue
-                item.pop('held', None)
-                item.update(since=due.isoformat(), lastAt=NOW(), lastStatus='failed' if problem else 'sent', lastError=problem or '')
+                handled(item, due, 'failed' if problem else 'sent', problem or '')
             store.save()
 
     def schedule_loop(self):

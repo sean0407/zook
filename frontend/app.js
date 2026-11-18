@@ -886,14 +886,23 @@
     } catch (e) { if (form.isConnected) target.innerHTML = `<p class="error-text">無法載入能力清單：${esc(e.message)}。請關閉並重試。</p>`; }
   }
 
-  const REPEATS = [['daily', '每天'], ['weekdays', '週一到週五'], ['mon', '每週一'], ['tue', '每週二'], ['wed', '每週三'], ['thu', '每週四'], ['fri', '每週五'], ['sat', '每週六'], ['sun', '每週日']];
+  const REPEATS = [['daily', '每天'], ['weekdays', '週一到週五'], ['mon', '每週一'], ['tue', '每週二'], ['wed', '每週三'], ['thu', '每週四'], ['fri', '每週五'], ['sat', '每週六'], ['sun', '每週日'], ['hourly', '每小時'], ['monthly', '每月'], ['once', '只一次']];
   const repeatName = id => (REPEATS.find(r => r[0] === id) || REPEATS[0])[1];
+  const WEEKDAY = '日一二三四五六';
+  const dayLabel = iso => { const d = new Date(iso + 'T00:00:00'); return `${d.getMonth() + 1}/${d.getDate()}（週${WEEKDAY[d.getDay()]}）`; };
+  // When a schedule runs, in words: 每天 10:00, 每小時的 15 分, 每月 5 號 10:00, 11/20（週五）10:00.
+  function scheduleWhen(x) {
+    if (x.repeat === 'hourly') return `每小時的 ${x.time.slice(3)} 分`;
+    if (x.repeat === 'monthly') return `每月 ${x.day} 號 ${x.time}`;
+    if (x.repeat === 'once') return `${x.date ? dayLabel(x.date) : ''} ${x.time}`;
+    return `${repeatName(x.repeat)} ${x.time}`;
+  }
   function schedulesPage() {
     const items = state.data.schedules || [];
     const intro = '<p class="muted sched-intro">時間到了，Zook 會自動把這則訊息送給 Bot 或群組，回覆留在對話裡。Mac 要開著、Zook 要在執行；需要你核准的動作仍會等你核准。</p>';
     if (!items.length) return intro + '<div class="blank">目前沒有排程。按「新增排程」，讓 Bot 或群組在固定時間自動做事。</div>';
-    const last = x => !x.lastStatus ? '尚未執行' : (x.lastStatus === 'sent' ? '上次執行：' : x.lastStatus === 'missed' ? '上次錯過：' : '上次失敗：') + formatDate(x.lastAt) + (x.lastStatus !== 'sent' && x.lastError ? '（' + x.lastError + '）' : '');
-    return intro + `<div class="cards">${items.map(x => `<article class="card sched-card"><div class="sched-head"><h3>${esc(repeatName(x.repeat))} ${esc(x.time)}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><p>${esc(x.content)}</p>${scheduleTarget(x)}<span class="status ${x.lastStatus && x.lastStatus !== 'sent' ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button><button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`).join('')}</div>`;
+    const last = x => x.done ? '已完成' : !x.lastStatus ? '尚未執行' : (x.lastStatus === 'sent' ? '上次執行：' : x.lastStatus === 'missed' ? '上次錯過：' : '上次失敗：') + formatDate(x.lastAt) + (x.lastStatus !== 'sent' && x.lastError ? '（' + x.lastError + '）' : '');
+    return intro + `<div class="cards">${items.map(x => `<article class="card sched-card"><div class="sched-head"><h3>${esc(scheduleWhen(x))}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><p>${esc(x.content)}</p>${scheduleTarget(x)}<span class="status ${x.lastStatus && x.lastStatus !== 'sent' && !x.done ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button><button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`).join('')}</div>`;
   }
   // Who a schedule talks to: a Bot or a group, with its avatar.
   function scheduleTarget(x) {
@@ -906,8 +915,12 @@
     if (!state.data.bots.length) { toast('請先建立一個 Bot'); return; }
     const two = n => String(n).padStart(2, '0'), [h, m] = (x.time || '10:00').split(':');
     const minutes = [...new Set([...Array.from({length: 12}, (_, i) => two(i * 5)), m])].sort();
+    const iso = d => `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+    const days = Array.from({length: 120}, (_, i) => { const d = new Date(); d.setDate(d.getDate() + i); return iso(d); });
+    if (x.date && !days.includes(x.date)) days.unshift(x.date);
+    const dates = days.map((d, i) => ({id: d, name: (i === 0 && d === iso(new Date()) ? '今天 ' : i === 1 ? '明天 ' : '') + dayLabel(d)}));
     const target = x.groupId ? 'group:' + x.groupId : x.botId ? 'bot:' + x.botId : state.page === 'chat' && state.groupId ? 'group:' + state.groupId : 'bot:' + ((state.page === 'chat' && state.selected) || state.data.bots[0].id);
-    modal(x.id ? '編輯排程' : '新增排程', `<form id="schedule-form"><div class="modal-body"><div class="field">對象${dropdown('target', target, scheduleTargets())}</div><label class="field">要做的事<textarea name="content" required placeholder="例如：整理今天的行事曆和未讀信件，列出三件最重要的事">${esc(x.content || '')}</textarea></label><div class="sched-when"><div class="field">重複${dropdown('repeat', x.repeat || 'daily', REPEATS.map(r => ({id: r[0], name: r[1]})))}</div><div class="field">時${dropdown('hour', h, Array.from({length: 24}, (_, i) => ({id: two(i), name: two(i)})))}</div><div class="field">分${dropdown('minute', m, minutes.map(v => ({id: v, name: v})))}</div></div><div class="setting-list in-form">${settingRow('啟用', '關閉後不會自動執行。', toggle('name="on"', x.on !== false, '啟用'))}${settingRow('錯過時補跑', '到時間時 Mac 在睡眠或 Zook 沒開，之後一開啟就補做一次（限 24 小時內）。', toggle('name="catchUp"', x.catchUp !== false, '錯過時補跑'))}</div></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">儲存</button></div></form>`);
+    modal(x.id ? '編輯排程' : '新增排程', `<form id="schedule-form"><div class="modal-body"><div class="field">對象${dropdown('target', target, scheduleTargets())}</div><label class="field">要做的事<textarea name="content" required placeholder="例如：整理今天的行事曆和未讀信件，列出三件最重要的事">${esc(x.content || '')}</textarea></label><div class="sched-when" data-repeat="${esc(x.repeat || 'daily')}"><div class="field">重複${dropdown('repeat', x.repeat || 'daily', REPEATS.map(r => ({id: r[0], name: r[1]})))}</div><div class="field when-date">日期${dropdown('date', x.date || dates[0].id, dates)}</div><div class="field when-day">日${dropdown('day', String(x.day || new Date().getDate()), Array.from({length: 31}, (_, i) => ({id: String(i + 1), name: (i + 1) + ' 號', hint: i >= 28 ? '沒有這天的月份在月底執行' : ''})))}</div><div class="field when-hour">時${dropdown('hour', h, Array.from({length: 24}, (_, i) => ({id: two(i), name: two(i)})))}</div><div class="field">分${dropdown('minute', m, minutes.map(v => ({id: v, name: v})))}</div></div><div class="setting-list in-form">${settingRow('啟用', '關閉後不會自動執行。', toggle('name="on"', x.on !== false, '啟用'))}${settingRow('錯過時補跑', '到時間時 Mac 在睡眠或 Zook 沒開，之後一開啟就補做一次（限 24 小時內）。', toggle('name="catchUp"', x.catchUp !== false, '錯過時補跑'))}</div></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">儲存</button></div></form>`);
     $('#schedule-form').dataset.id = x.id || '';
   }
   function noteModal(n = {}) {
@@ -1627,6 +1640,10 @@
       catch (err) { toast(err.message); }
       return;
     }
+    if (e.target.name === 'repeat' && e.target.closest('#schedule-form')) {
+      e.target.closest('.sched-when').dataset.repeat = e.target.value;
+      return;
+    }
     if (e.target.dataset.scheduleSwitch !== undefined) {
       const on = e.target.checked;
       try { await post('schedules/' + encodeURIComponent(e.target.dataset.id), {on}, 'PATCH'); await refresh(); toast(on ? '已啟用排程' : '已停用排程'); }
@@ -1844,7 +1861,10 @@
       } else if (form.id === 'schedule-form') {
         const d = new FormData(form), id = form.dataset.id;
         const [kind, targetId] = String(d.get('target')).split(':');
-        const data = {[kind === 'group' ? 'groupId' : 'botId']: targetId, content: d.get('content'), repeat: d.get('repeat'), time: d.get('hour') + ':' + d.get('minute'), on: d.get('on') === 'on', catchUp: d.get('catchUp') === 'on'};
+        const repeat = d.get('repeat');
+        const data = {[kind === 'group' ? 'groupId' : 'botId']: targetId, content: d.get('content'), repeat, time: (repeat === 'hourly' ? '00' : d.get('hour')) + ':' + d.get('minute'), on: d.get('on') === 'on', catchUp: d.get('catchUp') === 'on'};
+        if (repeat === 'once') data.date = d.get('date');
+        if (repeat === 'monthly') data.day = Number(d.get('day'));
         await post(id ? 'schedules/' + encodeURIComponent(id) : 'schedules', data, id ? 'PATCH' : 'POST');
         closeModal();
         await refresh();

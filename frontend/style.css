@@ -1466,5 +1466,12 @@ button {
 .sched-card .status { display: block; margin-top: 4px; }
 .sched-card .status.warn { color: #b3261e; }
 .sched-when { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; }
+.sched-when .when-date, .sched-when .when-day { display: none; }
+.sched-when[data-repeat="once"] { grid-template-columns: 1.4fr 2fr 1fr 1fr; }
+.sched-when[data-repeat="once"] .when-date { display: block; }
+.sched-when[data-repeat="monthly"] { grid-template-columns: 1.4fr 1fr 1fr 1fr; }
+.sched-when[data-repeat="monthly"] .when-day { display: block; }
+.sched-when[data-repeat="hourly"] { grid-template-columns: 2fr 1fr; }
+.sched-when[data-repeat="hourly"] .when-hour { display: none; }
 .sched-target { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-weight: 500; }
 .sched-target > .avatar { width: 22px; height: 22px; font-size: 11px; }
