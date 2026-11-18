@@ -420,8 +420,9 @@ class ProtocolClient:
             raise RuntimeError('MCP process disconnected. Check authorization in its owning app and reconnect.')
 
     def _http(self, msg):
+        # Some services turn away requests that do not say what program is asking (Python's default name is on their block lists).
         headers = {'Accept': 'application/json, text/event-stream', 'Content-Type': 'application/json',
-                   'MCP-Protocol-Version': self.protocol}
+                   'MCP-Protocol-Version': self.protocol, 'User-Agent': 'Zook (macOS; MCP client)'}
         headers.update(self.config.get('headers', {}))
         headers.update(self.config.get('http_headers', {}))
         for key, envname in self.config.get('env_http_headers', {}).items():
@@ -469,8 +470,9 @@ class ProtocolClient:
                     raise RuntimeError('MCP response exceeds the size limit.')
                 return json.loads(body)
         except urllib.error.HTTPError as exc:
-            if exc.code in (401, 403):
+            if exc.code == 401:
                 raise AuthorizationNeeded('這個連接器需要登入。請到連接器頁按「登入」，或在來源 App 重新授權。')
+            if exc.code == 403: raise RuntimeError('這個連接器拒絕了連線（403）。可能是帳號沒有權限，或服務不接受這個來源。')
             raise RuntimeError('MCP HTTP request failed (status %s). Verify the configured MCP endpoint.' % exc.code)
         except (urllib.error.URLError, OSError, ValueError):
             raise RuntimeError('MCP endpoint did not return a valid response. Check connectivity and its configured transport.')
@@ -625,7 +627,8 @@ class RuntimeSession:
         # A callable is read on every tool call, so a change in Settings applies mid-reply.
         self.permission_mode = permission_mode if callable(permission_mode) or permission_mode in PERMISSION_MODES else 'manual'
         self.annotations = {}
-        self.unavailable = []  # connectors left out of this reply because they need a sign-in
+        self.unavailable = []  # connectors left out of this reply because they could not be reached
+        self.unavailable_why = {}
 
     def tools(self):
         with self.init_lock:
@@ -656,11 +659,14 @@ class RuntimeSession:
                     signed = not config['noCredentials'] if 'noCredentials' in config else bool(config.get('headers') or config.get('http_headers') or config.get('env_http_headers') or config.get('bearer_token_env_var'))
                     try:
                         client = ProtocolClient(config); self.clients[ident] = client; found = client.tools()
-                    except AuthorizationNeeded:
+                    except Exception as exc:
+                        # One connector that cannot be reached does not stop the reply. It is left out, and both the Bot and the user are told.
                         stale = self.clients.pop(ident, None)
                         if stale: stale.close()
-                        if signed: raise RuntimeError('連接器「%s」的授權被拒絕。請到連接器頁重新登入或更新金鑰，或先關閉這個連接器。' % label)
-                        self.unavailable.append(label); continue  # never signed in: left out, and the reply goes on
+                        needs = isinstance(exc, AuthorizationNeeded)
+                        self.unavailable.append(label)
+                        self.unavailable_why[label] = ('需要登入' if not signed else '授權被拒絕，請重新登入或更新金鑰') if needs else self.redactor.text(exc)[:80]
+                        continue
                     for tool in found:
                         original = tool.get('name')
                         if not isinstance(original, str) or not isinstance(tool.get('inputSchema'), dict):

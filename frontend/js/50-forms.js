@@ -29,7 +29,6 @@
   });
   document.addEventListener('input', e => {
     if (e.target.id === 'chat-input' && activeGroup()) scheduleGroupEstimate();
-    if (e.target.id === 'catalog-search' && !e.isComposing) { const at = e.target.selectionStart; state.catalogQuery = e.target.value; renderCatalog(); const again = $('#catalog-search'); if (again) { again.focus(); again.setSelectionRange(at, at); } }
     if (e.target.closest('#bot-form')) saveBotDraft(e.target.closest('form'));
     if (e.target.name === 'modelCustom') {
       const f = e.target.closest('form');

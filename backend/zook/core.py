@@ -548,6 +548,7 @@ def mobile_message(m, names):
         if m.get(key): out[key] = m[key]
     if m.get('attachments'): out['attachments'] = len(m['attachments'])  # the phone shows how many, not the files
     if m.get('auto') and not m.get('note'): out['note'] = 'auto: ' + m['auto']
+    if m.get('skipped'): out['note'] = '；'.join(x for x in (out.get('note'), '這次沒用到的連接器：' + '、'.join(m['skipped'])) if x)
     return out
 
 

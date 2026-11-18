@@ -1590,3 +1590,7 @@ button.run-row:hover { background: #f1f1f1; }
 .catalog-item > div { flex: 1; }
 .account-pick { margin: 6px 0 2px; max-width: 260px; }
 .account-pick .dd-btn { height: 30px; min-height: 30px; border-radius: 8px; font-size: 12.5px; }
+.catalog-head { margin: 26px 0 4px; font-size: 17px; }
+.catalog-intro p { margin: 0 0 4px; }
+.catalog-group { font-size: 13px; color: #777; font-weight: 600; }
+.catalog-card.off { opacity: 0.6; }

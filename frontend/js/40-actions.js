@@ -512,7 +512,7 @@
           input.click();
           break;
         }
-        case 'catalog-open': await catalogModal(); break;
+        case 'catalog-why': catalogWhy(id); break;
         case 'catalog-add': await catalogAdd(id); break;
         case 'connector-login': {
           const ids = item => (item?.accounts || []).map(x => x.id).join(), before = ids((state.integrations?.mcp || []).find(i => i.id === id)), adding = !!el.dataset.add;
@@ -522,10 +522,11 @@
             await new Promise(r => setTimeout(r, 2000));
             state.integrations = await api('integrations');
             const now = (state.integrations.mcp || []).find(i => i.id === id);
-            if (adding ? ids(now) !== before : now?.signedIn) { render(true); toast(adding ? '已新增帳號，可以在卡片上選擇要用哪一個' : '登入完成'); break; }
+            if (adding ? ids(now) !== before : now?.signedIn) { await retestConnector(id); render(true); toast(adding ? '已新增帳號，可以在卡片上選擇要用哪一個' : '登入完成'); break; }
           }
           break;
         }
+        case 'connector-retest': await retestConnector(id); render(true); break;
         case 'connector-logout':
           if (!confirm('登出目前使用的這個帳號？它的授權會從鑰匙圈刪除。')) break;
           await post('connectors/' + encodeURIComponent(id.split(':')[1]) + '/logout');

@@ -35,7 +35,7 @@ class Provider(BaseHTTPRequestHandler):
             if form.get('refresh_token') == 'REFRESH-1' and not s.get('revoked'): return self.send(200, {'access_token': 'ACCESS-2', 'expires_in': 3600})
             return self.send(400, {'error': 'invalid_grant'})
         if path == '/mcp':
-            auth = self.headers.get('Authorization', ''); s.setdefault('seen', []).append(auth[:15])
+            auth = self.headers.get('Authorization', ''); s.setdefault('seen', []).append(auth[:15]); s.setdefault('agents', []).append(self.headers.get('User-Agent', ''))
             if not auth.startswith('Bearer ACCESS-'): return self.send(401, {}, {'WWW-Authenticate': 'Bearer resource_metadata="%s/.well-known/oauth-protected-resource"' % base})
             msg = json.loads(raw)
             if msg.get('method') == 'initialize': return self.send(200, {'jsonrpc': '2.0', 'id': msg['id'], 'result': {'protocolVersion': '2025-06-18', 'capabilities': {}, 'serverInfo': {'name': 'p', 'version': '1'}}})
@@ -106,7 +106,8 @@ class OAuthTest(unittest.TestCase):
         self.assertEqual(session.tools(), []); self.assertEqual(session.unavailable, ['Remote']); session.close()
         inventory['_private']['mcp']['x']['headers'] = {'Authorization': 'Bearer wrong-key'}  # a key that was refused is a real failure, and is shown
         session = rt.RuntimeSession([], ['x'], False, self.root / 'w', None, None, inventory=inventory)
-        self.assertRaises(RuntimeError, session.tools); session.close()
+        self.assertEqual(session.tools(), []); self.assertIn('授權被拒絕', session.unavailable_why['Remote']); session.close()   # left out and explained, and the reply still goes on
+        self.assertTrue(all('python' not in a.lower() for a in Provider.state.get('agents', ['x'])))
 
     def test_editing_keeps_the_sign_in_and_changing_the_address_removes_it(self):
         state = self.login(); self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % state, auth=False)
