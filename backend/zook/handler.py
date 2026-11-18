@@ -234,7 +234,7 @@ class Handler(BaseHTTPRequestHandler):
     def respond(self, code, data, content_type='application/json; charset=utf-8'):
         raw = json.dumps(data, ensure_ascii=False).encode() if isinstance(data, (dict, list)) else data
         self.send_response(code); self.send_header('Content-Type', content_type); self.send_header('Content-Length', str(len(raw)))
-        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"); self.send_header('Cache-Control', 'private, max-age=86400' if content_type == 'image/png' else 'no-store'); self.send_header('X-Content-Type-Options', 'nosniff'); self.end_headers(); self.wfile.write(raw)
+        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors %s" % ("'self'" if content_type == 'application/pdf' else "'none'")); self.send_header('Cache-Control', 'private, max-age=86400' if content_type == 'image/png' else 'no-store'); self.send_header('X-Content-Type-Options', 'nosniff'); self.end_headers(); self.wfile.write(raw)
     def error(self, code, message): self.respond(code, {'error': message})
     def authorized(self):
         port = self.server.server_address[1]
@@ -384,6 +384,21 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, self.quota())
             if path == '/api/usage/bots' and self.command == 'GET':
                 with store.lock: return self.respond(200, bot_usage(store))
+            if len(parts) in (4, 5, 6) and parts[:2] == ['api', 'bots'] and parts[3] == 'outputs' and not self.device:
+                with store.lock: bot = copy.deepcopy(store.find('bots', parts[2]))
+                if not bot: return self.error(404, '找不到機器人。')
+                if len(parts) == 4 and self.command == 'GET': return self.respond(200, {'outputs': bot_outputs(store, bot)})
+                item = bot_output(store, bot, parts[4])
+                if not item: return self.error(404, '找不到這個檔案，可能已經被移走或刪除。')
+                if len(parts) == 5 and self.command == 'GET':
+                    try: data, kind = output_response(item)
+                    except ValueError as exc: return self.error(413, str(exc))
+                    except OSError: return self.error(404, '找不到這個檔案，可能已經被移走或刪除。')
+                    return self.respond(200, data, kind)
+                if len(parts) == 6 and parts[5] == 'reveal' and self.command == 'POST':
+                    subprocess.run(['/usr/bin/open', '-R', item['path']], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                    return self.respond(200, {'ok': True})
+                return self.error(404, '找不到資源。')
             if path == '/api/google' and self.command in ('POST', 'DELETE') and not self.device:
                 if self.command == 'DELETE': google_logout(store); return self.respond(200, {'ok': True})
                 body = self.body()

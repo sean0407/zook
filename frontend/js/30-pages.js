@@ -254,6 +254,7 @@
       }
       delete state.pollers[jobId];
       await refresh();
+      if (j.status === 'completed') loadOutputs(botId, true);  // so new files show up, and their names in the reply open a preview
       if (j.status === 'failed') toast(j.error || '回覆失敗');
       if (j.status === 'cancelled') toast('已停止回覆')
     } catch (e) {

@@ -254,7 +254,11 @@
           state.detailOpen = !state.detailOpen;
           render(true);
           break;
+        case 'outputs-refresh': await loadOutputs(activeBot().id); break;
+        case 'output-open': await openOutput(el.dataset.bot || activeBot().id, id); break;
+        case 'output-reveal': await post('bots/' + encodeURIComponent(el.dataset.bot) + '/outputs/' + encodeURIComponent(id) + '/reveal'); break;
         case 'detail':
+          if (id === 'outputs' && activeBot()) delete state.outputs[activeBot().id];
           state.detail = id;
           render(true);
           break;
