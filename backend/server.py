@@ -2250,7 +2250,8 @@ class App(ThreadingHTTPServer):
                     else:
                         access_args = ['--permission-mode', 'dontAsk', '--no-subagents', '--trust', '--sandbox', 'strict'] + (['--deny', 'Bash', '--allow', 'Read', '--allow', 'Write', '--allow', 'Edit'] if native else ['--deny', 'Bash', '--deny', 'Edit'])
                     args = [binary, '--prompt-file', str(prompt_file), '--output-format', 'streaming-json'] + access_args + [
-                            '--allow', 'MCPTool(zook_*)', '--cwd', str(workspace)]  # zook_* also lets a short name through, so Grok gets "use zook__…" instead of a refusal + (['--model', model] if model else [])
+                            '--allow', 'MCPTool(zook_*)', '--cwd', str(workspace)] + (['--model', model] if model else [])
+                    # zook_* (not zook__*) also lets a short tool name through, so Grok is told to use zook__… instead of being refused.
                     args += ['--allow', 'WebSearch', '--allow', 'WebFetch'] if web else ['--disable-web-search']
                     env.update(GROK_MEMORY='0', **{'GROK_%s_%s_ENABLED' % (vendor, cell): 'false' for vendor in ('CLAUDE', 'CURSOR')
                                                     for cell in ('MCPS', 'AGENTS', 'RULES', 'SKILLS', 'HOOKS')})
