@@ -150,3 +150,31 @@
     if (!state.data || state.data.settings.onboarded !== false || document.hidden) return;
     try { const next = await api('accounts'); if (JSON.stringify(next) !== JSON.stringify(state.accounts)) { state.accounts = next; if (state.page !== 'usage' || !$('#account-code-form input:focus')) render(true); } } catch (_) {}
   }, 4000);
+
+  // Voice input: the Mac app listens and sends the words back; they are added to what is already typed.
+  const VOICE_LANGS = [{id: '', name: '跟隨系統語言'}, {id: 'zh-TW', name: '中文（台灣）'}, {id: 'en-US', name: 'English'}, {id: 'ja-JP', name: '日本語'}];
+  const VOICE_ERRORS = {mic: '沒有麥克風權限。請到「系統設定 → 隱私權與安全性 → 麥克風」打開 Zook。', speech: '沒有語音辨識權限。請到「系統設定 → 隱私權與安全性 → 語音辨識」打開 Zook。', unavailable: '這台 Mac 目前無法辨識這個語言。'};
+  const voiceSection = () => `<h2 class="settings-h">語音輸入</h2><div class="setting-list">${settingRow('辨識語言', '按訊息框旁的麥克風開始，再按一次結束', dropdown('voiceLang', state.data.settings.voiceLang || '', VOICE_LANGS, 'data-voice-lang'))}</div>`;
+  function toggleVoice() {
+    const bridge = window.webkit?.messageHandlers?.zookVoice;
+    if (!bridge) { toast('語音輸入要在 Zook App 裡使用'); return; }
+    if (state.voice) { bridge.postMessage({stop: true}); return; }
+    state.voice = {base: $('#chat-input')?.value || '', key: effortKey()};
+    bridge.postMessage({start: true, lang: state.data.settings.voiceLang || ''});
+  }
+  window.zookVoice = info => {
+    if (!info || !state.voice) return;
+    if (info.state === 'listening') { document.body.dataset.voice = 'on'; toast(info.onDevice ? '正在聽，再按一次麥克風結束' : '正在聽（由 Apple 的語音服務辨識），再按一次結束'); }
+    if (info.state === 'partial' && typeof info.text === 'string' && state.voice.key === effortKey()) {
+      const input = $('#chat-input'), base = state.voice.base;
+      if (input) { input.value = (base + (base && !/\s$/.test(base) ? ' ' : '') + info.text).slice(0, 30000); updateInputMirror(); }
+    }
+    if (info.state === 'ended' || info.state === 'error') {
+      delete document.body.dataset.voice; state.voice = null;
+      if (info.state === 'error') toast(VOICE_ERRORS[info.reason] || '語音輸入無法啟動。'); else $('#chat-input')?.focus();
+    }
+  };
+  document.addEventListener('change', async e => {
+    if (e.target.dataset.voiceLang === undefined) return;
+    try { state.data.settings = await post('settings', {voiceLang: e.target.value}, 'PATCH'); toast('已更新'); } catch (err) { toast(err.message); }
+  });

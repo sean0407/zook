@@ -6,7 +6,9 @@ if [ "${1:-}" = "--preview" ]; then
     APP="$PROJECT_ROOT/build/Zook Preview.app"
 fi
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-/usr/bin/swiftc -O -target "$(uname -m)-apple-macosx12.0" -framework AppKit -framework WebKit -framework UserNotifications "$PROJECT_ROOT/native/Zook.swift" -o "$APP/Contents/MacOS/Zook"
+# With more than one source file, Swift only allows top-level code in a file named main.swift.
+SWIFT_MAIN="$(mktemp -d)"; cp "$PROJECT_ROOT/native/Zook.swift" "$SWIFT_MAIN/main.swift"
+/usr/bin/swiftc -O -target "$(uname -m)-apple-macosx12.0" -framework AppKit -framework WebKit -framework UserNotifications -framework Speech -framework AVFoundation "$SWIFT_MAIN/main.swift" "$PROJECT_ROOT/native/Voice.swift" -o "$APP/Contents/MacOS/Zook"
 /usr/bin/swiftc -O -target "$(uname -m)-apple-macosx12.0" -framework AppKit "$PROJECT_ROOT/native/IconTool.swift" -o "$APP/Contents/MacOS/zook-icon"
 /usr/bin/swiftc -O -swift-version 5 -target "$(uname -m)-apple-macosx12.0" -framework AppKit -framework CoreImage "$PROJECT_ROOT/native/remote/RemoteCore.swift" "$PROJECT_ROOT/native/remote/main.swift" -o "$APP/Contents/MacOS/zook-remote"
 # Start from empty folders, so a file removed from the source does not stay in the app.
@@ -41,6 +43,8 @@ done
 <key>CFBundleVersion</key><string>4</string>
 <key>LSMinimumSystemVersion</key><string>12.0</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>NSMicrophoneUsageDescription</key><string>語音輸入時，Zook 會用麥克風聽你說的話並轉成文字。</string>
+<key>NSSpeechRecognitionUsageDescription</key><string>Zook 用語音辨識把你說的話轉成訊息文字。</string>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict></plist>
 PLIST

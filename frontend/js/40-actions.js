@@ -404,7 +404,7 @@
           saveBotDraft($('#bot-form'));
           break;
         case 'voice':
-          modal('語音輸入', '<div class="modal-body"><p class="muted">尚未安裝語音辨識模型。</p></div>', '<div class="modal-foot"><button class="primary" data-action="close-modal">知道了</button></div>');
+          toggleVoice();
           break;
         case 'composer-menu':
           modal('更多選項', '<div class="modal-body more-options"><button class="secondary" data-action="pick-files">📎 附加檔案或圖片</button><p class="muted">也可以拖進對話或貼上截圖。最多 10 個，單檔 20 MB。</p><button class="secondary" data-action="new-note">＋ 新增知識</button><p class="muted">新增知識，為 Bot 提供相關背景。</p></div>');

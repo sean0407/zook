@@ -42,6 +42,7 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
     private var noticeTimer: Timer?
     private var noticeBusy = false
     private var pendingOpen: [String]?
+    private lazy var voice = VoiceInput { [weak self] info in self?.tellPage("zookVoice", info) }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if Bundle.main.bundleIdentifier != nil { UNUserNotificationCenter.current().delegate = self }  // before a click that launched Zook arrives
@@ -50,6 +51,7 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
         configuration.userContentController.add(self, name: "zookWindow")
+        configuration.userContentController.add(self, name: "zookVoice")
         webView = ZookWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -119,6 +121,12 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
     @objc private func zoomReset() { webView.pageZoom = 1.0 }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == "zookVoice", let body = message.body as? [String: Any] {
+            // Only Zook's own page may open the microphone.
+            guard message.frameInfo.isMainFrame, let host = message.frameInfo.request.url?.host, host == "127.0.0.1" || host == "localhost" else { return }
+            if body["stop"] as? Bool == true { voice.stop() } else if body["start"] as? Bool == true { voice.start(language: body["lang"] as? String ?? "") }
+            return
+        }
         guard message.name == "zookWindow", let body = message.body as? [String: Any] else { return }
         if body["quit"] as? Bool == true { NSApp.terminate(nil); return }  // an update is ready to be swapped in
         func rects(_ key: String) -> [CGRect] {
@@ -126,6 +134,12 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
         }
         webView.dragAreas = rects("drag")
         webView.blockedAreas = rects("block")
+    }
+
+    private func tellPage(_ function: String, _ info: [String: Any]) {
+        if let json = try? JSONSerialization.data(withJSONObject: info), let text = String(data: json, encoding: .utf8) {
+            webView.evaluateJavaScript("window.\(function) && window.\(function)(\(text))", completionHandler: nil)
+        }
     }
 
     @objc private func showAbout() {

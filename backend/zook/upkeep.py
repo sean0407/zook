@@ -124,7 +124,7 @@ def activity_list(store, kind=''):
 
 SETTING_NAMES = {'permissionMode': '主動性', 'webSearch': '上網搜尋', 'provider': '預設提供者', 'model': '預設模型', 'fallbacks': '備用模型', 'access': '存取範圍', 'accessFolder': '存取範圍',
                  'features': '功能開關', 'effort': '思考強度', 'remote': '手機連線', 'autoUpdateCheck': '自動檢查更新', 'scheduleNotify': '通知', 'sharedMcp': '共用連接器', 'disabledSkills': 'Skills 開關',
-                 'disabledPlugins': '插件開關', 'autoModels': '自動選擇的模型', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步'}
+                 'disabledPlugins': '插件開關', 'autoModels': '自動選擇的模型', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步', 'voiceLang': '語音輸入語言'}
 BOT_FIELD_NAMES = {'name': '名稱', 'persona': '人格檔案', 'instructions': '工作指示', 'provider': '模型', 'model': '模型', 'account': '帳號', 'permissionMode': '主動性', 'access': '存取範圍', 'accessFolder': '存取範圍',
                    'fallbacks': '備用模型', 'features': '功能開關', 'effort': '思考強度', 'isAdmin': '管理員身分', 'enabledMcp': '連接器'}
 
@@ -268,6 +268,9 @@ def upkeep_fields(data, body, changes):
     if 'rules' in body:
         if not isinstance(body['rules'], str) or len(body['rules']) > 10000: raise ValueError('固定規則太長，最多 10000 字。')
         changes['rules'] = body['rules'].strip()
+    if 'voiceLang' in body:
+        if body['voiceLang'] not in ('', 'zh-TW', 'en-US', 'ja-JP'): raise ValueError('語音語言無效。')
+        changes['voiceLang'] = body['voiceLang']
     if 'onboarded' in body:
         if body['onboarded'] is not True: raise ValueError('onboarded 無效。')
         changes['onboarded'] = True
