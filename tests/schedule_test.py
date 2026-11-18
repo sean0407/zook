@@ -134,7 +134,10 @@ class ScheduleTest(unittest.TestCase):
             time.sleep(0.2)
         self.fail('timed out')
 
-    def messages(self, state): return next(b for b in state['bots'] if b['id'] == self.bot['id'])['messages']
+    def messages(self, state):
+        """The Bot's open conversation followed by the one schedules write into."""
+        bot = next(b for b in state['bots'] if b['id'] == self.bot['id'])
+        return bot['messages'] + [m for c in bot.get('chats') or [] if c.get('kind') == 'schedule' and c['id'] != bot.get('chatId') for m in c.get('messages') or []]
 
     def backdate(self, since, **more):
         """Pretend the schedule was saved earlier, so its time has already come."""

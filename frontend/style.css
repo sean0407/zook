@@ -1486,3 +1486,12 @@ button.run-row:hover { background: #f1f1f1; }
 .run-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: #4b4b4b; }
 .run-go { color: #9a9a9a; }
 .message.flash .bubble { box-shadow: 0 0 0 3px #f5c542; transition: box-shadow .3s; }
+.chat-title-btn { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-search { width: 100%; padding: 9px 12px; border: 1px solid #e3e3e3; border-radius: 10px; font: inherit; margin-bottom: 10px; }
+.chat-list { display: flex; flex-direction: column; gap: 2px; max-height: 55vh; overflow: auto; }
+.chat-row { display: flex; align-items: center; gap: 8px; padding: 2px 6px; border-radius: 8px; }
+.chat-row.current { background: #f2f2f2; }
+.chat-open { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 4px; border: 0; background: none; text-align: left; font: inherit; color: inherit; cursor: pointer; min-width: 0; }
+.chat-open strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chat-open small { color: #7a7a7a; }
+.danger-link { color: #b3261e; }

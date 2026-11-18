@@ -195,7 +195,7 @@
       const tools = drag && !isPinned ? `<span class="section-tools"><button class="icon-btn mini" data-action="rename-section" data-id="${esc(name)}" aria-label="重新命名分組" title="重新命名">✎</button>${items.length ? '' : `<button class="icon-btn mini" data-action="delete-section" data-id="${esc(name)}" aria-label="刪除分組" title="刪除空分組">×</button>`}</span>` : '';
       return `<div class="side-section" data-drop-section="${esc(isPinned ? '__pinned' : name)}"><div class="section-head bot-section-head" ${drag && !isPinned ? `draggable="true" data-drag-section="${esc(name)}"` : ''}><button class="section-toggle" data-action="collapse" data-id="${esc(name)}"><span>${esc(name)} ${items.some(b=>pendingForBot(b.id).length)?'<span class="approval-badge">待核准</span>':''}</span><span>${closed?'⌄':'⌃'}</span></button>${tools}</div>${closed?'':items.map(botRow).join('') + (items.length || !drag ? '' : '<div class="drop-hint">把 Bot 拖到這裡</div>')}</div>`;
     };
-    return `<aside class="sidebar"><div class="side-top"><div class="brand">Zook<span>✳</span></div><div class="side-actions"><button class="icon-btn" data-action="search-focus" aria-label="搜尋">${svg('search')}</button><button class="icon-btn" data-action="new-bot" aria-label="新增 Bot">${svg('plus')}</button></div></div><div class="search"><span class="glass tiny-icon">${svg('search')}</span><input id="side-search" placeholder="搜尋 Bots 和知識" aria-label="搜尋 Bots 和知識" value="${esc(state.query)}"></div><div class="side-scroll">${groupsBlock()}${pinned.length?block('已釘選',pinned,true):''}${sections.map(s=>block(s,bots.filter(b=>!b.pinned&&(b.section||'我的 Bots')===s))).join('')}${state.query?'':'<button class="side-empty add-section" data-action="new-section">＋ 新增分組</button>'}${state.query&&state.data.knowledge.filter(n=>matches(n.title)||matches(n.content)).length?`<div class="section-head">知識搜尋結果</div>${state.data.knowledge.filter(n=>matches(n.title)||matches(n.content)).map(n=>`<button class="side-row" data-action="edit-note" data-id="${esc(n.id)}"><span>▤</span><span class="side-copy"><span class="side-name">${esc(n.title)}</span><span class="side-preview">${esc(n.content)}</span></span></button>`).join('')}`:''}</div><div class="side-footer"><div class="user-avatar">S</div><div class="user-name">我的工作區</div><div class="launcher"><button class="icon-btn launcher-btn" data-action="launcher" aria-label="開啟功能選單" aria-expanded="${state.launcher}">${svg('grid')}</button>${state.launcher?`<div class="popup">${[['usage','◷','使用量'],['schedules','◴','排程'],['knowledge','▤','知識庫'],['memory','◎','記憶'],['accounts','⚿','模型帳號'],['skills','✳','Skills 與連接器'],['settings','⚙','設定']].map(x=>`<button class="nav-item" data-action="page" data-id="${x[0]}"><span>${x[1]}</span>${x[2]}</button>`).join('')}</div>`:''}</div><button class="icon-btn" data-action="page" data-id="settings" aria-label="設定">${svg('settings')}</button>${state.update?.available ? `<button class="icon-btn update-btn" data-action="update-open" aria-label="有新版 ${esc(state.update.latest)}，按這裡更新" title="有新版 ${esc(state.update.latest)}">${svg('download')}</button>` : ''}</div></aside>`
+    return `<aside class="sidebar"><div class="side-top"><div class="brand">Zook<span>✳</span></div><div class="side-actions"><button class="icon-btn" data-action="search-focus" aria-label="搜尋">${svg('search')}</button><button class="icon-btn" data-action="new-bot" aria-label="新增 Bot">${svg('plus')}</button></div></div><div class="search"><span class="glass tiny-icon">${svg('search')}</span><input id="side-search" placeholder="搜尋 Bot、對話和知識" aria-label="搜尋 Bot、對話和知識" value="${esc(state.query)}"></div><div class="side-scroll">${groupsBlock()}${pinned.length?block('已釘選',pinned,true):''}${sections.map(s=>block(s,bots.filter(b=>!b.pinned&&(b.section||'我的 Bots')===s))).join('')}${state.query?'':'<button class="side-empty add-section" data-action="new-section">＋ 新增分組</button>'}${messageHits().length?`<div class="section-head">對話搜尋結果</div>${messageHits().map(h=>`<button class="side-row" data-action="open-message" data-bot="${esc(h.b.id)}" data-id="${esc(h.m.id)}">${avatar(h.b)}<span class="side-copy"><span class="side-name">${esc(h.b.name)} · ${esc(chatName(h.b, h.c))}</span><span class="side-preview">${esc(snippet(h.m.content))}</span></span></button>`).join('')}`:''}${state.query&&state.data.knowledge.filter(n=>matches(n.title)||matches(n.content)).length?`<div class="section-head">知識搜尋結果</div>${state.data.knowledge.filter(n=>matches(n.title)||matches(n.content)).map(n=>`<button class="side-row" data-action="edit-note" data-id="${esc(n.id)}"><span>▤</span><span class="side-copy"><span class="side-name">${esc(n.title)}</span><span class="side-preview">${esc(n.content)}</span></span></button>`).join('')}`:''}</div><div class="side-footer"><div class="user-avatar">S</div><div class="user-name">我的工作區</div><div class="launcher"><button class="icon-btn launcher-btn" data-action="launcher" aria-label="開啟功能選單" aria-expanded="${state.launcher}">${svg('grid')}</button>${state.launcher?`<div class="popup">${[['usage','◷','使用量'],['schedules','◴','排程'],['knowledge','▤','知識庫'],['memory','◎','記憶'],['accounts','⚿','模型帳號'],['skills','✳','Skills 與連接器'],['settings','⚙','設定']].map(x=>`<button class="nav-item" data-action="page" data-id="${x[0]}"><span>${x[1]}</span>${x[2]}</button>`).join('')}</div>`:''}</div><button class="icon-btn" data-action="page" data-id="settings" aria-label="設定">${svg('settings')}</button>${state.update?.available ? `<button class="icon-btn update-btn" data-action="update-open" aria-label="有新版 ${esc(state.update.latest)}，按這裡更新" title="有新版 ${esc(state.update.latest)}">${svg('download')}</button>` : ''}</div></aside>`
   }
 
   function jobsForBot(botId) { return Object.values(state.jobDetails).filter(j => j.botId === botId && !j.groupId); }
@@ -277,8 +277,8 @@
     const b = activeBot();
     if (!b) return `<main class="main"><div class="empty-chat"><h1>歡迎使用 Zook</h1><p>建立一個 Bot，開始你的工作。</p><div class="quick-actions"><button data-action="new-bot">＋ 新增 Bot</button></div></div></main>`;
     const messages = b.messages || [];
-    const running = Object.entries(state.pollers).find(([, v]) => v.botId === b.id);
-    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-bot">${avatar(b)}${esc(b.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn" data-action="share">↑ 匯出對話</button>${!state.detailOpen?'<button class="text-btn" data-action="toggle-detail">顯示詳情</button>':''}</div></header><div class="conversation" id="conversation">${messages.length?`<div class="conversation-inner">${messages.map(m=>`<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message ${m.role==='user'?'user':'assistant'}" data-mid="${esc(m.id)}">${m.role==='user'?'':avatar(b)}${m.role!=='user'&&m.content&&m.status!=='running'?`<div class="bubble md ${m.status==='failed'?'error-text':''}">${markdown(m.content)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(m.status==='running'?'正在思考…':m.status==='cancelled'&&!m.content?'已停止回覆':m.status==='failed'&&!m.content?(Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。'):m.content)}</div>`}</div>`).join('')}</div>`:`<div class="empty-chat">${avatar(b,'hero')}<h1>今天想一起完成什麼？</h1><p>和 ${esc(b.name)} 開始一段對話。</p><div class="quick-actions"><button data-action="page" data-id="knowledge">▤ 管理知識庫</button><button data-action="page" data-id="usage">◷ 查看使用量</button><button data-action="page" data-id="settings">⚙ 設定模型</button></div></div>`}</div><div class="composer-wrap">${approvalCards(b.id)}<form class="composer" id="chat-form"><button type="button" class="icon-btn" data-action="composer-menu" aria-label="更多選項">${svg('plus')}</button><textarea id="chat-input" rows="1" placeholder="傳送訊息給 ${esc(b.name)}" aria-label="輸入訊息"></textarea><button type="button" class="icon-btn" data-action="voice" aria-label="語音輸入">${svg('mic')}</button>${running?`<button type="button" class="send" data-action="cancel-job" data-id="${esc(running[0])}" aria-label="停止回覆">■</button>`:`<button class="send" type="submit" aria-label="傳送訊息">↑</button>`}</form></div></main>${state.detailOpen?detail(b):''}`
+    const running = Object.entries(state.pollers).find(([id, v]) => v.botId === b.id && (state.jobDetails[id]?.chatId || b.chatId) === b.chatId);
+    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-bot">${avatar(b)}${esc(b.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn chat-title-btn" data-action="chats" title="所有對話">☰ ${esc(chatName(b))}</button><button class="text-btn" data-action="new-chat">＋ 新對話</button><button class="text-btn" data-action="share">↑ 匯出對話</button>${!state.detailOpen?'<button class="text-btn" data-action="toggle-detail">顯示詳情</button>':''}</div></header><div class="conversation" id="conversation">${messages.length?`<div class="conversation-inner">${messages.map(m=>`<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message ${m.role==='user'?'user':'assistant'}" data-mid="${esc(m.id)}">${m.role==='user'?'':avatar(b)}${m.role!=='user'&&m.content&&m.status!=='running'?`<div class="bubble md ${m.status==='failed'?'error-text':''}">${markdown(m.content)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(m.status==='running'?'正在思考…':m.status==='cancelled'&&!m.content?'已停止回覆':m.status==='failed'&&!m.content?(Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。'):m.content)}</div>`}</div>`).join('')}</div>`:`<div class="empty-chat">${avatar(b,'hero')}<h1>今天想一起完成什麼？</h1><p>和 ${esc(b.name)} 開始一段對話。</p><div class="quick-actions"><button data-action="page" data-id="knowledge">▤ 管理知識庫</button><button data-action="page" data-id="usage">◷ 查看使用量</button><button data-action="page" data-id="settings">⚙ 設定模型</button></div></div>`}</div><div class="composer-wrap">${approvalCards(b.id)}<form class="composer" id="chat-form"><button type="button" class="icon-btn" data-action="composer-menu" aria-label="更多選項">${svg('plus')}</button><textarea id="chat-input" rows="1" placeholder="傳送訊息給 ${esc(b.name)}" aria-label="輸入訊息"></textarea><button type="button" class="icon-btn" data-action="voice" aria-label="語音輸入">${svg('mic')}</button>${running?`<button type="button" class="send" data-action="cancel-job" data-id="${esc(running[0])}" aria-label="停止回覆">■</button>`:`<button class="send" type="submit" aria-label="傳送訊息">↑</button>`}</form></div></main>${state.detailOpen?detail(b):''}`
   }
 
   function activeGroup() { return state.groupId ? (state.data.groups || []).find(g => g.id === state.groupId) : null; }
@@ -912,6 +912,30 @@
     const last = x => x.done ? '已完成' : !x.lastStatus ? '尚未執行' : (x.lastStatus === 'sent' ? '上次執行：' : x.lastStatus === 'missed' ? '上次錯過：' : '上次失敗：') + formatDate(x.lastAt) + (x.lastStatus !== 'sent' && x.lastError ? '（' + x.lastError + '）' : '');
     return intro + `<div class="cards">${items.map(x => `<article class="card sched-card"><div class="sched-head"><h3>${esc(scheduleWhen(x))}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><p>${esc(x.content)}</p>${scheduleTarget(x)}<span class="status ${x.lastStatus && x.lastStatus !== 'sent' && !x.done ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button>${(x.runs || []).length ? `<button class="link" data-action="schedule-history" data-id="${esc(x.id)}">紀錄</button>` : ''}<button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`).join('')}</div>`;
   }
+  // Conversations of a Bot: the open one is b.messages, the others carry their own messages.
+  const chatName = (b, c) => { c = c || (b.chats || []).find(x => x.id === b.chatId) || {}; return c.title || (c.kind === 'schedule' ? '排程' : '新對話'); };
+  const chatMessages = (b, c) => c.id === b.chatId ? (b.messages || []) : (c.messages || []);
+  function chatsModal(b, query = '') {
+    const q = query.trim().toLowerCase();
+    const chats = [...(b.chats || [])].sort((x, y) => String(y.updatedAt || '').localeCompare(String(x.updatedAt || '')))
+      .filter(c => !q || chatName(b, c).toLowerCase().includes(q) || chatMessages(b, c).some(m => String(m.content || '').toLowerCase().includes(q)));
+    const rows = chats.map(c => `<div class="chat-row ${c.id === b.chatId ? 'current' : ''}"><button type="button" class="chat-open" data-action="open-chat" data-id="${esc(c.id)}"><strong>${esc(chatName(b, c))}</strong><small>${esc(formatDate(c.updatedAt))} · ${chatMessages(b, c).filter(m => m.role === 'user').length} 則</small></button><button type="button" class="link" data-action="rename-chat" data-id="${esc(c.id)}">改名</button><button type="button" class="link danger-link" data-action="delete-chat" data-id="${esc(c.id)}">刪除</button></div>`).join('');
+    modal(`${b.name} 的對話`, `<div class="modal-body"><input id="chat-search" class="chat-search" placeholder="搜尋這個 Bot 的對話" value="${esc(query)}" aria-label="搜尋對話"><div class="chat-list">${rows || '<p class="muted">沒有符合的對話。</p>'}</div></div>`, '<div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">關閉</button><button type="button" class="primary" data-action="new-chat">＋ 新對話</button></div>');
+  }
+  // Messages across every Bot's conversations that match the sidebar search.
+  function messageHits() {
+    if (!state.query) return [];
+    const hits = [];
+    for (const b of state.data.bots) for (const c of b.chats || []) for (const m of chatMessages(b, c)) {
+      if (m.content && matches(m.content)) hits.push({b, c, m});
+      if (hits.length >= 30) return hits;
+    }
+    return hits;
+  }
+  function snippet(text) {
+    const t = String(text || '').replace(/\s+/g, ' '), i = t.toLowerCase().indexOf(state.query.toLowerCase());
+    return (i > 30 ? '…' : '') + t.slice(Math.max(0, i - 30), i + 60);
+  }
   const RUN_STATUS = {running: '執行中', done: '已執行', failed: '失敗', missed: '錯過'};
   function scheduleHistory(x) {
     const rows = [...(x.runs || [])].reverse().map(r => {
@@ -921,9 +945,14 @@
     modal('執行紀錄', `<div class="modal-body"><p class="muted">最近 ${(x.runs || []).length} 次。點一筆會打開那次的對話。</p><div class="run-list">${rows}</div></div>`, '<div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">關閉</button></div>');
   }
   // Open a Bot's or group's conversation at a message (from the history list or a Mac notification).
-  function openConversation(kind, id, messageId) {
+  async function openConversation(kind, id, messageId) {
     const exists = kind === 'group' ? (state.data.groups || []).some(g => g.id === id) : state.data.bots.some(b => b.id === id);
     if (!exists) { toast(kind === 'group' ? '找不到這個群組' : '找不到這個 Bot'); return; }
+    if (kind !== 'group' && messageId) {
+      const b = state.data.bots.find(x => x.id === id);
+      const c = (b.chats || []).find(c => chatMessages(b, c).some(m => m.id === messageId));
+      if (c && c.id !== b.chatId) { await post(`bots/${encodeURIComponent(id)}/chats/${encodeURIComponent(c.id)}/open`, {}); await refresh(); }
+    }
     if (state.modal) closeModal();
     if (kind === 'group') state.groupId = id; else { state.groupId = null; state.selected = id; }
     state.page = 'chat'; state.launcher = false;
@@ -941,7 +970,7 @@
   }
   window.zookOpen = async (kind, id, messageId) => {  // from a Mac notification: the reply may be newer than this page
     try { await refresh(); startPollers(); } catch (_) {}
-    if (state.data) openConversation(kind, id, messageId);
+    if (state.data) await openConversation(kind, id, messageId);
   };
   // Who a schedule talks to: a Bot or a group, with its avatar.
   function scheduleTarget(x) {
@@ -1420,8 +1449,39 @@
           scheduleHistory(state.data.schedules.find(x => x.id === id));
           break;
         case 'open-run':
-          openConversation(el.dataset.kind, el.dataset.target, id);
+          await openConversation(el.dataset.kind, el.dataset.target, id);
           break;
+        case 'open-message':
+          state.query = ''; await openConversation('bot', el.dataset.bot, id);
+          break;
+        case 'chats':
+          chatsModal(activeBot());
+          break;
+        case 'new-chat': {
+          const b = activeBot();
+          await post(`bots/${encodeURIComponent(b.id)}/chats`, {});
+          if (state.modal) closeModal();
+          await refresh(); $('#chat-input')?.focus();
+          break;
+        }
+        case 'open-chat': {
+          const b = activeBot();
+          if (id !== b.chatId) { await post(`bots/${encodeURIComponent(b.id)}/chats/${encodeURIComponent(id)}/open`, {}); }
+          closeModal(); await refresh();
+          break;
+        }
+        case 'rename-chat': {
+          const b = activeBot(), c = b.chats.find(x => x.id === id);
+          modal('對話名稱', `<form id="chat-rename-form" data-id="${esc(id)}"><div class="modal-body"><label class="field">名稱<input name="title" required maxlength="80" value="${esc(chatName(b, c))}"></label></div><div class="modal-foot"><button type="button" class="secondary" data-action="chats">返回</button><button class="primary">儲存</button></div></form>`);
+          break;
+        }
+        case 'delete-chat': {
+          const b = activeBot(), c = b.chats.find(x => x.id === id);
+          if (!confirm(`確定刪除「${chatName(b, c)}」？刪除後無法復原。`)) break;
+          await api(`bots/${encodeURIComponent(b.id)}/chats/${encodeURIComponent(id)}`, {method: 'DELETE'});
+          await refresh(); chatsModal(activeBot()); toast('已刪除對話');
+          break;
+        }
         case 'run-schedule':
           await post('schedules/' + encodeURIComponent(id) + '/run', {});
           await refresh(); startPollers();
@@ -1636,6 +1696,11 @@
       state.skillQuery = e.target.value;
       render(true);
       const x = $('#skill-search'); x.focus(); x.setSelectionRange(pos, pos);
+      return;
+    }
+    if (e.target.id === 'chat-search') {
+      const value = e.target.value; chatsModal(activeBot(), value);
+      const box = $('#chat-search'); box.focus(); box.setSelectionRange(value.length, value.length);
       return;
     }
     if (e.target.id === 'side-search') {
@@ -1908,6 +1973,10 @@
         const bots = old ? state.data.bots.map(b => !b.pinned && (b.section || '我的 Bots') === old ? {...b, section: name} : b) : state.data.bots;
         closeModal(); await saveArrangement(bots, sections);
         toast(old ? '已重新命名分組' : '已新增分組，把 Bot 拖進去即可');
+      } else if (form.id === 'chat-rename-form') {
+        const b = activeBot();
+        await post(`bots/${encodeURIComponent(b.id)}/chats/${encodeURIComponent(form.dataset.id)}`, {title: new FormData(form).get('title')}, 'PATCH');
+        await refresh(); chatsModal(activeBot()); toast('已改名');
       } else if (form.id === 'schedule-form') {
         const d = new FormData(form), id = form.dataset.id;
         const [kind, targetId] = String(d.get('target')).split(':');
