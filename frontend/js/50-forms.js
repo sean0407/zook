@@ -459,6 +459,7 @@
   });
   refresh().then(() => {
     startPollers();
+    if (state.data.settings.onboarded === false) api('accounts').then(a => { state.accounts = a; render(true); }).catch(() => {});
     setInterval(syncFromElsewhere, 3000);
     setTimeout(refreshUpdate, 4000); setTimeout(refreshUpdate, 20000); setInterval(refreshUpdate, 3600 * 1000);
   }).catch(e => {

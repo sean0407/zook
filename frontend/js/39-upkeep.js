@@ -114,3 +114,39 @@
       if (picked && box) { box.querySelector('input').value = picked; box.querySelector('.watch-path').textContent = picked; }
     } catch (err) { toast(err.message); }
   });
+
+  // First-run guide: three steps, shown until they are done or skipped. The steps read the same sign-in state as 各模型使用量.
+  function guideSteps() {
+    const list = state.accounts?.providers || [];
+    const installed = list.filter(p => p.installed), signedIn = list.filter(p => p.status === 'logged_in' && !p.issue);
+    const replied = state.data.bots.some(b => (b.messages || []).some(m => m.role === 'assistant' && m.status === 'completed'));
+    const names = a => a.map(p => p.name.split('（')[0]).join('、');
+    return [{title: '安裝一個 AI 工具', done: installed.length > 0, note: installed.length ? '已安裝 ' + names(installed) : '有 ChatGPT 帳號選 Codex，有 Claude 帳號選 Claude。裝一個就能開始。', go: 'usage', label: '前往安裝'},
+            {title: '登入帳號', done: signedIn.length > 0, note: signedIn.length ? '已登入 ' + names(signedIn) : '登入由官方工具完成，Zook 不會看到密碼。', go: 'usage', label: '前往登入'},
+            {title: '傳第一則訊息', done: replied, note: replied ? '完成' : '選一個 Bot，在下方輸入想問的事。', go: 'chat', label: '開始對話'}];
+  }
+  function guideCard() {
+    if (!state.data || state.data.settings.onboarded !== false || state.groupId) return '';
+    if (!state.accounts) return '';
+    const steps = guideSteps(), at = steps.findIndex(s => !s.done);
+    if (at < 0) { finishGuide(); return ''; }
+    return `<section class="guide-card" aria-label="開始使用"><div class="guide-head"><strong>開始使用 Zook</strong><span class="muted">${at} / ${steps.length} 完成</span><button class="link" data-up="guide-skip">略過</button></div><ol class="guide-steps">${steps.map((s, i) => `<li class="${s.done ? 'done' : i === at ? 'now' : ''}"><span class="guide-mark" aria-hidden="true">${s.done ? '✓' : i + 1}</span><div class="guide-copy"><strong>${s.title}</strong><span>${esc(s.note)}</span></div>${i === at && !(s.go === 'chat' ? state.page === 'chat' : state.page === s.go) ? `<button class="primary small-btn" data-up="guide-go" data-id="${s.go}">${s.label}</button>` : ''}</li>`).join('')}</ol></section>`;
+  }
+  async function finishGuide(skipped) {
+    if (state.guideClosing) return;
+    state.guideClosing = true;
+    try { state.data.settings = await post('settings', {onboarded: true}, 'PATCH'); if (!skipped) toast('設定完成，可以開始使用了'); } catch (_) {}
+    state.guideClosing = false; render(true);
+  }
+  document.addEventListener('click', async e => {
+    const el = e.target.closest?.('[data-up^="guide-"]');
+    if (!el) return;
+    if (el.dataset.up === 'guide-skip') return finishGuide(true);
+    if (el.dataset.id === 'chat') { state.page = 'chat'; state.groupId = null; render(); $('#chat-input')?.focus(); }
+    else await loadPage(el.dataset.id);
+  });
+  // While the guide is showing, keep the sign-in state fresh so each step ticks itself off.
+  setInterval(async () => {
+    if (!state.data || state.data.settings.onboarded !== false || document.hidden) return;
+    try { const next = await api('accounts'); if (JSON.stringify(next) !== JSON.stringify(state.accounts)) { state.accounts = next; if (state.page !== 'usage' || !$('#account-code-form input:focus')) render(true); } } catch (_) {}
+  }, 4000);

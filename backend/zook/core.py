@@ -184,6 +184,8 @@ class Store:
             # Connectors became shared: carry over every connector any Bot was already using.
             self.data['settings']['sharedMcp'] = list(dict.fromkeys(x for b in self.data.get('bots', []) for x in b.get('enabledMcp') or []))
         self.data['settings'].setdefault('permissionMode', 'manual')
+        # The first-run guide is only for a fresh start: a workspace that has already been used never sees it.
+        self.data['settings'].setdefault('onboarded', bool(self.data.get('jobs')) or any(b.get('messages') for b in self.data.get('bots', [])))
         bots = self.data.get('bots', [])
         if bots and not any('isAdmin' in b for b in bots):
             for b in bots: b['isAdmin'] = b.get('name') == '管理員'

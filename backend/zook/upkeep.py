@@ -268,6 +268,9 @@ def upkeep_fields(data, body, changes):
     if 'rules' in body:
         if not isinstance(body['rules'], str) or len(body['rules']) > 10000: raise ValueError('固定規則太長，最多 10000 字。')
         changes['rules'] = body['rules'].strip()
+    if 'onboarded' in body:
+        if body['onboarded'] is not True: raise ValueError('onboarded 無效。')
+        changes['onboarded'] = True
     if 'budgetOver' in body:
         if body['budgetOver'] not in BUDGET_OVER: raise ValueError('預算用完後的做法無效。')
         changes['budgetOver'] = body['budgetOver']

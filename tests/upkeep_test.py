@@ -188,6 +188,17 @@ class UpkeepTest(unittest.TestCase):
         self.ask('一般訊息')  # an ordinary reply is not announced
         self.assertEqual(len(self.req('GET', '/api/notifications?after=0')[1]['items']), 1)
 
+    def test_first_run_guide_flag(self):
+        self.assertIs(self.req('GET', '/api/state')[1]['settings']['onboarded'], False)  # a fresh workspace
+        self.assertEqual(self.req('PATCH', '/api/settings', {'onboarded': False})[0], 400)  # it cannot be switched back on
+        self.assertIs(self.req('PATCH', '/api/settings', {'onboarded': True})[1]['onboarded'], True)
+        self.stop()
+        data = json.loads((self.root / 'data/swarmr.json').read_text()); del data['settings']['onboarded']
+        data['bots'][0]['messages'] = [{'id': 'm', 'role': 'user', 'content': 'hi'}]
+        (self.root / 'data/swarmr.json').write_text(json.dumps(data))
+        self.start()
+        self.assertIs(self.req('GET', '/api/state')[1]['settings']['onboarded'], True)  # a workspace already in use never sees the guide
+
 
 if __name__ == '__main__':
     unittest.main()
