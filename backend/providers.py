@@ -31,7 +31,7 @@ CATALOG = {
                  logout=['logout'], docs='https://docs.x.ai', version_check=['update', '--check', '--json']),
     'gemini': dict(name='Gemini（Google）', vendor='Google', binary='gemini', kind='generic', tools=False,
                    install='Zook 會從 https://nodejs.org 下載 Node.js，再安裝 @google/gemini-cli', npm_package='@google/gemini-cli', terminal_login=True,
-                   signed_in_file='~/.gemini/oauth_creds.json', args='-p {prompt}', model_args='-m {model}', full_args='--yolo',
+                   signed_in_file='~/.gemini/oauth_creds.json', run_env={'GEMINI_CLI_TRUST_WORKSPACE': 'true'}, args='-p {prompt}', model_args='-m {model}', full_args='--yolo',
                    latest_url='https://registry.npmjs.org/@google/gemini-cli/latest',
                    docs='https://github.com/google-gemini/gemini-cli'),
 }

@@ -409,7 +409,7 @@
       return `<div class="login-flow error-text">${esc(l.error || (kind === 'install' ? '安裝沒有完成。' : '登入沒有完成。'))}${kind === 'install' && l.log?.length ? `<pre class="flow-log">${esc(l.log.slice(-6).join('\n'))}</pre>` : ''}</div>`;
     };
     return `<p class="muted model-intro">Zook 透過各家官方 CLI 使用你的帳號。登入由 CLI 在瀏覽器完成，帳密與權杖只由 CLI 保存，Zook 不會讀取。</p><div class="account-list">${list.map(p => {
-      const [cls, label] = badge[p.status] || badge.unknown, l = p.login, running = l?.state === 'running' || p.install?.state === 'running';
+      const [cls, label] = p.issue ? ['warn', '無法使用'] : badge[p.status] || badge.unknown, l = p.login, running = l?.state === 'running' || p.install?.state === 'running';
       const detail = [p.method, p.plan && p.plan.toUpperCase(), p.workspace, p.email].filter(Boolean).map(esc).join(' · ');
       const sub = detail || (p.installed ? (p.custom ? esc(p.config?.command || '') : '已安裝') : (p.requires && !p.requirementMet ? `需要先安裝 ${esc(p.requires === 'npm' ? 'Node.js（npm）' : p.requires)}` : '尚未安裝這個 CLI'));
       const loginButtons = p.installed && p.loginMethods.length ? p.loginMethods.map((m, i) => `<button class="${i === 0 && p.status !== 'logged_in' ? 'primary' : 'secondary'}" data-action="account-login" data-id="${esc(p.id)}" data-method="${esc(m.id)}">${p.status === 'logged_in' && i === 0 ? '重新登入' : esc(m.label)}</button>`).join('') : '';
@@ -425,7 +425,7 @@
         return `<div class="profile-row"><div class="profile-head"><div><strong>${esc(a.name)}</strong><p class="muted small">${info}</p></div><span class="pill ${acls}">${alabel}</span></div>${usagePanel(quotaFor(p.id, a.id))}${flowView(a.login, 'login', p.id, a.id)}${!busy ? `<div class="actions">${buttons}<span class="spacer"></span><button class="link danger" data-action="profile-delete" data-id="${esc(p.id)}" data-account="${esc(a.id)}" data-name="${esc(a.name)}">移除帳號</button></div>` : ''}</div>`;
       }).join('');
       const profileBlock = p.installed && (p.canAddLogin || p.canAddKey) ? `<div class="profiles"><div class="profiles-head"><strong>其他帳號</strong><button class="secondary" data-action="profile-add" data-id="${esc(p.id)}">＋ 新增帳號</button></div>${profiles || '<p class="muted small">可以再加入其他登入帳號或 API 金鑰，並在每個 Bot 的設定裡指定要用哪一個。</p>'}</div>` : '';
-      return `<article class="account-card"><div class="account-head"><div><h3>${esc(p.name)}${p.custom ? ' <span class="pill">自訂</span>' : ''}</h3><p class="muted">${sub}</p>${versionLine}</div><span class="pill ${cls}">${label}</span></div>${notes.map(n => `<p class="muted small provider-note">${esc(n)}</p>`).join('')}${p.installed ? usagePanel(quotaFor(p.id)) : ''}${flowView(p.install, 'install', p.id)}${flowView(l, 'login', p.id)}${!running ? `<div class="actions">${p.installed && p.terminalLogin ? `<button class="${p.status === 'logged_in' ? 'secondary' : 'primary'}" data-action="terminal-login" data-id="${esc(p.id)}">${p.status === 'logged_in' ? '重新登入' : '用 Google 帳號登入'}</button>` : ''}${loginButtons}${installBtn}${p.custom ? `<button class="secondary" data-action="provider-edit" data-id="${esc(p.id)}">編輯設定</button>` : ''}<span class="spacer"></span>${p.status === 'logged_in' && p.canLogout ? `<button class="link danger" data-action="account-logout" data-id="${esc(p.id)}">登出</button>` : ''}${p.removable ? `<button class="link danger" data-action="provider-remove" data-id="${esc(p.id)}">從 Zook 移除</button>` : ''}</div>` : ''}${profileBlock}</article>`;
+      return `<article class="account-card"><div class="account-head"><div><h3>${esc(p.name)}${p.custom ? ' <span class="pill">自訂</span>' : ''}</h3><p class="muted">${sub}</p>${versionLine}</div><span class="pill ${cls}">${label}</span></div>${notes.map(n => `<p class="muted small provider-note">${esc(n)}</p>`).join('')}${p.issue ? `<div class="login-flow error-text">${esc(p.issue)}</div>` : ''}${p.installed ? usagePanel(quotaFor(p.id)) : ''}${flowView(p.install, 'install', p.id)}${flowView(l, 'login', p.id)}${!running ? `<div class="actions">${p.installed && p.terminalLogin ? `<button class="${p.status === 'logged_in' ? 'secondary' : 'primary'}" data-action="terminal-login" data-id="${esc(p.id)}">${p.status === 'logged_in' ? '重新登入' : '用 Google 帳號登入'}</button>` : ''}${loginButtons}${installBtn}${p.custom ? `<button class="secondary" data-action="provider-edit" data-id="${esc(p.id)}">編輯設定</button>` : ''}<span class="spacer"></span>${p.status === 'logged_in' && p.canLogout ? `<button class="link danger" data-action="account-logout" data-id="${esc(p.id)}">登出</button>` : ''}${p.removable ? `<button class="link danger" data-action="provider-remove" data-id="${esc(p.id)}">從 Zook 移除</button>` : ''}</div>` : ''}${profileBlock}</article>`;
     }).join('')}</div>`;
   }
   function providerAddModal() {
@@ -448,9 +448,19 @@
   async function loadAccounts() {
     state.accounts = await api('accounts');
     state.providers = (await api('providers')).providers;
-    if (state.page === 'usage') render(true);
+    if (state.page === 'usage' && !$('#account-code-form')) render(true);
     pollAccounts();
+    for (const p of state.accounts.providers.filter(x => x.needsCheck)) checkSignIn(p.id);
   }
+  // A sign-in can succeed while the account still cannot use the CLI: try it once and say so on the card.
+  async function checkSignIn(id) {
+    state.signInChecks = state.signInChecks || {};
+    if (state.signInChecks[id]) return;
+    state.signInChecks[id] = true;
+    try { await post('accounts/' + encodeURIComponent(id) + '/check'); await loadAccounts(); }
+    catch (_) {} finally { delete state.signInChecks[id]; }
+  }
+  window.addEventListener('focus', () => { if (state.page === 'usage' && state.accounts) loadAccounts().catch(() => {}); });  // back from the browser or Terminal
   async function reloadAccounts() { await loadAccounts(); refreshQuota(); }
   async function pollAccounts() {
     if (state.accountPolling) return;
@@ -1342,11 +1352,11 @@
           break;
         case 'terminal-login':
           await post('accounts/' + encodeURIComponent(id) + '/terminal-login');
-          toast('已開啟終端機，請在那裡選擇 Google 登入，完成後回到這裡按「偵測使用量」');
+          toast('已開啟終端機，請在那裡選擇 Google 登入，完成後回到 Zook');
           break;
         case 'detect-usage':
           el.disabled = true; el.textContent = '偵測中…';
-          try { state.quota = await post('quota/detect'); await loadAccounts(); toast('已更新使用量'); }
+          try { state.quota = await post('quota/detect'); await Promise.all((state.accounts?.providers || []).filter(p => p.terminalLogin && p.status === 'logged_in').map(p => post('accounts/' + encodeURIComponent(p.id) + '/check').catch(() => {}))); await loadAccounts(); toast('已更新使用量'); }
           catch (err) { toast(err.message); }
           render(true);
           break;

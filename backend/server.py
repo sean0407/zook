@@ -863,7 +863,7 @@ LOGIN_TIMEOUT = 600
 
 
 # Extra accounts. Each CLI keeps a whole account in one folder, and reads an API key from its own environment variable.
-ACCOUNT_HOME = {'codex': 'CODEX_HOME', 'claude': 'CLAUDE_CONFIG_DIR', 'grok': 'GROK_HOME'}
+ACCOUNT_HOME = {'codex': 'CODEX_HOME', 'claude': 'CLAUDE_CONFIG_DIR', 'grok': 'GROK_HOME', 'gemini': 'GEMINI_CLI_HOME'}
 ACCOUNT_KEYS = {'codex': ('CODEX_API_KEY', 'OPENAI_API_KEY'), 'claude': ('ANTHROPIC_API_KEY',), 'grok': ('XAI_API_KEY',), 'gemini': ('GEMINI_API_KEY',)}
 ACCOUNT_ID = re.compile(r'[0-9a-f]{32}')
 KEYCHAIN_SERVICE = 'Zook account API key'
@@ -941,9 +941,15 @@ def secret_delete(account_id):
 def provider_env(provider, account=None):
     """The CLI's environment. With an extra account, the CLI is pointed at that account's own folder, plus its API key if it is a key account."""
     env = claude_personal_env() if provider == 'claude' else os.environ.copy()
+    env.update((P.spec(_active['data'], provider) or {}).get('run_env') or {})
     account = find_account(account, provider) if isinstance(account, str) else account
     if not account: return env
     if provider in ACCOUNT_HOME: env[ACCOUNT_HOME[provider]] = str(account_dir(account['id']))
+    if provider == 'gemini' and account.get('type') == 'key':  # its own folder, or Gemini keeps using the saved Google sign-in
+        settings = account_dir(account['id']) / '.gemini' / 'settings.json'
+        if not settings.exists():
+            settings.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            settings.write_text(json.dumps({'security': {'auth': {'selectedType': 'gemini-api-key'}}}), encoding='utf-8')
     if account.get('type') == 'key':
         key = secret_get(account['id'])
         if not key: raise RuntimeError('找不到帳號「%s」的 API 金鑰，請到「各模型使用量」頁重新新增。' % account.get('name', ''))
@@ -1074,6 +1080,16 @@ class LoginFlow:
             needs_code = bool(re.search(r'paste|code', text, re.I)) and self.provider == 'claude'
             return dict(state=self.state, error=self.error, url=urls[0] if urls else '', deviceCode=code[-1] if code else '',
                         needsCode=needs_code and self.state == 'running', log=self.lines[-8:])
+
+
+def cli_issue(text):
+    """A plain explanation for account problems a CLI reports in English."""
+    text = str(text or '').lower()
+    if 'ineligibletiererror' in text or 'no longer supported for gemini code assist' in text:
+        return 'Google 已不開放個人免費方案使用 Gemini CLI。請按「＋ 新增帳號」加入 Gemini API 金鑰，再到 Bot 的進階設定選用它。'
+    if 'api_key_invalid' in text or 'api key not valid' in text:
+        return 'Google 不接受這把 Gemini API 金鑰，請移除後重新新增。'
+    return ''
 
 
 def login_methods(provider):
@@ -2549,6 +2565,10 @@ class App(ThreadingHTTPServer):
                             raise RuntimeError('Claude 尚未登入。請到「各模型使用量」頁登入後重試。')
                     except (ValueError, AttributeError): pass
                 detail = (stderr or b'').decode('utf-8', errors='replace').lower() + output.decode('utf-8', errors='replace').lower() + parsed['error'].lower()
+                issue = cli_issue(detail)
+                if issue:
+                    if not account: self.note_provider_issue(provider, issue)
+                    raise RuntimeError(issue)
                 if 'out of credits' in detail or 'insufficient credit' in detail or 'quota' in detail or 'usage limit' in detail:
                     raise RuntimeError('CLI 帳號額度不足或已達使用上限，請到該服務補充額度後重試。')
                 if 'not logged in' in detail or 'please log in' in detail or 'login required' in detail:
@@ -2561,6 +2581,7 @@ class App(ThreadingHTTPServer):
             if parsed['unparsable']: raise RuntimeError('CLI 回傳無法解析的結果。')
             content = parsed['content']
             if not content: raise RuntimeError('CLI 沒有回傳內容。')
+            if not account and (store.data.get('providerIssues') or {}).get(provider, {}).get('issue'): self.note_provider_issue(provider, '')
             with store.lock:
                 job = store.find('jobs', job_id)
                 if parsed['usage']: job['usage'] = dict(parsed['usage'], provider=provider, account=account['id'] if account else '')
@@ -2745,6 +2766,11 @@ class App(ThreadingHTTPServer):
                     if event: event.set()
             if released: self.store.save()
         return released
+
+    def note_provider_issue(self, provider, issue):
+        """Remember whether the CLI's own sign-in can actually be used, for its card."""
+        with self.store.lock:
+            self.store.data.setdefault('providerIssues', {})[provider] = dict(issue=issue, checkedAt=NOW()); self.store.save()
 
     def record_quota(self, provider, info, account_id='', source='reply'):
         snap = normalize_quota(provider, info)
@@ -3184,6 +3210,8 @@ class Handler(BaseHTTPRequestHandler):
                     sub = logins.get(provider + '@' + account['id'])
                     view['login'] = sub.view() if sub else None
                     profiles.append(view)
+                record = (data.get('providerIssues') or {}).get(provider)
+                item.update(issue=(record or {}).get('issue', ''), needsCheck=bool(s.get('terminal_login') and item['status'] == 'logged_in' and record is None))
                 item.update(profiles=profiles, canAddLogin=bool(provider in ACCOUNT_HOME and login_methods(provider)), canAddKey=provider in ACCOUNT_KEYS)
                 items.append(item)
             return self.respond(200, {'providers': items, 'catalog': P.catalog_view(data)})
@@ -3254,6 +3282,14 @@ class Handler(BaseHTTPRequestHandler):
                 if inst and inst.state == 'running': return self.error(409, '安裝流程已在進行中。')
                 self.server.installs[provider] = LoginFlow(provider, install_args(provider), failure='安裝沒有完成，請確認網路連線後再試。')
                 return self.respond(202, self.server.installs[provider].view())
+            if action == 'check':  # one tiny request, to learn whether this sign-in can really be used
+                path = find_cli(provider); s = P.spec(self.server.store.data, provider) or {}
+                if not path or not s.get('terminal_login'): raise ValueError('這個模型不需要檢查。')
+                try: done = subprocess.run([path, '-p', 'Reply with OK'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=provider_env(provider), timeout=90, cwd=tempfile.gettempdir())
+                except subprocess.TimeoutExpired: return self.respond(200, {'issue': ''})
+                issue = cli_issue(done.stdout.decode('utf-8', 'replace')) if done.returncode else ''
+                self.server.note_provider_issue(provider, issue)
+                return self.respond(200, {'issue': issue})
             if action == 'terminal-login':
                 path = find_cli(provider); s = P.spec(self.server.store.data, provider) or {}
                 if not path or not s.get('terminal_login'): raise ValueError('這個模型不能用終端機登入。')

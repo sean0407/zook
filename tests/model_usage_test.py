@@ -42,6 +42,29 @@ class UsagePerAccount(unittest.TestCase):
         finally: app.server_close()
 
 
+class GeminiAccounts(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.store = server.Store(Path(self.temp.name))
+
+    def tearDown(self): self.temp.cleanup()
+
+    def test_runs_in_any_folder_and_a_key_account_ignores_the_google_sign_in(self):
+        self.assertEqual(server.provider_env('gemini')['GEMINI_CLI_TRUST_WORKSPACE'], 'true')
+        self.assertNotIn('GEMINI_CLI_TRUST_WORKSPACE', server.provider_env('codex'))
+        account = dict(id=A, provider='gemini', name='金鑰', type='key')
+        with mock.patch.object(server, 'secret_get', return_value='a-key-for-tests'):
+            env = server.provider_env('gemini', account)
+        settings = Path(env['GEMINI_CLI_HOME']) / '.gemini/settings.json'
+        self.assertEqual(env['GEMINI_API_KEY'], 'a-key-for-tests')
+        self.assertEqual(json.loads(settings.read_text())['security']['auth']['selectedType'], 'gemini-api-key')
+        self.assertNotIn('a-key-for-tests', settings.read_text())
+
+    def test_account_problems_are_explained(self):
+        self.assertIn('API 金鑰', server.cli_issue('Error authenticating: IneligibleTierError: This client is no longer supported'))
+        self.assertIn('重新新增', server.cli_issue('API key not valid. Please pass a valid API key.'))
+        self.assertEqual(server.cli_issue('network timeout'), '')
+
+
 class ManagedInstall(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.store = server.Store(Path(self.temp.name))
