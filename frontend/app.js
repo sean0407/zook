@@ -278,7 +278,7 @@
     if (!b) return `<main class="main"><div class="empty-chat"><h1>歡迎使用 Zook</h1><p>建立一個 Bot，開始你的工作。</p><div class="quick-actions"><button data-action="new-bot">＋ 新增 Bot</button></div></div></main>`;
     const messages = b.messages || [];
     const running = Object.entries(state.pollers).find(([id, v]) => v.botId === b.id && (state.jobDetails[id]?.chatId || b.chatId) === b.chatId);
-    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-bot">${avatar(b)}${esc(b.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn chat-title-btn" data-action="chats" title="所有對話">☰ ${esc(chatName(b))}</button><button class="text-btn" data-action="new-chat">＋ 新對話</button><button class="text-btn" data-action="share">↑ 匯出對話</button>${!state.detailOpen?'<button class="text-btn" data-action="toggle-detail">顯示詳情</button>':''}</div></header><div class="conversation" id="conversation">${messages.length?`<div class="conversation-inner">${messages.map(m=>`<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message ${m.role==='user'?'user':'assistant'}" data-mid="${esc(m.id)}">${m.role==='user'?'':avatar(b)}${m.role!=='user'&&m.content&&m.status!=='running'?`<div class="bubble md ${m.status==='failed'?'error-text':''}">${markdown(m.content)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(m.status==='running'?'正在思考…':m.status==='cancelled'&&!m.content?'已停止回覆':m.status==='failed'&&!m.content?(Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。'):m.content)}</div>`}${redoBar(b, m, running)}</div>`).join('')}</div>`:`<div class="empty-chat">${avatar(b,'hero')}<h1>今天想一起完成什麼？</h1><p>和 ${esc(b.name)} 開始一段對話。</p><div class="quick-actions"><button data-action="page" data-id="knowledge">▤ 管理知識庫</button><button data-action="page" data-id="usage">◷ 查看使用量</button><button data-action="page" data-id="settings">⚙ 設定模型</button></div></div>`}</div><div class="composer-wrap">${approvalCards(b.id)}<form class="composer" id="chat-form"><button type="button" class="icon-btn" data-action="composer-menu" aria-label="更多選項">${svg('plus')}</button><textarea id="chat-input" rows="1" placeholder="傳送訊息給 ${esc(b.name)}" aria-label="輸入訊息"></textarea><button type="button" class="icon-btn" data-action="voice" aria-label="語音輸入">${svg('mic')}</button>${running?`<button type="button" class="send" data-action="cancel-job" data-id="${esc(running[0])}" aria-label="停止回覆">■</button>`:`<button class="send" type="submit" aria-label="傳送訊息">↑</button>`}</form></div></main>${state.detailOpen?detail(b):''}`
+    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-bot">${avatar(b)}${esc(b.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn chat-title-btn" data-action="chats" title="所有對話">☰ ${esc(chatName(b))}</button><button class="text-btn" data-action="new-chat">＋ 新對話</button><button class="text-btn" data-action="share">↑ 匯出對話</button>${!state.detailOpen?'<button class="text-btn" data-action="toggle-detail">顯示詳情</button>':''}</div></header><div class="conversation" id="conversation">${messages.length?`<div class="conversation-inner">${messages.map(m=>`<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message ${m.role==='user'?'user':'assistant'}" data-mid="${esc(m.id)}">${m.role==='user'?'':avatar(b)}${m.role!=='user'&&m.content&&m.status!=='running'?`<div class="bubble md ${m.status==='failed'?'error-text':''}">${markdown(m.content)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(m.status==='running'?'正在思考…':m.status==='cancelled'&&!m.content?'已停止回覆':m.status==='failed'&&!m.content?(Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。'):m.content)}</div>`}${attachmentsView(m)}${redoBar(b, m, running)}</div>`).join('')}</div>`:`<div class="empty-chat">${avatar(b,'hero')}<h1>今天想一起完成什麼？</h1><p>和 ${esc(b.name)} 開始一段對話。</p><div class="quick-actions"><button data-action="page" data-id="knowledge">▤ 管理知識庫</button><button data-action="page" data-id="usage">◷ 查看使用量</button><button data-action="page" data-id="settings">⚙ 設定模型</button></div></div>`}</div><div class="composer-wrap">${approvalCards(b.id)}${pendingFiles()}<form class="composer" id="chat-form"><button type="button" class="icon-btn" data-action="composer-menu" aria-label="更多選項">${svg('plus')}</button><textarea id="chat-input" rows="1" placeholder="傳送訊息給 ${esc(b.name)}" aria-label="輸入訊息"></textarea><button type="button" class="icon-btn" data-action="voice" aria-label="語音輸入">${svg('mic')}</button>${running?`<button type="button" class="send" data-action="cancel-job" data-id="${esc(running[0])}" aria-label="停止回覆">■</button>`:`<button class="send" type="submit" aria-label="傳送訊息">↑</button>`}</form></div></main>${state.detailOpen?detail(b):''}`
   }
 
   function activeGroup() { return state.groupId ? (state.data.groups || []).find(g => g.id === state.groupId) : null; }
@@ -323,7 +323,7 @@
   function groupMessage(g, m) {
     if (m.role === 'system') return `<div class="system-note">${esc(m.content)}</div>`;
     const tag = html => highlightMentions(html, groupMembers(g));
-    if (m.role === 'user') return `<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message user" data-mid="${esc(m.id)}">${m.author ? `<div class="speaker-wrap user-author"><div class="speaker">由 ${esc(m.author)} 發起</div><div class="bubble">${tag(esc(m.content))}</div></div>` : `<div class="bubble">${tag(esc(m.content))}</div>`}</div>`;
+    if (m.role === 'user') return `<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message user" data-mid="${esc(m.id)}">${m.author ? `<div class="speaker-wrap user-author"><div class="speaker">由 ${esc(m.author)} 發起</div><div class="bubble">${tag(esc(m.content))}</div></div>` : `<div class="bubble">${tag(esc(m.content))}</div>`}${attachmentsView(m)}</div>`;
     const b = state.data.bots.find(x => x.id === m.botId) || {name: '已刪除的 Bot', color: '#959595'};
     const text = m.status==='running' ? '正在思考…' : m.status==='cancelled'&&!m.content ? '已停止回覆' : m.status==='failed'&&!m.content ? (Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。') : m.content;
     return `<div class="message assistant" data-mid="${esc(m.id)}">${avatar(b)}<div class="speaker-wrap"><div class="speaker">${esc(b.name)}</div>${m.content&&m.status!=='running'?`<div class="bubble md">${tag(markdown(m.content))}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(text)}</div>`}</div></div>`;
@@ -331,7 +331,7 @@
   function groupChat() {
     const g = activeGroup(), members = groupMembers(g), running = g.status === 'running';
     const messages = g.messages || [];
-    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-group">${avatarStack(g)}${esc(g.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn" data-action="share">↑ 匯出對話</button>${!state.detailOpen?'<button class="text-btn" data-action="toggle-detail">顯示詳情</button>':''}</div></header><div class="conversation" id="conversation">${messages.length?`<div class="conversation-inner">${messages.map(m => groupMessage(g, m)).join('')}</div>`:`<div class="empty-chat">${avatarStack(g,'hero')}<h1>${esc(g.name)}</h1><p>直接發訊息讓成員輪流回覆，或用 @ 指定由誰處理。Bot 也可以用 @ 把工作交給其他成員。</p></div>`}</div><div class="composer-wrap">${approvalCards(null, jobsForGroup(g.id))}<div class="mention-row" aria-label="指名 Bot">${members.map(b => `<button type="button" class="mention-chip" data-action="mention" data-id="${esc(b.name)}">${avatar(b)}@${esc(b.name)}</button>`).join('')}<button type="button" class="mention-chip" data-action="mention" data-id="所有人">@所有人</button></div><div id="mention-menu" class="mention-menu" role="listbox" aria-label="選擇要指名的 Bot" hidden></div><form class="composer" id="chat-form"><button type="button" class="icon-btn" data-action="composer-menu" aria-label="更多選項">${svg('plus')}</button><div class="input-wrap"><div class="input-mirror" aria-hidden="true"></div><textarea id="chat-input" rows="1" placeholder="傳送訊息給群組，用 @ 指定 Bot" aria-label="輸入訊息"></textarea></div><button type="button" class="icon-btn" data-action="voice" aria-label="語音輸入">${svg('mic')}</button>${running?`<button type="button" class="send" data-action="stop-group" data-id="${esc(g.id)}" aria-label="停止討論">■</button>`:`<button class="send" type="submit" aria-label="傳送訊息">↑</button>`}</form></div></main>${state.detailOpen?groupDetail(g):''}`;
+    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-group">${avatarStack(g)}${esc(g.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn" data-action="share">↑ 匯出對話</button>${!state.detailOpen?'<button class="text-btn" data-action="toggle-detail">顯示詳情</button>':''}</div></header><div class="conversation" id="conversation">${messages.length?`<div class="conversation-inner">${messages.map(m => groupMessage(g, m)).join('')}</div>`:`<div class="empty-chat">${avatarStack(g,'hero')}<h1>${esc(g.name)}</h1><p>直接發訊息讓成員輪流回覆，或用 @ 指定由誰處理。Bot 也可以用 @ 把工作交給其他成員。</p></div>`}</div><div class="composer-wrap">${approvalCards(null, jobsForGroup(g.id))}<div class="mention-row" aria-label="指名 Bot">${members.map(b => `<button type="button" class="mention-chip" data-action="mention" data-id="${esc(b.name)}">${avatar(b)}@${esc(b.name)}</button>`).join('')}<button type="button" class="mention-chip" data-action="mention" data-id="所有人">@所有人</button></div><div id="mention-menu" class="mention-menu" role="listbox" aria-label="選擇要指名的 Bot" hidden></div>${pendingFiles()}<form class="composer" id="chat-form"><button type="button" class="icon-btn" data-action="composer-menu" aria-label="更多選項">${svg('plus')}</button><div class="input-wrap"><div class="input-mirror" aria-hidden="true"></div><textarea id="chat-input" rows="1" placeholder="傳送訊息給群組，用 @ 指定 Bot" aria-label="輸入訊息"></textarea></div><button type="button" class="icon-btn" data-action="voice" aria-label="語音輸入">${svg('mic')}</button>${running?`<button type="button" class="send" data-action="stop-group" data-id="${esc(g.id)}" aria-label="停止討論">■</button>`:`<button class="send" type="submit" aria-label="傳送訊息">↑</button>`}</form></div></main>${state.detailOpen?groupDetail(g):''}`;
   }
   function groupDetail(g) {
     const members = groupMembers(g), running = g.status === 'running';
@@ -912,6 +912,55 @@
     const last = x => x.done ? '已完成' : !x.lastStatus ? '尚未執行' : (x.lastStatus === 'sent' ? '上次執行：' : x.lastStatus === 'missed' ? '上次錯過：' : '上次失敗：') + formatDate(x.lastAt) + (x.lastStatus !== 'sent' && x.lastError ? '（' + x.lastError + '）' : '');
     return intro + `<div class="cards">${items.map(x => `<article class="card sched-card"><div class="sched-head"><h3>${esc(scheduleWhen(x))}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><p>${esc(x.content)}</p>${scheduleTarget(x)}<span class="status ${x.lastStatus && x.lastStatus !== 'sent' && !x.done ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button>${(x.runs || []).length ? `<button class="link" data-action="schedule-history" data-id="${esc(x.id)}">紀錄</button>` : ''}<button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`).join('')}</div>`;
   }
+  // ---- Attachments: each file is uploaded as soon as it is added, then sent with the message.
+  if (!state.pending) state.pending = [];
+  const kb = n => n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1024 / 1024).toFixed(1) + ' MB';
+  function pendingFiles() {
+    if (!state.pending.length) return '';
+    return `<div class="pending-files">${state.pending.map(f => `<div class="pending-file">${f.url ? `<img src="${esc(f.url)}" alt="">` : '<span class="file-icon">📄</span>'}<span class="pending-name">${esc(f.name)}<small>${f.uploading ? '上傳中…' : kb(f.size)}</small></span><button type="button" class="icon-btn mini" data-action="unattach" data-id="${esc(f.key)}" aria-label="移除 ${esc(f.name)}">×</button></div>`).join('')}</div>`;
+  }
+  function attachmentsView(m) {
+    if (!m.attachments || !m.attachments.length) return '';
+    return `<div class="attachments">${m.attachments.map(a => a.kind === 'image'
+      ? `<button type="button" class="att-image" data-action="view-image" data-id="${esc(a.id)}" data-name="${esc(a.name)}"><img src="/api/uploads/${esc(a.id)}" alt="${esc(a.name)}"></button>`
+      : `<a class="att-file" href="/api/uploads/${esc(a.id)}" download="${esc(a.name)}">📄 ${esc(a.name)}</a>`).join('')}</div>`;
+  }
+  async function addFiles(files) {
+    for (const f of files) {
+      if (state.pending.length >= 10) { toast('每則訊息最多 10 個檔案'); break; }
+      if (f.size > 20 * 1024 * 1024) { toast(`「${f.name}」超過 20 MB，沒有加入`); continue; }
+      if (!f.size) { toast(`「${f.name}」是空的`); continue; }
+      const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
+      const name = f.name && f.name !== 'image.png' ? f.name : `截圖-${stamp}.png`;
+      const item = {key: Math.random().toString(36).slice(2), name, size: f.size, uploading: true, url: /^image\//.test(f.type) ? URL.createObjectURL(f) : ''};
+      state.pending.push(item); render(true);
+      try {
+        const res = await fetch('/api/uploads', {method: 'POST', headers: {'X-File-Name': encodeURIComponent(name), 'Content-Type': 'application/octet-stream'}, body: f});
+        const meta = await res.json();
+        if (!res.ok) throw new Error(meta.error || '上傳失敗');
+        Object.assign(item, {id: meta.id, kind: meta.kind, uploading: false});
+      } catch (e) { state.pending = state.pending.filter(x => x !== item); toast(`「${name}」${e.message}`); }
+      render(true);
+    }
+  }
+  document.addEventListener('paste', e => {
+    const files = [...(e.clipboardData?.files || [])];
+    if (!files.length || e.target.id !== 'chat-input') return;
+    e.preventDefault(); addFiles(files);
+  });
+  // Files dragged onto the conversation; the sidebar's own drag and drop is left alone.
+  document.addEventListener('dragover', e => {
+    if (![...(e.dataTransfer?.types || [])].includes('Files')) return;
+    e.preventDefault();
+    if (e.target.closest?.('.main') && $('#chat-form')) { e.dataTransfer.dropEffect = 'copy'; $('.composer-wrap')?.classList.add('drop-files'); }
+    else e.dataTransfer.dropEffect = 'none';
+  }, true);
+  document.addEventListener('dragleave', e => { if (!e.relatedTarget) $('.composer-wrap')?.classList.remove('drop-files'); });
+  document.addEventListener('drop', e => {
+    if (!e.dataTransfer?.files?.length) return;
+    e.preventDefault(); e.stopPropagation(); $('.composer-wrap')?.classList.remove('drop-files');
+    if (e.target.closest?.('.main') && $('#chat-form')) addFiles([...e.dataTransfer.files]);
+  }, true);
   // Under the last question: 編輯. Under the last reply: 重新回答 and 換模型重答. Not while a reply is running.
   function redoBar(b, m, running) {
     if (running) return '';
@@ -1472,6 +1521,18 @@
         case 'open-run':
           await openConversation(el.dataset.kind, el.dataset.target, id);
           break;
+        case 'pick-files': {
+          closeModal();
+          const picker = document.createElement('input'); picker.type = 'file'; picker.multiple = true;
+          picker.onchange = () => addFiles([...picker.files]); picker.click();
+          break;
+        }
+        case 'unattach':
+          state.pending = state.pending.filter(f => f.key !== id); render(true);
+          break;
+        case 'view-image':
+          modal(el.dataset.name || '圖片', `<div class="modal-body image-view"><img src="/api/uploads/${esc(id)}" alt="${esc(el.dataset.name || '')}"></div>`, '', true);
+          break;
         case 'redo-again': {
           const b = activeBot();
           if (redoAllowed(b)) await redo(b, {mode: 'again'});
@@ -1578,7 +1639,7 @@
           modal('語音輸入', '<div class="modal-body"><p class="muted">尚未安裝語音辨識模型。</p></div>', '<div class="modal-foot"><button class="primary" data-action="close-modal">知道了</button></div>');
           break;
         case 'composer-menu':
-          modal('更多選項', '<div class="modal-body"><p class="muted">新增知識，為 Bot 提供相關背景。</p><button class="secondary" data-action="new-note">＋ 新增知識</button></div>');
+          modal('更多選項', '<div class="modal-body more-options"><button class="secondary" data-action="pick-files">📎 附加檔案或圖片</button><p class="muted">也可以把檔案拖進對話，或直接貼上截圖。每則最多 10 個，單檔 20 MB。</p><button class="secondary" data-action="new-note">＋ 新增知識</button><p class="muted">新增知識，為 Bot 提供相關背景。</p></div>');
           break;
         case 'approve':
         case 'deny':
@@ -1895,11 +1956,13 @@
       if (form.id === 'chat-form') {
         let input = $('#chat-input'),
           content = input.value.trim();
-        if (!content) return;
+        if (state.pending.some(f => f.uploading)) { toast('檔案還在上傳，請稍等'); return; }
+        const attachments = state.pending.map(f => f.id);
+        if (!content && !attachments.length) return;
         const g = activeGroup();
         if (g) {
-          await post('groups/' + encodeURIComponent(g.id) + '/messages', {content});
-          input.value = ''; updateInputMirror();
+          await post('groups/' + encodeURIComponent(g.id) + '/messages', {content, attachments});
+          input.value = ''; updateInputMirror(); state.pending = [];
           await refresh();
           pollGroup(g.id);
           return;
@@ -1907,9 +1970,10 @@
         let botId = state.selected;
         let result = await post('chat', {
           botId,
-          content
+          content,
+          attachments
         });
-        input.value = ''; updateInputMirror();
+        input.value = ''; updateInputMirror(); state.pending = [];
         await refresh();
         poll(result.jobId, botId)
       } else if (form.id === 'bot-form') {
