@@ -173,6 +173,21 @@ class UpkeepTest(unittest.TestCase):
         self.assertEqual(self.req('DELETE', '/api/skills/' + made['id'])[0], 200)
         self.assertFalse((self.root / 'data/skills' / made['folder']).exists())
 
+    def test_long_task_is_marked_and_announced(self):
+        self.assertEqual(self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': 'x', 'long': 'yes'})[0], 400)
+        status, out = self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': '整理全部資料', 'long': True})
+        self.assertEqual(status, 202)
+        end = time.time() + 15
+        while time.time() < end and self.req('GET', '/api/jobs/' + out['jobId'])[1]['status'] == 'running': time.sleep(0.1)
+        job = self.req('GET', '/api/jobs/' + out['jobId'])[1]
+        self.assertTrue(job['long']); self.assertEqual(job['status'], 'completed')
+        end = time.time() + 5
+        while time.time() < end and not self.req('GET', '/api/notifications?after=0')[1]['items']: time.sleep(0.1)
+        notices = self.req('GET', '/api/notifications?after=0')[1]['items']
+        self.assertEqual([(n['title'], n['body'], n['kind'], n['targetId']) for n in notices], [('小幫手', '長任務完成：ok from codex', 'bot', self.bot['id'])])
+        self.ask('一般訊息')  # an ordinary reply is not announced
+        self.assertEqual(len(self.req('GET', '/api/notifications?after=0')[1]['items']), 1)
+
 
 if __name__ == '__main__':
     unittest.main()

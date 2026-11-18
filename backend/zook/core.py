@@ -50,6 +50,7 @@ MAX_UPLOAD = 20 * 1024 * 1024   # one attached file
 MAX_ATTACHMENTS = 10            # files in one message
 IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp'}
 JOB_TIMEOUT = 900
+LONG_JOB_TIMEOUT = 4 * 3600  # a reply sent as 長任務
 # Grok's strict sandbox cannot start the Python inside Xcode or the Command Line Tools (sys.executable), only the system one.
 GROK_PYTHON = '/usr/bin/python3'
 APPROVAL_TIMEOUT = 600

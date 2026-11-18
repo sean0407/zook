@@ -111,6 +111,7 @@
       catch (err) { toast(err.message); }
       return;
     }
+    if (e.target.dataset.long !== undefined) { state.long[state.selected] = e.target.checked; return; }
     if (e.target.dataset.plan !== undefined) {
       state.plan[state.selected] = e.target.checked;
       if (e.target.checked) toast('這則訊息 Bot 只會提出計畫，不會動手');
@@ -243,9 +244,10 @@
           content,
           attachments,
           effort: currentEffort(),
-          plan: !!state.plan[botId]
+          plan: !!state.plan[botId],
+          long: !!state.long[botId]
         });
-        input.value = ''; updateInputMirror(); pendingList().length = 0; state.plan[botId] = false;
+        input.value = ''; updateInputMirror(); pendingList().length = 0; state.plan[botId] = false; state.long[botId] = false;
         await refresh();
         poll(result.jobId, botId)
       } else if (form.id === 'bot-form') {

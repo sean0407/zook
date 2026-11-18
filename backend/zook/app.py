@@ -145,13 +145,14 @@ class App(GroupRuns, ThreadingHTTPServer):
                 return handler.respond(200, {'id': device_id, 'name': name})
         return handler.error(404, '找不到資源。')
 
-    def send_to_bot(self, bot, content, inventory, author=None, chat_id=None, use=None, attachments=None, effort=None, plan=False, replaces=None):
+    def send_to_bot(self, bot, content, inventory, author=None, chat_id=None, use=None, attachments=None, effort=None, plan=False, replaces=None, long=False):
         """Send one message to a Bot and start its reply, in the open conversation or the one given. Lock held.
         use=(provider, model) answers this one message with another model without changing the Bot."""
         store = self.store
         chat_id = chat_id or ensure_chats(bot) and bot['chatId']
         effort = pick_effort(effort, bot_effort(bot))
         if not isinstance(plan, bool): raise ValueError('先規劃設定無效。')
+        if not isinstance(long, bool): raise ValueError('長任務設定無效。')
         messages = chat_messages(bot, chat_id)
         validate_selection(bot, inventory)
         if attachments and isinstance(content, str) and not content.strip(): content = '（請看附件）'
@@ -187,6 +188,7 @@ class App(GroupRuns, ThreadingHTTPServer):
         if use and bot.get('provider') == AUTO: job['autoChain'] = [[provider, model]]  # 換模型重答 stays on the model the user named
         if auto_chain: job['autoChain'] = auto_chain; refresh_auto(self)
         if plan: job['plan'] = True
+        if long: job['long'] = True; msg['long'] = True
         if use or replaces: job['noResume'] = True  # another model, or a rewritten history: start a new CLI conversation
         self.__dict__.setdefault('short_prompts', {})[job['id']] = short
         self.__dict__.setdefault('latest_asks', {})[job['id']] = content
@@ -386,7 +388,13 @@ class App(GroupRuns, ThreadingHTTPServer):
 
     def run_job(self, job_id, prompt, provider, model, bot=None, inventory=None):
         try: self._run_job(job_id, prompt, provider, model, bot, inventory)
-        finally: self.finish_session(job_id)
+        finally:
+            self.finish_session(job_id)
+            with self.store.lock:
+                job = self.store.find('jobs', job_id)
+                if job and job.get('long') and job['status'] != 'running':  # nobody is expected to be watching a long task
+                    body = '長任務完成：' + (first_sentence(job.get('content') or '') or '已完成。') if job['status'] == 'completed' else '長任務已停止。' if job['status'] == 'cancelled' else '長任務失敗：' + (job.get('error') or '')
+                    self.notify(self.target_name('bot', job['botId']), body, 'bot', job['botId'], job.get('messageId'), always=True)
 
     def _run_job(self, job_id, prompt, provider, model, bot=None, inventory=None):
         """Run one reply. When the Bot's model cannot answer (used up, not signed in, not installed, failed),
@@ -581,7 +589,7 @@ class App(GroupRuns, ThreadingHTTPServer):
                 proc = subprocess.Popen(args, stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=str(cli_cwd), env=env)
                 self.processes[job_id] = proc
             try:
-                deadline, sent = time.monotonic() + JOB_TIMEOUT, False
+                deadline, sent = time.monotonic() + (LONG_JOB_TIMEOUT if job.get('long') else JOB_TIMEOUT), False
                 while True:
                     began = time.monotonic()
                     try:

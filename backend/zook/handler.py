@@ -670,7 +670,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not bot: return self.error(404, '找不到機器人。')
                     if self.device and isinstance(body.get('attachments'), list) and len(body['attachments']) > MOBILE_PHOTOS: return self.error(400, '手機每則訊息最多 %d 張照片。' % MOBILE_PHOTOS)
                     try: job = self.server.send_to_bot(bot, body.get('content'), inventory, attachments=attachments_for(store, body.get('attachments')), effort=body.get('effort'),
-                                                         plan=body.get('plan', False))
+                                                         plan=body.get('plan', False), long=body.get('long', False))
                     except Busy as exc: return self.error(409, str(exc))
                     return self.respond(202, {'jobId': job['id']})
                 if path == '/api/chat/redo' and self.command == 'POST':
