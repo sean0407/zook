@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-import datetime, http.client, importlib.util, json, os, subprocess, sys, tempfile, time, unittest
+import datetime, http.client, importlib.util, json, os, subprocess, sys, tempfile, time, unittest, unittest.mock
 from pathlib import Path
 
 SERVER = Path(__file__).resolve().parents[1] / 'backend/server.py'
 CODEX = '''#!/usr/bin/env python3
-import sys, time
+import os, sys, time
 s = sys.stdin.read()
+open(os.path.join(os.path.dirname(sys.argv[0]), 'codex.args'), 'w').write(' '.join(sys.argv[1:]) + ' ZOOK_TOOL_WAIT=' + os.environ.get('ZOOK_TOOL_WAIT', ''))
 if 'SLOW' in s: time.sleep(4)
 print('done: ' + s.strip().splitlines()[-1][-40:])
 '''
@@ -73,6 +74,30 @@ class ScheduleNotices(unittest.TestCase):
                 self.assertEqual([(n['title'], n['body'], n['messageId']) for n in items], [(bot['name'], '需要你核准：新增 Bot「X」', 'q')])  # only the scheduled run asks this way
                 for job in store.data['jobs']: job['status'] = 'cancelled'; app.expire_job(job['id'])
             finally: app.server_close()
+
+    def test_unattended_approval_gives_up_after_the_wait(self):
+        server = load()
+        with tempfile.TemporaryDirectory() as d, unittest.mock.patch.dict(os.environ, ZOOK_SCHEDULE_APPROVAL_WAIT='0.3'):
+            store = server.Store(Path(d)); app = server.App(('127.0.0.1', 0), store, d, 't')
+            try:
+                bot = store.data['bots'][0]
+                store.data['jobs'].append(dict(id='j', botId=bot['id'], messageId='m', status='running', toolCalls=[dict(id='c', name='zook_create_bot', category='danger', arguments={})], approvals=[]))
+                run = dict(id='r', kind='bot', targetId=bot['id'], jobId='j', messageId='q', status='running')
+                store.data['schedules'].append(dict(id='s', botId=bot['id'], content='x', time='10:00', repeat='daily', on=True, runs=[run]))
+                started = time.time()
+                self.assertFalse(app.approve('j', 'c', 'zook_create_bot', {}, 'builtin:zook'))
+                self.assertLess(time.time() - started, 5)
+                self.assertEqual(store.data['jobs'][0]['approvals'][0]['status'], 'expired')
+                store.data['jobs'][0].update(status='completed', content='沒有核准，所以沒做。')
+                with store.lock: app.settle_schedule_runs()
+                self.assertEqual((run['status'], run['reason']), ('done', '有動作等你核准超過 24 小時，視為拒絕。'))
+            finally: app.server_close()
+
+    def test_mail_card_names_the_recipient_and_subject(self):
+        say = load().describe_send
+        self.assertEqual(say('send_email', {'to': 'amy@example.com', 'subject': '週報', 'body': '...'}), '寄信給 amy@example.com，主旨「週報」')
+        self.assertEqual(say('send_message', {'to': ['a@x.com', 'b@x.com'], 'subject': 'Hi'}), '寄信給 a@x.com、b@x.com，主旨「Hi」')
+        self.assertIsNone(say('create_draft', {'to': 'a@x.com'}))
 
 
 class ScheduleTest(unittest.TestCase):
@@ -194,6 +219,16 @@ class ScheduleTest(unittest.TestCase):
         # a monthly schedule keeps its day
         status, item = self.req('POST', '/api/schedules', {'botId': self.bot['id'], 'content': 'rent', 'repeat': 'monthly', 'day': 31, 'time': '09:00'})
         self.assertEqual((status, item['day']), (201, 31))
+
+    def test_scheduled_runs_wait_longer_for_approval(self):
+        args = lambda: (self.root / 'bin/codex.args').read_text()
+        self.assertEqual(self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': 'hi'})[0], 202)
+        self.wait(lambda s: self.messages(s)[-1].get('status') == 'completed')
+        self.assertIn('mcp_servers.zook.tool_timeout_sec=660', args()); self.assertIn('ZOOK_TOOL_WAIT=660', args())
+        status, item = self.req('POST', '/api/schedules', {'botId': self.bot['id'], 'content': 'x', 'time': '10:00'})
+        self.assertEqual(self.req('POST', '/api/schedules/%s/run' % item['id'], {})[0], 202)
+        self.wait(lambda s: self.messages(s)[-1].get('status') == 'completed')
+        self.assertIn('mcp_servers.zook.tool_timeout_sec=87000', args()); self.assertIn('ZOOK_TOOL_WAIT=87000', args())
 
     def test_missed_is_skipped_when_catch_up_is_off(self):
         earlier = datetime.datetime.now() - datetime.timedelta(minutes=30)

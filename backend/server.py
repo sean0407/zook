@@ -37,6 +37,10 @@ JOB_TIMEOUT = 900
 # Grok's strict sandbox cannot start the Python inside Xcode or the Command Line Tools (sys.executable), only the system one.
 GROK_PYTHON = '/usr/bin/python3'
 APPROVAL_TIMEOUT = 600
+# A schedule runs while nobody may be watching: an action it needs approval for waits this long (and the user gets a
+# notification), then counts as declined. The CLI and its tool calls are kept alive meanwhile.
+SCHEDULE_APPROVAL_WAIT = 24 * 3600
+SEND_TOOLS = ('send_email', 'send_message', 'sendmessage', 'send_mail', 'sendmail', 'send')
 GROUP_MIN_BOTS, GROUP_MAX_BOTS = 2, 6
 GROUP_MAX_TURNS = 8  # Bot replies per user message, including handoffs.
 GROUP_MAX_TURNS_MODERATED = 16  # With 管理員 hosting: kickoff, assignments, cross-discussion rounds and a summary.
@@ -1797,6 +1801,23 @@ def schedule_instructions():
 MAX_NOTICES = 100
 
 
+def schedule_approval_wait():
+    try: return float(os.environ.get('ZOOK_SCHEDULE_APPROVAL_WAIT') or SCHEDULE_APPROVAL_WAIT)
+    except ValueError: return SCHEDULE_APPROVAL_WAIT
+
+
+def tool_wait(scheduled):
+    """How long a CLI waits on one Zook tool call: the approval wait plus room for the tool itself."""
+    return int(schedule_approval_wait() + 600) if scheduled else APPROVAL_TIMEOUT + 60
+
+
+def describe_send(label, args):
+    """The approval card's sentence for sending mail: who gets it and the subject."""
+    if str(label or '').lower().replace('-', '_') not in SEND_TOOLS or not isinstance(args, dict) or not args.get('to'): return None
+    to = args['to'] if isinstance(args['to'], list) else [args['to']]
+    return '寄信給 %s，主旨「%s」' % ('、'.join(str(x) for x in to[:5]), str(args.get('subject') or '')[:80])
+
+
 def first_sentence(text, limit=120):
     """The first sentence of a reply, without Markdown marks, for a notification."""
     for line in re.sub(r'[*_`>#|]+', '', text or '').splitlines():
@@ -2047,6 +2068,7 @@ class App(ThreadingHTTPServer):
                     if job and job['status'] == 'completed': outcome = ('done', '', job.get('content') or '')
                     elif job and job['status'] == 'cancelled': outcome = ('failed', '回覆被停止了。', '')
                     else: outcome = ('failed', (job or {}).get('error') or '找不到這次的回覆。', '')
+                if run.get('approvalExpired') and outcome[0] == 'done': outcome = ('done', '有動作等你核准超過 24 小時，視為拒絕。', outcome[2])
                 run.update(status=outcome[0], reason=outcome[1], summary=outcome[2][:300], finishedAt=NOW())
                 if outcome[0] == 'failed': item.update(lastStatus='failed', lastError=outcome[1])
                 self.notify_run(run, first_sentence(outcome[2]) or '已完成。' if outcome[0] == 'done' else '失敗：' + outcome[1])
@@ -2129,14 +2151,19 @@ class App(ThreadingHTTPServer):
             approval = dict(id=approval_id, toolCallId=call_id, name=name, category=call.get('category', ''), label=call.get('label', name), sourceLabel=call.get('sourceLabel', source), arguments=copy.deepcopy(call.get('arguments', {})), status='pending')
             if name in SCHEDULE_TOOLS:
                 approval['text'] = describe_schedule_call(self.store, self.store.find('bots', job['botId']) or {'id': job['botId']}, job.get('groupId'), name, arguments)
+            elif describe_send(approval['label'], approval['arguments']):
+                approval['text'] = describe_send(approval['label'], approval['arguments'])
             job.setdefault('approvals', []).append(approval); self.approval_events[approval_id] = event
             run = self.schedule_run_for(job)
             if run: self.notify_run(run, '需要你核准：' + (approval.get('text') or describe_call(dict(approval, name=name))))
             self.store.save()
-        event.wait(APPROVAL_TIMEOUT)
+        event.wait(schedule_approval_wait() if run else APPROVAL_TIMEOUT)
         with self.store.lock:
             self.approval_events.pop(approval_id, None)
-            if approval['status'] == 'pending': approval['status'] = 'expired'; self.store.save()
+            if approval['status'] == 'pending':
+                approval['status'] = 'expired'
+                if run: run['approvalExpired'] = True  # unattended and nobody answered: declined, and the history says why
+                self.store.save()
             return approval['status'] == 'approved' and job['status'] == 'running'
 
     def run_job(self, job_id, prompt, provider, model, bot=None, inventory=None):
@@ -2215,6 +2242,9 @@ class App(ThreadingHTTPServer):
                     if job['status'] != 'running' or job_id not in self.workers: return
                     self.workers[job_id]['tools'] = tools
                 env['ZOOK_WORKER_TOKEN'] = token
+                with store.lock: wait = tool_wait(self.schedule_run_for(store.find('jobs', job_id) or {'id': job_id}) is not None)
+                env['ZOOK_TOOL_WAIT'] = str(wait)
+                env['MCP_TOOL_TIMEOUT'] = str(wait * 1000)  # Claude Code, in milliseconds
                 env['ZOOK_WORKER_URL'] = 'http://127.0.0.1:%d/api/worker/%s' % (self.server_address[1], job_id)
                 descriptions = ['- %s（%s）：%s' % (x['name'], x['id'], (x.get('description') or '')[:150].replace('\n', ' ')) for x in inventory['skills'] if x['id'] in skill_ids]
                 if descriptions: prompt += '\n共用 Skills（符合任務時，先用 zook_read_skill 讀取完整指示再照做）：\n' + '\n'.join(descriptions)
@@ -2240,9 +2270,9 @@ class App(ThreadingHTTPServer):
                     grok_dir = workspace / '.grok'
                     shutil.copyfile(adapter, str(grok_dir / 'zook_tool_server.py'))
                     (grok_dir / 'config.toml').write_text(
-                        '[mcp_servers.zook]\ncommand = %s\nargs = [%s]\nstartup_timeout_sec = 20\n'
-                        'env = { ZOOK_WORKER_URL = "${ZOOK_WORKER_URL}", ZOOK_WORKER_TOKEN = "${ZOOK_WORKER_TOKEN}" }\n'
-                        % (json.dumps(GROK_PYTHON if os.path.exists(GROK_PYTHON) else sys.executable), json.dumps(str(grok_dir / 'zook_tool_server.py'))), encoding='utf-8')
+                        '[mcp_servers.zook]\ncommand = %s\nargs = [%s]\nstartup_timeout_sec = 20\ntool_timeout_sec = %d\n'
+                        'env = { ZOOK_WORKER_URL = "${ZOOK_WORKER_URL}", ZOOK_WORKER_TOKEN = "${ZOOK_WORKER_TOKEN}", ZOOK_TOOL_WAIT = "${ZOOK_TOOL_WAIT}" }\n'
+                        % (json.dumps(GROK_PYTHON if os.path.exists(GROK_PYTHON) else sys.executable), json.dumps(str(grok_dir / 'zook_tool_server.py')), wait), encoding='utf-8')
                     # Grok no longer accepts --add-dir in a run like this ("a session works only in its cwd"), so its file tools
                     # stay in the workspace. With the whole Mac, its shell runs unsandboxed and reaches everything else.
                     if scope == 'full':   # the whole Mac: no sandbox, nothing asks, shell included
@@ -2265,8 +2295,9 @@ class App(ThreadingHTTPServer):
                     for feature in (() if native else ('shell_tool', 'unified_exec')) + ('apps', 'plugins', 'browser_use', 'computer_use', 'multi_agent', 'skill_search', 'memories'):
                         args += ['--disable', feature]
                     args += ['--enable', 'skip_host_skill_discovery', '-c', 'web_search=\"%s\"' % ('live' if web else 'disabled')]
-                    args += ['-c', 'mcp_servers.zook.command='+json.dumps(sys.executable), '-c', 'mcp_servers.zook.args='+json.dumps([adapter]), '-c', 'mcp_servers.zook.env_vars='+json.dumps(['ZOOK_WORKER_URL', 'ZOOK_WORKER_TOKEN']),
-                             '-c', 'mcp_servers.zook.default_tools_approval_mode="approve"']  # Zook's own approval broker gates writes.
+                    args += ['-c', 'mcp_servers.zook.command='+json.dumps(sys.executable), '-c', 'mcp_servers.zook.args='+json.dumps([adapter]), '-c', 'mcp_servers.zook.env_vars='+json.dumps(['ZOOK_WORKER_URL', 'ZOOK_WORKER_TOKEN', 'ZOOK_TOOL_WAIT']),
+                             '-c', 'mcp_servers.zook.default_tools_approval_mode="approve"',  # Zook's own approval broker gates writes.
+                             '-c', 'mcp_servers.zook.tool_timeout_sec=%d' % wait]
                 if model: args += ['--model', model]
                 args += ['-']
             else:
@@ -2283,7 +2314,17 @@ class App(ThreadingHTTPServer):
                 proc = subprocess.Popen(args, stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=str(cli_cwd), env=env)
                 self.processes[job_id] = proc
             try:
-                output, stderr = proc.communicate(prompt.encode('utf-8') if stdin_prompt else None, timeout=JOB_TIMEOUT)
+                deadline, sent = time.monotonic() + JOB_TIMEOUT, False
+                while True:
+                    try:
+                        output, stderr = proc.communicate(None if sent or not stdin_prompt else prompt.encode('utf-8'), timeout=max(1, min(30, deadline - time.monotonic())))
+                        break
+                    except subprocess.TimeoutExpired:
+                        sent = True
+                        with store.lock:
+                            asking = any(a.get('status') == 'pending' for a in (store.find('jobs', job_id) or {}).get('approvals', []))
+                        if asking: deadline = max(deadline, time.monotonic() + 120)  # waiting for the user does not use up the time limit
+                        elif time.monotonic() >= deadline: raise
             except subprocess.TimeoutExpired:
                 terminate_tree(proc)
                 try:
