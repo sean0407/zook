@@ -108,6 +108,7 @@ class Handler(BaseHTTPRequestHandler):
                     profiles.append(view)
                 record = (data.get('providerIssues') or {}).get(provider)
                 item.update(issue=(record or {}).get('issue', '') if item['status'] == 'logged_in' else '', needsCheck=provider_needs_check(s, item['status'], record))
+                item.update(ability_view(self.server.store, provider))
                 item.update(profiles=profiles, canAddLogin=bool(provider in ACCOUNT_HOME and login_methods(provider)), canAddKey=provider in ACCOUNT_KEYS)
                 items.append(item)
             return self.respond(200, {'providers': items, 'catalog': P.catalog_view(data)})

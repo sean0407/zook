@@ -159,7 +159,7 @@ class App(ThreadingHTTPServer):
         if any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs']): raise Busy('此機器人已有執行中的工作。')
         provider, model = use or bot_model(store, bot)
         if not P.spec(store.data, provider) or not isinstance(model, str) or len(model) > 100: raise ValueError('模型設定無效。')
-        if plan and provider_kind(provider) not in PLAN_KINDS: raise ValueError('這個模型不支援先規劃。')
+        if plan and (provider_kind(provider) not in PLAN_KINDS or not ability_on(store, provider, 'plan')): raise ValueError('這個模型不支援先規劃。')
         knowledge = [x for x in store.data['knowledge'] if not x.get('botId') or x.get('botId') == bot['id']][-10:]
         context = '\n'.join((x['role'] + ': ' + x['content'][:4000]) for x in messages[-12:] if x.get('content'))
         placed = place_attachments(store, bot['id'], attachments) if attachments else []
@@ -378,6 +378,7 @@ class App(ThreadingHTTPServer):
                 if not job or job['status'] != 'running': return
                 if bot is None: bot = copy.deepcopy(store.find('bots', job['botId']))
             kind = provider_kind(provider)
+            effort = job.get('effort') if ability_on(store, provider, 'effort') else 'standard'  # a CLI version without the option just uses its default
             if not kind: raise RuntimeError('找不到這個提供者，請到「各模型使用量」頁確認。')
             web = web_enabled()
             # Each CLI keeps its own built-in tools (files, commands) inside the Bot's workspace when 主動性 is 自動 or 全部允許.
@@ -448,7 +449,7 @@ class App(ThreadingHTTPServer):
                     else:
                         access_args = ['--permission-mode', 'dontAsk', '--no-subagents', '--trust', '--sandbox', 'strict'] + (['--deny', 'Bash', '--allow', 'Read', '--allow', 'Write', '--allow', 'Edit'] if native else ['--deny', 'Bash', '--deny', 'Edit', '--deny', 'Write'])
                     args = [binary, '--prompt-file', str(prompt_file), '--output-format', 'streaming-json'] + access_args + [
-                            '--allow', 'MCPTool(zook_*)', '--cwd', str(workspace)] + (['--model', model] if model else []) + effort_args('grok', job.get('effort'))
+                            '--allow', 'MCPTool(zook_*)', '--cwd', str(workspace)] + (['--model', model] if model else []) + effort_args('grok', effort)
                     # zook_* (not zook__*) also lets a short tool name through, so Grok is told to use zook__… instead of being refused.
                     args += ['--allow', 'WebSearch', '--allow', 'WebFetch'] if web else ['--disable-web-search']
                     env.update(GROK_MEMORY='0', **{'GROK_%s_%s_ENABLED' % (vendor, cell): 'false' for vendor in ('CLAUDE', 'CURSOR')
@@ -460,10 +461,10 @@ class App(ThreadingHTTPServer):
             elif kind == 'antigravity':
                 prepare_antigravity_folder(workspace, scope, root, wait)
                 if scope != 'workspace': prompt += '\n你目前在 Bot 的工作資料夾，要處理的檔案在 %s。' % root
-                args = antigravity_args(binary, model, job.get('effort'), native, planning, scope, root, web)
+                args = antigravity_args(binary, model, effort, native, planning, scope, root, web)
                 prompt = json.dumps({'event': 'user', 'message': {'content': prompt}}, ensure_ascii=False) + '\n'
             elif provider == 'codex':
-                images = [x for x in (job.get('attachments') or []) if pathlib.Path(x).suffix.lower() in IMAGE_TYPES]
+                images = [x for x in (job.get('attachments') or []) if pathlib.Path(x).suffix.lower() in IMAGE_TYPES and ability_on(store, provider, 'images')]
                 args = [binary, 'exec'] + [a for x in images for a in ('-i', x)] + ['--json'] + ((['--dangerously-bypass-approvals-and-sandbox'] if scope == 'full' else codex_permission_args(binary)) if native and selected else ['--sandbox', 'read-only']) + ['--skip-git-repo-check', '--ephemeral', '--ignore-user-config', '--color', 'never',
                         '-c', 'project_doc_max_bytes=0', '-c', 'developer_instructions=' + json.dumps(CODEX_DEVELOPER_NOTE, ensure_ascii=False)]
                 if selected:
@@ -474,7 +475,7 @@ class App(ThreadingHTTPServer):
                              '-c', 'mcp_servers.zook.default_tools_approval_mode="approve"',  # Zook's own approval broker gates writes.
                              '-c', 'mcp_servers.zook.tool_timeout_sec=%d' % wait]
                 if model: args += ['--model', model]
-                args += effort_args('codex', job.get('effort'))
+                args += effort_args('codex', effort)
                 args += ['-']
             else:
                 # With access to the whole Mac, Claude also gets Bash and its file tools may leave the starting folder.
@@ -487,7 +488,7 @@ class App(ThreadingHTTPServer):
                     args += ['--mcp-config', json.dumps({'mcpServers': {'zook': {'command': sys.executable, 'args': [adapter]}}}), '--allowedTools', ','.join(['mcp__zook__'+tool['name'] for tool in tools] + (['WebSearch', 'WebFetch'] if web else []) + claude_tools
                                                              + (['Read(/%s/**)' % str(workspace / 'attachments')] if attach_read else []))]
                 if model: args += ['--model', model]
-                args += effort_args('claude', job.get('effort'))
+                args += effort_args('claude', effort)
             with store.lock:
                 job = store.find('jobs', job_id)
                 if not job or job['status'] != 'running': return
