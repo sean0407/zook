@@ -37,7 +37,7 @@ MAX_BODY = 1024 * 1024
 # Thinking strength: 快速 / 標準 / 深入. 標準 passes nothing, so each CLI keeps its own default.
 EFFORTS = ('fast', 'standard', 'deep')
 EFFORT_LEVELS = dict(fast='low', deep='high')
-PLAN_KINDS = ('codex', 'claude', 'grok')  # the CLIs Zook can really hold to read-only
+PLAN_KINDS = ('codex', 'claude', 'grok', 'antigravity')  # the CLIs Zook can really hold to read-only
 SUBAGENT_NOTE = '\n這裡不能派出子代理或內部執行助手。如果 Skill 或規則要求派出，改由你自己直接完成，不要因此停下來。'
 PLAN_NOTE = ('\n先規劃：這次只提出計畫，不要動手。用條列說明要做什麼、步驟順序、會動到哪些檔案或服務、哪些動作需要使用者核准。'
              '可以讀資料來了解狀況，但不要修改檔案、不要執行會改變東西的指令、不要對外送出任何東西。最後提醒使用者：確認沒問題就按「照計畫執行」。')
@@ -225,6 +225,7 @@ def effort_args(kind, effort):
     if kind == 'codex': return ['-c', 'model_reasoning_effort="%s"' % level]
     if kind == 'claude': return ['--effort', level]
     if kind == 'grok': return ['--reasoning-effort', level]
+    if kind == 'antigravity': return ['--effort', level]
     return []
 
 
@@ -591,6 +592,7 @@ def remote_device_id(public_key):
 
 
 def quota_exhausted(store, provider):
+    if provider == 'antigravity': return False  # its limits are per model group; a used-up group simply fails over
     """True when the last known quota snapshot says this provider is used up and has not reset yet."""
     snap = (store.data.get('quota') or {}).get(provider) or {}
     now = time.time()
@@ -984,6 +986,11 @@ def account_status(provider, account=None):
             if item['status'] == 'logged_in':
                 item['method'] = 'Grok 帳號'
                 item['email'] = str((_active['data'].get('accountInfo') or {}).get(info_key, {}).get('email') or '')
+        elif s.get('kind') == 'antigravity':
+            p = subprocess.run([path, 'models'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, timeout=25)
+            text = ANSI.sub('', p.stdout.decode('utf-8', 'replace')).lower()
+            item['status'] = 'not_logged_in' if 'authentication required' in text or 'not logged in' in text or 'sign in' in text else ('logged_in' if p.returncode == 0 else 'unknown')
+            if item['status'] == 'logged_in': item['method'] = 'Google 帳號'
         elif s.get('kind') == 'generic':
             if s.get('signed_in_file'):  # only whether the CLI has signed in; the file is never opened
                 signed_in = os.path.exists(os.path.expanduser(s['signed_in_file'])) or bool(env.get('GEMINI_API_KEY'))
@@ -1104,11 +1111,68 @@ def guard_gemini_folder(folder, workspace):
 
 def provider_needs_check(spec, status, record):
     """Whether to try a sign-in once more: never tried, signed in again since, or the last try could not tell."""
-    if not spec.get('terminal_login') or status != 'logged_in': return False
+    if not spec.get('terminal_login') or not spec.get('signed_in_file') or status != 'logged_in': return False
     if record is None: return True
     if record.get('retryAt') and time.time() >= record['retryAt']: return True
     try: return os.path.getmtime(os.path.expanduser(spec.get('signed_in_file') or '')) > record.get('checkedTs', 0)
     except OSError: return False
+
+
+def antigravity_settings(native, scope, web):
+    """This run's settings for agy, never saved. Paid AI credits stay off; 謹慎 and 先規劃 cannot change anything."""
+    allow, deny = ['mcp(zook/*)'], []
+    if web: allow.append('read_url(*)')
+    else: deny += ['read_url(*)', 'execute_url(*)']
+    settings = dict(useG1Credits=False)
+    if not native:
+        settings.update(agentMode='', toolPermission='request-review'); deny += ['write_file(*)', 'command(*)', 'execute_url(*)']
+    elif scope == 'full': settings['allowNonWorkspaceAccess'] = True
+    else: settings['toolPermission'] = 'proceed-in-sandbox'
+    settings['permissions'] = dict(allow=allow, deny=list(dict.fromkeys(deny)))
+    return settings
+
+
+def antigravity_args(binary, prompt, model, effort, native, planning, scope, folder, web):
+    args = [binary, '-p', prompt, '--output-format', 'json', '--disable-slash-commands', '--settings', json.dumps(antigravity_settings(native, scope, web))]
+    if planning: args += ['--mode', 'plan']
+    elif native and scope == 'full': args += ['--dangerously-skip-permissions']
+    elif native: args += ['--mode', 'accept-edits', '--sandbox'] + (['--add-dir', str(folder)] if scope == 'folder' else [])
+    return args + (['--model', model] if model else []) + effort_args('antigravity', effort)
+
+
+def prepare_antigravity_folder(workspace, scope, folder, wait):
+    """Zook's tools reach agy through the workspace's .agents/mcp_config.json. The worker token stays in the environment, never in this file."""
+    if scope == 'folder' and os.path.lexists(str(pathlib.Path(folder) / '.agents' / 'mcp_config.json')):
+        raise RuntimeError('這個資料夾裡有 .agents/mcp_config.json，為了安全，Antigravity Bot 不會在這裡執行。請移除該設定，或改用其他資料夾。')
+    agents = pathlib.Path(workspace) / '.agents'
+    if agents.is_symlink() or agents.is_file(): agents.unlink()
+    elif agents.exists(): shutil.rmtree(str(agents))  # nothing a Bot left here may carry over
+    agents.mkdir(mode=0o700)
+    python = GROK_PYTHON if os.path.exists(GROK_PYTHON) else sys.executable
+    (agents / 'mcp_config.json').write_text(json.dumps({'mcpServers': {'zook': {'command': python, 'args': [str(pathlib.Path(__file__).with_name('tool_server.py'))], 'timeoutSeconds': wait}}}), encoding='utf-8')
+
+
+def antigravity_error(text):
+    text = str(text or '').lower()
+    if 'authentication required' in text: return 'Antigravity 尚未登入，請到「各模型使用量」登入。'
+    if 'no capacity' in text or 'unavailable' in text: return 'Antigravity 的這個模型目前太忙，請稍後再試或換一個模型。'
+    if 'resource_exhausted' in text or 'quota' in text or 'rate limit' in text: return 'Antigravity 的額度已用完，請等額度重置或換一個模型。'
+    return ''
+
+
+def antigravity_quota(path):
+    """Remaining limits from `agy -p /usage`, which uses no model quota itself."""
+    done = subprocess.run([path, '-p', '/usage', '--output-format', 'json'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=40, cwd=tempfile.gettempdir())
+    data = json.loads(done.stdout.decode('utf-8', 'replace'))
+    windows = []
+    for group in ((data.get('command') or {}).get('data') or {}).get('groups') or []:
+        name = re.sub(r'\s+models$', ' 模型', str(group.get('name') or ''), flags=re.I).replace(' and ', ' 與 ')
+        for bucket in group.get('buckets') or []:
+            left = bucket.get('remaining_fraction')
+            if isinstance(left, (int, float)):
+                period = {'weekly': '每週', 'daily': '每天'}.get(bucket.get('window'), '5 小時' if 'hour' in str(bucket.get('window')) else '')
+                windows.append(dict(label=(name + ' · ' + period).strip(' ·'), usedPercent=max(0.0, min(100.0, (1 - float(left)) * 100)), resetsAt=bucket.get('reset_time')))
+    return dict(windows=windows, plan='', limitReached=None, credits={}, resetCredits=None, updatedAt=NOW(), source='live') if windows else None
 
 
 def login_methods(provider):
@@ -1818,6 +1882,16 @@ def model_list(provider):
         source = 'cli' if models else 'none'
         note = '由 grok models 取得。' if models else '無法取得 Grok 模型清單，請確認已安裝 Grok CLI。'
         return dict(provider=provider, models=models, source=source, status='available' if models else 'unavailable', note=note, detectedAt=NOW())
+    if s.get('kind') == 'antigravity':
+        if binary:
+            try:
+                out = subprocess.run([binary, 'models'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=25).stdout.decode('utf-8', 'replace')
+                for line in ANSI.sub('', out).splitlines():
+                    parts = line.strip().split('\t')
+                    if len(parts) == 2 and clean_model(parts[0]): models.append(dict(id=parts[0], name=parts[1], source='cli'))
+            except (OSError, subprocess.SubprocessError): pass
+        return dict(provider=provider, models=models, source='cli' if models else 'none', status='available' if models else 'unavailable',
+                    note='由 agy models 取得。' if models else '無法取得 Antigravity 模型清單，請確認已登入。', detectedAt=NOW())
     if s.get('kind') == 'generic':
         models = [dict(id=m, name=m, source='config') for m in s.get('models', []) if clean_model(m)]
         note = '來自這個提供者的設定；也可以輸入自訂模型 ID。' if models else '沒有設定模型清單，請輸入模型 ID，或留空使用 CLI 預設。'
@@ -2441,12 +2515,12 @@ class App(ThreadingHTTPServer):
             with store.lock:
                 planning = bool((store.find('jobs', job_id) or {}).get('plan'))
                 native = permission_mode(store, bot) in ('auto', 'bypass') and not planning
-            selected = kind in ('codex', 'claude', 'grok')  # Zook tools need MCP support in the CLI; other CLIs run as plain chat.
+            selected = kind in PLAN_KINDS  # Zook tools need MCP support in the CLI; other CLIs run as plain chat.
             workspace = store.dir / 'workspaces' / bot['id']; workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
             # The access scope applies to every CLI. Grok and plain CLIs cannot ask before each action, so with 主動性 謹慎 they stay in the workspace.
             scope, root = bot_access(bot, workspace) if native or kind in ('codex', 'claude') else ('workspace', workspace)
             # Grok reads Zook's tool settings from the folder it starts in, so it always starts in the workspace and is given the other folders.
-            cli_cwd = workspace if kind == 'grok' else root
+            cli_cwd = workspace if kind in ('grok', 'antigravity') else root
             account = find_account(bot.get('account'), provider)  # an extra account only applies to the provider it belongs to
             env = provider_env(provider, account)
             if selected:
@@ -2476,7 +2550,7 @@ class App(ThreadingHTTPServer):
                 if not planning: prompt += schedule_instructions()
                 if not planning: prompt += '\n記憶：使用者告訴你值得長期記住的偏好、事實或決定時，用 zook_remember 記下（scope=bot 只給你自己，scope=shared 給所有 Bot）。不要記錄密碼、金鑰或一次性的內容。'
                 if kind == 'grok': prompt += '\nZook 工具在這裡的完整名稱是 zook__ 加上工具名，例如 zook__zook_create_schedule。'
-                if native: prompt += '\n工具說明：' + access_note(scope, root, kind == 'codex', kind == 'grok') + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。'
+                if native: prompt += '\n工具說明：' + access_note(scope, root, kind in ('codex', 'antigravity'), kind == 'grok') + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。'
                 else: prompt += '\n工具說明：檔案讀寫與其他動作請使用 zook 工具。zook 工具會依使用者設定的主動性決定是否先請使用者核准，與本機 CLI 沙箱是否唯讀無關；需要時直接呼叫，被拒絕再說明即可。'
             if not selected and scope != 'workspace': prompt += '\n工具說明：' + access_note(scope, root, True)
             adapter = str(pathlib.Path(__file__).with_name('tool_server.py'))
@@ -2513,6 +2587,10 @@ class App(ThreadingHTTPServer):
                 else:
                     if provider == 'gemini': guard_gemini_folder(cli_cwd, workspace)
                     args, stdin_prompt = P.command_args(P.spec(store.data, provider), str(prompt_file), prompt, model, full=scope == 'full', binary=binary)
+            elif kind == 'antigravity':
+                prepare_antigravity_folder(workspace, scope, root, wait)
+                if scope != 'workspace': prompt += '\n你目前在 Bot 的工作資料夾，要處理的檔案在 %s。' % root
+                args, stdin_prompt = antigravity_args(binary, prompt, model, job.get('effort'), native, planning, scope, root, web), False
             elif provider == 'codex':
                 images = [x for x in (job.get('attachments') or []) if pathlib.Path(x).suffix.lower() in IMAGE_TYPES]
                 args = [binary, 'exec'] + [a for x in images for a in ('-i', x)] + ['--json'] + ((['--dangerously-bypass-approvals-and-sandbox'] if scope == 'full' else codex_permission_args(binary)) if native and selected else ['--sandbox', 'read-only']) + ['--skip-git-repo-check', '--ephemeral', '--ignore-user-config', '--color', 'never',
@@ -2568,7 +2646,7 @@ class App(ThreadingHTTPServer):
                     except subprocess.TimeoutExpired: pass
                 raise RuntimeError('執行逾時。')
             if len(output) > MAX_BODY: raise RuntimeError('回覆超過大小限制。')
-            parsed = parse_cli_output(kind if kind in ('codex', 'claude', 'grok') else 'plain', output.decode('utf-8', errors='replace'), model)
+            parsed = parse_cli_output(kind if kind in PLAN_KINDS else 'plain', output.decode('utf-8', errors='replace'), model)
             if parsed['quota']: self.record_quota(provider, parsed['quota'], account['id'] if account else '')
             if parsed.get('web'):
                 with store.lock:
@@ -2585,6 +2663,8 @@ class App(ThreadingHTTPServer):
                             raise RuntimeError('Claude 尚未登入。請到「各模型使用量」頁登入後重試。')
                     except (ValueError, AttributeError): pass
                 detail = (stderr or b'').decode('utf-8', errors='replace').lower() + output.decode('utf-8', errors='replace').lower() + parsed['error'].lower()
+                if kind == 'antigravity' and antigravity_error(parsed['error'] + (stderr or b'').decode('utf-8', errors='replace')):
+                    raise RuntimeError(antigravity_error(parsed['error'] + (stderr or b'').decode('utf-8', errors='replace')))
                 issue = cli_issue((stderr or b'').decode('utf-8', errors='replace')) if provider == 'gemini' else ''  # what the CLI itself reports, not the Bot's text
                 if issue:
                     if not account: self.note_provider_issue(provider, issue)
@@ -2621,6 +2701,7 @@ class App(ThreadingHTTPServer):
                 self.processes.pop(job_id, None)
                 self.expire_job(job_id); store.save()
             if session: session.close()
+            if provider_kind(provider) == 'antigravity': shutil.rmtree(str(store.dir / 'workspaces' / bot['id'] / '.agents'), ignore_errors=True)
             for leftover in (store.dir / 'workspaces').glob('*/.grok/.zook-prompt-%s.txt' % job_id):
                 shutil.rmtree(str(leftover.parent), ignore_errors=True)  # per-job .grok dir: prompt, MCP config, adapter copy
 
@@ -2941,6 +3022,14 @@ def parse_cli_output(provider, text, model=''):
     out = dict(content='', usage=None, quota=None, error='', isError=False, unparsable=False, web=[])
     if provider == 'plain':
         out['content'] = ANSI.sub('', text).strip(); return out
+    if provider == 'antigravity':
+        d = next((o for o in reversed(objs) if 'status' in o), None)
+        if d is None: out['unparsable'] = True; return out
+        out['content'] = str(d.get('response') or '').strip()
+        if d.get('status') != 'SUCCESS': out['isError'] = True; out['error'] = str(d.get('error') or out['content'])[:2000]
+        u = d.get('usage') if isinstance(d.get('usage'), dict) else None
+        if u: out['usage'] = dict(input=_int(u.get('input_tokens')), cachedInput=_int(u.get('cache_read_tokens')), output=_int(u.get('output_tokens')), model=model or '預設模型', costUsd=None)
+        return out
     if provider == 'grok':
         # grok --output-format json: {text, usage{input_tokens, cache_read_input_tokens, ...}, total_cost_usd, modelUsage}
         end = next((o for o in reversed(objs) if o.get('type') == 'end'), None)
@@ -3156,6 +3245,17 @@ class Handler(BaseHTTPRequestHandler):
         with store.lock: store.data.setdefault('quota', {})[key] = live; store.save()
         return live
 
+    def antigravity_live_quota(self):
+        store, app = self.server.store, self.server
+        caches = app.__dict__.setdefault('codex_quota_caches', {}); hit = caches.get('antigravity')
+        if hit and time.time() - hit[0] < 60: return hit[1]
+        try: live = antigravity_quota(find_cli('antigravity'))
+        except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError): live = None
+        if not live: return None
+        caches['antigravity'] = (time.time(), live)
+        with store.lock: store.data.setdefault('quota', {})['antigravity'] = live; store.save()
+        return live
+
     def quota(self):
         store = self.server.store
         result = []
@@ -3164,7 +3264,8 @@ class Handler(BaseHTTPRequestHandler):
             account = account_status(provider)
             with store.lock: snap = copy.deepcopy(store.data.get('quota', {}).get(provider))
             if provider == 'codex' and account['status'] == 'logged_in': snap = self.codex_live_quota() or snap
-            if provider not in ('codex', 'claude'): snap = None  # the other CLIs do not report plan limits to Zook
+            if provider == 'antigravity' and account['status'] == 'logged_in': snap = self.antigravity_live_quota() or snap
+            if provider not in ('codex', 'claude', 'antigravity'): snap = None  # the other CLIs do not report plan limits to Zook
             profiles = []
             for extra in [] if phone else [a for a in store.data.get('accounts') or [] if a.get('provider') == provider]:
                 try: view = account_view(extra)
@@ -3176,7 +3277,7 @@ class Handler(BaseHTTPRequestHandler):
                 profiles.append(dict(view, zookUsage=used, quota=saved if provider in ('codex', 'claude') else None, apiBilling=billed, noQuotaApi=provider not in ('codex', 'claude')))
             with store.lock: zook = provider_usage(store, provider)
             result.append(dict(id=provider, name=account['name'], vendor=(P.spec(store.data, provider) or {}).get('vendor', ''), zookUsage=zook,
-                               status=account['status'], method=account['method'], noQuotaApi=provider not in ('codex', 'claude'),
+                               status=account['status'], method=account['method'], noQuotaApi=provider not in ('codex', 'claude', 'antigravity'),
                                plan=(snap or {}).get('plan') or account['plan'], email=account['email'], workspace=account.get('workspace', ''), quota=snap,
                                apiBilling=account['method'] in ('Anthropic Console', 'API 金鑰'), profiles=profiles))
         return {'providers': result}
@@ -3307,7 +3408,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(202, self.server.installs[provider].view())
             if action == 'check':  # one tiny request, to learn whether this sign-in can really be used
                 path = find_cli(provider); s = P.spec(self.server.store.data, provider) or {}
-                if not path or not s.get('terminal_login'): raise ValueError('這個模型不需要檢查。')
+                if not path or not s.get('signed_in_file'): raise ValueError('這個模型不需要檢查。')
                 try:
                     with tempfile.TemporaryDirectory() as empty:  # an empty folder: nothing there can change how Gemini behaves
                         done = subprocess.run([path, '-p', 'Reply with OK'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=provider_env(provider), timeout=90, cwd=empty)

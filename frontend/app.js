@@ -419,7 +419,7 @@
       const installBtn = p.canInstall && (!p.requires || p.requirementMet || p.installed) && !(upToDate && p.installed) ? `<button class="${!p.installed || v?.updateAvailable ? 'primary' : 'secondary'}" data-action="provider-install" data-id="${esc(p.id)}" data-command="${esc(p.installed && p.canUpdate ? '' : p.installCommand)}">${installLabel}</button>` : '';
       const notes = [!p.tools ? '這個 CLI 只能純對話，不能使用 Zook 的工具。' : '', p.installed && !p.loginMethods.length && p.loginNote ? p.loginNote : ''].filter(Boolean);
       const shortName = p.name.split('（')[0], parts = p.installed ? usageParts(quotaFor(p.id)) : {body: '<p class="quota-empty">安裝後就能登入和查看用量。</p>', zook: '<div class="zook-usage empty"></div>', when: ''};
-      const chips = [p.plan && p.plan.toUpperCase(), p.workspace, p.method].filter(Boolean);
+      const chips = [p.plan && p.plan.toUpperCase(), p.workspace, p.email ? p.method : ''].filter(Boolean);
       const addAccount = p.installed && (p.canAddLogin || p.canAddKey) ? `<button class="secondary" data-action="profile-add" data-id="${esc(p.id)}">＋ 新增帳號</button>` : '';
       const terminal = p.installed && p.terminalLogin ? `<button class="${p.status === 'logged_in' ? 'secondary' : 'primary'}" data-action="terminal-login" data-id="${esc(p.id)}">${p.status === 'logged_in' ? '重新登入' : '用 Google 帳號登入'}</button>` : '';
       const manage = `${p.custom ? `<button class="secondary" data-action="provider-edit" data-id="${esc(p.id)}">編輯設定</button>` : ''}${p.status === 'logged_in' && p.canLogout ? `<button class="link danger" data-action="account-logout" data-id="${esc(p.id)}">登出</button>` : ''}${p.removable ? `<button class="link danger" data-action="provider-remove" data-id="${esc(p.id)}">從 Zook 移除</button>` : ''}`;
@@ -469,7 +469,7 @@
   async function reloadAccounts() { await loadAccounts(); refreshQuota(); }
   async function detectUsage() {
     state.quota = await post('quota/detect');
-    await Promise.all((state.accounts?.providers || []).filter(p => p.terminalLogin && p.status === 'logged_in').map(p => post('accounts/' + encodeURIComponent(p.id) + '/check').catch(() => {})));
+    await Promise.all((state.accounts?.providers || []).filter(p => p.terminalLogin && p.status === 'logged_in' && p.id === 'gemini').map(p => post('accounts/' + encodeURIComponent(p.id) + '/check').catch(() => {})));
     await loadAccounts();
   }
   async function pollAccounts() {
@@ -534,11 +534,11 @@
   const quotaFor = (id, account) => { const q = (state.quota?.providers || []).find(x => x.id === id); return account ? (q?.profiles || []).find(x => x.id === account) : q; };
   function botUsageSection() {
     const u = state.botUsage;
-    if (!u) return `<section class="usage-block"><h2>各 Bot Token 用量</h2>${loadingBlock('正在整理用量…')}</section>`;
-    if (u.error) return `<section class="usage-block"><h2>各 Bot Token 用量</h2><div class="blank error-text">${esc(u.error)}</div></section>`;
+    if (!u) return `<section class="usage-block"><h2>Bot Token 用量</h2>${loadingBlock('正在整理用量…')}</section>`;
+    if (u.error) return `<section class="usage-block"><h2>Bot Token 用量</h2><div class="blank error-text">${esc(u.error)}</div></section>`;
     const rows = u.bots || [], max = Math.max(1, ...rows.flatMap(r => Object.values(r.daily)));
     const days = (u.days || []).map(d => d.slice(5).replace('-', '/'));
-    return `<section class="usage-block"><h2>各 Bot Token 用量</h2>${rows.length ? `<div class="bot-usage"><div class="bot-usage-row head"><span>Bot</span><span>回覆</span><span>輸入</span><span>輸出</span><span>估算費用</span><span>近 7 天（${esc(days[0] || '')}–${esc(days.at(-1) || '')}）</span></div>${rows.map(r => `<div class="bot-usage-row"><span class="bot-cell">${avatar(r)}<span><strong>${esc(r.name)}</strong><small>${Object.entries(r.models).sort((a, b) => b[1] - a[1]).map(([m]) => esc(m)).join('、')}</small></span></span><span>${fmtN(r.replies)}${r.groupReplies ? `<small>群組 ${fmtN(r.groupReplies)}</small>` : ''}</span><span>${fmtN(r.input)}${r.cachedInput ? `<small>快取 ${fmtN(r.cachedInput)}</small>` : ''}</span><span>${fmtN(r.output)}</span><span>${r.costUsd == null ? '<small>訂閱內</small>' : '$' + r.costUsd.toFixed(r.costUsd < 1 ? 4 : 2) + '<small>API 等值</small>'}</span><span class="spark">${Object.values(r.daily).map((v, i) => `<i style="height:${Math.max(v ? 8 : 2, Math.round(v / max * 100))}%" title="${esc(days[i])}：${fmtN(v)} tokens"></i>`).join('')}</span></div>`).join('')}</div>` : '<div class="blank">還沒有用量紀錄。Bot 回覆後就會出現在這裡。</div>'}</section>`;
+    return `<section class="usage-block"><h2>Bot Token 用量</h2>${rows.length ? `<div class="bot-usage"><div class="bot-usage-row head"><span>Bot</span><span>回覆</span><span>輸入</span><span>輸出</span><span>估算費用</span><span>近 7 天（${esc(days[0] || '')}–${esc(days.at(-1) || '')}）</span></div>${rows.map(r => `<div class="bot-usage-row"><span class="bot-cell">${avatar(r)}<span><strong>${esc(r.name)}</strong><small>${Object.entries(r.models).sort((a, b) => b[1] - a[1]).map(([m]) => esc(m)).join('、')}</small></span></span><span>${fmtN(r.replies)}${r.groupReplies ? `<small>群組 ${fmtN(r.groupReplies)}</small>` : ''}</span><span>${fmtN(r.input)}${r.cachedInput ? `<small>快取 ${fmtN(r.cachedInput)}</small>` : ''}</span><span>${fmtN(r.output)}</span><span>${r.costUsd == null ? '<small>訂閱內</small>' : '$' + r.costUsd.toFixed(r.costUsd < 1 ? 4 : 2) + '<small>API 等值</small>'}</span><span class="spark">${Object.values(r.daily).map((v, i) => `<i style="height:${Math.max(v ? 8 : 2, Math.round(v / max * 100))}%" title="${esc(days[i])}：${fmtN(v)} tokens"></i>`).join('')}</span></div>`).join('')}</div>` : '<div class="blank">還沒有用量紀錄。Bot 回覆後就會出現在這裡。</div>'}</section>`;
   }
 
   // Permission modes: which tool actions need the user's approval.

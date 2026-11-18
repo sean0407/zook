@@ -4,6 +4,7 @@ Built-in entries come from each vendor's own install script and CLI help:
 - Claude Code: https://claude.ai/install.sh, `claude update`
 - Codex:       https://chatgpt.com/codex/install.sh, `codex update`
 - Grok Build:  https://x.ai/cli/install.sh, `grok update`, `grok login`, `grok models`
+- Antigravity: https://antigravity.google/cli/install.sh, `agy update`, `agy -p`, `agy models`
 - Gemini CLI:  npm package @google/gemini-cli (Zook installs its own Node.js for it; see cli_installer.py)
 
 Custom providers are any other CLI the user configures: a command, its arguments with
@@ -29,6 +30,9 @@ CATALOG = {
                  extra_paths=['~/.grok/bin/grok'], install='curl -fsSL https://x.ai/cli/install.sh | bash', update=['update'],
                  login=[('browser', '用 Grok 帳號登入', ['login', '--oauth']), ('device', '裝置碼登入', ['login', '--device-auth'])],
                  logout=['logout'], docs='https://docs.x.ai', version_check=['update', '--check', '--json']),
+    'antigravity': dict(name='Antigravity（Google）', vendor='Google', binary='agy', kind='antigravity', tools=True,
+                        install='curl -fsSL https://antigravity.google/cli/install.sh | bash', update=['update'], terminal_login=True,
+                        login_note='Google 的服務條款限制以第三方工具使用 Antigravity，帳號可能因此被暫停，請自行評估。', docs='https://antigravity.google/docs'),
     'gemini': dict(name='Gemini（Google）', vendor='Google', binary='gemini', kind='generic', tools=False,
                    install='Zook 會從 https://nodejs.org 下載 Node.js，再安裝 @google/gemini-cli', npm_package='@google/gemini-cli', terminal_login=True,
                    signed_in_file='~/.gemini/oauth_creds.json', run_env={'GEMINI_CLI_TRUST_WORKSPACE': 'true'}, args='-p {prompt}', model_args='-m {model}', full_args='--yolo',
