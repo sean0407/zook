@@ -1714,6 +1714,16 @@ def schedule_fields(store, body, record):
     return record
 
 
+SCHEDULE_HISTORY = 20
+
+
+def schedule_add_run(item, run):
+    """Keep the schedule's most recent runs: when, how it went and where the conversation is."""
+    run = dict(run, id=ID(), at=NOW())
+    item['runs'] = ((item.get('runs') or []) + [run])[-SCHEDULE_HISTORY:]
+    return run
+
+
 def schedule_last_due(item, now):
     """The most recent moment this schedule was meant to run, at or before now (local time)."""
     hour, minute = int(item['time'][:2]), int(item['time'][3:])
@@ -1876,20 +1886,49 @@ class App(ThreadingHTTPServer):
         return job
 
     def run_schedule(self, item, inventory):
-        """Send a schedule's message now. Returns None when sent, or the reason it could not be. Lock held."""
-        if item.get('groupId'):
-            group = self.store.find('groups', item['groupId'])
-            if not group: return '找不到這個群組。'
-            if group['status'] == 'running': raise Busy('群組正在討論，等討論結束再執行。')
-            try: self.post_group_message(group, item['content'], author='排程')
-            except (ValueError, RuntimeError) as exc: return str(exc)[:300]
-            return None
-        bot = self.store.find('bots', item.get('botId'))
-        if not bot: return '找不到這個 Bot。'
-        try: self.send_to_bot(bot, item['content'], inventory, author='排程')
+        """Send a schedule's message now and add it to the schedule's history. Returns None when sent,
+        or the reason it could not be. Raises Busy when the Bot or group is working on something else. Lock held."""
+        run = dict(kind='group' if item.get('groupId') else 'bot', targetId=item.get('groupId') or item.get('botId'), status='running')
+        try:
+            if item.get('groupId'):
+                group = self.store.find('groups', item['groupId'])
+                if not group: raise RuntimeError('找不到這個群組。')
+                if group['status'] == 'running': raise Busy('群組正在討論，等討論結束再執行。')
+                run['runId'] = self.post_group_message(group, item['content'], author='排程')
+                run['messageId'] = next(m['id'] for m in reversed(group['messages']) if m['role'] == 'user')
+            else:
+                bot = self.store.find('bots', item.get('botId'))
+                if not bot: raise RuntimeError('找不到這個 Bot。')
+                run['jobId'] = self.send_to_bot(bot, item['content'], inventory, author='排程')['id']
+                run['messageId'] = next(m['id'] for m in reversed(bot['messages']) if m['role'] == 'user')
         except Busy: raise
-        except (ValueError, RuntimeError) as exc: return str(exc)[:300]
-        return None
+        except (ValueError, RuntimeError) as exc:
+            run.update(status='failed', reason=str(exc)[:300])
+        schedule_add_run(item, run)
+        return run.get('reason')
+
+    def settle_schedule_runs(self):
+        """Finish the history entries of schedules whose reply has come in. Lock held."""
+        store = self.store
+        for item in store.data['schedules']:
+            for run in item.get('runs') or []:
+                if run.get('status') != 'running': continue
+                if run.get('kind') == 'group':
+                    group = store.find('groups', run.get('targetId'))
+                    if group and group.get('runId') == run.get('runId'): continue  # still discussing
+                    messages = (group or {}).get('messages') or []
+                    after = next((i for i, m in enumerate(messages) if m['id'] == run.get('messageId')), len(messages))
+                    replies = [m for m in messages[after + 1:] if m['role'] == 'assistant' and m.get('status') == 'completed' and m.get('content')]
+                    outcome = ('done', '', replies[-1]['content']) if replies else ('failed', '群組沒有產生回覆。', '')
+                else:
+                    job = store.find('jobs', run.get('jobId'))
+                    if job and job['status'] == 'running': continue
+                    if job and job['status'] == 'completed': outcome = ('done', '', job.get('content') or '')
+                    elif job and job['status'] == 'cancelled': outcome = ('failed', '回覆被停止了。', '')
+                    else: outcome = ('failed', (job or {}).get('error') or '找不到這次的回覆。', '')
+                run.update(status=outcome[0], reason=outcome[1], summary=outcome[2][:300], finishedAt=NOW())
+                if outcome[0] == 'failed': item.update(lastStatus='failed', lastError=outcome[1])
+                store.save()
 
     def run_schedules(self, now=None):
         """Send every schedule whose time has come. Runs a few times a minute while Zook is open."""
@@ -1899,6 +1938,7 @@ class App(ThreadingHTTPServer):
                 due = item.get('on') and schedule_last_due(item, now)
                 if due and due.isoformat() > item.get('since', ''): yield item, due
         with store.lock:
+            self.settle_schedule_runs()
             if not list(waiting()): return
         inventory = inventory_for(store)
         def handled(item, due, status, error=''):
@@ -1908,13 +1948,17 @@ class App(ThreadingHTTPServer):
         with store.lock:
             for item, due in list(waiting()):
                 late = (now - due).total_seconds()
-                if late > 86400 or (late > 180 and not item.get('catchUp', True) and not item.get('held')):
-                    handled(item, due, 'missed', '到時間時 Zook 沒有開著。'); continue
-                try: problem = self.run_schedule(item, inventory)
-                except Busy:
-                    item['held'] = True  # the Bot or group is busy with something else: try again shortly
-                    if late > 6 * 3600: handled(item, due, 'missed', '一直在忙，這次沒有執行。')
-                    continue
+                missed = None
+                if late > 86400 or (late > 180 and not item.get('catchUp', True) and not item.get('held')): missed = '到時間時 Zook 沒有開著。'
+                else:
+                    try: problem = self.run_schedule(item, inventory)
+                    except Busy:
+                        item['held'] = True  # the Bot or group is busy with something else: try again shortly
+                        if late > 6 * 3600: missed = '一直在忙，這次沒有執行。'
+                        else: continue
+                if missed:
+                    schedule_add_run(item, dict(kind='group' if item.get('groupId') else 'bot', targetId=item.get('groupId') or item.get('botId'), status='missed', reason=missed))
+                    handled(item, due, 'missed', missed); continue
                 handled(item, due, 'failed' if problem else 'sent', problem or '')
             store.save()
 

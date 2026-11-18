@@ -272,7 +272,7 @@
     if (!b) return `<main class="main"><div class="empty-chat"><h1>歡迎使用 Zook</h1><p>建立一個 Bot，開始你的工作。</p><div class="quick-actions"><button data-action="new-bot">＋ 新增 Bot</button></div></div></main>`;
     const messages = b.messages || [];
     const running = Object.entries(state.pollers).find(([, v]) => v.botId === b.id);
-    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-bot">${avatar(b)}${esc(b.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn" data-action="share">↑ 匯出對話</button>${!state.detailOpen?'<button class="text-btn" data-action="toggle-detail">顯示詳情</button>':''}</div></header><div class="conversation" id="conversation">${messages.length?`<div class="conversation-inner">${messages.map(m=>`<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message ${m.role==='user'?'user':'assistant'}">${m.role==='user'?'':avatar(b)}${m.role!=='user'&&m.content&&m.status!=='running'?`<div class="bubble md ${m.status==='failed'?'error-text':''}">${markdown(m.content)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(m.status==='running'?'正在思考…':m.status==='cancelled'&&!m.content?'已停止回覆':m.status==='failed'&&!m.content?(Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。'):m.content)}</div>`}</div>`).join('')}</div>`:`<div class="empty-chat">${avatar(b,'hero')}<h1>今天想一起完成什麼？</h1><p>和 ${esc(b.name)} 開始一段對話。</p><div class="quick-actions"><button data-action="page" data-id="knowledge">▤ 管理知識庫</button><button data-action="page" data-id="usage">◷ 查看使用量</button><button data-action="page" data-id="settings">⚙ 設定模型</button></div></div>`}</div><div class="composer-wrap">${approvalCards(b.id)}<form class="composer" id="chat-form"><button type="button" class="icon-btn" data-action="composer-menu" aria-label="更多選項">${svg('plus')}</button><textarea id="chat-input" rows="1" placeholder="傳送訊息給 ${esc(b.name)}" aria-label="輸入訊息"></textarea><button type="button" class="icon-btn" data-action="voice" aria-label="語音輸入">${svg('mic')}</button>${running?`<button type="button" class="send" data-action="cancel-job" data-id="${esc(running[0])}" aria-label="停止回覆">■</button>`:`<button class="send" type="submit" aria-label="傳送訊息">↑</button>`}</form></div></main>${state.detailOpen?detail(b):''}`
+    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-bot">${avatar(b)}${esc(b.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn" data-action="share">↑ 匯出對話</button>${!state.detailOpen?'<button class="text-btn" data-action="toggle-detail">顯示詳情</button>':''}</div></header><div class="conversation" id="conversation">${messages.length?`<div class="conversation-inner">${messages.map(m=>`<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message ${m.role==='user'?'user':'assistant'}" data-mid="${esc(m.id)}">${m.role==='user'?'':avatar(b)}${m.role!=='user'&&m.content&&m.status!=='running'?`<div class="bubble md ${m.status==='failed'?'error-text':''}">${markdown(m.content)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(m.status==='running'?'正在思考…':m.status==='cancelled'&&!m.content?'已停止回覆':m.status==='failed'&&!m.content?(Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。'):m.content)}</div>`}</div>`).join('')}</div>`:`<div class="empty-chat">${avatar(b,'hero')}<h1>今天想一起完成什麼？</h1><p>和 ${esc(b.name)} 開始一段對話。</p><div class="quick-actions"><button data-action="page" data-id="knowledge">▤ 管理知識庫</button><button data-action="page" data-id="usage">◷ 查看使用量</button><button data-action="page" data-id="settings">⚙ 設定模型</button></div></div>`}</div><div class="composer-wrap">${approvalCards(b.id)}<form class="composer" id="chat-form"><button type="button" class="icon-btn" data-action="composer-menu" aria-label="更多選項">${svg('plus')}</button><textarea id="chat-input" rows="1" placeholder="傳送訊息給 ${esc(b.name)}" aria-label="輸入訊息"></textarea><button type="button" class="icon-btn" data-action="voice" aria-label="語音輸入">${svg('mic')}</button>${running?`<button type="button" class="send" data-action="cancel-job" data-id="${esc(running[0])}" aria-label="停止回覆">■</button>`:`<button class="send" type="submit" aria-label="傳送訊息">↑</button>`}</form></div></main>${state.detailOpen?detail(b):''}`
   }
 
   function activeGroup() { return state.groupId ? (state.data.groups || []).find(g => g.id === state.groupId) : null; }
@@ -317,10 +317,10 @@
   function groupMessage(g, m) {
     if (m.role === 'system') return `<div class="system-note">${esc(m.content)}</div>`;
     const tag = html => highlightMentions(html, groupMembers(g));
-    if (m.role === 'user') return `<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message user">${m.author ? `<div class="speaker-wrap user-author"><div class="speaker">由 ${esc(m.author)} 發起</div><div class="bubble">${tag(esc(m.content))}</div></div>` : `<div class="bubble">${tag(esc(m.content))}</div>`}</div>`;
+    if (m.role === 'user') return `<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message user" data-mid="${esc(m.id)}">${m.author ? `<div class="speaker-wrap user-author"><div class="speaker">由 ${esc(m.author)} 發起</div><div class="bubble">${tag(esc(m.content))}</div></div>` : `<div class="bubble">${tag(esc(m.content))}</div>`}</div>`;
     const b = state.data.bots.find(x => x.id === m.botId) || {name: '已刪除的 Bot', color: '#959595'};
     const text = m.status==='running' ? '正在思考…' : m.status==='cancelled'&&!m.content ? '已停止回覆' : m.status==='failed'&&!m.content ? (Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。') : m.content;
-    return `<div class="message assistant">${avatar(b)}<div class="speaker-wrap"><div class="speaker">${esc(b.name)}</div>${m.content&&m.status!=='running'?`<div class="bubble md">${tag(markdown(m.content))}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(text)}</div>`}</div></div>`;
+    return `<div class="message assistant" data-mid="${esc(m.id)}">${avatar(b)}<div class="speaker-wrap"><div class="speaker">${esc(b.name)}</div>${m.content&&m.status!=='running'?`<div class="bubble md">${tag(markdown(m.content))}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(text)}</div>`}</div></div>`;
   }
   function groupChat() {
     const g = activeGroup(), members = groupMembers(g), running = g.status === 'running';
@@ -837,7 +837,7 @@
     document.querySelectorAll('[data-approval-details]').forEach(x => { if (openApprovals.includes(x.dataset.approvalDetails)) x.open = true; });
     if ($('#conversation')) {
       const c = $('#conversation');
-      c.scrollTo({top: y != null && !nearBottom ? y : c.scrollHeight, behavior: 'instant'});
+      if (!keepFocus()) c.scrollTo({top: y != null && !nearBottom ? y : c.scrollHeight, behavior: 'instant'});
     }
     if ($('#settings-form')) {
       const f = $('#settings-form');
@@ -902,8 +902,36 @@
     const intro = '<p class="muted sched-intro">時間到了，Zook 會自動把這則訊息送給 Bot 或群組，回覆留在對話裡。Mac 要開著、Zook 要在執行；需要你核准的動作仍會等你核准。</p>';
     if (!items.length) return intro + '<div class="blank">目前沒有排程。按「新增排程」，讓 Bot 或群組在固定時間自動做事。</div>';
     const last = x => x.done ? '已完成' : !x.lastStatus ? '尚未執行' : (x.lastStatus === 'sent' ? '上次執行：' : x.lastStatus === 'missed' ? '上次錯過：' : '上次失敗：') + formatDate(x.lastAt) + (x.lastStatus !== 'sent' && x.lastError ? '（' + x.lastError + '）' : '');
-    return intro + `<div class="cards">${items.map(x => `<article class="card sched-card"><div class="sched-head"><h3>${esc(scheduleWhen(x))}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><p>${esc(x.content)}</p>${scheduleTarget(x)}<span class="status ${x.lastStatus && x.lastStatus !== 'sent' && !x.done ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button><button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`).join('')}</div>`;
+    return intro + `<div class="cards">${items.map(x => `<article class="card sched-card"><div class="sched-head"><h3>${esc(scheduleWhen(x))}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><p>${esc(x.content)}</p>${scheduleTarget(x)}<span class="status ${x.lastStatus && x.lastStatus !== 'sent' && !x.done ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button>${(x.runs || []).length ? `<button class="link" data-action="schedule-history" data-id="${esc(x.id)}">紀錄</button>` : ''}<button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`).join('')}</div>`;
   }
+  const RUN_STATUS = {running: '執行中', done: '已執行', failed: '失敗', missed: '錯過'};
+  function scheduleHistory(x) {
+    const rows = [...(x.runs || [])].reverse().map(r => {
+      const open = r.messageId && r.status !== 'missed';
+      return `<${open ? 'button type="button"' : 'div'} class="run-row ${open ? '' : 'static'}" ${open ? `data-action="open-run" data-kind="${esc(r.kind)}" data-target="${esc(r.targetId)}" data-id="${esc(r.messageId)}"` : ''}><span class="run-when">${esc(formatDate(r.at))}</span><span class="run-status ${esc(r.status)}">${esc(RUN_STATUS[r.status] || r.status)}</span><span class="run-text">${esc(r.reason || r.summary || '')}</span>${open ? '<span class="run-go" aria-hidden="true">›</span>' : ''}</${open ? 'button' : 'div'}>`;
+    }).join('');
+    modal('執行紀錄', `<div class="modal-body"><p class="muted">最近 ${(x.runs || []).length} 次。點一筆會打開那次的對話。</p><div class="run-list">${rows}</div></div>`, '<div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">關閉</button></div>');
+  }
+  // Open a Bot's or group's conversation at a message (from the history list or a Mac notification).
+  function openConversation(kind, id, messageId) {
+    const exists = kind === 'group' ? (state.data.groups || []).some(g => g.id === id) : state.data.bots.some(b => b.id === id);
+    if (!exists) { toast(kind === 'group' ? '找不到這個群組' : '找不到這個 Bot'); return; }
+    if (state.modal) closeModal();
+    if (kind === 'group') state.groupId = id; else { state.groupId = null; state.selected = id; }
+    state.page = 'chat'; state.launcher = false;
+    state.focus = messageId ? {id: messageId, until: Date.now() + 5000} : null;
+    render();
+  }
+  // Keep a message that was jumped to in view for a moment, even when replies arrive and the page redraws.
+  document.addEventListener('wheel', () => { state.focus = null; }, {passive: true});  // scrolling yourself ends it
+  function keepFocus() {
+    if (!state.focus || Date.now() > state.focus.until) { state.focus = null; return false; }
+    const el = [...document.querySelectorAll('[data-mid]')].find(x => x.dataset.mid === state.focus.id);
+    if (!el) return false;
+    el.scrollIntoView({block: 'center'}); el.classList.add('flash');
+    return true;
+  }
+  window.zookOpen = (kind, id, messageId) => { if (state.data) openConversation(kind, id, messageId); };
   // Who a schedule talks to: a Bot or a group, with its avatar.
   function scheduleTarget(x) {
     if (x.groupId) { const g = (state.data.groups || []).find(g => g.id === x.groupId); return `<span class="sched-target">${g ? avatarStack(g) + esc(g.name) : '找不到群組'}</span>`; }
@@ -1376,6 +1404,12 @@
             await refresh();
             toast('已刪除排程');
           }
+          break;
+        case 'schedule-history':
+          scheduleHistory(state.data.schedules.find(x => x.id === id));
+          break;
+        case 'open-run':
+          openConversation(el.dataset.kind, el.dataset.target, id);
           break;
         case 'run-schedule':
           await post('schedules/' + encodeURIComponent(id) + '/run', {});

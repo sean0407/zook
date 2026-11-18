@@ -39,6 +39,14 @@ class ScheduleTimes(unittest.TestCase):
         self.assertEqual(due(dict(time='08:00', repeat='monthly', day=30), datetime.datetime(2026, 11, 30, 9)), datetime.datetime(2026, 11, 30, 8, 0))
 
 
+class ScheduleHistory(unittest.TestCase):
+    def test_keeps_the_last_twenty(self):
+        add = load().schedule_add_run; item = {}
+        for i in range(25): add(item, dict(status='done', reason=str(i)))
+        self.assertEqual([r['reason'] for r in item['runs']], [str(i) for i in range(5, 25)])
+        self.assertTrue(all(r['id'] and r['at'] for r in item['runs']))
+
+
 class ScheduleTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name)
@@ -93,6 +101,11 @@ class ScheduleTest(unittest.TestCase):
         asked, reply = self.messages(state)
         self.assertEqual((asked['content'], asked['author']), ('morning report', '排程')); self.assertTrue(reply['content'].startswith('done'))
         self.assertEqual(state['schedules'][0]['lastStatus'], 'sent')
+        # the run history settles once the reply is in, and points at the message the schedule sent
+        state = self.wait(lambda s: s['schedules'][0]['runs'][-1]['status'] == 'done')
+        run = state['schedules'][0]['runs'][-1]
+        self.assertEqual((run['kind'], run['targetId'], run['messageId']), ('bot', self.bot['id'], asked['id']))
+        self.assertTrue(run['summary'].startswith('done'))
         self.assertEqual(self.req('PATCH', '/api/schedules/' + item['id'], {'time': '11:30', 'repeat': 'weekdays', 'on': False})[1]['time'], '11:30')
         self.assertEqual(self.req('DELETE', '/api/bots/' + self.bot['id'])[0], 200)  # its schedules go with it
         self.assertEqual(self.req('GET', '/api/state')[1]['schedules'], [])
@@ -122,6 +135,9 @@ class ScheduleTest(unittest.TestCase):
         self.assertEqual((first['content'], first['author']), ('discuss the market', '排程'))
         self.assertTrue(all(m['content'].startswith('done') for m in g(state)['messages'] if m['role'] == 'assistant'))
         self.assertEqual(self.messages(state), [])  # nothing lands in the Bot's own conversation
+        state = self.wait(lambda s: s['schedules'][0]['runs'][-1]['status'] == 'done')
+        run = state['schedules'][0]['runs'][-1]
+        self.assertEqual((run['kind'], run['targetId'], run['messageId']), ('group', group['id'], first['id']))
         # switching a schedule between a Bot and a group keeps exactly one target
         self.assertEqual(self.req('PATCH', '/api/schedules/' + item['id'], {'botId': self.bot['id']})[1]['groupId'], '')
         self.assertEqual(self.req('PATCH', '/api/schedules/' + item['id'], {'groupId': group['id']})[1]['botId'], '')
@@ -149,6 +165,7 @@ class ScheduleTest(unittest.TestCase):
         self.backdate(earlier - datetime.timedelta(hours=1))
         state = self.wait(lambda s: s['schedules'][0].get('lastStatus') == 'missed')
         self.assertEqual(self.messages(state), [])
+        self.assertEqual([(r['status'], r['reason']) for r in state['schedules'][0]['runs']], [('missed', '到時間時 Zook 沒有開著。')])
 
     def test_waits_while_the_bot_is_busy(self):
         now = datetime.datetime.now()
