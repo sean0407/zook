@@ -629,6 +629,9 @@ class RuntimeSession:
         self.annotations = {}
         self.unavailable = []  # connectors left out of this reply because they could not be reached
         self.unavailable_why = {}
+        self.lazy = {}     # connector name -> id, for the ones loaded only when asked for
+        self.loaded = {}   # connector id -> its tools, once connected
+        self.load_lock = threading.RLock()
 
     def tools(self):
         with self.init_lock:
@@ -654,39 +657,91 @@ class RuntimeSession:
                     {'skill_id': _str('Selected Skill ID'), 'argv': {'type': 'array', 'items': {'type': 'string'}, 'minItems': 1, 'maxItems': 32},
                      'cwd': _str('Relative Bot workspace directory, default .')}, ['skill_id', 'argv'], False))
             try:
+                # Zook's own small connectors are listed straight away. Every other connector is loaded only when the Bot asks for it:
+                # their tool lists can run to tens of thousands of words, and sending them with every message made each reply slow.
                 for ident in sorted(self.mcp_ids - {'builtin:workspace'}):
-                    config = self.inventory['_private']['mcp'][ident]; label = next((x['name'] for x in self.inventory.get('mcp', []) if x['id'] == ident), ident)
-                    signed = not config['noCredentials'] if 'noCredentials' in config else bool(config.get('headers') or config.get('http_headers') or config.get('env_http_headers') or config.get('bearer_token_env_var'))
-                    try:
-                        client = ProtocolClient(config); self.clients[ident] = client; found = client.tools()
-                    except Exception as exc:
-                        # One connector that cannot be reached does not stop the reply. It is left out, and both the Bot and the user are told.
-                        stale = self.clients.pop(ident, None)
-                        if stale: stale.close()
-                        needs = isinstance(exc, AuthorizationNeeded)
-                        self.unavailable.append(label)
-                        self.unavailable_why[label] = ('需要登入' if not signed else '授權被拒絕，請重新登入或更新金鑰') if needs else self.redactor.text(exc)[:80]
-                        continue
-                    for tool in found:
-                        original = tool.get('name')
-                        if not isinstance(original, str) or not isinstance(tool.get('inputSchema'), dict):
-                            raise RuntimeError('MCP returned an invalid tool schema.')
-                        prefix = hashlib.sha256(ident.encode()).hexdigest()[:10]
-                        suffix = hashlib.sha256(original.encode()).hexdigest()[:8]
-                        name = 'zook_' + prefix + '_' + re.sub('[^A-Za-z0-9_]', '_', original)[:36] + '_' + suffix
-                        if name in self.routes:
-                            raise RuntimeError('MCP returned duplicate tools.')
-                        schema = copy.deepcopy(tool)
-                        schema['name'] = name
-                        schema['description'] = self.redactor.text(tool.get('description', original))[:4000]
-                        self.routes[name] = (ident, original)
-                        self.annotations[name] = tool.get('annotations') if isinstance(tool.get('annotations'), dict) else {}
-                        catalog.append(self.redactor.value(schema, redact_keys=False))
+                    if not ident.startswith('builtin:'): self.lazy[self._connector_name(ident)] = ident; continue
+                    try: catalog += self._load_connector(ident)
+                    except Exception as exc: self._left_out(ident, exc)
+                if self.lazy:
+                    names = '、'.join(sorted(self.lazy))
+                    catalog += [_schema('zook_connector_tools', 'List what a connected service can do. Call it before using a connector. Give "tool" to get that one tool\'s full input schema. Connectors: ' + names,
+                                        {'connector': _str('Connector name, exactly as listed'), 'tool': _str('Optional: one tool name, to get its full input schema')}, ['connector']),
+                                {'name': 'zook_connector_call', 'description': 'Run one tool of a connected service. Look the tool up with zook_connector_tools first. Changes may ask the user for approval.',
+                                 'inputSchema': {'type': 'object', 'properties': {'connector': _str('Connector name'), 'tool': _str('Tool name from zook_connector_tools'),
+                                                 'arguments': {'type': 'object', 'description': 'Arguments for that tool', 'additionalProperties': True}}, 'required': ['connector', 'tool'], 'additionalProperties': False},
+                                 'annotations': {'readOnlyHint': False, 'destructiveHint': True, 'openWorldHint': True}}]
                 self.catalog = catalog
                 return copy.deepcopy(catalog)
             except Exception as exc:
                 self.close()
                 raise RuntimeError(self.redactor.text(exc))
+
+    def _connector_name(self, ident):
+        return next((x['name'] for x in self.inventory.get('mcp', []) if x['id'] == ident), ident)
+
+    def _left_out(self, ident, exc):
+        """One connector that cannot be reached does not stop the reply. It is left out, and both the Bot and the user are told."""
+        config, label = self.inventory['_private']['mcp'][ident], self._connector_name(ident)
+        signed = not config['noCredentials'] if 'noCredentials' in config else bool(config.get('headers') or config.get('http_headers') or config.get('env_http_headers') or config.get('bearer_token_env_var'))
+        why = ('需要登入' if not signed else '授權被拒絕，請重新登入或更新金鑰') if isinstance(exc, AuthorizationNeeded) else self.redactor.text(exc)[:80]
+        if label not in self.unavailable: self.unavailable.append(label)
+        self.unavailable_why[label] = why
+        return why
+
+    def _load_connector(self, ident):
+        """Connect to one connector and register its tools. Returns their descriptions under Zook's own names."""
+        with self.load_lock:
+            if ident in self.loaded: return self.loaded[ident]
+            if self.closed: raise RuntimeError('Runtime session is closed.')
+            config, schemas = self.inventory['_private']['mcp'][ident], []
+            try:
+                client = ProtocolClient(config); self.clients[ident] = client; found = client.tools()
+                for tool in found:
+                    original = tool.get('name')
+                    if not isinstance(original, str) or not isinstance(tool.get('inputSchema'), dict):
+                        raise RuntimeError('MCP returned an invalid tool schema.')
+                    prefix = hashlib.sha256(ident.encode()).hexdigest()[:10]
+                    suffix = hashlib.sha256(original.encode()).hexdigest()[:8]
+                    name = 'zook_' + prefix + '_' + re.sub('[^A-Za-z0-9_]', '_', original)[:36] + '_' + suffix
+                    if name in self.routes:
+                        raise RuntimeError('MCP returned duplicate tools.')
+                    schema = copy.deepcopy(tool)
+                    schema['name'] = name
+                    schema['description'] = self.redactor.text(tool.get('description', original))[:4000]
+                    self.routes[name] = (ident, original)
+                    self.annotations[name] = tool.get('annotations') if isinstance(tool.get('annotations'), dict) else {}
+                    schemas.append(self.redactor.value(schema, redact_keys=False))
+            except Exception:
+                stale = self.clients.pop(ident, None)
+                if stale: stale.close()
+                for name in [n for n, route in self.routes.items() if route[0] == ident]: self.routes.pop(name, None); self.annotations.pop(name, None)
+                raise
+            self.loaded[ident] = schemas
+            return schemas
+
+    def _connector(self, name):
+        """The id of a connector the Bot named, loaded and ready. Raises with a reason the Bot can pass on."""
+        wanted = str(name or '').strip().lower()
+        ident = next((i for label, i in self.lazy.items() if label.lower() == wanted), None) or next((i for label, i in self.lazy.items() if wanted and wanted in label.lower()), None)
+        if not ident: raise RuntimeError('沒有這個連接器。可用的有：' + '、'.join(sorted(self.lazy)))
+        try: self._load_connector(ident)
+        except Exception as exc: raise RuntimeError('連接器「%s」這次無法使用：%s' % (self._connector_name(ident), self._left_out(ident, exc)))
+        return ident
+
+    def _gateway(self, name, args):
+        """The two tools that stand in for every connector's own list."""
+        ident = self._connector(args.get('connector'))
+        tools = {self.routes[t['name']][1]: t for t in self.loaded[ident]}
+        if name == 'zook_connector_tools':
+            if args.get('tool'):
+                if args['tool'] not in tools: raise RuntimeError('這個連接器沒有這個工具。先不帶 tool 查一次完整清單。')
+                return _content({'tool': args['tool'], 'description': tools[args['tool']].get('description', ''), 'inputSchema': tools[args['tool']]['inputSchema']})
+            return _content({'connector': self._connector_name(ident), 'tools': [{'name': n, 'description': str(t.get('description') or '')[:240], 'arguments': sorted((t['inputSchema'].get('properties') or {}))[:20],
+                                                                      'required': list(t['inputSchema'].get('required') or [])[:20]} for n, t in tools.items()],
+                             'next': 'Call zook_connector_call with connector, tool and arguments. Ask for one tool by name here when you need its full input schema.'})
+        if args.get('tool') not in tools: raise RuntimeError('這個連接器沒有這個工具。先用 zook_connector_tools 查清單。')
+        return self.call(tools[args['tool']]['name'], args.get('arguments') if isinstance(args.get('arguments'), dict) else {})
 
     def current_mode(self):
         mode = self.permission_mode() if callable(self.permission_mode) else self.permission_mode
@@ -751,15 +806,18 @@ class RuntimeSession:
             if self.closed:
                 raise RuntimeError('Runtime session is closed.')
             self.tools()
+            if name in ('zook_connector_tools', 'zook_connector_call') and self.lazy:
+                if not isinstance(args, dict): raise RuntimeError('Tool arguments must be a bounded JSON object.')
+                return self._gateway(name, args)  # the real tool is then checked, approved and recorded like any other
             # Serialize before approval; callbacks cannot mutate the executed arguments.
             encoded = json.dumps(args, ensure_ascii=False, allow_nan=False)
             if len(encoded.encode()) > MAX_MESSAGE or not isinstance(args, dict):
                 raise RuntimeError('Tool arguments must be a bounded JSON object.')
             frozen = json.loads(encoded)
             known = {tool['name']: tool for tool in self.catalog}
-            if name not in known:
+            if name not in known and name not in self.routes:
                 raise RuntimeError('Tool is not selected or is unavailable for this Bot.')
-            schema = known[name]['inputSchema']
+            schema = known[name]['inputSchema'] if name in known else None
             if name not in self.routes:
                 if any(k not in schema['properties'] for k in frozen) or any(k not in frozen for k in schema['required']):
                     raise RuntimeError('Tool arguments do not match the selected tool schema.')

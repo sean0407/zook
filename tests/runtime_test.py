@@ -44,7 +44,28 @@ class RuntimeTests(unittest.TestCase):
 
     def external_name(self, session, original):
         session.tools()
+        session.call('zook_connector_tools', {'connector': 'fixture:mcp'})   # a connector is only connected once the Bot asks about it
         return next(name for name, route in session.routes.items() if route[1] == original)
+
+    def test_connectors_are_loaded_only_when_asked_for(self):
+        session, events = self.session(mcp=['fixture:mcp'])
+        listed = session.tools(); self.assertEqual([t['name'] for t in listed], ['zook_connector_tools', 'zook_connector_call'])
+        self.assertEqual((session.clients, session.routes), ({}, {}))                       # nothing connected yet, and none of its tools sent
+        self.assertLess(len(json.dumps(listed)), 1600)
+        found = json.loads(session.call('zook_connector_tools', {'connector': 'fixture:mcp'})['content'][0]['text'])
+        self.assertEqual(sorted(t['name'] for t in found['tools']), ['echo', 'side_effect']); self.assertEqual(events, [])
+        one = json.loads(session.call('zook_connector_tools', {'connector': 'fixture:mcp', 'tool': 'echo'})['content'][0]['text'])
+        self.assertIn('message', one['inputSchema']['properties'])
+        result = session.call('zook_connector_call', {'connector': 'fixture:mcp', 'tool': 'echo', 'arguments': {'message': 'through the gateway'}})
+        self.assertEqual(json.loads(result['content'][0]['text'])['message'], 'through the gateway')
+        self.assertEqual([e['status'] for e in events], ['waiting_approval', 'running', 'completed'])   # asked and recorded as the real tool
+
+    def test_the_gateway_cannot_skip_approval_or_reach_other_tools(self):
+        session, events = self.session(mcp=['fixture:mcp'], approve=lambda *a: False)
+        denied = session.call('zook_connector_call', {'connector': 'fixture:mcp', 'tool': 'side_effect', 'arguments': {'marker': 'gateway-denied'}})
+        self.assertTrue(denied['isError']); self.assertFalse((self.root / 'side-effect.txt').exists() and 'gateway-denied' in (self.root / 'side-effect.txt').read_text())
+        for bad in ({'connector': 'nope', 'tool': 'echo'}, {'connector': 'fixture:mcp', 'tool': 'zook_workspace_write'}, {'connector': 'fixture:mcp', 'tool': 'missing'}):
+            self.assertTrue(session.call('zook_connector_call', bad)['isError'], bad)
 
     def test_connector_gets_shell_variables(self):
         # A sign-in kept in the shell profile reaches the connector, and ${VAR} in its settings is filled in.
@@ -61,7 +82,7 @@ class RuntimeTests(unittest.TestCase):
     def test_real_stdio_handshake_paging_schema_and_call(self):
         session, events = self.session(mcp=['fixture:mcp'])
         name = self.external_name(session, 'echo')
-        schema = next(t for t in session.tools() if t['name'] == name)['inputSchema']
+        schema = next(t for t in session.loaded['fixture:mcp'] if t['name'] == name)['inputSchema']
         self.assertEqual(schema['properties']['continuation_token'], {'type': 'string'})
         self.assertEqual(len(session.routes), 2)
         result = session.call(name, {'message': 'actual protocol result'})

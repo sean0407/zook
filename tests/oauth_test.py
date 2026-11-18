@@ -104,10 +104,12 @@ class OAuthTest(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('zook_rt_oauth', Path(SERVER).with_name('runtime.py')); rt = importlib.util.module_from_spec(spec); spec.loader.exec_module(rt)
         inventory = {'skills': [], 'mcp': [{'id': 'x', 'name': 'Remote'}], '_private': {'skills': {}, 'mcp': {'x': {'transport': 'http', 'url': self.base + '/mcp'}}}}
         session = rt.RuntimeSession([], ['x'], False, self.root / 'w', None, None, inventory=inventory)
-        self.assertEqual(session.tools(), []); self.assertEqual(session.unavailable, ['Remote']); session.close()
-        inventory['_private']['mcp']['x']['headers'] = {'Authorization': 'Bearer wrong-key'}  # a key that was refused is a real failure, and is shown
+        self.assertEqual(len(session.tools()), 2)                                   # only the two stand-in tools; nothing is connected for a plain reply
+        asked = session.call('zook_connector_tools', {'connector': 'Remote'})
+        self.assertTrue(asked['isError']); self.assertIn('需要登入', asked['content'][0]['text']); self.assertEqual(session.unavailable, ['Remote']); session.close()
+        inventory['_private']['mcp']['x']['headers'] = {'Authorization': 'Bearer wrong-key'}  # a key that was refused is explained, and the reply still goes on
         session = rt.RuntimeSession([], ['x'], False, self.root / 'w', None, None, inventory=inventory)
-        self.assertEqual(session.tools(), []); self.assertIn('授權被拒絕', session.unavailable_why['Remote']); session.close()   # left out and explained, and the reply still goes on
+        self.assertIn('授權被拒絕', session.call('zook_connector_tools', {'connector': 'Remote'})['content'][0]['text']); session.close()
         self.assertTrue(all('python' not in a.lower() for a in Provider.state.get('agents', ['x'])))
 
     def test_editing_keeps_the_sign_in_and_changing_the_address_removes_it(self):

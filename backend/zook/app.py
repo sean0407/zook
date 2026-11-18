@@ -463,6 +463,7 @@ class App(GroupRuns, ThreadingHTTPServer):
                     if not job or job['status'] != 'running': return
                     self.workers[job_id] = {'token': token, 'session': session, 'tools': []}
                 tools = session.tools()  # May start external servers; never hold store.lock.
+                if session.lazy: prompt += '\n已連接的外部服務：%s。需要用到時，先用 zook_connector_tools 查它能做什麼，再用 zook_connector_call 執行；用不到就不必查。' % '、'.join(sorted(session.lazy))
                 if session.unavailable:
                     skipped = ['%s（%s）' % (name, session.unavailable_why.get(name, '連不上')) for name in session.unavailable]
                     prompt += '\n這些連接器這次無法使用：%s。使用者問到相關內容時，直接說明原因，請他到連接器頁處理，不要假裝查過。' % '、'.join(skipped)

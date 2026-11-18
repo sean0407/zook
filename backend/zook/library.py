@@ -105,9 +105,24 @@ def pack_import(store, raw):
     return result
 
 
+_discovered = {}   # home folder -> (when, what was found). Looking through every Skill folder takes seconds, so it is not redone for every message.
+DISCOVER_KEEP = 30
+
+
+def discovered():
+    """Skills, connectors and plugins found on this Mac. Re-read at most every 30 seconds, and at once after anything is changed in Zook."""
+    key = str(pathlib.Path.home()); hit = _discovered.get(key)
+    if not hit or time.time() - hit[0] > DISCOVER_KEEP: hit = _discovered[key] = (time.time(), runtime_module().discover())
+    return copy.deepcopy(hit[1])
+
+
+def forget_discovered():
+    _discovered.clear()
+
+
 def inventory_for(store):
     """Discovered Skills/MCP minus anything from disabled plugins (also removed from the private config)."""
-    data = runtime_module().discover()
+    data = discovered()
     with store.lock: own = copy.deepcopy(store.data.get('connectors') or []); gmail = dict(store.data['settings'].get('gmail') or {})
     # Built-in Gmail: listed always, usable once an address and app password have been saved.
     item = {'id': GMAIL_ID, 'name': 'Gmail', 'source': 'builtin', 'transport': 'stdio', 'status': 'configured', 'gmail': True, 'address': gmail.get('address', ''),

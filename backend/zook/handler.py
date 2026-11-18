@@ -284,6 +284,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(200, oauth_page('登入完成，可以關閉這個分頁，回到 Zook。'), 'text/html; charset=utf-8')
         if not self.authorized(): return self.error(403, '禁止存取。')
         if self.command in ('POST', 'PATCH', 'DELETE'):
+            if not path.startswith(('/api/chat', '/api/groups/', '/api/jobs/', '/api/approvals/', '/api/mobile/')) or '/files' in path: forget_discovered()  # a change made in Zook shows at once; sending a message does not rescan
             origin = self.headers.get('Origin')
             if origin and origin not in ('http://127.0.0.1:%d' % self.server.server_address[1], 'http://localhost:%d' % self.server.server_address[1]):
                 return self.error(403, '來源不符。')
