@@ -483,6 +483,20 @@
           input.click();
           break;
         }
+        case 'connector-login': {
+          await post('connectors/' + encodeURIComponent(id.split(':')[1]) + '/login');
+          toast('已在瀏覽器開啟登入頁，完成後回到這裡');
+          for (let n = 0; n < 90 && ['mcp', 'skills', 'plugins'].includes(state.page); n++) {  // wait for the browser to come back
+            await new Promise(r => setTimeout(r, 2000));
+            state.integrations = await api('integrations');
+            if ((state.integrations.mcp || []).find(i => i.id === id)?.signedIn) { render(true); toast('登入完成'); break; }
+          }
+          break;
+        }
+        case 'connector-logout':
+          await post('connectors/' + encodeURIComponent(id.split(':')[1]) + '/logout');
+          state.integrations = await api('integrations'); render(true); toast('已登出');
+          break;
         case 'connector-edit':
           connectorModal((state.integrations?.mcp || []).find(i => i.id === id));
           break;

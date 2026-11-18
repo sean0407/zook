@@ -7,6 +7,7 @@ import contextlib
 import stat
 import ctypes
 import hashlib
+import html
 import datetime
 import glob
 import http.cookies
@@ -29,6 +30,7 @@ import copy
 import importlib.util
 import fcntl
 import threading
+import urllib.parse
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

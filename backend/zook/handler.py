@@ -273,6 +273,15 @@ class Handler(BaseHTTPRequestHandler):
                     return self.respond(200, worker['session'].call(params['name'], params.get('arguments', {})))
                 return self.error(400, '無效的工具要求。')
             except (ValueError, RuntimeError): return self.error(400, '工具要求失敗。')
+        if path == '/oauth/callback' and self.command == 'GET':
+            # The browser returning from a connector's sign-in page. It has no Zook session, so the one-time state is what proves it.
+            port = self.server.server_address[1]
+            if self.headers.get('Host', '').lower() not in ('127.0.0.1:%d' % port, 'localhost:%d' % port): return self.error(403, '禁止存取。')
+            query = parse_qs(urlsplit(self.path).query)
+            if query.get('error'): self.server.__dict__.get('oauth_flows', {}).pop((query.get('state') or [''])[0], None); return self.respond(200, oauth_page('登入已取消，可以關閉這個分頁。'), 'text/html; charset=utf-8')
+            try: oauth_finish(self.server, (query.get('state') or [''])[0], (query.get('code') or [''])[0])
+            except (ValueError, RuntimeError) as exc: return self.respond(400, oauth_page(str(exc)), 'text/html; charset=utf-8')
+            return self.respond(200, oauth_page('登入完成，可以關閉這個分頁，回到 Zook。'), 'text/html; charset=utf-8')
         if not self.authorized(): return self.error(403, '禁止存取。')
         if self.command in ('POST', 'PATCH', 'DELETE'):
             origin = self.headers.get('Origin')
@@ -448,6 +457,15 @@ class Handler(BaseHTTPRequestHandler):
                     if not raw or len(raw) > PACK_BYTES: raise ValueError('設定包超過 150 MB，無法匯入。')
                     return self.respond(200, pack_import(store, raw))
                 except ValueError as exc: return self.error(400, str(exc) if '設定包' in str(exc) else '這不是 Zook 的設定包，或檔案已損壞。')
+            if len(parts) == 4 and parts[:2] == ['api', 'connectors'] and parts[3] in ('login', 'logout') and self.command == 'POST' and not self.device:
+                with store.lock: record = copy.deepcopy(next((c for c in store.data['connectors'] if c['id'] == parts[2]), None))
+                if not record: return self.error(404, '找不到這個連接器。')
+                if parts[3] == 'logout': oauth_logout(store, record['id']); return self.respond(200, {'ok': True})
+                try: url = oauth_begin(self.server, record)
+                except ValueError as exc: return self.error(400, str(exc))
+                except RuntimeError as exc: return self.error(409, str(exc))
+                if not os.environ.get('ZOOK_NO_BROWSER'): subprocess.run(['/usr/bin/open', _oauth_url(url)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                return self.respond(200, {'url': url})
             if parts[:2] == ['api', 'connectors'] and len(parts) in (2, 3):
                 body = self.body() if self.command in ('POST', 'PATCH') else {}
                 try:
@@ -477,6 +495,7 @@ class Handler(BaseHTTPRequestHandler):
                             st = store.data['settings']; st['sharedMcp'] = [x for x in st.get('sharedMcp') or [] if x != 'zook:' + existing['id']]
                             store.save()
                         for secret_id in connector_secret_ids(existing): secret_delete(secret_id)
+                        if (existing.get('oauth') or {}).get('secretId'): blob_delete(existing['oauth']['secretId'])
                         return self.respond(200, {'ok': True})
                 except ValueError as exc: return self.error(400, str(exc))
                 except RuntimeError as exc: return self.error(409, str(exc))

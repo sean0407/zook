@@ -13,7 +13,7 @@ def connector_keep_secrets(record, found):
 
 
 def connector_secret_ids(record):
-    return [x for x in [record.get('secretId')] + list((record.get('moreSecrets') or {}).values()) if x]
+    return [x for x in [record.get('secretId')] + list((record.get('moreSecrets') or {}).values()) if x]  # sign-in tokens are removed with oauth_logout
 
 
 def pack_export(store):
@@ -127,6 +127,9 @@ def inventory_for(store):
         else:
             config = dict(transport='http', url=record['url'], headers=dict(record.get('headers') or {}))
             if secret: config['headers']['Authorization'] = 'Bearer ' + secret
+            elif record.get('oauth'):
+                access = oauth_access(store, record)
+                if access: config['headers']['Authorization'] = 'Bearer ' + access
         waiting = bool(record.get('secretName')) and not secret  # brought in from a pack: the key has not been pasted yet
         for key, sid in (record.get('moreSecrets') or {}).items():
             value = secret_get(sid) if sid else ''
@@ -134,7 +137,10 @@ def inventory_for(store):
             elif not value: waiting = True
         data['_private']['mcp'][ident] = config
         data['mcp'].insert(2 + own.index(record), {'id': ident, 'name': record['name'], 'source': 'zook', 'transport': record['transport'], 'status': 'configured',
-                            'editable': True, 'config': connector_view(record), 'needsKey': waiting})
+                            'editable': True, 'config': connector_view(record), 'needsKey': waiting,
+                            'canLogin': record['transport'] == 'http' and not record.get('secretName') and not secret,
+                            'signedIn': bool(record.get('oauth')) and 'Authorization' in config.get('headers', {}),
+                            'needsLogin': bool(record.get('oauth')) and 'Authorization' not in config.get('headers', {})})
     copied = {record.get('origin') for record in own if record.get('origin')}
     for item in data['mcp']:
         if item['id'] in copied: item['copied'] = True  # Zook now has its own copy, so this one is no longer handed to Bots
