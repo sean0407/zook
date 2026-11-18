@@ -9,11 +9,15 @@
   document.addEventListener('change', e => {
     if (e.target.name === 'provider' && e.target.closest('#bot-form')) syncFeatureRows(e.target.closest('#bot-form'));
     if (e.target.dataset.autoModel) saveAutoModel(e.target);
+    if (e.target.name === 'groupMode' && activeGroup()) { state.groupMode[activeGroup().id] = e.target.value; updateGroupEstimate(); }
+    if (e.target.name === 'botIds' && e.target.closest('#group-form')) syncGroupHost(e.target.closest('#group-form'));
+    if (e.target.id === 'group-file-input' && activeGroup()) uploadGroupFiles(activeGroup(), [...e.target.files]);
     if (e.target.name === 'access' && e.target.closest('#bot-form')) e.target.closest('form').querySelector('[data-access-folder]').hidden = e.target.value !== 'folder';
     if (e.target.name === 'transport' && e.target.closest('#connector-form')) e.target.closest('form').querySelectorAll('[data-for]').forEach(x => x.hidden = x.dataset.for !== e.target.value);
     if (e.target.name === 'accountType' && e.target.closest('#profile-form')) e.target.closest('form').querySelector('[data-key-field]').hidden = e.target.value !== 'key';
   });
   document.addEventListener('input', e => {
+    if (e.target.id === 'chat-input' && activeGroup()) scheduleGroupEstimate();
     if (e.target.closest('#bot-form')) saveBotDraft(e.target.closest('form'));
     if (e.target.name === 'modelCustom') {
       const f = e.target.closest('form');
@@ -206,8 +210,8 @@
         if (!content && !attachments.length) return;
         const g = activeGroup();
         if (g) {
-          await post('groups/' + encodeURIComponent(g.id) + '/messages', {content, attachments, effort: currentEffort()});
-          input.value = ''; updateInputMirror(); pendingList().length = 0;
+          await post('groups/' + encodeURIComponent(g.id) + '/messages', {content, attachments, effort: currentEffort(), mode: currentGroupMode(g)});
+          input.value = ''; updateInputMirror(); pendingList().length = 0; delete state.groupMode[g.id]; state.groupEstimate = null;
           await refresh();
           pollGroup(g.id);
           return;
@@ -309,7 +313,7 @@
         state.accounts = await api('accounts'); render(true); pollAccounts();
       } else if (form.id === 'group-form') {
         const d = new FormData(form), id = form.dataset.id;
-        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds')}, id ? 'PATCH' : 'POST');
+        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds'), hostId: d.get('hostId') || '', mode: d.get('mode') || 'free', turnLimit: Number(d.get('turnLimit')) || 8}, id ? 'PATCH' : 'POST');
         closeModal();
         state.groupId = result.id;
         state.page = 'chat';

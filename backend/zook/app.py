@@ -1,5 +1,5 @@
 # The running service: schedules, replies, group discussions. Loaded by backend/server.py into one shared namespace.
-class App(ThreadingHTTPServer):
+class App(GroupRuns, ThreadingHTTPServer):
     daemon_threads = True
     def __init__(self, address, store, assets, token):
         super().__init__(address, Handler)
@@ -528,6 +528,7 @@ class App(ThreadingHTTPServer):
                 images = [x for x in (job.get('attachments') or []) if pathlib.Path(x).suffix.lower() in IMAGE_TYPES and ability_on(store, provider, 'images')]
                 args = [binary, 'exec'] + [a for x in images for a in ('-i', x)] + ['--json'] + ((['--dangerously-bypass-approvals-and-sandbox'] if scope == 'full' else codex_permission_args(binary)) if native and selected else ['--sandbox', 'read-only']) + ['--skip-git-repo-check', '--ephemeral', '--ignore-user-config', '--color', 'never',
                         '-c', 'project_doc_max_bytes=0', '-c', 'developer_instructions=' + json.dumps(CODEX_DEVELOPER_NOTE, ensure_ascii=False)]
+                if job.get('groupFiles') and native and scope == 'folder': args += ['--add-dir', str(workspace / 'attachments')]  # the group's shared files
                 if selected:
                     for feature in (() if native else ('shell_tool', 'unified_exec')) + ('apps', 'plugins', 'browser_use', 'computer_use', 'skill_search', 'memories') + (() if 'multi' in features else ('multi_agent',)) + (() if 'image' in features else ('image_generation',)):
                         args += ['--disable', feature]
@@ -542,10 +543,10 @@ class App(ThreadingHTTPServer):
             else:
                 # With access to the whole Mac, Claude also gets Bash and its file tools may leave the starting folder.
                 claude_tools = (CLAUDE_NATIVE_TOOLS + (['Bash'] if scope == 'full' else []) + (['Task'] if 'multi' in features else [])) if native and selected else []
-                attach_read = ['Read'] if job.get('attachments') and 'Read' not in claude_tools else []  # just to look at what was attached
+                attach_read = ['Read'] if (job.get('attachments') or job.get('groupFiles')) and 'Read' not in claude_tools else []  # just to look at what was attached
                 args = [binary, '--print', '--restricted' if selected else '--safe-mode', '--strict-mcp-config', '--no-session-persistence', '--tools', ','.join(claude_tools + attach_read + (['WebSearch', 'WebFetch'] if web else [])), '--output-format', 'stream-json', '--verbose']
                 if native and selected: args += ['--permission-mode', 'acceptEdits'] + (['--add-dir', '/'] if scope == 'full' else [])
-                if attach_read: args += ['--add-dir', str(workspace / 'attachments')]  # its working folder may be elsewhere
+                if attach_read or (job.get('groupFiles') and scope == 'folder'): args += ['--add-dir', str(workspace / 'attachments')]  # its working folder may be elsewhere
                 if selected:
                     args += ['--mcp-config', json.dumps({'mcpServers': {'zook': {'command': sys.executable, 'args': [adapter]}}}), '--allowedTools', ','.join(['mcp__zook__'+tool['name'] for tool in tools] + (['WebSearch', 'WebFetch'] if web else []) + claude_tools
                                                              + (['Read(/%s/**)' % str(workspace / 'attachments')] if attach_read else []))]
@@ -759,24 +760,6 @@ class App(ThreadingHTTPServer):
                              dict(fields, schedule_id=S('Schedule id from zook_list_schedules'), enabled=S('on or off')), ['schedule_id'], False), change, 'always'),
             (runtime._schema('zook_delete_schedule', 'Delete a schedule. The user is always asked to approve.', {'schedule_id': S('Schedule id from zook_list_schedules')}, ['schedule_id'], False), delete, 'always')]
 
-    def post_group_message(self, group, content, author=None, attachments=None, effort=None):
-        # Caller holds the store lock.
-        effort = pick_effort(effort, '')
-        if attachments and isinstance(content, str) and not content.strip(): content = '（請看附件）'
-        if not isinstance(content, str) or not content.strip() or len(content) > 30000: raise ValueError('訊息內容無效。')
-        if group['status'] == 'running': raise RuntimeError('群組討論進行中，請等待或先停止。')
-        group['runEffort'] = effort
-        members = [b for b in (self.store.find('bots', x) for x in group['botIds']) if b]
-        if not members: raise RuntimeError('群組沒有可用的 Bot。')
-        targets = group_mentions(content, members)
-        broadcast = not targets or bool(re.search(r'@(?:%s)' % '|'.join(map(re.escape, GROUP_ALL)), content, re.I))
-        if not targets: targets = [b['id'] for b in members]
-        message = dict(id=ID(), role='user', content=content, createdAt=NOW())
-        if author: message['author'] = author
-        if attachments: message['attachments'] = attachments  # each member receives the files on its turn
-        group['messages'].append(message)
-        return self.start_group(group, targets, broadcast)
-
     CLAUDE_QUOTA_STALE = 15 * 60   # refresh when the snapshot is older than this
     CLAUDE_PROBE_MIN_GAP = 10 * 60  # never probe more often than this
 
@@ -841,111 +824,3 @@ class App(ThreadingHTTPServer):
         if worker: threading.Thread(target=worker['session'].close, daemon=True).start()
         proc = self.processes.get(job['id'])
         if proc: terminate_tree(proc)
-
-    def start_group(self, group, targets, broadcast):
-        run_id = ID(); group.update(status='running', runId=run_id, activeJobId=None)
-        threading.Thread(target=self.run_group, args=(group['id'], run_id, list(targets), broadcast), daemon=True).start()
-        return run_id
-
-    def _group_turn(self, group_id, run_id, bot_id, may_pass, role, moderated, blind):
-        """Create the reply placeholder and job for one Bot turn. Returns None when the turn is skipped, False when the run ended."""
-        store = self.store
-        with store.lock:
-            group = store.find('groups', group_id)
-            if not group or group.get('runId') != run_id or group['status'] != 'running': return False
-            bot = store.find('bots', bot_id)
-            if not bot or bot_id not in group['botIds']: return None
-            if any(j['botId'] == bot_id and j['status'] == 'running' for j in store.data['jobs']):
-                group['messages'].append(dict(id=ID(), role='system', content=bot['name'] + ' 正在其他對話中工作，這次略過。', createdAt=NOW()))
-                store.save(); return None
-            auto_chain, auto_mark = None, {}
-            if bot.get('provider') == AUTO:
-                asked = next((m for m in reversed(group['messages']) if m.get('role') == 'user'), {})
-                try: auto_chain, auto_mark = pick_auto(store, asked.get('content'), [a.get('name') for a in asked.get('attachments') or []])
-                except ValueError as exc:
-                    group['messages'].append(dict(id=ID(), role='system', content='%s 這次略過：%s' % (bot['name'], exc), createdAt=NOW()))
-                    store.save(); return None
-            provider, model = auto_chain[0] if auto_chain else bot_model(store, bot)
-            prompt = group_prompt(store, group, bot, may_pass, moderator=role, moderated=moderated, blind=blind)
-            msg = dict(id=ID(), role='assistant', botId=bot_id, content='', createdAt=NOW(), status='running')
-            job = dict(id=ID(), botId=bot_id, groupId=group_id, messageId=msg['id'], status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[],
-                       effort=group.get('runEffort') if group.get('runEffort') not in (None, '', 'standard') else pick_effort(bot.get('effort')))
-            if job['effort'] != 'standard': msg['effort'] = job['effort']
-            if auto_chain: job['autoChain'] = auto_chain; msg.update(auto_mark); refresh_auto(self)
-            files = place_attachments(store, bot_id, recent_attachments(store, group['messages'][-20:]))
-            if files: job['attachments'] = [str(x) for x in files]
-            group['messages'].append(msg); store.data['jobs'].append(job)
-            group['activeJobIds'] = (group.get('activeJobIds') or []) + [job['id']]; group['activeJobId'] = group['activeJobIds'][0]
-            store.save()
-            return dict(job=job, msg=msg, prompt=prompt, provider=provider, model=model, bot=copy.deepcopy(bot), role=role)
-
-    def run_group(self, group_id, run_id, targets, broadcast):
-        store = self.store; turns = 0; spoke = False
-        with store.lock:
-            group = store.find('groups', group_id) or {'botIds': []}
-            members = [b for b in (store.find('bots', x) for x in group['botIds']) if b]
-            host = next((b['id'] for b in members if b.get('isAdmin')), None)
-        # With 管理員 in the group and no specific Bot named, 管理員 hosts: states the goal and assigns work,
-        # members answer independently and at the same time, then respond to each other when the host asks,
-        # and the host closes with conclusions, decisions for the user, action items and open questions.
-        moderated = bool(host and broadcast and len(members) > 1)
-        if moderated: pending = [(host, False, 'kickoff')]
-        else: pending = [(t, broadcast, None) for t in targets]
-        rounds = 0; cap = GROUP_MAX_TURNS_MODERATED if moderated else GROUP_MAX_TURNS; blind_next = False
-        try:
-            while turns < cap:
-                if not pending:
-                    if not moderated or rounds > GROUP_MODERATION_ROUNDS: break
-                    rounds += 1
-                    pending.append((host, False, 'final' if rounds > GROUP_MODERATION_ROUNDS or cap - turns <= 2 else 'moderate'))
-                # The first round after the kickoff runs together and blind; everything else one at a time.
-                batch = pending[:cap - turns] if blind_next else pending[:1]
-                del pending[:len(batch)]
-                turns_here = []
-                for bot_id, may_pass, role in batch:
-                    turn = self._group_turn(group_id, run_id, bot_id, may_pass, role, moderated, blind_next)
-                    if turn is False: return
-                    if turn: turns_here.append(turn)
-                blind_next = False
-                threads = [threading.Thread(target=self.run_job, args=(t['job']['id'], t['prompt'], t['provider'], t['model'], t['bot'], None), daemon=True) for t in turns_here]
-                for th in threads: th.start()
-                for th in threads: th.join()
-                turns += len(turns_here)
-                with store.lock:
-                    group = store.find('groups', group_id)
-                    if not group or group.get('runId') != run_id: return
-                    group['activeJobIds'] = []; group['activeJobId'] = None
-                    if any(t['job']['status'] == 'cancelled' for t in turns_here): return
-                    members = [b for b in (store.find('bots', x) for x in group['botIds']) if b]
-                    for t in turns_here:
-                        job, msg, role, bot_id = t['job'], t['msg'], t['role'], t['bot']['id']
-                        if job['status'] != 'completed': continue
-                        content = job.get('content') or ''
-                        if is_pass(content):
-                            group['messages'] = [m for m in group['messages'] if m['id'] != msg['id']]; continue
-                        spoke = True
-                        mentioned = [x for x in group_mentions(content, members) if x != bot_id]
-                        if role == 'final': rounds = GROUP_MODERATION_ROUNDS + 1; pending.clear()
-                        elif role in ('kickoff', 'moderate'):
-                            if role == 'kickoff':
-                                mentioned = mentioned or [b['id'] for b in members if b['id'] != bot_id]; blind_next = True
-                            if role == 'moderate' and not mentioned: rounds = GROUP_MODERATION_ROUNDS + 1  # host already wrapped up
-                            for target in mentioned:
-                                if target not in [x[0] for x in pending]: pending.append((target, False, None))
-                        else:
-                            for target in mentioned[:1] if moderated else mentioned:
-                                if not (moderated and target == host) and target not in [x[0] for x in pending]: pending.append((target, False, None))
-                    store.save()
-            with store.lock:
-                group = store.find('groups', group_id)
-                if group and group.get('runId') == run_id and pending and not moderated:
-                    group['messages'].append(dict(id=ID(), role='system', content='本輪已達 %d 次發言上限，請再傳一則訊息讓討論繼續。' % GROUP_MAX_TURNS, createdAt=NOW()))
-                elif group and group.get('runId') == run_id and turns and not spoke and broadcast:
-                    group['messages'].append(dict(id=ID(), role='system', content='沒有成員認為需要回覆。可以用 @ 指定由誰回答。', createdAt=NOW()))
-        finally:
-            with store.lock:
-                group = store.find('groups', group_id)
-                if group and group.get('runId') == run_id:
-                    group.update(status='idle', runId=None, activeJobId=None, activeJobIds=[])
-                store.save()
-

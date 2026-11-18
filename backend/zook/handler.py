@@ -503,6 +503,31 @@ class Handler(BaseHTTPRequestHandler):
                 meta = dict(id=upload_id, name=name, size=size, kind='image' if pathlib.Path(name).suffix.lower() in IMAGE_TYPES else 'file', createdAt=NOW())
                 (folder / 'meta.json').write_text(json.dumps(meta, ensure_ascii=False), encoding='utf-8')
                 return self.respond(201, meta)
+            if len(parts) == 4 and parts[:2] == ['api', 'groups'] and parts[3] == 'files' and self.command == 'POST' and not self.device:
+                try: size = int(self.headers.get('Content-Length', '0'))
+                except ValueError: size = 0
+                if size <= 0: return self.error(400, '檔案是空的。')
+                if size > MAX_UPLOAD: self.close_connection = True; return self.error(413, '單一檔案不能超過 20 MB。')
+                with store.lock:
+                    if not store.find('groups', parts[2]): self.close_connection = True; return self.error(404, '找不到群組。')
+                incoming = store.dir / 'group-files'; incoming.mkdir(parents=True, exist_ok=True, mode=0o700)
+                temp = incoming / ('.incoming-' + ID()); remaining = size
+                with open(temp, 'wb') as out:
+                    while remaining:
+                        chunk = self.rfile.read(min(remaining, 1 << 20))
+                        if not chunk: break
+                        out.write(chunk); remaining -= len(chunk)
+                try:
+                    if remaining: return self.error(400, '檔案沒有傳完整。')
+                    with store.lock:
+                        group = store.find('groups', parts[2])
+                        if not group: return self.error(404, '找不到群組。')
+                        try: name = add_group_file(store, group, unquote(self.headers.get('X-File-Name', '')), temp, size, '你')
+                        except ValueError as exc: return self.error(400, str(exc))
+                        store.save()
+                    return self.respond(201, {'name': name})
+                finally:
+                    if temp.exists(): temp.unlink()
             if len(parts) == 3 and parts[:2] == ['api', 'uploads'] and self.command == 'GET' and not self.device:
                 meta = upload_meta(store, parts[2])
                 if not meta: return self.error(404, '找不到這個檔案。')
@@ -605,17 +630,48 @@ class Handler(BaseHTTPRequestHandler):
                         return self.respond(200, {'group': group, 'jobs': [j for j in (store.find('jobs', x) for x in ids) if j]})
                     if len(parts) == 3 and self.command == 'PATCH':
                         candidate = copy.deepcopy(group); set_group_fields(store, candidate, self.body())
-                        group.update(name=candidate['name'], botIds=candidate['botIds']); store.save(); return self.respond(200, group)
+                        group.clear(); group.update(candidate); store.save(); return self.respond(200, group)
                     if len(parts) == 3 and self.command == 'DELETE':
                         if group['status'] == 'running': return self.error(409, '群組討論進行中，請先停止。')
                         store.data['groups'].remove(group)
+                        shutil.rmtree(str(group_files_dir(store, group['id'])), ignore_errors=True)
                         store.data['schedules'] = [x for x in store.data['schedules'] if x.get('groupId') != group['id']]
                         store.save(); return self.respond(200, {'ok': True})
                     if len(parts) == 4 and parts[3] == 'messages' and self.command == 'POST':
                         body = self.body()
-                        try: run_id = self.server.post_group_message(group, body.get('content'), attachments=attachments_for(store, body.get('attachments')), effort=body.get('effort'))
+                        try: run_id = self.server.post_group_message(group, body.get('content'), attachments=attachments_for(store, body.get('attachments')), effort=body.get('effort'), mode=body.get('mode'))
                         except RuntimeError as exc: return self.error(409, str(exc))
                         store.save(); return self.respond(202, {'runId': run_id})
+                    if len(parts) == 4 and parts[3] == 'continue' and self.command == 'POST':
+                        body = self.body()
+                        if body.get('discard') is True: group.pop('paused', None); store.save(); return self.respond(200, group)
+                        try: run_id = self.server.continue_group(group)
+                        except RuntimeError as exc: return self.error(409, str(exc))
+                        store.save(); return self.respond(202, {'runId': run_id})
+                    if len(parts) == 4 and parts[3] == 'summarize' and self.command == 'POST':
+                        try: run_id = self.server.summarize_group(group)
+                        except RuntimeError as exc: return self.error(409, str(exc))
+                        store.save(); return self.respond(202, {'runId': run_id})
+                    if len(parts) == 6 and parts[3] == 'messages' and parts[5] == 'verify' and self.command == 'POST':
+                        body = self.body()
+                        try: result = self.server.verify_group_message(group, parts[4], body.get('confirm') is True)
+                        except RuntimeError as exc: return self.error(409, str(exc))
+                        store.save(); return self.respond(200 if result.get('needsConfirm') else 202, result)
+                    if len(parts) == 4 and parts[3] == 'files' and self.command == 'GET' and not self.device:
+                        return self.respond(200, {'files': list_group_files(store, group), 'limit': GROUP_FILES_TOTAL})
+                    if len(parts) == 5 and parts[3] == 'files' and self.command == 'GET' and not self.device:
+                        found = group_file_path(store, group, parts[4])
+                        if not found: return self.error(404, '找不到這個檔案。')
+                        return self.respond(200, found.read_bytes(), 'application/octet-stream')
+                    if len(parts) == 5 and parts[3] == 'files' and self.command == 'DELETE' and not self.device:
+                        found = group_file_path(store, group, parts[4])
+                        if not found: return self.error(404, '找不到這個檔案。')
+                        found.unlink(); (group.get('fileInfo') or {}).pop(parts[4], None); store.save()
+                        return self.respond(200, {'ok': True})
+                    if len(parts) == 4 and parts[3] == 'estimate' and self.command == 'POST':
+                        body = self.body(); mode = body.get('mode') or group.get('mode') or 'free'
+                        if mode not in GROUP_MODES or not isinstance(body.get('content', ''), str): raise ValueError('討論方式無效。')
+                        return self.respond(200, group_estimate(store, group, body.get('content', ''), mode))
                     if len(parts) == 4 and parts[3] == 'stop' and self.command == 'POST':
                         ids = group.get('activeJobIds') or ([group['activeJobId']] if group.get('activeJobId') else [])
                         group.update(status='idle', runId=None, activeJobId=None, activeJobIds=[])
@@ -676,7 +732,9 @@ class Handler(BaseHTTPRequestHandler):
                     if any(item.get('botId') == bot['id'] for item in store.data['knowledge']): return self.error(409, '請先將此 Bot 的知識移至其他 Bot 或共用知識。')
                     if any(g['status'] == 'running' and bot['id'] in g['botIds'] for g in store.data['groups']): return self.error(409, '此機器人正在群組討論中。')
                     for g in store.data['groups']:
-                        if bot['id'] in g['botIds']: g['botIds'].remove(bot['id'])
+                        if bot['id'] in g['botIds']:
+                            g['botIds'].remove(bot['id'])
+                            if g.get('hostId') == bot['id']: drop_group_host(store, g)
                     store.data['schedules'][:] = [x for x in store.data['schedules'] if x.get('botId') != bot['id']]
                     store.data['bots'].remove(bot); store.save(); return self.respond(200, {'ok': True})
                 if path == '/api/settings' and self.command == 'PATCH':
@@ -714,6 +772,16 @@ def set_group_fields(store, group, body, creating=False):
         if any(not store.find('bots', x) for x in ids): raise ValueError('找不到所選的 Bot。')
         if group.get('status') == 'running' and ids != group['botIds']: raise ValueError('群組討論進行中，暫時無法修改成員。')
         group['botIds'] = ids
+    if 'hostId' in body:
+        if body['hostId'] != '' and body['hostId'] not in group['botIds']: raise ValueError('主持人要是這個群組的成員。')
+        group['hostId'] = body['hostId']
+    elif group.get('hostId') and group['hostId'] not in group['botIds']: drop_group_host(store, group)
+    if 'mode' in body:
+        if body['mode'] not in GROUP_MODES: raise ValueError('討論方式無效。')
+        group['mode'] = body['mode']
+    if 'turnLimit' in body:
+        if body['turnLimit'] not in GROUP_LIMITS: raise ValueError('回合上限無效。')
+        group['turnLimit'] = body['turnLimit']
     if 'name' in body:
         name = body['name']
         if not isinstance(name, str) or len(name) > 100: raise ValueError('名稱無效。')

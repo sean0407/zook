@@ -108,7 +108,7 @@ class AttachmentTest(unittest.TestCase):
         end = time.time() + 15
         while time.time() < end and next(g for g in self.req('GET', '/api/state')[1]['groups'] if g['id'] == group['id'])['status'] == 'running': time.sleep(0.2)
         for bot in (self.bot, other):
-            self.assertEqual(len(list((self.root / 'data/workspaces' / bot['id'] / 'attachments').iterdir())), 1)
+            self.assertEqual(len([x for x in (self.root / 'data/workspaces' / bot['id'] / 'attachments').iterdir() if x.is_file()]), 1)
         self.assertIn('資料.csv', (self.root / 'bin/codex.prompt').read_text())
 
 
