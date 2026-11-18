@@ -708,17 +708,6 @@ class Handler(BaseHTTPRequestHandler):
                     except Busy as exc: return self.error(409, str(exc))
                     if problem: return self.error(400, problem)
                     item.update(lastAt=NOW(), lastStatus='sent', lastError=''); store.save(); return self.respond(202, item)
-                if parts[:2] == ['api', 'projects'] and len(parts) in (2, 3) and self.command in ('POST', 'PATCH', 'DELETE'):
-                    if len(parts) == 2 and self.command == 'POST':
-                        if len(store.data['projects']) >= MAX_PROJECTS: return self.error(409, '專案已達上限 %d 個。' % MAX_PROJECTS)
-                        project = project_fields(store, self.body(), dict(id=ID(), name='', note='', folder='', botIds=[], groupIds=[], knowledgeIds=[], createdAt=NOW()))
-                        save_project(store, project); store.save(); return self.respond(201, project)
-                    project = next((p for p in store.data['projects'] if len(parts) == 3 and p['id'] == parts[2]), None)
-                    if not project: return self.error(404, '找不到這個專案。')
-                    if self.command == 'DELETE':  # only the project goes; its Bots, groups, knowledge and files stay
-                        store.data['projects'].remove(project); store.save(); return self.respond(200, {'ok': True})
-                    if self.command == 'PATCH':
-                        changed = project_fields(store, self.body(), copy.deepcopy(project)); save_project(store, changed); store.save(); return self.respond(200, changed)
                 if path == '/api/groups' and self.command == 'POST':
                     body = self.body(); group = dict(id=ID(), name='', botIds=[], messages=[], status='idle', runId=None, activeJobId=None, createdAt=NOW())
                     set_group_fields(store, group, body, creating=True)
@@ -736,7 +725,7 @@ class Handler(BaseHTTPRequestHandler):
                         store.save(); return self.respond(200, group)
                     if len(parts) == 3 and self.command == 'DELETE':
                         if group['status'] == 'running': return self.error(409, '群組討論進行中，請先停止。')
-                        store.data['groups'].remove(group); forget_in_projects(store, 'groupIds', group['id'])
+                        store.data['groups'].remove(group)
                         shutil.rmtree(str(group_files_dir(store, group['id'])), ignore_errors=True)
                         store.data['schedules'] = [x for x in store.data['schedules'] if x.get('groupId') != group['id']]
                         store.save(); return self.respond(200, {'ok': True})
@@ -841,7 +830,7 @@ class Handler(BaseHTTPRequestHandler):
                             g['botIds'].remove(bot['id'])
                             if was_host: drop_group_host(store, g)
                     store.data['schedules'][:] = [x for x in store.data['schedules'] if x.get('botId') != bot['id']]
-                    store.data['bots'].remove(bot); forget_in_projects(store, 'botIds', bot['id']); store.save(); return self.respond(200, {'ok': True})
+                    store.data['bots'].remove(bot); store.save(); return self.respond(200, {'ok': True})
                 if path == '/api/settings' and self.command == 'PATCH':
                     body = self.body(); update(store.data['settings'], body, 'settings'); store.save()
                     if 'remote' in body: threading.Thread(target=self.server.sync_remote, daemon=True).start()
@@ -853,7 +842,7 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) == 3 and parts[:2] == ['api', 'knowledge']:
                     item = store.find('knowledge', parts[2])
                     if not item: return self.error(404, '找不到知識項目。')
-                    if self.command == 'DELETE': store.data['knowledge'].remove(item); forget_in_projects(store, 'knowledgeIds', item['id']); store.save(); return self.respond(200, {'ok': True})
+                    if self.command == 'DELETE': store.data['knowledge'].remove(item); store.save(); return self.respond(200, {'ok': True})
                     if self.command == 'PATCH': update(item, self.body(), 'knowledge'); item['updatedAt'] = NOW(); store.save(); return self.respond(200, item)
             if self.command == 'GET' and not path.startswith('/api/'):
                 relative = unquote(path).lstrip('/') or 'index.html'; target = (self.server.assets / relative).resolve()

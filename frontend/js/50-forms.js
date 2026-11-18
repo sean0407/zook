@@ -28,7 +28,6 @@
   document.addEventListener('change', e => {
     if (e.target.name === 'provider' && e.target.closest('#bot-form')) syncFeatureRows(e.target.closest('#bot-form'));
     if (e.target.dataset.autoModel) saveAutoModel(e.target);
-    if (e.target.name === 'projectFilter') { state.projectId = e.target.value; render(true); }
     if (e.target.dataset.botDefault) saveBotDefault(e.target);
     if (e.target.name === 'connectorAccount') switchConnectorAccount(e.target);
     if (e.target.name === 'groupMode' && activeGroup()) { state.groupMode[activeGroup().id] = e.target.value; updateGroupEstimate(); }
@@ -301,8 +300,6 @@
         const button = form.querySelector('.primary'); button.disabled = true; button.textContent = '正在確認金鑰…';
         try { await catalogAdd(form.dataset.id, new FormData(form).get('key').trim()); }
         finally { if (button.isConnected) { button.disabled = false; button.textContent = '連結'; } }
-      } else if (form.id === 'project-form') {
-        await saveProject(form);
       } else if (form.id === 'google-form') {
         const d = new FormData(form);
         await post('google', {clientId: d.get('clientId').trim(), clientSecret: d.get('clientSecret').trim(), write: form.elements.write.checked});

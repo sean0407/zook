@@ -15,7 +15,7 @@ class MobileMore(unittest.TestCase):
     def test_phone_routes_are_limited(self):
         allowed = [('GET', '/api/mobile/schedules'), ('POST', '/api/mobile/schedules/s1'), ('POST', '/api/mobile/photos'), ('POST', '/api/mobile/bots/b1/chats'), ('GET', '/api/notifications')]
         refused = [('POST', '/api/schedules'), ('PATCH', '/api/schedules/s1'), ('DELETE', '/api/schedules/s1'), ('POST', '/api/uploads'), ('GET', '/api/bots/b1/outputs'), ('GET', '/api/bots/b1/outputs/x'),
-                   ('POST', '/api/google'), ('POST', '/api/connectors/c1/login'), ('GET', '/api/groups/g1/files'), ('POST', '/api/projects')]
+                   ('POST', '/api/google'), ('POST', '/api/connectors/c1/login'), ('GET', '/api/groups/g1/files')]
         for method, path in allowed: self.assertTrue(m.device_may(method, path), path)
         for method, path in refused: self.assertFalse(m.device_may(method, path), path)
 
