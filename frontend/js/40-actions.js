@@ -1,0 +1,527 @@
+  document.addEventListener('click', async e => {
+    const el = e.target.closest('[data-action]');
+    if (!el) return;
+    const action = el.dataset.action,
+      id = el.dataset.id;
+    try {
+      switch (action) {
+        case 'pick-mention':
+          pickMention(Number(id));
+          break;
+        case 'select-group':
+          state.groupId = id;
+          state.page = 'chat';
+          state.launcher = false;
+          render();
+          break;
+        case 'new-group':
+          if (state.data.bots.length < 2) { toast('至少需要 2 個 Bot 才能建立群組'); break; }
+          groupModal();
+          break;
+        case 'edit-group':
+          groupModal(activeGroup());
+          break;
+        case 'delete-group':
+          if (confirm('確定刪除這個群組及其對話？成員 Bot 不會被刪除。')) {
+            await api('groups/' + encodeURIComponent($('#group-form').dataset.id), {method: 'DELETE'});
+            closeModal();
+            state.groupId = null;
+            await refresh();
+            toast('已刪除群組')
+          }
+          break;
+        case 'terminal-login':
+          await post('accounts/' + encodeURIComponent(id) + '/terminal-login');
+          toast('已開啟終端機，請在那裡選擇 Google 登入，完成後回到 Zook');
+          break;
+        case 'detect-usage':
+          if (state.usageBusy) break;
+          state.usageBusy = 'detect'; render(true);
+          try { await detectUsage(); toast('已更新使用量'); }
+          catch (err) { toast(err.message); }
+          state.usageBusy = ''; render(true);
+          break;
+        case 'update-all': {
+          const list = (state.accounts?.providers || []).filter(p => p.installed && p.canInstall && p.version?.updateAvailable);
+          if (list.length && !confirm(`將更新 ${list.map(p => p.name.split('（')[0] + ' ' + p.version.latest).join('、')}，完成後重新偵測使用量。\n\n確定更新？`)) break;
+          if (state.usageBusy) break;
+          state.usageBusy = 'update'; render(true);
+          try {
+            const started = await Promise.all(list.map(p => post('accounts/' + encodeURIComponent(p.id) + '/install').then(() => p.id, () => null)));
+            await loadAccounts();
+            for (let i = 0; i < 400 && state.accounts.providers.some(p => p.install?.state === 'running'); i++) { await new Promise(r => setTimeout(r, 1500)); await loadAccounts(); }
+            await detectUsage();
+            const failed = state.accounts.providers.filter(p => started.includes(p.id) && p.install?.state !== 'succeeded').map(p => p.name.split('（')[0]);
+            toast(!list.length ? '全部都是最新版，使用量已更新' : failed.length ? `${failed.join('、')} 沒有更新成功，其他已完成` : '全部更新完成，使用量已更新');
+          } catch (err) { toast(err.message); }
+          state.usageBusy = ''; render(true);
+          break;
+        }
+        case 'refresh-claude-quota':
+          el.disabled = true; el.textContent = '更新中…';
+          try { state.quota = await post('quota/claude/refresh'); render(true); toast('已更新 Claude 額度'); }
+          finally { if (el.isConnected) { el.disabled = false; el.textContent = '立即更新'; } }
+          break;
+        case 'account-login':
+          el.disabled = true;
+          await post('accounts/' + encodeURIComponent(id) + '/login', {method: el.dataset.method, account: el.dataset.account || ''});
+          await reloadAccounts();
+          break;
+        case 'update-open':
+          updateModal();
+          break;
+        case 'update-check':
+          el.disabled = true; el.textContent = '檢查中…';
+          state.update = await post('update/check'); render(true);
+          toast(state.update.available ? `有新版 ${state.update.latest}` : state.update.error || '已是最新版');
+          break;
+        case 'update-install':
+          el.disabled = true;
+          await installUpdate();
+          break;
+        case 'accounts-from-form':
+          closeModal(); state.accounts = null; await loadPage('usage');
+          break;
+        case 'profile-add':
+          profileModal(state.accounts.providers.find(x => x.id === id));
+          break;
+        case 'profile-delete':
+          if (!confirm(`移除帳號「${el.dataset.name}」？使用它的 Bot 會改用預設帳號。`)) break;
+          await post('accounts/' + encodeURIComponent(id) + '/profiles/delete', {account: el.dataset.account});
+          await reloadAccounts(); toast('已移除帳號');
+          break;
+        case 'provider-add':
+          providerAddModal();
+          break;
+        case 'provider-add-one':
+          el.disabled = true;
+          await post('accounts/' + encodeURIComponent(id) + '/add');
+          closeModal(); await reloadAccounts(); toast('已加入，可以按「一鍵安裝」或直接登入');
+          break;
+        case 'provider-custom':
+          customProviderModal();
+          break;
+        case 'provider-edit':
+          customProviderModal(state.accounts.providers.find(x => x.id === id));
+          break;
+        case 'provider-install': {
+          const p = state.accounts.providers.find(x => x.id === id);
+          const domain = (el.dataset.command.match(/https?:\/\/([^/\s]+)/) || [])[1];
+          const msg = el.dataset.command ? `將在這台電腦執行 ${p.name} 的官方安裝程式${domain ? '（來自 ' + domain + '）' : ''}。\n\n確定安裝？` : `確定把 ${p.name} 更新到最新版？`;
+          if (!confirm(msg)) break;
+          el.disabled = true;
+          await post('accounts/' + encodeURIComponent(id) + '/install');
+          await reloadAccounts();
+          break;
+        }
+        case 'install-cancel':
+          await post('accounts/' + encodeURIComponent(id) + '/install/cancel');
+          await reloadAccounts();
+          break;
+        case 'provider-remove': {
+          const p = state.accounts.providers.find(x => x.id === id);
+          if (!confirm(`從 Zook 移除 ${p.name}？這不會解除安裝 CLI，也不會登出。`)) break;
+          await post('accounts/' + encodeURIComponent(id) + '/remove');
+          await reloadAccounts(); toast('已從 Zook 移除');
+          break;
+        }
+        case 'account-cancel':
+          await post('accounts/' + encodeURIComponent(id) + '/login/cancel', {account: el.dataset.account || ''});
+          await reloadAccounts();
+          break;
+        case 'account-logout':
+          if (confirm('確定登出？使用這個提供者的 Bot 會無法回覆，直到重新登入。')) {
+            await post('accounts/' + encodeURIComponent(id) + '/logout');
+            await reloadAccounts(); toast('已登出');
+          }
+          break;
+        case 'persona-reset':
+          if (state.personaDrafts) delete state.personaDrafts[activeBot()?.id];
+          render(true);
+          break;
+        case 'dir-tab':
+          state.page = id; render();
+          break;
+        case 'dir-filter':
+          state.dirFilter = id; render(true);
+          break;
+        case 'dir-expand':
+          state.dirExpanded = {...(state.dirExpanded || {}), [id]: !state.dirExpanded?.[id]}; render(true);
+          break;
+        case 'dir-toggle': {
+          const kind = el.dataset.kind;
+          el.disabled = true;
+          const key = kind === 'skill' ? 'disabledSkills' : kind === 'mcp' ? 'sharedMcp' : 'disabledPlugins', off = new Set(state.data.settings[key] || []);
+          off.has(id) ? off.delete(id) : off.add(id);
+          state.data.settings = await post('settings', {[key]: [...off]}, 'PATCH');
+          if (kind === 'mcp') { render(true); toast(off.has(id) ? '已開放給所有 Bot' : '已停用這個連接器'); break; }
+          if (kind === 'plugin') state.integrations = await api('integrations');
+          render(true);
+          toast(kind === 'skill' ? (off.has(id) ? '已停用這個 Skill' : '已開放給所有 Bot') : (off.has(id) ? '已停用插件' : '已啟用插件'));
+          break;
+        }
+        case 'delete-memory':
+          if (confirm('確定刪除這則記憶？')) {
+            await api('memories/' + encodeURIComponent(id), {method: 'DELETE'});
+            await refresh();
+            toast('已刪除記憶')
+          }
+          break;
+        case 'stop-group':
+          await post('groups/' + encodeURIComponent(id) + '/stop');
+          toast('已停止討論');
+          await refresh();
+          break;
+        case 'mention': {
+          const input = $('#chat-input');
+          const pos = input.selectionStart ?? input.value.length;
+          const before = input.value.slice(0, pos), insert = (before && !/\s$/.test(before) ? ' ' : '') + '@' + id + ' ';
+          input.value = before + insert + input.value.slice(pos); updateInputMirror();
+          input.focus();
+          input.setSelectionRange(pos + insert.length, pos + insert.length);
+          break;
+        }
+        case 'select-bot':
+          state.groupId = null;
+          state.selected = id;
+          state.page = 'chat';
+          state.launcher = false;
+          render();
+          break;
+        case 'remote-pair':
+          el.disabled = true;
+          try { pairingModal(await post('remote/pairing')); } catch (err) { toast(err.message); el.disabled = false; }
+          break;
+        case 'remote-pair-cancel':
+          await api('remote/pairing', {method: 'DELETE'}).catch(() => {});
+          closeModal(); loadRemote(true);
+          break;
+        case 'remote-revoke': {
+          const d = state.remote?.devices.find(x => x.id === id);
+          if (!d || !confirm(`撤銷「${d.name}」？這台裝置會立刻無法連線，要再使用必須重新配對。`)) break;
+          state.remote = await api('remote/devices/' + encodeURIComponent(id), {method: 'DELETE'});
+          render(true); toast('已撤銷「' + d.name + '」');
+          break;
+        }
+        case 'new-section':
+          sectionModal();
+          break;
+        case 'rename-section':
+          sectionModal(id);
+          break;
+        case 'delete-section':
+          await saveArrangement(state.data.bots, sectionNames().filter(x => x !== id));
+          toast('已刪除分組');
+          break;
+        case 'dir-collapse': {
+          // Remembered with the other settings, so a group you fold away stays folded next time.
+          const now = new Set(state.data.settings.dirCollapsed || []);
+          now.has(id) ? now.delete(id) : now.add(id);
+          state.data.settings.dirCollapsed = [...now]; render(true);
+          state.data.settings = await post('settings', {dirCollapsed: [...now]}, 'PATCH');
+          break;
+        }
+        case 'collapse':
+          state.collapsed[id] = !state.collapsed[id];
+          render(true);
+          break;
+        case 'search-focus':
+          $('#side-search')?.focus();
+          break;
+        case 'new-bot':
+          botModal();
+          break;
+        case 'edit-bot':
+          botModal(activeBot());
+          break;
+        case 'launcher':
+          state.launcher = !state.launcher;
+          render(true);
+          break;
+        case 'page':
+          await loadPage(id);
+          break;
+        case 'toggle-detail':
+          state.detailOpen = !state.detailOpen;
+          render(true);
+          break;
+        case 'detail':
+          state.detail = id;
+          render(true);
+          break;
+        case 'new-schedule':
+          scheduleModal();
+          break;
+        case 'edit-schedule':
+          scheduleModal(state.data.schedules.find(x => x.id === id));
+          break;
+        case 'delete-schedule':
+          if (confirm('確定刪除這個排程？')) {
+            await api('schedules/' + encodeURIComponent(id), {method: 'DELETE'});
+            await refresh();
+            toast('已刪除排程');
+          }
+          break;
+        case 'schedule-history':
+          scheduleHistory(state.data.schedules.find(x => x.id === id));
+          break;
+        case 'open-run':
+          await openConversation(el.dataset.kind, el.dataset.target, id);
+          break;
+        case 'pick-files': {
+          closeModal();
+          const picker = document.createElement('input'); picker.type = 'file'; picker.multiple = true;
+          picker.onchange = () => addFiles([...picker.files]); picker.click();
+          break;
+        }
+        case 'unattach':
+          pendingList().splice(pendingList().findIndex(f => f.key === id), 1); render(true);
+          break;
+        case 'view-image':
+          modal(el.dataset.name || '圖片', `<div class="modal-body image-view"><img src="/api/uploads/${esc(id)}" alt="${esc(el.dataset.name || '')}"></div>`, '', true);
+          break;
+        case 'run-plan': {
+          const b = activeBot();
+          const sent = await post('chat', {botId: b.id, content: '請照上面的計畫執行。', effort: currentEffort()});
+          await refresh(); poll(sent.jobId, b.id);
+          break;
+        }
+        case 'redo-again': {
+          const b = activeBot();
+          if (redoAllowed(b)) await redo(b, {mode: 'again'});
+          break;
+        }
+        case 'edit-last': {
+          const b = activeBot(), last = [...b.messages].reverse().find(m => m.role === 'user');
+          modal('編輯訊息', `<form id="edit-last-form"><div class="modal-body"><label class="field">改完後重新送出，之後的回覆會被取代<textarea name="content" required rows="6">${esc(last.content)}</textarea></label></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">重新送出</button></div></form>`);
+          break;
+        }
+        case 'redo-model': {
+          const b = activeBot(), installed = (state.providers || []).filter(p => p.installed !== false);
+          const options = installed.map(p => ({id: p.id, name: String(p.name).split('（')[0], hint: p.id === (b.provider || state.data.settings.provider) ? '這個 Bot 目前用的' : ''}));
+          if (!options.length) { toast('沒有其他可用的模型'); break; }
+          const other = options.find(o => !o.hint) || options[0];
+          modal('換模型重答', `<form id="redo-model-form"><div class="modal-body"><p class="muted">只有這一次用別的模型回答，不會改變 Bot 的設定。</p><div class="setting-list in-form">${settingRow('模型', '用預設版本回答', dropdown('provider', other.id, options))}</div></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">重答</button></div></form>`);
+          break;
+        }
+        case 'open-message':
+          state.query = ''; await openConversation('bot', el.dataset.bot, id);
+          break;
+        case 'chats':
+          chatsModal(activeBot());
+          break;
+        case 'new-chat': {
+          const b = activeBot();
+          await post(`bots/${encodeURIComponent(b.id)}/chats`, {});
+          if (state.modal) closeModal();
+          await refresh(); $('#chat-input')?.focus();
+          break;
+        }
+        case 'open-chat': {
+          const b = activeBot();
+          if (id !== b.chatId) { await post(`bots/${encodeURIComponent(b.id)}/chats/${encodeURIComponent(id)}/open`, {}); }
+          closeModal(); await refresh();
+          break;
+        }
+        case 'rename-chat': {
+          const b = activeBot(), c = b.chats.find(x => x.id === id);
+          modal('對話名稱', `<form id="chat-rename-form" data-id="${esc(id)}"><div class="modal-body"><label class="field">名稱<input name="title" required maxlength="80" value="${esc(chatName(b, c))}"></label></div><div class="modal-foot"><button type="button" class="secondary" data-action="chats">返回</button><button class="primary">儲存</button></div></form>`);
+          break;
+        }
+        case 'delete-chat': {
+          const b = activeBot(), c = b.chats.find(x => x.id === id);
+          if (!confirm(`確定刪除「${chatName(b, c)}」？刪除後無法復原。`)) break;
+          await api(`bots/${encodeURIComponent(b.id)}/chats/${encodeURIComponent(id)}`, {method: 'DELETE'});
+          await refresh(); chatsModal(activeBot()); toast('已刪除對話');
+          break;
+        }
+        case 'run-schedule':
+          await post('schedules/' + encodeURIComponent(id) + '/run', {});
+          await refresh(); startPollers();
+          toast('已送出，回覆會出現在對話裡');
+          break;
+        case 'new-note':
+          noteModal();
+          break;
+        case 'edit-note':
+          noteModal(state.data.knowledge.find(n => n.id === id));
+          break;
+        case 'delete-note':
+          if (confirm('確定刪除這則知識？')) {
+            await api('knowledge/' + encodeURIComponent(id), {
+              method: 'DELETE'
+            });
+            await refresh();
+            toast('已刪除知識')
+          }
+          break;
+        case 'delete-bot':
+          if (confirm('確定刪除這個 Bot 及其對話？')) {
+            await api('bots/' + encodeURIComponent($('#bot-form').dataset.id), {
+              method: 'DELETE'
+            });
+            closeModal();
+            await refresh();
+            toast('已刪除 Bot')
+          }
+          break;
+        case 'choose-folder': {
+          const picked = (await post('choose-folder')).path, form = $('#bot-form');
+          if (picked && form) { form.elements.accessFolder.value = picked; form.querySelector('[data-access-path]').textContent = picked; saveBotDraft(form); }
+          break;
+        }
+        case 'close-modal':
+          closeModal();
+          break;
+        case 'overlay':
+          if (e.target === el) closeModal();
+          break;
+        case 'shape':
+          $('#bot-form [name=shape]').value = id;
+          $$('.shape-btn').forEach(x => x.classList.toggle('selected', x.dataset.id === id));
+          $('.bot-preview .avatar').className = `avatar shape-${id} hero`;
+          saveBotDraft($('#bot-form'));
+          break;
+        case 'color':
+          $('#bot-form [name=color]').value = id;
+          $$('.swatch').forEach(x => x.classList.toggle('selected', x.dataset.id === id));
+          $$('#bot-form .avatar').forEach(x => x.style.setProperty('--c', id));
+          saveBotDraft($('#bot-form'));
+          break;
+        case 'voice':
+          modal('語音輸入', '<div class="modal-body"><p class="muted">尚未安裝語音辨識模型。</p></div>', '<div class="modal-foot"><button class="primary" data-action="close-modal">知道了</button></div>');
+          break;
+        case 'composer-menu':
+          modal('更多選項', '<div class="modal-body more-options"><button class="secondary" data-action="pick-files">📎 附加檔案或圖片</button><p class="muted">也可以把檔案拖進對話，或直接貼上截圖。每則最多 10 個，單檔 20 MB。</p><button class="secondary" data-action="new-note">＋ 新增知識</button><p class="muted">新增知識，為 Bot 提供相關背景。</p></div>');
+          break;
+        case 'approve':
+        case 'deny':
+          if (state.deciding[id]) break;
+          state.deciding[id] = true;
+          el.disabled = true;
+          try {
+            await post('approvals/' + encodeURIComponent(id), {decision: action === 'approve' ? 'approve' : 'deny'});
+            for (const j of Object.values(state.jobDetails)) for (const a of j.approvals || []) if (a.id === id) a.status = action === 'approve' ? 'approved' : 'denied';
+            render(true);
+          } finally { delete state.deciding[id]; if (el.isConnected) el.disabled = false; }
+          break;
+        case 'gmail-setup':
+          gmailModal();
+          break;
+        case 'gmail-remove':
+          if (!confirm('中斷 Gmail 連接？所有 Bot 都會無法再使用 Gmail，儲存的應用程式密碼會從鑰匙圈刪除。')) break;
+          await api('gmail', {method: 'DELETE'});
+          delete state.mcpTests['builtin:gmail'];
+          state.integrations = await api('integrations'); await refresh(); toast('已中斷 Gmail 連接');
+          break;
+        case 'connector-add':
+          connectorModal();
+          break;
+        case 'skills-import': {
+          const ids = directoryItems('skills').filter(i => i.group === id && i.importable).map(i => i.id);
+          el.disabled = true; el.textContent = '匯入中…';
+          const r = await post('skills/import', {ids});
+          state.integrations = await api('integrations'); await refresh();
+          toast([r.imported.length ? `已匯入 ${r.imported.length} 個 Skill` : '沒有新的 Skill 可以匯入', r.skipped.length ? `${r.skipped.length} 個同名的只保留一份` : '', r.failed.length ? `${r.failed.length} 個匯入失敗：${r.failed[0].error}` : ''].filter(Boolean).join('，'));
+          break;
+        }
+        case 'skill-update':
+          el.disabled = true;
+          await post('skills/' + encodeURIComponent(id.split(':')[1]) + '/update');
+          state.integrations = await api('integrations'); render(true); toast('已更新成原來源的最新內容');
+          break;
+        case 'skill-remove':
+          if (!confirm(`從 Zook 移除 Skill「${el.dataset.name}」？原本工具裡的那一份不受影響。`)) break;
+          await api('skills/' + encodeURIComponent(id.split(':')[1]), {method: 'DELETE'});
+          state.integrations = await api('integrations'); await refresh(); toast('已從 Zook 移除');
+          break;
+        case 'connector-copy': {
+          el.disabled = true;
+          const made = await post('connector-copy', {id});
+          state.integrations = await api('integrations'); await refresh();
+          try { state.mcpTests[made.id] = await post('mcp/' + encodeURIComponent(made.id) + '/test'); }
+          catch (error) { state.mcpTests[made.id] = {status: 'error', error: error.message}; }
+          render(true);
+          toast(state.mcpTests[made.id].status === 'ready' ? '已複製到 Zook，連線正常' : '已複製到 Zook，但連不上。如果它需要登入，授權還留在原本的工具裡');
+          break;
+        }
+        case 'pack-export': {
+          el.disabled = true;
+          const pack = await api('pack');
+          el.disabled = false;
+          if (!pack.skills && !pack.connectors) { toast('還沒有可以匯出的內容。先把 Skill 匯入 Zook，或把連接器複製到 Zook'); break; }
+          const raw = atob(pack.data), bytes = new Uint8Array(raw.length);
+          for (let n = 0; n < raw.length; n++) bytes[n] = raw.charCodeAt(n);
+          download(bytes, pack.name, 'application/zip');
+          toast(`已匯出 ${pack.skills} 個 Skill、${pack.connectors} 個連接器`);
+          break;
+        }
+        case 'pack-import': {
+          const input = document.createElement('input');
+          input.type = 'file'; input.accept = '.zookpack,.zip';
+          input.onchange = async () => {
+            const file = input.files[0];
+            if (!file) return;
+            if (file.size > 150 * 1024 * 1024) { toast('設定包超過 150 MB，無法匯入'); return; }
+            if (!confirm(`匯入「${file.name}」？\n\n設定包裡的 Skill 和連接器可以在這台 Mac 上執行程式，請只匯入你自己匯出的檔案。`)) return;
+            try {
+              const text = await new Promise((done, fail) => { const reader = new FileReader(); reader.onload = () => done(reader.result); reader.onerror = fail; reader.readAsDataURL(file); });
+              const r = await post('pack', {data: String(text).split(',')[1] || ''});
+              state.integrations = await api('integrations'); await refresh();
+              toast([`已匯入 ${r.skills.length} 個 Skill、${r.connectors.length} 個連接器`, r.skipped.length ? `${r.skipped.length} 個已經有或無法匯入，已略過` : '', r.needKeys.length ? `${r.needKeys.length} 個連接器需要重新貼上金鑰` : ''].filter(Boolean).join('，'));
+            } catch (error) { toast(error.message || '匯入失敗'); }
+          };
+          input.click();
+          break;
+        }
+        case 'connector-edit':
+          connectorModal((state.integrations?.mcp || []).find(i => i.id === id));
+          break;
+        case 'connector-delete':
+          if (!confirm(`移除連接器「${el.dataset.name}」？所有 Bot 都會無法再使用它。`)) break;
+          await api('connectors/' + encodeURIComponent(id.split(':')[1]), {method: 'DELETE'});
+          delete state.mcpTests[id];
+          state.integrations = await api('integrations'); await refresh(); toast('已移除連接器');
+          break;
+        case 'test-mcp':
+          el.disabled = true;
+          try { state.mcpTests[id] = await post('mcp/' + encodeURIComponent(id) + '/test'); }
+          catch (error) { state.mcpTests[id] = {status:'error', error:error.message}; }
+          render(true);
+          break;
+        case 'cancel-job':
+          await post('jobs/' + encodeURIComponent(id) + '/cancel');
+          toast('正在停止回覆');
+          break;
+        case 'share': {
+          const g = activeGroup();
+          if (g) {
+            const name = id => state.data.bots.find(b => b.id === id)?.name || 'Bot';
+            download(`# ${g.name}\n\n${(g.messages||[]).filter(m=>m.content).map(m=>m.role==='system'?`> ${m.content}`:`## ${m.role==='user'?'我':name(m.botId)}\n\n${m.content}`).join('\n\n')}`, `${g.name.replace(/[\\/:*?"<>|]/g,'_')}-群組對話.md`, 'text/markdown;charset=utf-8');
+            break
+          }
+          let b = activeBot();
+          download(`# ${b.name}\n\n${(b.messages||[]).map(m=>`## ${m.role==='user'?'我':b.name}\n\n${m.content}`).join('\n\n')}`, `${b.name.replace(/[\\/:*?"<>|]/g,'_')}-對話.md`, 'text/markdown;charset=utf-8');
+          break
+        }
+        case 'export': {
+          let data = await post('export');
+          download(JSON.stringify(data, null, 2), 'Zook-export.json', 'application/json');
+          break
+        }
+        case 'refresh-models':
+          await loadModels(el.closest('form'), true);
+          break;
+        case 'int-filter':
+          $$('[data-action=int-filter]').forEach(x => x.classList.toggle('active', x === el));
+          $('#integration-cards').innerHTML = integrationCards(state.integrations, id, $('#integration-search').value);
+          break;
+      }
+    } catch (err) {
+      toast(err.message)
+    }
+  });
+
+  function $$(s) {
+    return [...document.querySelectorAll(s)]
+  }

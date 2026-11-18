@@ -1,0 +1,848 @@
+# The HTTP API and startup. Loaded by backend/server.py into one shared namespace.
+class Handler(BaseHTTPRequestHandler):
+    server_version = 'Zook'; sys_version = ''
+    def log_message(self, *args): pass
+
+    def codex_live_quota(self, account=None):
+        """Codex limits straight from the CLI, at most once a minute per account."""
+        store, app = self.server.store, self.server
+        key = 'codex' + ('@' + account['id'] if account else '')
+        caches = app.__dict__.setdefault('codex_quota_caches', {})
+        hit = caches.get(key)
+        if hit and time.time() - hit[0] < 60: return hit[1]
+        try: live = normalize_quota('codex', codex_rpc(find_cli('codex'), 'account/rateLimits/read', {}, provider_env('codex', account)))
+        except (OSError, ValueError, TimeoutError, AttributeError, RuntimeError): live = None
+        if not live: return None
+        live.update(updatedAt=NOW(), source='live'); caches[key] = (time.time(), live)
+        with store.lock: store.data.setdefault('quota', {})[key] = live; store.save()
+        return live
+
+    def antigravity_live_quota(self):
+        store, app = self.server.store, self.server
+        caches = app.__dict__.setdefault('codex_quota_caches', {}); hit = caches.get('antigravity')
+        if hit and time.time() - hit[0] < 60: return hit[1]
+        try: live = antigravity_quota(find_cli('antigravity'))
+        except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError): live = None
+        caches['antigravity'] = (time.time(), live)  # a failed read is not retried on every page load either
+        if not live: return None
+        with store.lock: store.data.setdefault('quota', {})['antigravity'] = live; store.save()
+        return live
+
+    def quota(self):
+        store = self.server.store
+        result = []
+        phone = bool(getattr(self, 'device', None))  # a paired phone only shows the main sign-ins of the three big CLIs
+        for provider in [x for x in P.active_ids(store.data) if not phone or x in ('codex', 'claude', 'grok')]:
+            account = account_status(provider)
+            with store.lock: snap = copy.deepcopy(store.data.get('quota', {}).get(provider))
+            if provider == 'codex' and account['status'] == 'logged_in': snap = self.codex_live_quota() or snap
+            if provider == 'antigravity' and account['status'] == 'logged_in': snap = self.antigravity_live_quota() or snap
+            if provider not in ('codex', 'claude', 'antigravity'): snap = None  # the other CLIs do not report plan limits to Zook
+            profiles = []
+            for extra in [] if phone else [a for a in store.data.get('accounts') or [] if a.get('provider') == provider]:
+                try: view = account_view(extra)
+                except (OSError, ValueError, RuntimeError): view = dict(id=extra['id'], name=extra['name'], type=extra['type'], status='unknown', method='', plan='', email='')
+                billed = extra['type'] == 'key' or view.get('method') in ('Anthropic Console', 'API 金鑰')
+                with store.lock:
+                    used = provider_usage(store, provider, extra['id']); saved = copy.deepcopy(store.data.get('quota', {}).get(provider + '@' + extra['id']))
+                if provider == 'codex' and view['status'] == 'logged_in' and not billed: saved = self.codex_live_quota(extra) or saved
+                profiles.append(dict(view, zookUsage=used, quota=saved if provider in ('codex', 'claude') else None, apiBilling=billed, noQuotaApi=provider not in ('codex', 'claude')))
+            with store.lock: zook = provider_usage(store, provider)
+            result.append(dict(id=provider, name=account['name'], vendor=(P.spec(store.data, provider) or {}).get('vendor', ''), zookUsage=zook,
+                               status=account['status'], method=account['method'], noQuotaApi=provider not in ('codex', 'claude', 'antigravity'),
+                               plan=(snap or {}).get('plan') or account['plan'], email=account['email'], workspace=account.get('workspace', ''), quota=snap,
+                               apiBilling=account['method'] in ('Anthropic Console', 'API 金鑰'), profiles=profiles))
+        return {'providers': result}
+
+    def detect_usage(self):
+        """偵測使用量: read fresh limits for every signed-in account. Claude only reports them with a reply, so each subscription gets one tiny request."""
+        store, app = self.server.store, self.server
+        app.__dict__.setdefault('codex_quota_caches', {}).clear()
+        targets = []
+        if 'claude' in P.active_ids(store.data):
+            main = account_status('claude')
+            if main['status'] == 'logged_in' and main['method'] != 'Anthropic Console': targets.append(None)
+            for extra in [a for a in store.data.get('accounts') or [] if a.get('provider') == 'claude' and a.get('type') == 'login']:
+                view = account_view(extra)
+                if view['status'] == 'logged_in' and view['method'] != 'Anthropic Console': targets.append(extra)
+        def probe(extra):
+            try: app.record_quota('claude', claude_quota_probe(provider_env('claude', extra) if extra else None), extra['id'] if extra else '', 'probe')
+            except (RuntimeError, OSError, subprocess.TimeoutExpired): pass
+        threads = [threading.Thread(target=probe, args=(x,), daemon=True) for x in targets]
+        for t in threads: t.start()
+        for t in threads: t.join(100)
+        app.claude_probe_at = time.time()
+        return self.quota()
+
+    def accounts(self, parts):
+        logins = self.server.logins
+        if len(parts) == 2 and self.command == 'GET':
+            items = []
+            data = self.server.store.data
+            for provider, flow in list(logins.items()):  # remember the account a Zook-run sign-in reported (keys are provider or provider@account)
+                if flow.state == 'succeeded' and not getattr(flow, 'recorded', False):
+                    found = re.search(r'[Ss]igned in as\s+(\S+@\S+)', '\n'.join(flow.lines))
+                    with self.server.store.lock:
+                        if found: data.setdefault('accountInfo', {})[provider] = {'email': found.group(1).rstrip('.,')}
+                        self.server.store.save()
+                    flow.recorded = True
+            for provider in P.active_ids(data):
+                item = account_status(provider); flow = logins.get(provider); inst = self.server.installs.get(provider)
+                s = P.spec(data, provider) or {}
+                if inst and inst.state != 'running' and not getattr(inst, 'version_refreshed', False):
+                    _version_cache.pop(provider, None); inst.version_refreshed = True
+                ver = provider_version(provider)
+                item.update(version={k: ver[k] for k in ('current', 'latest', 'updateAvailable', 'error')} if ver else None)
+                item.update(login=flow.view() if flow else None, install=inst.view() if inst else None, loginMethods=[dict(id=m, label=l) for m, l in login_methods(provider)],
+                            canInstall=bool(s.get('install') or s.get('update')), terminalLogin=bool(s.get('terminal_login')), installCommand=s.get('install', ''), canUpdate=bool(s.get('update')),
+                            canLogout=bool(provider in ('codex', 'claude') or s.get('logout')), removable=provider not in P.DEFAULT_ADDED,
+                            requires=s.get('requires', ''), requirementMet=not s.get('requires') or bool(P.find_binary(s['requires'])),
+                            config={k: s.get(k, '') for k in ('command', 'args', 'model_args', 'install', 'login', 'status')} if s.get('custom') else None,
+                            models=s.get('models', []) if s.get('custom') else None)
+                profiles = []
+                for account in [a for a in data.get('accounts') or [] if a.get('provider') == provider]:
+                    try: view = account_view(account)
+                    except (OSError, ValueError, RuntimeError): view = dict(id=account['id'], name=account['name'], type=account['type'], status='unknown', method='', plan='', email='')
+                    sub = logins.get(provider + '@' + account['id'])
+                    view['login'] = sub.view() if sub else None
+                    profiles.append(view)
+                record = (data.get('providerIssues') or {}).get(provider)
+                item.update(issue=(record or {}).get('issue', '') if item['status'] == 'logged_in' else '', needsCheck=provider_needs_check(s, item['status'], record))
+                item.update(profiles=profiles, canAddLogin=bool(provider in ACCOUNT_HOME and login_methods(provider)), canAddKey=provider in ACCOUNT_KEYS)
+                items.append(item)
+            return self.respond(200, {'providers': items, 'catalog': P.catalog_view(data)})
+        if len(parts) == 3 and parts[2] == 'custom' and self.command == 'POST':
+            store = self.server.store
+            with store.lock:
+                ids = set(P.CATALOG) | {c['id'] for c in P.custom_list(store.data)}
+                item = P.validate_custom(self.body(), ids)
+                store.data['customProviders'] = [c for c in P.custom_list(store.data) if c['id'] != item['id']] + [item]
+                store.save()
+            return self.respond(201, item)
+        if len(parts) < 4 or self.command != 'POST' or not P.spec(self.server.store.data, parts[2]): return self.error(404, '找不到資源。')
+        provider, action = parts[2], '/'.join(parts[3:])
+        body = self.body(); store = self.server.store
+        account = None
+        if body.get('account'):
+            account = find_account(body['account'], provider) if isinstance(body['account'], str) else None
+            if not account: return self.error(404, '找不到這個帳號。')
+        login_key = provider + ('@' + account['id'] if account else '')
+        flow = logins.get(login_key)
+        try:
+            if action == 'profiles':
+                name, kind, key = body.get('name'), body.get('type'), body.get('key')
+                if not isinstance(name, str) or not name.strip() or len(name) > 60: raise ValueError('請輸入帳號名稱。')
+                if kind == 'login' and not (provider in ACCOUNT_HOME and login_methods(provider)): raise ValueError('這個模型不支援再登入一個帳號，請改用 API 金鑰。')
+                if kind == 'key' and provider not in ACCOUNT_KEYS: raise ValueError('這個模型不支援 API 金鑰。')
+                if kind not in ('login', 'key'): raise ValueError('帳號類型無效。')
+                with store.lock:
+                    if any(a['provider'] == provider and a['name'] == name.strip() for a in store.data['accounts']): raise ValueError('已經有同名的帳號。')
+                new = dict(id=ID(), provider=provider, name=name.strip(), type=kind, createdAt=NOW())
+                if kind == 'key': secret_set(new['id'], key.strip() if isinstance(key, str) else '')
+                if provider in ACCOUNT_HOME: account_dir(new['id'])
+                with store.lock: store.data['accounts'].append(new); store.save()
+                return self.respond(201, new)
+            if action == 'profiles/delete':
+                if not account: raise ValueError('帳號無效。')
+                if flow and flow.state == 'running': flow.cancel()
+                logins.pop(login_key, None)
+                with store.lock:
+                    store.data['accounts'] = [a for a in store.data['accounts'] if a['id'] != account['id']]
+                    for b in store.data['bots']:
+                        if b.get('account') == account['id']: b['account'] = ''  # back to the CLI's own sign-in
+                    (store.data.get('accountInfo') or {}).pop(login_key, None); (store.data.get('quota') or {}).pop(login_key, None); store.save()
+                secret_delete(account['id'])
+                shutil.rmtree(str(_active['dir'] / 'accounts' / account['id']), ignore_errors=True)
+                return self.respond(200, {'ok': True})
+            if action == 'add':
+                with self.server.store.lock:
+                    st = self.server.store.data['settings']
+                    st['addedProviders'] = list(dict.fromkeys(list(st.get('addedProviders') or P.DEFAULT_ADDED) + [provider]))
+                    st['hiddenProviders'] = [x for x in st.get('hiddenProviders') or [] if x != provider]; self.server.store.save()
+                return self.respond(200, {'ok': True})
+            if action == 'remove':
+                store = self.server.store
+                with store.lock:
+                    if provider in P.DEFAULT_ADDED: return self.error(409, '內建的 Codex 和 Claude 不能移除。')
+                    users = [b['name'] for b in store.data['bots'] if b.get('provider') == provider]
+                    if users or store.data['settings'].get('provider') == provider:
+                        return self.error(409, '還有 Bot 或預設設定在使用這個提供者：' + ('、'.join(users) or '預設模型') + '。請先改用其他提供者。')
+                    if provider.startswith(P.CUSTOM_PREFIX): store.data['customProviders'] = [c for c in P.custom_list(store.data) if c['id'] != provider]
+                    else:
+                        st = store.data['settings']; st['hiddenProviders'] = list(dict.fromkeys((st.get('hiddenProviders') or []) + [provider]))
+                        st['addedProviders'] = [x for x in st.get('addedProviders') or P.DEFAULT_ADDED if x != provider]
+                    store.save()
+                return self.respond(200, {'ok': True})
+            if action == 'install':
+                inst = self.server.installs.get(provider)
+                if inst and inst.state == 'running': return self.error(409, '安裝流程已在進行中。')
+                self.server.installs[provider] = LoginFlow(provider, install_args(provider), failure='安裝沒有完成，請確認網路連線後再試。')
+                return self.respond(202, self.server.installs[provider].view())
+            if action == 'check':  # one tiny request, to learn whether this sign-in can really be used
+                path = find_cli(provider); s = P.spec(self.server.store.data, provider) or {}
+                if not path or not s.get('signed_in_file'): raise ValueError('這個模型不需要檢查。')
+                try:
+                    with tempfile.TemporaryDirectory() as empty:  # an empty folder: nothing there can change how Gemini behaves
+                        done = subprocess.run([path, '-p', 'Reply with OK'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=provider_env(provider), timeout=90, cwd=empty)
+                except subprocess.TimeoutExpired:
+                    self.server.note_provider_issue(provider, '', unsure=True); return self.respond(200, {'issue': ''})
+                issue = cli_issue(done.stderr.decode('utf-8', 'replace')) if done.returncode else ''
+                self.server.note_provider_issue(provider, issue, unsure=bool(done.returncode and not issue))
+                return self.respond(200, {'issue': issue})
+            if action == 'terminal-login':
+                path = find_cli(provider); s = P.spec(self.server.store.data, provider) or {}
+                if not path or not s.get('terminal_login'): raise ValueError('這個模型不能用終端機登入。')
+                folder = _active['dir'] / 'tools'; folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+                script = folder / (provider + '-login.command')
+                script.write_text('#!/bin/sh\nexec %s\n' % shlex.quote(path), encoding='utf-8'); script.chmod(0o700); _agy_status.clear()
+                subprocess.run(['/usr/bin/open', str(script)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=True)
+                return self.respond(200, {'ok': True})
+            if action == 'install/cancel':
+                inst = self.server.installs.get(provider)
+                if inst: inst.cancel()
+                return self.respond(200, inst.view() if inst else {'state': 'idle'})
+            if action == 'login':
+                if flow and flow.state == 'running': return self.error(409, '登入流程已在進行中。')
+                default = (login_methods(provider) or [('', '')])[0][0]
+                if account and account['type'] != 'login': raise ValueError('API 金鑰帳號不需要登入。')
+                logins[login_key] = LoginFlow(provider, login_args(provider, body.get('method') or default), account)
+                return self.respond(202, logins[login_key].view())
+            if action == 'login/cancel':
+                if flow: flow.cancel()
+                return self.respond(200, flow.view() if flow else {'state': 'idle'})
+            if action == 'login/code':
+                code = body.get('code')
+                if not flow or not isinstance(code, str) or not code.strip() or len(code) > 2000: raise ValueError('授權碼無效。')
+                flow.send(code); return self.respond(200, flow.view())
+            if action == 'logout':
+                if flow and flow.state == 'running': flow.cancel()
+                p = subprocess.run(logout_args(provider), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=provider_env(provider, account), timeout=20)
+                logins.pop(login_key, None)
+                with self.server.store.lock:
+                    (self.server.store.data.get('accountInfo') or {}).pop(login_key, None); (self.server.store.data.get('providerIssues') or {}).pop(login_key, None); self.server.store.save()
+                return self.respond(200, {'ok': p.returncode == 0})
+        except ValueError as exc: return self.error(400, str(exc))
+        except (RuntimeError, OSError) as exc: return self.error(409, str(exc) if isinstance(exc, RuntimeError) else '無法執行 CLI。')
+        except subprocess.TimeoutExpired: return self.error(504, 'CLI 沒有回應。')
+        return self.error(404, '找不到資源。')
+    def respond(self, code, data, content_type='application/json; charset=utf-8'):
+        raw = json.dumps(data, ensure_ascii=False).encode() if isinstance(data, (dict, list)) else data
+        self.send_response(code); self.send_header('Content-Type', content_type); self.send_header('Content-Length', str(len(raw)))
+        self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"); self.send_header('Cache-Control', 'private, max-age=86400' if content_type == 'image/png' else 'no-store'); self.send_header('X-Content-Type-Options', 'nosniff'); self.end_headers(); self.wfile.write(raw)
+    def error(self, code, message): self.respond(code, {'error': message})
+    def authorized(self):
+        port = self.server.server_address[1]
+        if self.headers.get('Host', '').lower() not in ('127.0.0.1:%d' % port, 'localhost:%d' % port, '[::1]:%d' % port): return False
+        token = self.headers.get('Authorization', '')
+        cookie = http.cookies.SimpleCookie()
+        try: cookie.load(self.headers.get('Cookie', ''))
+        except http.cookies.CookieError: pass
+        value = cookie['swarmr_session'].value if 'swarmr_session' in cookie else ''
+        self.via_bridge = False
+        bridge = self.server.bridge_token
+        if bridge and secrets.compare_digest(token, 'Bearer ' + bridge): self.via_bridge = True; return True
+        return secrets.compare_digest(token, 'Bearer '+self.server.token) or secrets.compare_digest(value, self.server.token)
+    def body(self, limit=MAX_BODY):
+        try:
+            n = int(self.headers.get('Content-Length', '0'))
+            if n <= 0 or n > limit: raise ValueError()
+            obj = json.loads(self.rfile.read(n))
+            if not isinstance(obj, dict): raise ValueError()
+            return obj
+        except (ValueError, UnicodeError): raise ValueError('無效或過大的 JSON。')
+    def dispatch(self):
+        path = urlsplit(self.path).path
+        parts = [unquote(p) for p in path.strip('/').split('/')]
+        if len(parts) == 3 and parts[:2] == ['api', 'worker']:
+            port = self.server.server_address[1]
+            if self.command != 'POST' or self.headers.get('Host', '').lower() not in ('127.0.0.1:%d' % port, 'localhost:%d' % port): return self.error(403, '禁止存取。')
+            with self.server.store.lock:
+                worker = self.server.workers.get(parts[2]); job = self.server.store.find('jobs', parts[2])
+                authorized = worker and job and job['status'] == 'running' and secrets.compare_digest(self.headers.get('Authorization', ''), 'Bearer '+worker['token'])
+            if not authorized: return self.error(403, '禁止存取。')
+            try:
+                body = self.body(); method = body.get('method'); params = body.get('params', {})
+                if method == 'tools/list': return self.respond(200, {'tools': worker['tools']})
+                if method == 'tools/call' and isinstance(params, dict) and isinstance(params.get('name'), str) and isinstance(params.get('arguments', {}), dict):
+                    return self.respond(200, worker['session'].call(params['name'], params.get('arguments', {})))
+                return self.error(400, '無效的工具要求。')
+            except (ValueError, RuntimeError): return self.error(400, '工具要求失敗。')
+        if not self.authorized(): return self.error(403, '禁止存取。')
+        if self.command in ('POST', 'PATCH', 'DELETE'):
+            origin = self.headers.get('Origin')
+            if origin and origin not in ('http://127.0.0.1:%d' % self.server.server_address[1], 'http://localhost:%d' % self.server.server_address[1]):
+                return self.error(403, '來源不符。')
+        path = urlsplit(self.path).path
+        parts = [unquote(p) for p in path.strip('/').split('/')]
+        store = self.server.store
+        self.device = None
+        try:
+            if self.via_bridge:
+                device_id = self.headers.get('X-Zook-Device')
+                if device_id is None:
+                    if path.startswith('/api/remote/bridge/'): return self.server.bridge_request(self, self.command, path)
+                    return self.error(403, '禁止存取。')
+                # A paired device, reached through the relay. Checked on every request, so a revoked device stops at once.
+                with store.lock:
+                    self.device = next((d for d in store.data.get('remoteDevices', []) if d['id'] == device_id), None)
+                    if self.device: self.device['lastSeenAt'] = NOW()
+                if not self.device: return self.error(401, '這台裝置尚未配對或已被撤銷。')
+                if not device_may(self.command, path): return self.error(403, '這個動作只能在 Mac 上進行。')
+                if path == '/api/remote/me': return self.respond(200, {'id': self.device['id'], 'name': self.device['name']})
+            elif path.startswith('/api/remote/bridge/'): return self.error(403, '禁止存取。')
+            if self.command == 'POST' and path == '/api/choose-folder':
+                # The Mac's own folder chooser. Never reachable from a paired device (not in DEVICE_ALLOWED).
+                try:
+                    done = subprocess.run(['/usr/bin/osascript', '-e', 'tell me to activate', '-e', 'POSIX path of (choose folder with prompt "選擇這個 Bot 可以使用的資料夾")'],
+                                          capture_output=True, text=True, timeout=600)
+                except subprocess.TimeoutExpired: return self.respond(200, {'path': ''})
+                chosen = done.stdout.strip() if done.returncode == 0 else ''
+                return self.respond(200, {'path': str(pathlib.Path(chosen).resolve()) if chosen and pathlib.Path(chosen).is_dir() else ''})
+            if self.command == 'POST' and path == '/api/mobile/bots':
+                body = self.body()
+                with store.lock: bot = mobile_create_bot(store, body)
+                return self.respond(201, dict(id=bot['id'], name=bot['name']))
+            if self.command == 'GET' and path == '/api/mobile/settings':
+                inventory = inventory_for(store)   # reads files; never under the store lock
+                with store.lock: view = mobile_settings(store, inventory)
+                view['thisDevice'] = (self.device or {}).get('id')
+                return self.respond(200, view)
+            if self.command == 'GET' and parts[:2] == ['api', 'mobile']:
+                with store.lock:
+                    if path == '/api/mobile/home': return self.respond(200, mobile_home(store))
+                    if len(parts) == 4 and parts[2] in ('bots', 'groups'):
+                        item = store.find(parts[2], parts[3])
+                        if not item: return self.error(404, '找不到這個對話。')
+                        return self.respond(200, mobile_bot(store, item) if parts[2] == 'bots' else mobile_group(store, item))
+                return self.error(404, '找不到資源。')
+            if path == '/api/remote' and self.command == 'GET': return self.respond(200, self.server.remote_view())
+            if path == '/api/remote/pairing' and self.command == 'POST':
+                try: return self.respond(200, self.server.start_pairing())
+                except RuntimeError as exc: return self.error(409, str(exc))
+            if path == '/api/remote/pairing' and self.command == 'DELETE':
+                with store.lock: self.server.pairing = None
+                return self.respond(200, {'ok': True})
+            if len(parts) == 4 and parts[:3] == ['api', 'remote', 'devices'] and self.command == 'DELETE':
+                with store.lock:
+                    before = len(store.data.get('remoteDevices', []))
+                    store.data['remoteDevices'] = [d for d in store.data.get('remoteDevices', []) if d['id'] != parts[3]]
+                    if len(store.data['remoteDevices']) == before: return self.error(404, '找不到這台裝置。')
+                    store.save()
+                return self.respond(200, self.server.remote_view())
+            if self.command == 'GET' and path == '/api/models':
+                params = parse_qs(urlsplit(self.path).query)
+                provider = params.get('provider', [''])[0]
+                if not P.spec(store.data, provider): return self.error(400, '供應商無效。')
+                return self.respond(200, model_list(provider))
+            if self.command == 'GET' and path == '/api/integrations': return self.respond(200, integrations(self.server.store))
+            if self.command == 'GET' and len(parts) == 3 and parts[:2] == ['api', 'icons']:
+                png = icon_png(self.server.store, parts[2])
+                return self.respond(200, png, 'image/png') if png else self.error(404, '沒有這個圖示。')
+            if path == '/api/providers' and self.command == 'GET':
+                data = self.server.store.data
+                return self.respond(200, {'providers': [dict(id=pid, name=provider_label(pid), installed=bool(find_cli(pid)), tools=bool((P.spec(data, pid) or {}).get('tools')),
+                                                             accounts=[dict(id=a['id'], name=a['name'], type=a['type']) for a in data.get('accounts') or [] if a.get('provider') == pid])
+                                                        for pid in P.active_ids(data)]})
+            if parts[:2] == ['api', 'accounts']:
+                return self.accounts(parts)
+            if path == '/api/update' and self.command == 'GET':
+                if self.server.store.data['settings'].get('autoUpdateCheck', True): threading.Thread(target=self.server.updater.check, daemon=True).start()
+                return self.respond(200, self.server.updater.view())
+            if path in ('/api/update/check', '/api/update/download', '/api/update/apply') and self.command == 'POST':
+                try:
+                    if path.endswith('check'): self.server.updater.check(force=True)
+                    elif path.endswith('download'): self.server.updater.download()
+                    else: self.server.updater.apply()
+                except RuntimeError as exc: return self.error(409, str(exc))
+                return self.respond(200, self.server.updater.view())
+            if path == '/api/quota' and self.command == 'GET':
+                if parse_qs(urlsplit(self.path).query).get('auto', [''])[0] == '1': self.server.auto_claude_quota()
+                return self.respond(200, self.quota())
+            if path == '/api/quota/detect' and self.command == 'POST' and not self.device:
+                self.body(); return self.respond(200, self.detect_usage())
+            if path == '/api/quota/claude/refresh' and self.command == 'POST':
+                self.body()
+                self.server.claude_probe_at = time.time()
+                try: self.server.record_quota('claude', claude_quota_probe())
+                except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc: return self.error(409, str(exc) if isinstance(exc, RuntimeError) else '無法查詢 Claude 額度。')
+                with store.lock: store.data['quota']['claude']['source'] = 'probe'; store.save()
+                return self.respond(200, self.quota())
+            if path == '/api/usage/bots' and self.command == 'GET':
+                with store.lock: return self.respond(200, bot_usage(store))
+            if path == '/api/gmail' and self.command in ('POST', 'DELETE'):
+                with store.lock: saved = dict(store.data['settings'].get('gmail') or {})
+                if self.command == 'DELETE':
+                    with store.lock:
+                        st = store.data['settings']; st.pop('gmail', None)
+                        st['sharedMcp'] = [x for x in st.get('sharedMcp') or [] if x != GMAIL_ID]; store.save()
+                    if saved.get('secretId'): secret_delete(saved['secretId'])
+                    return self.respond(200, {'ok': True})
+                body = self.body(); address, password = body.get('address'), body.get('password')
+                if not isinstance(address, str) or not re.fullmatch(r'[^@\s]{1,64}@[^@\s]{1,255}\.[^@\s]{2,}', address.strip()): return self.error(400, '請輸入完整的 Gmail 信箱。')
+                password = re.sub(r'\s+', '', password) if isinstance(password, str) else ''
+                if not re.fullmatch(r'[A-Za-z0-9]{16}', password): return self.error(400, '應用程式密碼是 16 個英文字母。請貼上 Google 產生的那一組，不是你的 Google 登入密碼。')
+                try:
+                    gmail_check(address.strip(), password)
+                    secret_id = saved.get('secretId') or ID(); secret_set(secret_id, password)
+                except RuntimeError as exc: return self.error(409, str(exc))
+                with store.lock:
+                    st = store.data['settings']; st['gmail'] = dict(address=address.strip(), secretId=secret_id)
+                    st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + [GMAIL_ID])); store.save()
+                return self.respond(200, {'ok': True, 'address': address.strip()})
+            if path == '/api/skills/import' and self.command == 'POST':
+                ids = self.body().get('ids')
+                if not isinstance(ids, list) or len(ids) > 1024 or any(not isinstance(x, str) for x in ids): return self.error(400, '請選擇要匯入的 Skill。')
+                return self.respond(200, skills_import(store, inventory_for(store), ids))
+            if parts[:2] == ['api', 'skills'] and len(parts) in (3, 4) and parts[2] != 'import':
+                with store.lock: record = next((dict(x) for x in store.data['skills'] if x['id'] == parts[2]), None)
+                if not record: return self.error(404, '找不到這個 Skill。')
+                if len(parts) == 3 and self.command == 'DELETE':
+                    with store.lock:
+                        store.data['skills'] = [x for x in store.data['skills'] if x['id'] != record['id']]
+                        st = store.data['settings']; st['disabledSkills'] = [x for x in st['disabledSkills'] if x != ZOOK_SKILL + record['id']]
+                        store.save()
+                    shutil.rmtree(str(store.dir / 'skills' / record['folder']), ignore_errors=True)
+                    return self.respond(200, {'ok': True})
+                if len(parts) == 4 and parts[3] == 'update' and self.command == 'POST':
+                    self.body()
+                    if not record.get('originPath') or not os.path.isfile(os.path.join(record['originPath'], 'SKILL.md')): return self.error(409, '找不到原本的來源，無法更新。')
+                    try: skill_copy(record['originPath'], store.dir / 'skills' / record['folder'])
+                    except ValueError as exc: return self.error(400, str(exc))
+                    except OSError: return self.error(409, '讀不到原本來源的檔案。')
+                    with store.lock:
+                        for x in store.data['skills']:
+                            if x['id'] == record['id']: x['stamp'] = skill_stamp(record['originPath'])
+                        store.save()
+                    return self.respond(200, {'ok': True})
+                return self.error(404, '找不到資源。')
+            if path == '/api/connector-copy' and self.command == 'POST':
+                ident = self.body().get('id'); found = inventory_for(store)
+                entry = next((m for m in found['mcp'] if m['id'] == ident and m.get('copyable')), None); config = found['_private']['mcp'].get(ident)
+                if not entry or not isinstance(config, dict): return self.error(404, '找不到這個連接器，或它已經複製過了。')
+                with store.lock:
+                    if any(same_name(c['name']) == same_name(entry['name']) for c in store.data['connectors']): return self.error(400, 'Zook 已經有同名的連接器。')
+                try:
+                    record, secrets_found = connector_from_config(entry['name'][:80], config)
+                    connector_keep_secrets(record, secrets_found)
+                except ValueError as exc: return self.error(400, str(exc))
+                record['origin'] = ident
+                with store.lock:
+                    store.data['connectors'].append(record)
+                    st = store.data['settings']; shared = st.get('sharedMcp') or []; was_on = ident in shared
+                    st['sharedMcp'] = [x for x in shared if x != ident] + (['zook:' + record['id']] if was_on else [])
+                    store.save()
+                return self.respond(201, dict(id='zook:' + record['id'], name=record['name'], on=was_on))
+            if path == '/api/pack' and self.command == 'GET':
+                try: raw, skill_count, connector_count = pack_export(store)
+                except ValueError as exc: return self.error(400, str(exc))
+                return self.respond(200, dict(name='Zook-設定包-%s.zookpack' % datetime.date.today().strftime('%Y%m%d'), data=base64.b64encode(raw).decode(), skills=skill_count, connectors=connector_count))
+            if path == '/api/pack' and self.command == 'POST':
+                try:
+                    raw = base64.b64decode(self.body(PACK_BYTES * 2).get('data') or '', validate=True)
+                    if not raw or len(raw) > PACK_BYTES: raise ValueError('設定包超過 150 MB，無法匯入。')
+                    return self.respond(200, pack_import(store, raw))
+                except ValueError as exc: return self.error(400, str(exc) if '設定包' in str(exc) else '這不是 Zook 的設定包，或檔案已損壞。')
+            if parts[:2] == ['api', 'connectors'] and len(parts) in (2, 3):
+                body = self.body() if self.command in ('POST', 'PATCH') else {}
+                try:
+                    with store.lock: existing = next((c for c in store.data['connectors'] if len(parts) == 3 and c['id'] == parts[2]), None)
+                    if len(parts) == 3 and not existing: return self.error(404, '找不到這個連接器。')
+                    if (len(parts) == 2 and self.command == 'POST') or (existing and self.command == 'PATCH'):
+                        record, secret = connector_fields(body, existing)
+                        with store.lock:
+                            if any(c['name'] == record['name'] and c['id'] != record['id'] for c in store.data['connectors']): raise ValueError('已經有同名的連接器。')
+                        if secret:
+                            record['secretId'] = record['secretId'] or ID(); secret_set(record['secretId'], secret)
+                        elif not record['secretName'] and record['secretId']:
+                            secret_delete(record['secretId']); record['secretId'] = ''
+                        more = body.get('moreSecrets') if isinstance(body.get('moreSecrets'), dict) else {}
+                        for key, value in more.items():  # keys a copied or imported connector carries besides the main one
+                            if key in record['moreSecrets'] and isinstance(value, str) and value.strip():
+                                record['moreSecrets'][key] = record['moreSecrets'][key] or ID(); secret_set(record['moreSecrets'][key], value.strip())
+                        with store.lock:
+                            store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]
+                            if not existing:  # a connector you just added is switched on for every Bot
+                                st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + ['zook:' + record['id']]))
+                            store.save()
+                        return self.respond(200 if existing else 201, dict(id='zook:' + record['id'], name=record['name']))
+                    if existing and self.command == 'DELETE':
+                        with store.lock:
+                            store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != existing['id']]
+                            st = store.data['settings']; st['sharedMcp'] = [x for x in st.get('sharedMcp') or [] if x != 'zook:' + existing['id']]
+                            store.save()
+                        for secret_id in connector_secret_ids(existing): secret_delete(secret_id)
+                        return self.respond(200, {'ok': True})
+                except ValueError as exc: return self.error(400, str(exc))
+                except RuntimeError as exc: return self.error(409, str(exc))
+                return self.error(404, '找不到資源。')
+            if len(parts) == 4 and parts[:2] == ['api', 'mcp'] and parts[3] == 'test' and self.command == 'POST':
+                self.body()
+                return self.respond(200, runtime_module().test_connection(parts[2], inventory_for(self.server.store)))
+            if path == '/api/uploads' and self.command == 'POST' and not self.device:
+                # One attached file, sent as the raw request body; the name comes in X-File-Name.
+                try: size = int(self.headers.get('Content-Length', '0'))
+                except ValueError: size = 0
+                if size <= 0: return self.error(400, '檔案是空的。')
+                if size > MAX_UPLOAD: self.close_connection = True; return self.error(413, '單一檔案不能超過 20 MB。')
+                name = upload_name(unquote(self.headers.get('X-File-Name', '')))
+                upload_id = ID(); folder = store.dir / 'uploads' / upload_id
+                folder.mkdir(parents=True, mode=0o700)
+                remaining = size
+                with open(folder / 'file', 'wb') as out:
+                    while remaining:
+                        chunk = self.rfile.read(min(remaining, 1 << 20))
+                        if not chunk: break
+                        out.write(chunk); remaining -= len(chunk)
+                if remaining: shutil.rmtree(str(folder), ignore_errors=True); return self.error(400, '檔案沒有傳完整。')
+                meta = dict(id=upload_id, name=name, size=size, kind='image' if pathlib.Path(name).suffix.lower() in IMAGE_TYPES else 'file', createdAt=NOW())
+                (folder / 'meta.json').write_text(json.dumps(meta, ensure_ascii=False), encoding='utf-8')
+                return self.respond(201, meta)
+            if len(parts) == 3 and parts[:2] == ['api', 'uploads'] and self.command == 'GET' and not self.device:
+                meta = upload_meta(store, parts[2])
+                if not meta: return self.error(404, '找不到這個檔案。')
+                data = (store.dir / 'uploads' / meta['id'] / 'file').read_bytes()
+                kind = IMAGE_TYPES.get(pathlib.Path(meta['name']).suffix.lower())
+                return self.respond(200, data, kind or 'application/octet-stream')
+            inventory = None
+            if (path in ('/api/chat', '/api/chat/redo') and self.command == 'POST') or (parts[:2] == ['api', 'bots'] and self.command in ('POST', 'PATCH')) or (len(parts) == 4 and parts[:2] == ['api', 'schedules']):
+                inventory = inventory_for(store)
+            with store.lock:
+                if self.command == 'GET' and path == '/api/state':
+                    for b in store.data['bots']: ensure_chats(b)  # Bots added by an import, too
+                    return self.respond(200, store.data)
+                if self.command == 'GET' and path == '/api/notifications':
+                    try: after = int((parse_qs(urlsplit(self.path).query).get('after') or ['0'])[0])
+                    except ValueError: after = 0
+                    return self.respond(200, dict(seq=self.server.notice_seq, items=[n for n in self.server.notices if n['seq'] > after]))
+                if self.command == 'GET' and path == '/api/diagnostics': return self.respond(200, dict(providers=provider_info(), python=__import__('platform').python_version(), system=__import__('platform').system()))
+                if self.command == 'GET' and path == '/api/usage': return self.respond(200, usage())
+                if self.command == 'POST' and path == '/api/export': return self.respond(200, store.data)
+                if len(parts) == 3 and parts[:2] == ['api', 'jobs'] and self.command == 'GET':
+                    job = store.find('jobs', parts[2]); return self.respond(200, job) if job else self.error(404, '找不到工作。')
+                if len(parts) == 3 and parts[:2] == ['api', 'approvals'] and self.command == 'POST':
+                    body = self.body(); decision = body.get('decision')
+                    if decision not in ('approve', 'deny'): raise ValueError('決定無效。')
+                    for job in store.data['jobs']:
+                        approval = next ( (x for x in job.get('approvals', []) if x['id'] == parts[2]), None)
+                        if approval:
+                            if job['status'] != 'running' or approval['status'] != 'pending': return self.error(409, '此審批已結束。')
+                            approval['status'] = 'approved' if decision == 'approve' else 'denied'; store.save()
+                            event = self.server.approval_events.get(approval['id'])
+                            if event: event.set()
+                            return self.respond(200, approval)
+                    return self.error(404, '找不到審批。')
+                if len(parts) == 4 and parts[:2] == ['api', 'jobs'] and parts[3] == 'cancel'  and self.command == 'POST':
+                    job = store.find('jobs', parts[2])
+                    if not job: return self.error(404, '找不到工作。')
+                    self.server.cancel_job(job)
+                    return self.respond(200, job)
+                if path == '/api/chat' and self.command == 'POST':
+                    body = self.body(); bot = store.find('bots', body.get('botId'))
+                    if not bot: return self.error(404, '找不到機器人。')
+                    try: job = self.server.send_to_bot(bot, body.get('content'), inventory, attachments=attachments_for(store, body.get('attachments')), effort=body.get('effort'),
+                                                         plan=body.get('plan', False))
+                    except Busy as exc: return self.error(409, str(exc))
+                    return self.respond(202, {'jobId': job['id']})
+                if path == '/api/chat/redo' and self.command == 'POST':
+                    # Answer the last question again, send an edited version of it, or answer it with another model.
+                    body = self.body(); bot = store.find('bots', body.get('botId'))
+                    if not bot: return self.error(404, '找不到機器人。')
+                    if body.get('mode') not in ('again', 'edit'): return self.error(400, '動作無效。')
+                    if any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs']): return self.error(409, '此機器人已有執行中的工作。')
+                    messages = bot['messages']
+                    last = next((i for i in range(len(messages) - 1, -1, -1) if messages[i]['role'] == 'user'), None)
+                    if last is None: return self.error(400, '這個對話還沒有可以重來的訊息。')
+                    content = body.get('content') if body['mode'] == 'edit' else messages[last]['content']
+                    if not isinstance(content, str) or not content.strip(): return self.error(400, '訊息內容無效。')
+                    use = None
+                    if body.get('provider'):
+                        if not isinstance(body['provider'], str) or not P.spec(store.data, body['provider']): return self.error(400, '找不到這個模型。')
+                        model = body.get('model') or ''
+                        if not isinstance(model, str) or len(model) > 100: return self.error(400, '找不到這個模型。')
+                        use = (body['provider'], model)
+                    author, kept = messages[last].get('author'), [a for a in messages[last].get('attachments') or [] if upload_meta(store, a['id'])]
+                    reply = messages[last + 1] if len(messages) > last + 1 else {}
+                    effort, plan = body.get('effort') or reply.get('effort') or 'standard', bool(messages[last].get('plan'))
+                    removed = messages[last:]; del messages[last:]
+                    try: job = self.server.send_to_bot(bot, content, inventory, author=author, use=use, attachments=kept, effort=effort, plan=plan, replaces=removed)
+                    except (ValueError, RuntimeError):
+                        messages.extend(removed); raise
+                    return self.respond(202, {'jobId': job['id']})
+                if path == '/api/schedules' and self.command == 'POST':
+                    if len(store.data['schedules']) >= MAX_SCHEDULES: return self.error(409, '排程已達上限 %d 個，請先刪除不用的排程。' % MAX_SCHEDULES)
+                    item = schedule_fields(store, self.body(), dict(id=ID(), botId='', content='', time='', repeat='daily', on=True, catchUp=True, createdAt=NOW()))
+                    store.data['schedules'].append(item); store.save(); return self.respond(201, item)
+                if len(parts) == 3 and parts[:2] == ['api', 'schedules'] and self.command in ('PATCH', 'DELETE'):
+                    item = store.find('schedules', parts[2])
+                    if not item: return self.error(404, '找不到這個排程。')
+                    if self.command == 'DELETE': store.data['schedules'].remove(item); store.save(); return self.respond(200, {'ok': True})
+                    candidate = schedule_fields(store, self.body(), copy.deepcopy(item)); candidate.pop('held', None)
+                    if 'runs' in item: candidate['runs'] = item['runs']  # keep the same history entries a running reply may still update
+                    item.clear(); item.update(candidate); store.save(); return self.respond(200, item)
+                if len(parts) == 4 and parts[:2] == ['api', 'schedules'] and parts[3] == 'run' and self.command == 'POST':
+                    item = store.find('schedules', parts[2])
+                    if not item: return self.error(404, '找不到這個排程。')
+                    self.body()
+                    try: problem = self.server.run_schedule(item, inventory)
+                    except Busy as exc: return self.error(409, str(exc))
+                    if problem: return self.error(400, problem)
+                    item.update(lastAt=NOW(), lastStatus='sent', lastError=''); store.save(); return self.respond(202, item)
+                if path == '/api/groups' and self.command == 'POST':
+                    body = self.body(); group = dict(id=ID(), name='', botIds=[], messages=[], status='idle', runId=None, activeJobId=None, createdAt=NOW())
+                    set_group_fields(store, group, body, creating=True)
+                    store.data['groups'].append(group); store.save(); return self.respond(201, group)
+                if len(parts) >= 3 and parts[:2] == ['api', 'groups']:
+                    group = store.find('groups', parts[2])
+                    if not group: return self.error(404, '找不到群組。')
+                    if len(parts) == 3 and self.command == 'GET':
+                        ids = group.get('activeJobIds') or ([group['activeJobId']] if group.get('activeJobId') else [])
+                        return self.respond(200, {'group': group, 'jobs': [j for j in (store.find('jobs', x) for x in ids) if j]})
+                    if len(parts) == 3 and self.command == 'PATCH':
+                        candidate = copy.deepcopy(group); set_group_fields(store, candidate, self.body())
+                        group.update(name=candidate['name'], botIds=candidate['botIds']); store.save(); return self.respond(200, group)
+                    if len(parts) == 3 and self.command == 'DELETE':
+                        if group['status'] == 'running': return self.error(409, '群組討論進行中，請先停止。')
+                        store.data['groups'].remove(group)
+                        store.data['schedules'] = [x for x in store.data['schedules'] if x.get('groupId') != group['id']]
+                        store.save(); return self.respond(200, {'ok': True})
+                    if len(parts) == 4 and parts[3] == 'messages' and self.command == 'POST':
+                        body = self.body()
+                        try: run_id = self.server.post_group_message(group, body.get('content'), attachments=attachments_for(store, body.get('attachments')), effort=body.get('effort'))
+                        except RuntimeError as exc: return self.error(409, str(exc))
+                        store.save(); return self.respond(202, {'runId': run_id})
+                    if len(parts) == 4 and parts[3] == 'stop' and self.command == 'POST':
+                        ids = group.get('activeJobIds') or ([group['activeJobId']] if group.get('activeJobId') else [])
+                        group.update(status='idle', runId=None, activeJobId=None, activeJobIds=[])
+                        for job in [j for j in (store.find('jobs', x) for x in ids) if j]: self.server.cancel_job(job)
+                        store.save(); return self.respond(200, group)
+                    return self.error(404, '找不到資源。')
+                if len(parts) == 3 and parts[:2] == ['api', 'memories'] and self.command == 'DELETE':
+                    item = store.find('memories', parts[2])
+                    if not item: return self.error(404, '找不到記憶。')
+                    store.data['memories'].remove(item); store.save(); return self.respond(200, {'ok': True})
+                if path == '/api/bots' and self.command == 'POST':
+                    body = self.body(); name = body.get('name', '')
+                    if not isinstance(name, str) or not name.strip() or len(name)>100: raise ValueError('名稱無效。')
+                    bot = dict(id=ID(), name=name, color='#8275f4', shape='circle', instructions='', persona='', provider='', model='', pinned=False, section='團隊', messages=[], enabledSkills=[], enabledMcp=[], allowCommands=True)
+                    update(bot, body, 'bot'); validate_selection(bot, inventory); ensure_chats(bot); store.data['bots'].append(bot); store.save(); return self.respond(201, bot)
+                if path == '/api/bots/arrange' and self.command == 'POST':
+                    body = self.body(); arrange_bots(store, body); store.save()
+                    return self.respond(200, dict(bots=[dict(id=b['id'], section=b.get('section'), pinned=b.get('pinned')) for b in store.data['bots']], sections=store.data['settings']['sections']))
+                if len(parts) >= 4 and parts[:2] == ['api', 'bots'] and parts[3] == 'chats':
+                    bot = store.find('bots', parts[2])
+                    if not bot: return self.error(404, '找不到機器人。')
+                    ensure_chats(bot)
+                    if len(parts) == 4 and self.command == 'POST':
+                        self.body()
+                        current = next(c for c in bot['chats'] if c['id'] == bot['chatId'])
+                        if not bot['messages'] and current.get('kind') != 'schedule': return self.respond(201, current)  # already blank
+                        chat = dict(id=ID(), title='', createdAt=NOW(), updatedAt=NOW(), messages=[])
+                        bot['chats'].append(chat); open_chat(bot, chat['id']); store.save(); return self.respond(201, chat)
+                    chat = next((c for c in bot['chats'] if c['id'] == parts[4]), None) if len(parts) >= 5 else None
+                    if not chat: return self.error(404, '找不到這個對話。')
+                    if len(parts) == 6 and parts[5] == 'open' and self.command == 'POST':
+                        self.body(); open_chat(bot, chat['id']); store.save(); return self.respond(200, {k: v for k, v in chat.items() if k != 'messages'})
+                    if len(parts) == 5 and self.command == 'PATCH':
+                        title = self.body().get('title')
+                        if not isinstance(title, str) or not title.strip() or len(title) > 80: return self.error(400, '請輸入 1–80 字的名稱。')
+                        chat['title'] = title.strip(); store.save(); return self.respond(200, {k: v for k, v in chat.items() if k != 'messages'})
+                    if len(parts) == 5 and self.command == 'DELETE':
+                        if any(j['botId'] == bot['id'] and j['status'] == 'running' and j.get('chatId', bot['chatId']) == chat['id'] for j in store.data['jobs']):
+                            return self.error(409, '這個對話還在回覆中，請等回覆完成或先停止。')
+                        if chat['id'] == bot['chatId']:
+                            rest = sorted((c for c in bot['chats'] if c['id'] != chat['id']), key=lambda c: c.get('updatedAt') or '', reverse=True)
+                            if rest: open_chat(bot, rest[0]['id'])
+                            else:
+                                fresh = dict(id=ID(), title='', createdAt=NOW(), updatedAt=NOW(), messages=[])
+                                bot['chats'].append(fresh); open_chat(bot, fresh['id'])
+                        bot['chats'].remove(chat); store.save(); return self.respond(200, {'ok': True, 'chatId': bot['chatId']})
+                    return self.error(404, '找不到資源。')
+                if len(parts) == 3 and parts[:2] == ['api', 'bots'] and self.command == 'PATCH':
+                    bot = store.find('bots', parts[2])
+                    if not bot: return self.error(404, '找不到機器人。')
+                    body = self.body(); candidate = copy.deepcopy(bot); update(candidate, body, 'bot'); validate_selection(candidate, inventory); bot.update(candidate); store.save()
+                    if 'permissionMode' in body: self.server.release_approvals()
+                    return self.respond(200, bot)
+                if len(parts) == 3 and parts[:2] == ['api', 'bots'] and self.command == 'DELETE':
+                    bot = store.find('bots', parts[2])
+                    if not bot: return self.error(404, '找不到機器人。')
+                    if any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs']): return self.error(409, '此機器人已有執行中的工作。')
+                    if any(item.get('botId') == bot['id'] for item in store.data['knowledge']): return self.error(409, '請先將此 Bot 的知識移至其他 Bot 或共用知識。')
+                    if any(g['status'] == 'running' and bot['id'] in g['botIds'] for g in store.data['groups']): return self.error(409, '此機器人正在群組討論中。')
+                    for g in store.data['groups']:
+                        if bot['id'] in g['botIds']: g['botIds'].remove(bot['id'])
+                    store.data['schedules'][:] = [x for x in store.data['schedules'] if x.get('botId') != bot['id']]
+                    store.data['bots'].remove(bot); store.save(); return self.respond(200, {'ok': True})
+                if path == '/api/settings' and self.command == 'PATCH':
+                    body = self.body(); update(store.data['settings'], body, 'settings'); store.save()
+                    if 'remote' in body: threading.Thread(target=self.server.sync_remote, daemon=True).start()
+                    if 'permissionMode' in body: self.server.release_approvals()
+                    return self.respond(200, store.data['settings'])
+                if path == '/api/knowledge' and self.command == 'POST':
+                    item = dict(id=ID(), title='', content='', tags=[], botId='', createdAt=NOW(), updatedAt=NOW())
+                    update(item, self.body(), 'knowledge'); store.data['knowledge'].append(item); store.save(); return self.respond(201, item)
+                if len(parts) == 3 and parts[:2] == ['api', 'knowledge']:
+                    item = store.find('knowledge', parts[2])
+                    if not item: return self.error(404, '找不到知識項目。')
+                    if self.command == 'DELETE': store.data['knowledge'].remove(item); store.save(); return self.respond(200, {'ok': True})
+                    if self.command == 'PATCH': update(item, self.body(), 'knowledge'); item['updatedAt'] = NOW(); store.save(); return self.respond(200, item)
+            if self.command == 'GET' and not path.startswith('/api/'):
+                relative = unquote(path).lstrip('/') or 'index.html'; target = (self.server.assets / relative).resolve()
+                parts_dir = self.server.assets / 'js'
+                if relative == 'app.js' and parts_dir.is_dir():  # the page's script is kept in several files, joined here in name order
+                    return self.respond(200, b''.join(f.read_bytes() for f in sorted(parts_dir.glob('*.js'))), 'text/javascript; charset=utf-8')
+                if not target.is_relative_to(self.server.assets) or not target.is_file(): return self.error(404, '找不到檔案。')
+                return self.respond(200, target.read_bytes(), mimetypes.guess_type(str(target))[0] or 'application/octet-stream')
+            return self.error(404, '找不到資源。')
+        except ValueError as exc: return self.error(400, str(exc))
+        except (OSError, TypeError, KeyError): return self.error(500, '處理要求時發生錯誤。')
+    do_GET = dispatch; do_POST = dispatch; do_PATCH = dispatch; do_DELETE = dispatch
+
+
+def set_group_fields(store, group, body, creating=False):
+    if 'botIds' in body or creating:
+        ids = body.get('botIds')
+        if not isinstance(ids, list) or any(not isinstance(x, str) for x in ids): raise ValueError('成員無效。')
+        ids = list(dict.fromkeys(ids))
+        if not GROUP_MIN_BOTS <= len(ids) <= GROUP_MAX_BOTS: raise ValueError('群組需要 %d 到 %d 個 Bot。' % (GROUP_MIN_BOTS, GROUP_MAX_BOTS))
+        if any(not store.find('bots', x) for x in ids): raise ValueError('找不到所選的 Bot。')
+        if group.get('status') == 'running' and ids != group['botIds']: raise ValueError('群組討論進行中，暫時無法修改成員。')
+        group['botIds'] = ids
+    if 'name' in body:
+        name = body['name']
+        if not isinstance(name, str) or len(name) > 100: raise ValueError('名稱無效。')
+        group['name'] = name.strip()
+    if not group.get('name'):
+        group['name'] = '、'.join(store.find('bots', x)['name'] for x in group['botIds'])[:100]
+
+
+def update(target, body, kind):
+    fields = {'bot': {'name': 100, 'color': 30, 'shape': 30, 'instructions': 10000, 'persona': 20000, 'provider': 20, 'model': 100, 'section': 100},
+              'settings': {'provider': 20, 'model': 100}, 'knowledge': {'title': 300, 'content': 100000, 'botId': 100}}[kind]
+    changes = {}
+    for key, limit in fields.items():
+        if key in body:
+            value = body[key]
+            if not isinstance(value, str) or len(value) > limit or (key == 'name' and not value.strip()): raise ValueError('欄位 %s 無效。' % key)
+            if key == 'provider' and not ((kind == 'bot' and value == '') or P.spec(_active['data'], value)): raise ValueError('供應商無效。')
+            changes[key] = value
+    if kind == 'bot':
+        for key in ('enabledSkills', 'enabledMcp'):
+            if key in body:
+                value = body[key]
+                if not isinstance(value, list) or any(not isinstance(x, str) for x in value): raise ValueError('欄位 %s 無效。' % key)
+                changes[key] = value[:]
+        if 'allowCommands' in body:
+            if not isinstance(body['allowCommands'], bool): raise ValueError('allowCommands 無效。')
+            changes['allowCommands'] = body['allowCommands']
+    if kind == 'settings' and 'disabledPlugins' in body:
+        value = body['disabledPlugins']
+        if not isinstance(value, list) or len(value) > 500 or any(not isinstance(x, str) or len(x) > 200 for x in value): raise ValueError('disabledPlugins 無效。')
+        changes['disabledPlugins'] = list(dict.fromkeys(value))
+    if kind == 'settings' and 'remote' in body:
+        value = body['remote']
+        if not isinstance(value, dict) or not isinstance(value.get('enabled', False), bool) or not isinstance(value.get('relayUrl', ''), str): raise ValueError('遠端連線設定無效。')
+        relay = value.get('relayUrl', '').strip().rstrip('/')
+        if relay and not re.fullmatch(r'wss?://[A-Za-z0-9.\-]+(:\d+)?(/[A-Za-z0-9._~/\-]*)?', relay): raise ValueError('中繼伺服器網址要以 wss:// 開頭。')
+        if relay.startswith('ws://') and not re.match(r'ws://(127\.0\.0\.1|localhost)(:|/|$)', relay): raise ValueError('中繼伺服器網址要以 wss:// 開頭。')
+        if value.get('enabled') and not relay: raise ValueError('請先填入中繼伺服器網址。')
+        changes['remote'] = dict(enabled=bool(value.get('enabled')), relayUrl=relay)
+    if kind in ('settings', 'bot') and 'fallbacks' in body:
+        value = body['fallbacks']
+        if value is None and kind == 'bot': changes['fallbacks'] = None  # follow the default order
+        else:
+            if not isinstance(value, list) or len(value) > 10 or any(not isinstance(x, str) or not P.spec(_active['data'], x) for x in value): raise ValueError('備用模型無效。')
+            changes['fallbacks'] = list(dict.fromkeys(value))
+    if kind == 'settings' and 'dirCollapsed' in body:
+        value = body['dirCollapsed']
+        if not isinstance(value, list) or len(value) > 200 or any(not isinstance(x, str) or len(x) > 200 for x in value): raise ValueError('dirCollapsed 無效。')
+        changes['dirCollapsed'] = list(dict.fromkeys(value))
+    if kind == 'settings' and 'sharedMcp' in body:
+        value = body['sharedMcp']
+        if not isinstance(value, list) or len(value) > 200 or any(not isinstance(x, str) or len(x) > 200 for x in value): raise ValueError('sharedMcp 無效。')
+        changes['sharedMcp'] = list(dict.fromkeys(value))
+    if kind == 'settings' and 'disabledSkills' in body:
+        value = body['disabledSkills']
+        if not isinstance(value, list) or len(value) > 1000 or any(not isinstance(x, str) or len(x) > 200 for x in value): raise ValueError('disabledSkills 無效。')
+        changes['disabledSkills'] = list(dict.fromkeys(value))
+    if kind == 'bot' and 'account' in body:
+        if body['account'] != '' and not find_account(body['account'] if isinstance(body['account'], str) else None): raise ValueError('帳號無效。')
+        changes['account'] = body['account']
+    if kind == 'bot' and ('access' in body or 'accessFolder' in body):
+        access = body.get('access', target.get('access') or 'full'); folder = body.get('accessFolder', target.get('accessFolder') or '')
+        if access not in ACCESS_SCOPES or not isinstance(folder, str) or len(folder) > 1000: raise ValueError('存取範圍無效。')
+        if access == 'folder':
+            chosen = pathlib.Path(folder.strip()).expanduser()
+            if not folder.strip() or not chosen.is_absolute() or not chosen.is_dir(): raise ValueError('請選擇一個存在的資料夾。')
+            folder = str(chosen.resolve())
+        changes['access'] = access; changes['accessFolder'] = folder if access == 'folder' else ''
+    if 'permissionMode' in body and kind in ('bot', 'settings'):
+        allowed = ('manual', 'auto', 'bypass') + (('',) if kind == 'bot' else ())
+        if body['permissionMode'] not in allowed: raise ValueError('主動性設定無效。')
+        changes['permissionMode'] = body['permissionMode']
+    if kind == 'settings' and 'autoUpdateCheck' in body:
+        if not isinstance(body['autoUpdateCheck'], bool): raise ValueError('autoUpdateCheck 無效。')
+        changes['autoUpdateCheck'] = body['autoUpdateCheck']
+    if kind == 'settings' and 'scheduleNotify' in body:
+        if not isinstance(body['scheduleNotify'], bool): raise ValueError('scheduleNotify 無效。')
+        changes['scheduleNotify'] = body['scheduleNotify']
+    if kind == 'settings' and 'webSearch' in body:
+        if not isinstance(body['webSearch'], bool): raise ValueError('webSearch 無效。')
+        changes['webSearch'] = body['webSearch']
+    if kind == 'bot' and 'isAdmin' in body:
+        if not isinstance(body['isAdmin'], bool): raise ValueError('isAdmin 無效。')
+        changes['isAdmin'] = body['isAdmin']
+    if kind == 'bot' and 'effort' in body:
+        if body['effort'] not in EFFORTS: raise ValueError('思考強度無效。')
+        changes['effort'] = body['effort']
+    if kind == 'bot' and 'pinned' in body:
+        if not isinstance(body['pinned'], bool): raise ValueError('pinned 無效。')
+        changes['pinned'] = body['pinned']
+    if kind == 'knowledge' and 'tags' in body:
+        tags = body['tags']
+        if not isinstance(tags, list) or len(tags)>30 or any(not isinstance(t, str) or len(t)>100 for t in tags): raise ValueError('標籤無效。')
+        changes['tags'] = tags
+    target.update(changes)
+
+
+def main():
+    parser = argparse.ArgumentParser(); parser.add_argument('--port', type=int, default=0); parser.add_argument('--data-dir', required=True); parser.add_argument('--assets', required=True)
+    args = parser.parse_args(); token = secrets.token_urlsafe(32)
+    pathlib.Path(args.data_dir).mkdir(parents=True, exist_ok=True, mode=0o700)
+    instance_lock = open(pathlib.Path(args.data_dir) / '.instance.lock', 'a')
+    try: fcntl.flock(instance_lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError: raise SystemExit('Zook is already using this data directory.')
+    app = App(('127.0.0.1', args.port), Store(args.data_dir), args.assets, token)
+    print(json.dumps(dict(port=app.server_address[1], token=token)), flush=True)
+    def stop_server(signum, frame):
+        threading.Thread(target=app.shutdown, daemon=True).start()
+    signal.signal(signal.SIGTERM, stop_server)
+    threading.Thread(target=app.sync_remote, daemon=True).start()
+    threading.Thread(target=app.schedule_loop, daemon=True).start()
+    try: app.serve_forever()
+    except KeyboardInterrupt: pass
+    finally:
+        with app.store.lock:
+            processes = list(app.processes.values())
+            workers = [app.expire_job(job_id) for job_id in list(app.workers)]
+            for job in app.store.data['jobs']:
+                if job['status'] == 'running':
+                    job.update(status='failed', error='服務關閉，工作已中斷。', finishedAt=NOW())
+                    app.store.finish_message(job, '', 'failed')
+            app.store.save()
+        app.stop_remote()
+        for flow in list(app.logins.values()) + list(app.installs.values()): flow.cancel()
+        for worker in workers:
+            if worker: worker['session'].close()
+        for proc in processes:
+            try: os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError: pass
+        for proc in processes:
+            try: proc.wait(timeout=2)
+            except subprocess.TimeoutExpired: pass
+            # The leader may exit before its descendants.
+            try: os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError: pass
+        app.server_close()
+
+if __name__ == '__main__': main()
