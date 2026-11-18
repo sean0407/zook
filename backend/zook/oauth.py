@@ -120,6 +120,8 @@ def oauth_discover(mcp_url):
             for key in ('authorization_endpoint', 'token_endpoint', 'registration_endpoint'):
                 if meta.get(key): _oauth_url(meta[key], local)
             scopes = resource.get('scopes_supported') if isinstance(resource.get('scopes_supported'), list) else []
+            offered = meta.get('scopes_supported') if isinstance(meta.get('scopes_supported'), list) else []
+            if 'offline_access' in offered and 'offline_access' not in scopes: scopes = list(scopes) + ['offline_access']  # so the sign-in can be renewed without asking again
             return dict(authorize=meta['authorization_endpoint'], token=meta['token_endpoint'], register=meta.get('registration_endpoint') or '',
                         resource=str(resource.get('resource') or mcp_url), scope=' '.join(str(x) for x in scopes[:30]), local=local)
     raise RuntimeError('這個連接器不支援在瀏覽器登入。如果它使用金鑰，請用「編輯」貼上金鑰。')

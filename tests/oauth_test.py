@@ -19,7 +19,7 @@ class Provider(BaseHTTPRequestHandler):
         base = 'http://127.0.0.1:%d' % self.server.server_address[1]; path = urlsplit(self.path).path
         if path.startswith('/.well-known/oauth-protected-resource'): return self.send(200, {'resource': Provider.state.get('resource') or base + '/mcp', 'authorization_servers': [base]})
         if path.startswith('/.well-known/oauth-authorization-server'):
-            return self.send(200, {'authorization_endpoint': base + '/authorize', 'token_endpoint': base + '/token', 'registration_endpoint': base + '/register', 'code_challenge_methods_supported': ['S256']})
+            return self.send(200, {'authorization_endpoint': base + '/authorize', 'token_endpoint': base + '/token', 'registration_endpoint': base + '/register', 'code_challenge_methods_supported': ['S256'], 'scopes_supported': ['openid', 'offline_access']})
         self.send(404, {})
     def do_POST(self):
         s = Provider.state; base = 'http://127.0.0.1:%d' % self.server.server_address[1]
@@ -73,6 +73,7 @@ class OAuthTest(unittest.TestCase):
     def login(self):
         status, body = self.req('POST', '/api/connectors/%s/login' % self.cid, {}); self.assertEqual(status, 200, body)
         query = {k: v[0] for k, v in parse_qs(urlsplit(body['url']).query).items()}; Provider.state['challenge'] = query['code_challenge']
+        self.assertIn('offline_access', query.get('scope', ''))   # asked for whenever the service offers it, so the sign-in lasts
         self.assertEqual((query['code_challenge_method'], query['redirect_uri'], query['resource']), ('S256', 'http://127.0.0.1:%d/oauth/callback' % self.port, self.base + '/mcp'))
         return query['state']
 
