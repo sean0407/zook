@@ -277,12 +277,12 @@ def provider_env(provider, account=None):
 def account_view(account):
     """What the 各模型使用量 page shows for one extra account."""
     provider = account['provider']
-    item = dict(id=account['id'], name=account['name'], type=account['type'], status='unknown', method='', plan='', email='')
+    item = dict(id=account['id'], name=account['name'], type=account['type'], status='unknown', method='', plan='', email='', workspace='')
     if account['type'] == 'key':
         item.update(status='logged_in' if secret_get(account['id']) else 'not_logged_in', method='API 金鑰')
         return item
     full = account_status(provider, account)
-    item.update({k: full.get(k, '') for k in ('status', 'method', 'plan', 'email')})
+    item.update({k: full.get(k, '') for k in ('status', 'method', 'plan', 'email', 'workspace')})
     return item
 
 
@@ -337,7 +337,7 @@ def account_status(provider, account=None):
             if p.returncode == 0 and 'logged in' in text.lower() and 'not logged in' not in text.lower():
                 item['status'] = 'logged_in'
                 item['method'] = 'ChatGPT 帳號' if 'chatgpt' in text.lower() else ('API 金鑰' if 'api key' in text.lower() else text[:60])
-                if not account: item.update(codex_account(path))  # the account details service only knows the CLI's own sign-in
+                item.update(codex_account(path, account))
             elif 'not logged in' in text.lower() or p.returncode != 0:
                 item['status'] = 'not_logged_in'
     except (OSError, ValueError, subprocess.TimeoutExpired):
@@ -348,20 +348,21 @@ def account_status(provider, account=None):
 _codex_account_cache = {}
 
 
-def codex_account(path):
-    """Email, plan and workspace from the read-only app-server `account/read` (cached 5 minutes)."""
-    hit = _codex_account_cache.get(path)
+def codex_account(path, account=None):
+    """Email, plan and workspace of one sign-in from the read-only app-server `account/read` (cached 5 minutes)."""
+    key = (path, account['id'] if account else '')
+    hit = _codex_account_cache.get(key)
     if hit and time.time() - hit[0] < 300: return dict(hit[1])
     info = {}
     try:
-        result = codex_rpc(path, 'account/read', {})
+        result = codex_rpc(path, 'account/read', {}, provider_env('codex', account) if account else None)
         account = result.get('account') if isinstance(result, dict) and isinstance(result.get('account'), dict) else {}
         info = {k: v for k, v in (('email', str(account.get('email') or '')), ('plan', str(account.get('planType') or '')),
                                   ('workspace', str(account.get('workspaceName') or ''))) if v}
         if account.get('type') == 'apiKey': info['method'] = 'API 金鑰'
-    except (OSError, ValueError, TimeoutError, AttributeError):
+    except (OSError, ValueError, TimeoutError, AttributeError, RuntimeError):
         return {}
-    _codex_account_cache[path] = (time.time(), info)
+    _codex_account_cache[key] = (time.time(), info)
     return dict(info)
 
 

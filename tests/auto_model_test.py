@@ -68,14 +68,14 @@ class AutoModelTest(unittest.TestCase):
     def test_task_picks_model_and_says_why(self):
         self.assertEqual(self.bot['model'], '')
         reply = self.send('幫我修這段 python 的 bug')
-        self.assertEqual(reply['note'], '自動選用 Codex：寫程式'); self.assertEqual(self.log.read_text().split(), ['codex'])
+        self.assertEqual(reply['auto'], 'Codex code'); self.assertNotIn('note', reply); self.assertEqual(self.log.read_text().split(), ['codex'])
         reply = self.send('請分析這兩個方案的優缺點')
-        self.assertEqual(reply['note'], '自動選用 Claude：長篇分析')
+        self.assertEqual(reply['auto'], 'Claude analysis'); self.assertIn('長篇分析', reply['autoWhy'])
 
     def test_low_quota_is_skipped(self):
         self.quota('codex', 95)
         reply = self.send('寫一個 python 函式')
-        self.assertEqual(reply['note'], '自動選用 Claude：寫程式（Codex 額度不足）')
+        self.assertEqual(reply['auto'], 'Claude code'); self.assertIn('Codex 額度不足', reply['autoWhy'])
 
     def test_all_low_tells_the_user_and_sends_nothing(self):
         self.req('PATCH', '/api/settings', {'autoModels': ['codex']})
@@ -95,7 +95,7 @@ class AutoModelTest(unittest.TestCase):
             if (self.req('GET', '/api/state')[1].get('autoStatus') or {}).get('claude', {}).get('billed'): break
             time.sleep(.1)
         reply = self.send('請分析這兩個方案')
-        self.assertEqual(reply['note'], '自動選用 Codex：長篇分析'); self.assertEqual(self.log.read_text().split(), ['codex'])
+        self.assertEqual(reply['auto'], 'Codex analysis'); self.assertEqual(self.log.read_text().split(), ['codex'])
 
     def test_named_redo_does_not_fall_back_to_other_models(self):
         self.send('寫 python')

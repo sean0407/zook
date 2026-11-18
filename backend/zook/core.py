@@ -490,6 +490,7 @@ def mobile_message(m, names):
     if m.get('botId'): out['botId'] = m['botId']; out['botName'] = names.get(m['botId'], '已刪除的 Bot')
     for key in ('note', 'author'):
         if m.get(key): out[key] = m[key]
+    if m.get('auto') and not m.get('note'): out['note'] = 'auto: ' + m['auto']
     return out
 
 

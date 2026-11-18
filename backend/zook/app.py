@@ -157,7 +157,7 @@ class App(ThreadingHTTPServer):
         if attachments and isinstance(content, str) and not content.strip(): content = '（請看附件）'
         if not isinstance(content, str) or not content.strip() or len(content) > 30000: raise ValueError('訊息內容無效。')
         if any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs']): raise Busy('此機器人已有執行中的工作。')
-        auto_chain, auto_note = pick_auto(store, content, [a.get('name') for a in attachments or []], plan) if not use and bot.get('provider') == AUTO else (None, '')
+        auto_chain, auto_mark = pick_auto(store, content, [a.get('name') for a in attachments or []], plan) if not use and bot.get('provider') == AUTO else (None, {})
         provider, model = use or (auto_chain[0] if auto_chain else bot_model(store, bot))
         if not P.spec(store.data, provider) or not isinstance(model, str) or len(model) > 100: raise ValueError('模型設定無效。')
         if plan and (provider_kind(provider) not in PLAN_KINDS or not ability_on(store, provider, 'plan')): raise ValueError('這個模型不支援先規劃。')
@@ -169,7 +169,7 @@ class App(ThreadingHTTPServer):
         short = prompt.replace('\n對話紀錄：\n' + context, '', 1)  # when the CLI continues its own conversation it already has the history
         msg = dict(id=ID(), role='assistant', content='', createdAt=NOW(), status='running')
         if use: msg['note'] = '這次用 %s 回答' % provider_label(provider).split('（')[0]
-        if auto_note: msg['note'] = auto_note
+        msg.update(auto_mark)
         if effort != 'standard': msg['effort'] = effort
         if plan: msg['plan'] = True
         asked = dict(id=ID(), role='user', content=content, createdAt=NOW())
@@ -408,7 +408,7 @@ class App(ThreadingHTTPServer):
                     job['fallback'] = dict(provider=p, original=provider, reason=why or '無法回覆')
                     owner = store.find('groups', job['groupId']) if job.get('groupId') else store.find('bots', job['botId'])
                     message = find_message(owner, job['messageId'])
-                    if message: message['note'] = note
+                    if message: message['note'] = note; message.pop('auto', None); message.pop('autoWhy', None)  # the note now says which model answered
                     store.save()
                 if job['status'] != 'running': return
                 # This attempt failed and another model is available.
@@ -686,9 +686,9 @@ class App(ThreadingHTTPServer):
             name = args['name'].strip()
             with store.lock:
                 if any(b['name'].strip().lower() == name.lower() for b in store.data['bots']): raise RuntimeError('已經有名為「%s」的 Bot。' % name)
-                new = dict(id=ID(), name=name, color=args.get('color') or colors_for(len(store.data['bots'])), shape=str(len(store.data['bots']) % 13), instructions='', persona='', provider='', model='', pinned=False, section='團隊', messages=[], enabledSkills=[], enabledMcp=[], allowCommands=True, isAdmin=False)
+                new = dict(id=ID(), name=name, color=args.get('color') or colors_for(len(store.data['bots'])), shape=str(len(store.data['bots']) % 13), instructions='', persona='', provider=AUTO, model='', pinned=False, section='團隊', messages=[], enabledSkills=[], enabledMcp=[], allowCommands=True, isAdmin=False)
                 update(new, {k: args[k] for k in ('name', 'persona', 'instructions', 'provider', 'model', 'color') if args.get(k)}, 'bot')
-                ensure_chats(new); store.data['bots'].append(new); store.save()
+                ensure_chats(new); store.data['bots'].append(new); store.save(); watch_auto_status(store, new)
             return {'created': new['name'], 'id': new['id']}
         def create_group(args):
             with store.lock:
@@ -707,7 +707,7 @@ class App(ThreadingHTTPServer):
         return tools + [
             (runtime._schema('zook_list_team', 'List all Zook Bots (name, role, model) and groups.', {}), list_team, False),
             (runtime._schema('zook_create_bot', 'Create a new Zook Bot after user approval.',
-                             {'name': S('Bot name'), 'persona': S('Persona: personality, tone, values and how it talks (Traditional Chinese)'), 'instructions': S('Work instructions: role and responsibilities'), 'provider': S('Provider id; empty = default'), 'model': S('Model ID; empty = default'), 'color': S('Hex color like #2585f6, optional')}, ['name', 'persona', 'instructions'], False), create_bot, True),
+                             {'name': S('Bot name'), 'persona': S('Persona: personality, tone, values and how it talks (Traditional Chinese)'), 'instructions': S('Work instructions: role and responsibilities'), 'provider': S('Provider id; empty = pick automatically for each message'), 'model': S('Model ID; empty = default'), 'color': S('Hex color like #2585f6, optional')}, ['name', 'persona', 'instructions'], False), create_bot, True),
             (runtime._schema('zook_create_group', 'Create a group chat of 2–6 existing Bots (by name) after user approval.',
                              {'name': S('Group name, optional'), 'bot_names': A('Exact Bot names, 2–6')}, ['bot_names'], False), create_group, True),
             (runtime._schema('zook_start_group_discussion', 'Post a kickoff message into a group so its Bots start working, after user approval. Use @Bot names to assign owners.',
@@ -858,10 +858,10 @@ class App(ThreadingHTTPServer):
             if any(j['botId'] == bot_id and j['status'] == 'running' for j in store.data['jobs']):
                 group['messages'].append(dict(id=ID(), role='system', content=bot['name'] + ' 正在其他對話中工作，這次略過。', createdAt=NOW()))
                 store.save(); return None
-            auto_chain, auto_note = None, ''
+            auto_chain, auto_mark = None, {}
             if bot.get('provider') == AUTO:
                 asked = next((m for m in reversed(group['messages']) if m.get('role') == 'user'), {})
-                try: auto_chain, auto_note = pick_auto(store, asked.get('content'), [a.get('name') for a in asked.get('attachments') or []])
+                try: auto_chain, auto_mark = pick_auto(store, asked.get('content'), [a.get('name') for a in asked.get('attachments') or []])
                 except ValueError as exc:
                     group['messages'].append(dict(id=ID(), role='system', content='%s 這次略過：%s' % (bot['name'], exc), createdAt=NOW()))
                     store.save(); return None
@@ -871,7 +871,7 @@ class App(ThreadingHTTPServer):
             job = dict(id=ID(), botId=bot_id, groupId=group_id, messageId=msg['id'], status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[],
                        effort=group.get('runEffort') if group.get('runEffort') not in (None, '', 'standard') else pick_effort(bot.get('effort')))
             if job['effort'] != 'standard': msg['effort'] = job['effort']
-            if auto_chain: job['autoChain'] = auto_chain; msg['note'] = auto_note; refresh_auto(self)
+            if auto_chain: job['autoChain'] = auto_chain; msg.update(auto_mark); refresh_auto(self)
             files = place_attachments(store, bot_id, recent_attachments(store, group['messages'][-20:]))
             if files: job['attachments'] = [str(x) for x in files]
             group['messages'].append(msg); store.data['jobs'].append(job)

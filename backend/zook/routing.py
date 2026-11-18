@@ -6,6 +6,7 @@ AUTO_SUBSCRIPTIONS = ('Claude 訂閱帳號', 'ChatGPT 帳號', 'Grok 帳號', 'G
 AUTO_MIN_LEFT = 10  # percent of quota that must remain
 AUTO_TASKS = dict(image=('看圖', ('codex', 'claude', 'antigravity', 'grok')), code=('寫程式', ('codex', 'claude', 'grok', 'antigravity')),
                   analysis=('長篇分析', ('claude', 'codex', 'antigravity', 'grok')), quick=('簡短問答', ('grok', 'antigravity', 'codex', 'claude')))
+AUTO_MARKS = dict(image='image', code='code', analysis='analysis', quick='simple')  # the small mark at the end of a reply
 AUTO_LONG = 1500
 _AUTO_CODE = re.compile(r'```|`[^`\n]+`|程式|代碼|除錯|函式|腳本|報錯|重構|編譯|正則|(?<![a-z])(?:bug|debug|python|javascript|typescript|swift|sql|html|css|api|json|regex|script|git|commit|refactor|traceback|function)(?![a-z])', re.I)
 _AUTO_ANALYSIS = re.compile(r'分析|比較|評估|研究|報告|策略|總結|摘要|規劃|企劃|優缺點|深入|(?<![a-z])(?:analy[sz]e|analysis|compare|research|report|summari[sz]e)(?![a-z])', re.I)
@@ -109,7 +110,7 @@ def auto_quota_low(store, provider):
 
 
 def pick_auto(store, content, names=(), plan=False):
-    """(models to try in order, the note shown under the reply). Raises ValueError when nothing can answer."""
+    """(models to try in order, the fields that mark the reply). Raises ValueError when nothing can answer."""
     task = auto_task(content, names); label, order = AUTO_TASKS[task]
     if 'autoStatus' not in store.data:  # billing is not known yet, so nothing can be picked safely
         threading.Thread(target=refresh_auto_status, args=(store,), daemon=True).start()
@@ -124,6 +125,6 @@ def pick_auto(store, content, names=(), plan=False):
     if not usable: raise ValueError('可自動選用的模型額度都低於 10%%：%s。Zook 不會自動改用付費方式，請等額度重置，或指定其他模型。' % '、'.join(short(p) for p in allowed))
     settings = store.data['settings']
     chain = [[p, settings.get('model', '') if p == settings.get('provider', 'codex') else ''] for p in usable]
-    note = '自動選用 %s：%s' % (short(usable[0]), label)
-    if usable[0] != allowed[0]: note += '（%s 額度不足）' % short(allowed[0])
-    return chain, note
+    why = 'Zook 判斷這是%s，所以用 %s' % (label, short(usable[0]))
+    if usable[0] != allowed[0]: why += '（%s 額度不足）' % short(allowed[0])
+    return chain, dict(auto='%s %s' % (short(usable[0]), AUTO_MARKS[task]), autoWhy=why)
