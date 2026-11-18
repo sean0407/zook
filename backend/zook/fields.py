@@ -122,5 +122,6 @@ def update(target, body, kind):
         tags = body['tags']
         if not isinstance(tags, list) or len(tags)>30 or any(not isinstance(t, str) or len(t)>100 for t in tags): raise ValueError('標籤無效。')
         changes['tags'] = tags
+    if kind == 'settings': upkeep_fields(_active['data'], body, changes)
     if kind == 'bot' and changes.get('provider') == AUTO: changes.update(model='', account='')  # each reply picks its own model
     target.update(changes)

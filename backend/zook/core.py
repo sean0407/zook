@@ -458,6 +458,7 @@ def identity_block(bot):
         parts.append('你沒有上網功能。需要最新資訊時請直接說明查不到，不要猜測。')
     if (bot.get('persona') or '').strip(): parts.append('【人格】\n' + bot['persona'].strip()[:20000])
     if (bot.get('instructions') or '').strip(): parts.append('【工作指示】\n' + bot['instructions'].strip()[:5000])
+    if rules_block(): parts.append(rules_block())
     return '\n'.join(parts)
 
 

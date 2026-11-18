@@ -16,9 +16,9 @@ class App(GroupRuns, ThreadingHTTPServer):
         self.updater = Updater(lambda: any(j.get('status') == 'running' for j in self.store.data['jobs']))
         self.notices, self.notice_seq = [], 0  # for Mac notifications; the window asks for new ones
 
-    def notify(self, title, body, kind, target_id, message_id):
-        """Queue a Mac notification about a schedule. Lock held."""
-        if self.store.data['settings'].get('scheduleNotify') is False: return
+    def notify(self, title, body, kind, target_id, message_id, always=False):
+        """Queue a Mac notification. Lock held. Schedule notices follow the 通知 switch; the others are always shown."""
+        if not always and self.store.data['settings'].get('scheduleNotify') is False: return
         self.notice_seq += 1
         self.notices.append(dict(seq=self.notice_seq, title=str(title)[:80], body=str(body)[:200], kind=kind, targetId=target_id, messageId=message_id or '', createdAt=NOW()))
         del self.notices[:-MAX_NOTICES]
@@ -281,6 +281,9 @@ class App(GroupRuns, ThreadingHTTPServer):
             time.sleep(wait)
             try: self.run_schedules()
             except Exception: pass
+            try:
+                with self.store.lock: backup_daily(self.store)
+            except Exception: pass
 
     def note_skipped(self, job, session):
         """Under the reply: which connectors could not be used this time, including ones that failed when the Bot reached for them."""
@@ -346,6 +349,8 @@ class App(GroupRuns, ThreadingHTTPServer):
             item = next((x for x in calls if x['id'] == event.get('id')), None)
             if item is None:
                 item = {'id': event.get('id', ID()), 'createdAt': NOW()}; calls.append(item)
+            if event.get('autoApproved') and not item.get('autoApproved') and event.get('category', item.get('category')) in ('external_write', 'danger'):
+                log_activity(self.store, 'tool', '未詢問即執行：%s（%s）' % (describe_call(dict(item, **event)), self.target_name('bot', job['botId'])), by='Zook')
             for key in ('name', 'source', 'status', 'arguments', 'resultSummary', 'error', 'label', 'sourceLabel', 'category', 'autoApproved'):
                 if key in event: item[key] = event[key]
             self.store.save()
@@ -395,8 +400,11 @@ class App(GroupRuns, ThreadingHTTPServer):
             if job.get('plan'): chain = [x for x in chain if provider_kind(x[0]) in PLAN_KINDS] or chain[:1]  # a backup must be held to read-only too
             skipped = {}
             for p, _ in chain[:]:
-                reason = '尚未安裝' if not find_cli(p) else '額度已用完' if quota_exhausted(store, p) and not find_account(bot.get('account'), p) else None
+                reason = '尚未安裝' if not find_cli(p) else '額度已用完' if quota_exhausted(store, p) and not find_account(bot.get('account'), p) else '用量預算已用完' if budget_blocks(store, p) == 'switch' else None
                 if reason and len(chain) > 1: skipped[p] = reason; chain.remove(next(x for x in chain if x[0] == p))
+            if budget_blocks(store, chain[0][0]) == 'stop':
+                job.update(status='failed', error='這個月的用量預算已用完。可到「各模型使用量」調整上限。', finishedAt=NOW())
+                store.finish_message(job, '', 'failed'); store.save(); return
         why = skipped.get(provider)
         for index, (p, m) in enumerate(chain):
             final = index == len(chain) - 1
@@ -646,7 +654,7 @@ class App(GroupRuns, ThreadingHTTPServer):
             if not account and (store.data.get('providerIssues') or {}).get(provider, {}).get('issue'): self.note_provider_issue(provider, '')
             with store.lock:
                 job = store.find('jobs', job_id)
-                if parsed['usage']: job['usage'] = dict(parsed['usage'], provider=provider, account=account['id'] if account else '')
+                if parsed['usage']: job['usage'] = dict(parsed['usage'], provider=provider, account=account['id'] if account else ''); budget_add(self, provider, parsed['usage'])
                 if job['status'] == 'running':
                     job.update(status='completed', content=content, finishedAt=NOW())
                     self.remember_session(job, provider, model, account, cli_cwd, cli_session(kind, output.decode('utf-8', errors='replace')))

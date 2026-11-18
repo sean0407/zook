@@ -233,6 +233,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.error(404, '找不到資源。')
     def respond(self, code, data, content_type='application/json; charset=utf-8'):
         raw = json.dumps(data, ensure_ascii=False).encode() if isinstance(data, (dict, list)) else data
+        note_request(self, code, data)
         self.send_response(code); self.send_header('Content-Type', content_type); self.send_header('Content-Length', str(len(raw)))
         self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors %s" % ("'self'" if content_type == 'application/pdf' else "'none'")); self.send_header('Cache-Control', 'private, max-age=86400' if content_type == 'image/png' else 'no-store'); self.send_header('X-Content-Type-Options', 'nosniff'); self.end_headers(); self.wfile.write(raw)
     def error(self, code, message): self.respond(code, {'error': message})
@@ -254,6 +255,7 @@ class Handler(BaseHTTPRequestHandler):
             if n <= 0 or n > limit: raise ValueError()
             obj = json.loads(self.rfile.read(n))
             if not isinstance(obj, dict): raise ValueError()
+            self.last_body = obj
             return obj
         except (ValueError, UnicodeError): raise ValueError('無效或過大的 JSON。')
     def dispatch(self):
@@ -292,6 +294,7 @@ class Handler(BaseHTTPRequestHandler):
         parts = [unquote(p) for p in path.strip('/').split('/')]
         store = self.server.store
         self.device = None
+        self.hint = activity_hint(store, parts) if self.command in ('PATCH', 'DELETE', 'POST') else ''
         try:
             if self.via_bridge:
                 device_id = self.headers.get('X-Zook-Device')
@@ -638,6 +641,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.command == 'GET' and path == '/api/diagnostics': return self.respond(200, dict(providers=provider_info(), python=__import__('platform').python_version(), system=__import__('platform').system()))
                 if self.command == 'GET' and path == '/api/usage': return self.respond(200, usage())
                 if self.command == 'POST' and path == '/api/export': return self.respond(200, store.data)
+                if parts[:2] == ['api', 'backups'] or path in ('/api/activity', '/api/budget'): return upkeep_route(self, store, parts, path)
                 if len(parts) == 3 and parts[:2] == ['api', 'jobs'] and self.command == 'GET':
                     job = store.find('jobs', parts[2]); return self.respond(200, job) if job else self.error(404, '找不到工作。')
                 if len(parts) == 3 and parts[:2] == ['api', 'approvals'] and self.command == 'POST':
@@ -648,6 +652,8 @@ class Handler(BaseHTTPRequestHandler):
                         if approval:
                             if job['status'] != 'running' or approval['status'] != 'pending': return self.error(409, '此審批已結束。')
                             approval['status'] = 'approved' if decision == 'approve' else 'denied'; store.save()
+                            log_activity(store, 'approval', ('核准：' if decision == 'approve' else '拒絕：') + (approval.get('text') or describe_call(dict(approval, name=approval.get('name')))) + '（%s）' % self.server.target_name('bot', job['botId']),
+                                         by=('手機：' + str(self.device.get('name') or '已配對裝置')) if self.device else '')
                             event = self.server.approval_events.get(approval['id'])
                             if event: event.set()
                             return self.respond(200, approval)
