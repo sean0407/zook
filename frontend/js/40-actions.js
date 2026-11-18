@@ -429,12 +429,12 @@
           break;
         case 'google-setup': googleModal(); break;
         case 'google-add': {
-          const before = ((state.integrations?.mcp || []).find(i => i.google)?.accounts || []).length;
+          const ids = item => (item?.accounts || []).map(x => x.id).join(), before = ids((state.integrations?.mcp || []).find(i => i.google));
           await post('google', {add: true}); toast('已在瀏覽器開啟 Google 登入頁，選另一個帳號登入');
           for (let n = 0; n < 90 && state.page === 'mcp'; n++) {
             await new Promise(r => setTimeout(r, 2000));
             let now; try { now = await api('integrations'); } catch (_) { continue; }
-            if (((now.mcp || []).find(i => i.google)?.accounts || []).length > before) { state.integrations = now; render(true); toast('已新增帳號，可以在卡片上選擇要用哪一個'); break; }
+            if (ids((now.mcp || []).find(i => i.google)) !== before) { state.integrations = now; render(true); toast('帳號已更新，可以在卡片上選擇要用哪一個'); break; }
           }
           break;
         }
@@ -515,14 +515,14 @@
         case 'catalog-open': await catalogModal(); break;
         case 'catalog-add': await catalogAdd(id); break;
         case 'connector-login': {
-          const before = ((state.integrations?.mcp || []).find(i => i.id === id)?.accounts || []).length, adding = !!el.dataset.add;
+          const ids = item => (item?.accounts || []).map(x => x.id).join(), before = ids((state.integrations?.mcp || []).find(i => i.id === id)), adding = !!el.dataset.add;
           await post('connectors/' + encodeURIComponent(id.split(':')[1]) + '/login', adding ? {add: true} : {});
           toast('已在瀏覽器開啟登入頁，完成後回到這裡');
           for (let n = 0; n < 90 && ['mcp', 'skills', 'plugins'].includes(state.page); n++) {  // wait for the browser to come back
             await new Promise(r => setTimeout(r, 2000));
             state.integrations = await api('integrations');
             const now = (state.integrations.mcp || []).find(i => i.id === id);
-            if (adding ? (now?.accounts || []).length > before : now?.signedIn) { render(true); toast(adding ? '已新增帳號，可以在卡片上選擇要用哪一個' : '登入完成'); break; }
+            if (adding ? ids(now) !== before : now?.signedIn) { render(true); toast(adding ? '已新增帳號，可以在卡片上選擇要用哪一個' : '登入完成'); break; }
           }
           break;
         }

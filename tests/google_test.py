@@ -81,6 +81,9 @@ class GoogleTest(unittest.TestCase):
         self.assertEqual(self.req('GET', '/oauth/callback?state=%s&code=abc' % query['state'], auth=False)[0], 200)
         accounts = self.item()['accounts']; self.assertEqual([(a['name'], a['active']) for a in accounts], [('me@example.com', True), ('work@example.com', False)])
         self.assertEqual(self.req('POST', '/api/google/account', {'account': accounts[1]['id']})[0], 200); self.assertEqual(self.item()['address'], 'work@example.com')
+        status, body = self.req('POST', '/api/google', {'clientId': 'client-1234567890', 'clientSecret': 'SECRET-123456', 'write': True})   # plain sign-in again, choosing the other listed address
+        Google.email = 'me@example.com'; query = {k: v[0] for k, v in parse_qs(urlsplit(body['url']).query).items()}; self.req('GET', '/oauth/callback?state=%s&code=abc' % query['state'], auth=False)
+        self.assertEqual([(a['name'], a['active']) for a in self.item()['accounts']], [('work@example.com', True), ('me@example.com', False)])   # nobody was dropped
         self.assertEqual(self.req('DELETE', '/api/google')[0], 200); self.assertEqual([a['name'] for a in self.item()['accounts']], ['me@example.com']); self.assertFalse(self.item()['needsSetup'])
         saved = (self.root / 'data/swarmr.json').read_text()
         for secret in ('GACCESS', 'GREFRESH', 'SECRET-123456'): self.assertNotIn(secret, saved)

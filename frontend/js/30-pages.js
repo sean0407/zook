@@ -266,9 +266,14 @@
   // Dropdown: open/close, pick an option, close on outside click or Escape.
   const closeDropdowns = except => document.querySelectorAll('.dd.open').forEach(d => { if (d !== except) { d.classList.remove('open'); d.querySelector('.dd-btn').setAttribute('aria-expanded', 'false'); } });
   // The launcher menu closes when anything outside it is clicked, or Escape is pressed.
+  // Listened for on the way down, so a click that another handler stops (a dropdown) still closes it.
+  // Only the menu itself is taken away: the rest of the page is left as it is, so whatever was clicked still works.
   document.addEventListener('click', e => {
-    if (state.launcher && !e.target.closest?.('.launcher') && !e.target.closest?.('[data-action="launcher"]')) setTimeout(() => { if (state.launcher) { state.launcher = false; render(true); } }, 0);
-  });
+    if (!state.launcher || e.target.closest?.('.launcher') || e.target.closest?.('[data-action="launcher"]')) return;
+    state.launcher = false;
+    document.querySelector('.launcher .popup')?.remove();
+    document.querySelector('[data-action="launcher"]')?.setAttribute('aria-expanded', 'false');
+  }, true);
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.launcher) { state.launcher = false; render(true); } });
   document.addEventListener('click', e => {
     const opt = e.target.closest?.('.dd-opt'), btn = e.target.closest?.('.dd-btn');

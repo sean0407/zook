@@ -158,6 +158,23 @@ class OAuthTest(unittest.TestCase):
         self.assertEqual([(a['name'], a['active']) for a in left], [('帳號 1', True)]); self.assertTrue(self.item()['signedIn']); self.assertEqual(len(list((self.root / 'secrets').iterdir())), parts // 2)
         self.req('DELETE', '/api/connectors/' + self.cid); self.assertEqual(list((self.root / 'secrets').iterdir()), [])
 
+    def test_signing_in_again_refreshes_the_account_it_was_started_for(self):
+        def begin(add=False):
+            body = self.req('POST', '/api/connectors/%s/login' % self.cid, {'add': True} if add else {})[1]
+            query = {k: v[0] for k, v in parse_qs(urlsplit(body['url']).query).items()}; Provider.state['challenge'] = query['code_challenge']; return query['state']
+        finish = lambda state: self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % state, auth=False)
+        finish(begin()); finish(begin(True)); a, b = self.item()['accounts']
+        again = begin()                                                      # sign in again to the first account…
+        self.req('POST', '/api/connectors/%s/account' % self.cid, {'account': b['id']})   # …and switch to the second before the browser returns
+        finish(again); now = self.item()['accounts']
+        self.assertEqual([(x['name'], x['active']) for x in now], [('帳號 2', True), ('帳號 1', False)]); self.assertEqual(now[0]['id'], b['id']); self.assertNotEqual(now[1]['id'], a['id'])
+
+    def test_a_refusal_marks_only_the_account_that_was_refused(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('zook_oauth_lost', SERVER); z = importlib.util.module_from_spec(spec); spec.loader.exec_module(z)
+        accounts = [dict(secretId='b' * 32), dict(secretId='a' * 32)]
+        self.assertFalse(z._mark_lost(accounts, 'c' * 32)); self.assertTrue(z._mark_lost(accounts, 'a' * 32)); self.assertEqual([bool(x.get('needsLogin')) for x in accounts], [False, True])
+
     def test_cancelled_sign_in_and_wrong_host(self):
         state = self.login(); status, page = self.req('GET', '/oauth/callback?state=%s&error=access_denied' % state, auth=False); self.assertIn('取消', page)
         self.assertEqual(self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % state, auth=False)[0], 400)

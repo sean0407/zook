@@ -138,7 +138,7 @@ def oauth_begin(app, record, add=False):
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
     flows = app.__dict__.setdefault('oauth_flows', {})
     for old in [k for k, v in flows.items() if time.time() - v['at'] > OAUTH_FLOW_MINUTES * 60]: flows.pop(old, None)
-    flows[state] = dict(connector=record['id'], url=record['url'], add=bool(add), verifier=verifier, meta=meta, client=client['client_id'], secret=client.get('client_secret') or '', redirect=redirect, at=time.time())
+    flows[state] = dict(connector=record['id'], url=record['url'], add=bool(add), replace=(record.get('oauth') or {}).get('secretId'), verifier=verifier, meta=meta, client=client['client_id'], secret=client.get('client_secret') or '', redirect=redirect, at=time.time())
     query = dict(response_type='code', client_id=client['client_id'], redirect_uri=redirect, state=state, code_challenge=challenge, code_challenge_method='S256', resource=meta['resource'])
     if meta['scope']: query['scope'] = meta['scope']
     return meta['authorize'] + ('&' if '?' in meta['authorize'] else '?') + urllib.parse.urlencode(query)
@@ -177,10 +177,11 @@ def oauth_finish(app, state, code):
         if fits:
             now = record.get('oauth'); others = record.setdefault('otherAccounts', [])
             new = dict(secretId=blob_id, clientId=flow['client'], tokenEndpoint=flow['meta']['token'], resource=flow['meta']['resource'], url=flow['url'], local=flow['meta'].get('local', False), signedInAt=NOW())
-            if flow.get('add') and now:  # another account beside the one in use; the default stays as it is
-                new['name'] = '帳號 %d' % (len(others) + 2); others.append(new)
-            else:
-                old = (now or {}).get('secretId'); new['name'] = (now or {}).get('name') or '帳號 1'; record['oauth'] = new
+            target = None if flow.get('add') else next((x for x in [now] + others if x and x.get('secretId') == flow.get('replace')), None)
+            if target:  # signing in again: the same account, wherever it now sits in the list
+                old = target['secretId']; name = target.get('name') or '帳號 1'; target.clear(); target.update(new, name=name)
+            elif now: new['name'] = '帳號 %d' % (len(others) + 2); others.append(new)  # another account; the default stays as it is
+            else: new['name'] = '帳號 1'; record['oauth'] = new
             if not others: record.pop('otherAccounts', None)
             store.save()
     if not fits: blob_delete(blob_id); raise ValueError(changed)
@@ -191,7 +192,7 @@ def oauth_access(store, record):
     """A usable access token for this connector, refreshed when it is about to run out. '' when the user must sign in again."""
     info = record.get('oauth') or {}
     if info.get('url') != record.get('url'): return ''  # the token was issued for another address
-    return oauth_token(info, info.get('resource') or record.get('url'), lambda: _oauth_lost(store, record['id']))
+    return oauth_token(info, info.get('resource') or record.get('url'), lambda: _oauth_lost(store, record['id'], info.get('secretId')))
 
 
 def oauth_token(info, resource, lost):
@@ -210,15 +211,23 @@ def oauth_token(info, resource, lost):
         except RuntimeError: return still  # offline: try again next time
         if status >= 300:  # only a clear refusal means signing in again; a busy or broken service is tried again later
             return lost() if status in (400, 401) and token.get('error') in ('invalid_grant', 'invalid_client', 'unauthorized_client', 'invalid_token') else still
+        if blob_get(info['secretId']) is None: return ''  # signed out while the request was in flight: nothing is written back
         try: fresh = dict(_oauth_keep(token, kept), secret=kept.get('secret') or ''); blob_set(info['secretId'], fresh)
         except RuntimeError: return still  # an answer without a token is a fault on their side, not a refusal
         return fresh['access']
 
 
-def _oauth_lost(store, connector_id):
+def _mark_lost(accounts, secret_id):
+    """Mark the one sign-in that was refused, wherever it now sits in the list. True when something changed."""
+    pick = next((x for x in accounts if x and x.get('secretId') == secret_id), None)
+    if not pick or pick.get('needsLogin'): return False
+    pick['needsLogin'] = True; return True
+
+
+def _oauth_lost(store, connector_id, secret_id):
     with store.lock:
-        record = next((c for c in store.data['connectors'] if c['id'] == connector_id), None)
-        if record and record.get('oauth') and not record['oauth'].get('needsLogin'): record['oauth']['needsLogin'] = True; store.save()
+        record = next((c for c in store.data['connectors'] if c['id'] == connector_id), None) or {}
+        if _mark_lost([record.get('oauth')] + list(record.get('otherAccounts') or []), secret_id): store.save()
     return ''
 
 
@@ -277,8 +286,8 @@ def oauth_logout(store, connector_id, account_id=None, everything=False):
     with store.lock:
         record = next((c for c in store.data['connectors'] if c['id'] == connector_id), None)
         while record and (record.get('oauth') or record.get('otherAccounts')):
-            gone.append(_remove(record, 'oauth', 'otherAccounts', account_id))
-            if not everything: break
+            removed = _remove(record, 'oauth', 'otherAccounts', account_id); gone.append(removed)
+            if not everything or not removed: break
         store.save()
     for blob_id in gone:
         if blob_id: blob_delete(blob_id)
@@ -321,7 +330,7 @@ def google_begin(app, client_id, client_secret, write, add=False):
     state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(64)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
     flows = app.__dict__.setdefault('oauth_flows', {})
-    flows[state] = dict(kind='google', connector='', url='', verifier=verifier, meta=dict(token=token, resource='', local=_same_place(token, None)), client=client_id.strip(), secret=client_secret.strip(), redirect=redirect, write=bool(write), add=bool(add), at=time.time())
+    flows[state] = dict(kind='google', connector='', url='', verifier=verifier, meta=dict(token=token, resource='', local=_same_place(token, None)), client=client_id.strip(), secret=client_secret.strip(), redirect=redirect, write=bool(write), add=bool(add), replace=((app.store.data['settings'].get('google') or {}).get('secretId')), at=time.time())
     query = dict(response_type='code', client_id=client_id.strip(), redirect_uri=redirect, state=state, code_challenge=challenge, code_challenge_method='S256',
                  scope=' '.join(GOOGLE_READ + (GOOGLE_WRITE if write else ())), access_type='offline', prompt='consent select_account' if add else 'consent')
     return authorize + '?' + urllib.parse.urlencode(query)
@@ -336,10 +345,12 @@ def google_finish(store, flow, kept):
     new = dict(secretId=blob_id, clientId=flow['client'], tokenEndpoint=flow['meta']['token'], local=flow['meta']['local'], write=flow['write'], email=email, name=email or 'Google 帳號', signedInAt=NOW())
     with store.lock:
         st = store.data['settings']; now = st.get('google'); others = st.setdefault('googleOthers', [])
-        same = next((x for x in others if email and x.get('email') == email), None)
-        if same: others.remove(same); gone.append(same.get('secretId'))  # signing in again to an account already listed
-        if flow.get('add') and now and not (email and now.get('email') == email): others.append(new)  # the default stays as it is
-        else: gone.append((now or {}).get('secretId')); st['google'] = new
+        listed = [x for x in [now] + others if x]
+        # The same address is the same account, whichever button started the sign-in. Otherwise signing in again refreshes the account it was started for.
+        target = next((x for x in listed if email and x.get('email') == email), None) or (None if flow.get('add') else next((x for x in listed if x.get('secretId') == flow.get('replace')), None))
+        if target: gone.append(target.get('secretId')); target.clear(); target.update(new)
+        elif now: others.append(new)  # another account; the default stays as it is
+        else: st['google'] = new
         if not others: st.pop('googleOthers', None)
         st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + [GOOGLE_ID])); store.save()
     for old in gone:
@@ -348,10 +359,10 @@ def google_finish(store, flow, kept):
 
 def google_access(store):
     with store.lock: info = dict(store.data['settings'].get('google') or {})
-    def lost():
+    def lost():  # only the account that was refused, even if another one has become the default meanwhile
         with store.lock:
-            now = store.data['settings'].get('google')
-            if now and not now.get('needsLogin'): now['needsLogin'] = True; store.save()
+            st = store.data['settings']
+            if _mark_lost([st.get('google')] + list(st.get('googleOthers') or []), info.get('secretId')): store.save()
         return ''
     return oauth_token(info, '', lost)
 
