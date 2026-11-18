@@ -27,7 +27,7 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 | `native/Zook.swift` | macOS 視窗、啟動與關閉後端、檔案選取與下載 |
 | `native/remote/` | `zook-remote`，與中繼伺服器的加密連線 |
 | `backend/server.py` | 啟動入口：依序載入 `backend/zook/` 的檔案，全部共用同一個命名空間 |
-| `backend/zook/` | `core` 資料儲存、`accounts` 帳號與更新、`library` 設定包與排程規則、`app` 回覆與群組、`parsing` 解讀 CLI 輸出、`abilities` 各家能力對照與版本檢查、`sessions` 接續 CLI 原生對話、`handler` API |
+| `backend/zook/` | `core` 資料儲存、`accounts` 帳號與更新、`library` 設定包與排程規則、`app` 回覆與群組、`parsing` 解讀 CLI 輸出、`abilities` 各家能力對照與版本檢查、`sessions` 接續 CLI 原生對話、`routing` 自動選擇模型、`handler` API |
 | `backend/runtime.py` | Skill 與連接器探索、MCP 客戶端、工具執行 |
 | `backend/providers.py` | 各家 CLI 的定義 |
 | `backend/tool_server.py` | 提供給 CLI 的 Zook 工具（MCP） |
@@ -104,6 +104,7 @@ GitHub Actions（`.github/workflows/test.yml`）會在每次推送跑測試和�
 
 - 需要登入授權、綁在 Claude 或 ChatGPT 帳號的遠端連接器（例如公司的 LogiQ／Google Chat）複製到 Zook 後會 403，原因未查明。
 - 群組討論每次重新帶入最近的對話，不接續 CLI 原生對話。
+- 自動選擇：Grok 沒有額度資料，無法套用「剩餘低於 10% 不選」；API 計費帳號一律不選。
 - Antigravity 走官方 `agy` CLI。Google 條款限制第三方工具使用，帳號有被暫停的風險，卡片上有寫明；AI 點數一律關閉。
 - Gemini 沒有接 Zook 工具（ROADMAP E6）。Grok 的檔案工具只在工作資料夾，新版 Grok 不接受 `--add-dir`（ROADMAP E7）。
 - Grok 的 Zook 工具伺服器必須用 `/usr/bin/python3` 啟動，嚴格沙箱擋得住 Xcode 內的 Python。

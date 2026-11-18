@@ -2,12 +2,16 @@
 AUTO = 'auto'
 AUTO_MODELS = ('codex', 'claude', 'grok', 'antigravity')
 AUTO_DEFAULT_OFF = ('antigravity',)  # the user accepted an account risk for this one, so it is only used when turned on
+AUTO_SUBSCRIPTIONS = ('Claude 訂閱帳號', 'ChatGPT 帳號', 'Grok 帳號', 'Google 帳號')
 AUTO_MIN_LEFT = 10  # percent of quota that must remain
 AUTO_TASKS = dict(image=('看圖', ('codex', 'claude', 'antigravity', 'grok')), code=('寫程式', ('codex', 'claude', 'grok', 'antigravity')),
                   analysis=('長篇分析', ('claude', 'codex', 'antigravity', 'grok')), quick=('簡短問答', ('grok', 'antigravity', 'codex', 'claude')))
 AUTO_LONG = 1500
 _AUTO_CODE = re.compile(r'```|`[^`\n]+`|程式|代碼|除錯|函式|腳本|報錯|重構|編譯|正則|(?<![a-z])(?:bug|debug|python|javascript|typescript|swift|sql|html|css|api|json|regex|script|git|commit|refactor|traceback|function)(?![a-z])', re.I)
 _AUTO_ANALYSIS = re.compile(r'分析|比較|評估|研究|報告|策略|總結|摘要|規劃|企劃|優缺點|深入|(?<![a-z])(?:analy[sz]e|analysis|compare|research|report|summari[sz]e)(?![a-z])', re.I)
+
+
+_auto_checking = threading.Lock()
 
 
 def auto_task(content, names=()):
@@ -27,13 +31,26 @@ def auto_status(provider):
 
 
 def auto_state(provider, status, method):
+    """Only a sign-in known to be a subscription counts as free to use; anything else is treated as billed."""
     signed = True if status == 'logged_in' else False if status == 'not_logged_in' else None
-    return dict(signedIn=signed, billed=method in ('Anthropic Console', 'API 金鑰') or any(provider_env(provider).get(k) for k in ACCOUNT_KEYS.get(provider, ())))
+    return dict(signedIn=signed, billed=method not in AUTO_SUBSCRIPTIONS or any(provider_env(provider).get(k) for k in ACCOUNT_KEYS.get(provider, ())))
+
+
+def merge_auto_status(old, new):
+    """A check that could not finish keeps what was known before."""
+    return {p: (old[p] if s.get('signedIn') is None and p in old else s) for p, s in new.items()}
+
+
+def auto_known_billed(state):
+    return bool(state) and state.get('signedIn') is True and bool(state.get('billed'))
 
 
 def refresh_auto_status(store):
-    found = {p: auto_status(p) for p in AUTO_MODELS if P.spec(store.data, p) and find_cli(p)}
-    with store.lock: store.data['autoStatus'] = found; store.save()
+    if not _auto_checking.acquire(blocking=False): return  # one check at a time
+    try:
+        found = {p: auto_status(p) for p in AUTO_MODELS if P.spec(store.data, p) and find_cli(p)}
+        with store.lock: store.data['autoStatus'] = merge_auto_status(store.data.get('autoStatus') or {}, found); store.save()
+    finally: _auto_checking.release()
 
 
 def refresh_auto(app):
@@ -46,12 +63,12 @@ def refresh_auto(app):
         with store.lock: allowed = auto_allowed(store)
         live = {}
         try:
-            if 'codex' in allowed:
+            if 'codex' in allowed and find_cli('codex'):
                 live['codex'] = normalize_quota('codex', codex_rpc(find_cli('codex'), 'account/rateLimits/read', {}, provider_env('codex', None)))
                 if live['codex']: live['codex'].update(updatedAt=NOW(), source='live')
-        except (OSError, ValueError, TimeoutError, AttributeError, RuntimeError): pass
+        except (OSError, ValueError, TimeoutError, AttributeError, RuntimeError, TypeError): pass
         try:
-            if 'antigravity' in allowed: live['antigravity'] = antigravity_quota(find_cli('antigravity'))
+            if 'antigravity' in allowed and find_cli('antigravity'): live['antigravity'] = antigravity_quota(find_cli('antigravity'))
         except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError): pass
         with store.lock:
             store.data.setdefault('quota', {}).update({k: v for k, v in live.items() if v}); store.save()
@@ -67,7 +84,7 @@ def auto_allowed(store):
     """The models 自動選擇 may use. Until the user chooses: signed-in subscriptions only, never API billing."""
     chosen = store.data['settings'].get('autoModels')
     status = store.data.get('autoStatus') or {}
-    if isinstance(chosen, list): return [p for p in AUTO_MODELS if p in chosen and not (status.get(p) or {}).get('billed')]  # API billing is never picked automatically
+    if isinstance(chosen, list): return [p for p in AUTO_MODELS if p in chosen and not auto_known_billed(status.get(p))]  # API billing is never picked automatically
     return [p for p in AUTO_MODELS if p not in AUTO_DEFAULT_OFF and (status.get(p) or {}).get('signedIn') and not status[p].get('billed')]
 
 
@@ -98,7 +115,7 @@ def pick_auto(store, content, names=(), plan=False):
         threading.Thread(target=refresh_auto_status, args=(store,), daemon=True).start()
         raise ValueError('正在確認各模型的登入狀態，請幾秒後再送一次。')
     status = store.data['autoStatus']
-    allowed = [p for p in order if p in auto_allowed(store) and P.spec(store.data, p) and find_cli(p) and (status.get(p) or {}).get('signedIn') is not False]
+    allowed = [p for p in order if p in auto_allowed(store) and P.spec(store.data, p) and find_cli(p) and (status.get(p) or {}).get('billed') is False and (status.get(p) or {}).get('signedIn') is not False]
     if task == 'image': allowed = [p for p in allowed if ability_on(store, p, 'images')]
     if plan: allowed = [p for p in allowed if provider_kind(p) in PLAN_KINDS and ability_on(store, p, 'plan')]
     if not allowed: raise ValueError('自動選擇目前沒有可用的模型。請到「各模型使用量」開啟至少一個已登入的模型。')

@@ -3,13 +3,19 @@ def _int(value):
     return value if isinstance(value, int) and value >= 0 else 0
 
 
+_SECRET_VALUE = r"""(?:\\?"(?:[^"\\]|\\[^"])*\\?"|'[^']*'|[^\s"'&]+)"""
+_SECRET_NAME = r'[a-z0-9_-]*(?:token|secret|password|passwd|pwd|api[_-]?key|access[_-]?key|private[_-]?key|credential)[a-z0-9_-]*'
 _COMMAND_SECRETS = (
-    (re.compile(r'(?i)(authorization["\']?\s*[:=]\s*["\']?(?:bearer|basic|token)?\s*)[^\s"\']+'), r'\1[redacted]'),
+    (re.compile(r"""(?i)(authorization\\?["']?\s*[:=]\s*\\?["']?)[^"'\\\n]+"""), r'\1[redacted]'),
     (re.compile(r'(?i)(\bbearer\s+)[a-z0-9._~+/=-]{8,}'), r'\1[redacted]'),
-    (re.compile(r'\b(?:sk|pk|rk|xai|ghp|gho|ghs|github_pat|glpat|xox[abprs]|AIza)[-_A-Za-z0-9]{12,}'), '[redacted]'),
+    (re.compile(r'\b(?:sk|pk|rk|xai|ghp|gho|ghs|github_pat|glpat|hf|xox[abprs])[-_][-_A-Za-z0-9]{10,}|\bAIza[-_A-Za-z0-9]{12,}|\bAKIA[0-9A-Z]{12,}|\beyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{4,}'), '[redacted]'),
     (re.compile(r'(?i)(://[^/\s:@]+:)[^/\s@]+@'), r'\1[redacted]@'),
-    (re.compile(r'(?i)(--?(?:password|passwd|token|secret|api-?key)[= ]+)[^\s"\']+'), r'\1[redacted]'),
-    (re.compile(r'(?i)([a-z0-9_-]*(?:token|secret|password|passwd|api[_-]?key|access[_-]?key|credential)[a-z0-9_-]*["\']?\s*[=:]\s*["\']?)[^\s"\'&]+'), r'\1[redacted]'),
+    (re.compile(r"""(?i)((?:^|\s)(?:-u|--user)[= ]+["']?[^\s:"']+:)[^\s"']+"""), r'\1[redacted]'),
+    (re.compile(r'(?i)(\bsshpass\s+-p\s*)\S+'), r'\1[redacted]'),
+    (re.compile(r'(?i)(\b(?:mysql|mysqldump|mariadb)\b[^|;&\n]*?\s-p)(?=\S)\S+'), r'\1[redacted]'),
+    (re.compile(r'(?i)([?&][a-z0-9_-]*(?:key|token|secret|sig|signature|auth|password)[a-z0-9_-]*=)[^&\s"\']+'), r'\1[redacted]'),
+    (re.compile(r'(?i)(--?(?:password|passwd|pass|token|secret|api-?key)[= ]+)' + _SECRET_VALUE), r'\1[redacted]'),
+    (re.compile(r"""(?i)(""" + _SECRET_NAME + r"""\\?["']?\s*[=:]\s*)""" + _SECRET_VALUE), r'\1[redacted]'),
 )
 
 

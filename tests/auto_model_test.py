@@ -7,7 +7,8 @@ CLI = '''#!/usr/bin/env python3
 import json, os, sys
 name = os.path.basename(sys.argv[0])
 if 'auth' in sys.argv: print(json.dumps({'loggedIn': True, 'authMethod': os.environ.get('CLAUDE_METHOD', 'claude.ai')})); sys.exit(0)
-if set(sys.argv) & {'login', 'models', '--version', '--help', 'app-server'}: print('Logged in'); sys.exit(0)
+if 'login' in sys.argv: print('Logged in using ChatGPT'); sys.exit(0)
+if set(sys.argv) & {'models', '--version', '--help', 'app-server'}: print('Logged in'); sys.exit(0)
 sys.stdin.read()
 open(os.environ['AUTO_LOG'], 'a').write(name + '\\n')
 if name == 'claude': print(json.dumps({'type': 'result', 'result': 'from ' + name, 'is_error': False}))
@@ -87,7 +88,7 @@ class AutoModelTest(unittest.TestCase):
         path = self.root / 'data/swarmr.json'
         self.quota('none', 0)
         self.proc.terminate(); self.proc.wait(timeout=5); self.proc.stdout.close()
-        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', AUTO_LOG=str(self.log), CLAUDE_METHOD='console')
+        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', AUTO_LOG=str(self.log), CLAUDE_METHOD='api_key')
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
         for _ in range(100):

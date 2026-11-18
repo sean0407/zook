@@ -8,7 +8,7 @@ CODEX = r'''#!/usr/bin/env python3
 import json, os, sys
 a = sys.argv[1:]; here = os.path.dirname(sys.argv[0]); text = sys.stdin.read()
 with open(os.path.join(here, 'runs.jsonl'), 'a') as f: f.write(json.dumps(dict(args=a, prompt=text)) + '\n')
-if 'resume' in a and os.path.exists(os.path.join(here, 'lost')): sys.stderr.write('no rollout found\n'); sys.exit(1)
+if 'resume' in a and os.path.exists(os.path.join(here, 'lost')): sys.stderr.write('Error: no rollout found for thread id x\n'); sys.exit(1)
 if 'PLEASE-FAIL' in text: sys.exit(1)
 print(json.dumps(dict(type='thread.started', thread_id=a[a.index('resume') + 1] if 'resume' in a else 'thread-%d' % len(open(os.path.join(here, 'runs.jsonl')).readlines()))))
 print(json.dumps(dict(type='item.completed', item=dict(type='agent_message', text='ok'))))
@@ -66,6 +66,10 @@ class NativeSessions(unittest.TestCase):
         self.req('PATCH', '/api/bots/' + self.bot['id'], {'model': 'gpt-other'})
         self.say('換模型後'); self.assertNotIn('resume', self.last()['args'])
         self.say('同模型'); self.assertIn('resume', self.last()['args'])
+
+    def test_the_question_comes_last_in_the_prompt(self):
+        self.say('藍鯨有多大'); self.assertTrue(self.last()['prompt'].rstrip().endswith('藍鯨有多大'))
+        self.say('牠吃什麼'); self.assertIn('resume', self.last()['args']); self.assertTrue(self.last()['prompt'].rstrip().endswith('牠吃什麼'))
 
     def test_changing_access_or_planning_starts_over(self):
         self.say('問題'); self.req('PATCH', '/api/bots/' + self.bot['id'], {'access': 'workspace'})

@@ -189,6 +189,7 @@ class App(ThreadingHTTPServer):
         if plan: job['plan'] = True
         if use or replaces: job['noResume'] = True  # another model, or a rewritten history: start a new CLI conversation
         self.__dict__.setdefault('short_prompts', {})[job['id']] = short
+        self.__dict__.setdefault('latest_asks', {})[job['id']] = content
         store.data['jobs'].append(job); store.save(); self.start_job(job, prompt, provider, model, copy.deepcopy(bot), inventory)
         return job
 
@@ -305,7 +306,7 @@ class App(ThreadingHTTPServer):
 
     def finish_session(self, job_id):
         """A reply that did not finish leaves the CLI conversation out of step with what Zook saved, so the next one starts fresh."""
-        self.__dict__.get('short_prompts', {}).pop(job_id, None)
+        self.__dict__.get('short_prompts', {}).pop(job_id, None); self.__dict__.get('latest_asks', {}).pop(job_id, None)
         with self.store.lock:
             job = self.store.find('jobs', job_id) or {}
             if not job.get('chatId') or job.get('status') == 'completed': return
@@ -414,7 +415,6 @@ class App(ThreadingHTTPServer):
                 error = self.attempt_errors.pop(job_id, '')
                 if p == provider: why = fallback_reason(error)
                 acted = job.get('mayHaveActed') or any(c.get('category') not in ('read', 'external_read') for c in (job.get('toolCalls') or [])[before:])
-                if provider_kind(p) == 'antigravity' and permission_mode(store, bot) in ('auto', 'bypass') and not job.get('plan') and fallback_reason(error) == '無法回覆': acted = True  # its output does not list what its tools did
                 if acted:  # It already changed something; repeating the work on another model could do it twice.
                     job.update(status='failed', error=error or 'CLI 執行失敗。', finishedAt=NOW())
                     store.finish_message(job, '', 'failed'); store.save(); return
@@ -446,7 +446,7 @@ class App(ThreadingHTTPServer):
             account = find_account(bot.get('account'), provider)  # an extra account only applies to the provider it belongs to
             env = provider_env(provider, account)
             features = active_features(bot, kind, native, planning, scope)
-            with store.lock: job.update(features=features, nativeAccess=[scope, str(root), bool(native)])
+            with store.lock: job.update(features=features, nativeAccess=[scope, str(root), permission_mode(store, bot), bool(native)])
             resume = self.native_session(job, provider, model, account, cli_cwd)
             keep_session = bool(job.get('chatId')) and kind in PLAN_KINDS
             with store.lock: job['resumed'] = bool(resume)
@@ -481,6 +481,7 @@ class App(ThreadingHTTPServer):
                 if native: prompt += '\n工具說明：' + access_note(scope, root, kind in ('codex', 'antigravity'), kind == 'grok') + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。'
                 else: prompt += '\n工具說明：檔案讀寫與其他動作請使用 zook 工具。zook 工具會依使用者設定的主動性決定是否先請使用者核准，與本機 CLI 沙箱是否唯讀無關；需要時直接呼叫，被拒絕再說明即可。'
             if not selected and scope != 'workspace': prompt += '\n工具說明：' + access_note(scope, root, True)
+            prompt += latest_ask_note(self.__dict__.get('latest_asks', {}).get(job_id))  # the Skill list and tool notes above can bury the question
             adapter = str(pathlib.Path(__file__).with_name('tool_server.py'))
             stdin_prompt = True
             if kind in ('grok', 'generic'):
@@ -587,8 +588,10 @@ class App(ThreadingHTTPServer):
                 raise RuntimeError('回覆超過大小限制。')
             parsed = parse_cli_output(kind if kind in PLAN_KINDS else 'plain', output.decode('utf-8', errors='replace'), model)
             if parsed['quota']: self.record_quota(provider, parsed['quota'], account['id'] if account else '')
-            if resume and (proc.returncode != 0 or parsed['isError']) and session_lost((stderr or b'').decode('utf-8', 'replace') + parsed['error'] + output[-3000:].decode('utf-8', 'replace')):
+            if resume and proc.returncode != 0 and session_lost((stderr or b'').decode('utf-8', 'replace')):
                 with store.lock: job['resumeGone'] = True
+            if native and cli_used_tools(kind, output.decode('utf-8', errors='replace')):
+                with store.lock: job['mayHaveActed'] = True  # these CLIs do not always report what their tools did when they fail
             parsed['web'] = (parsed.get('web') or []) + feature_events(kind, output.decode('utf-8', errors='replace'), features, cli_cwd, started_at)
             if parsed.get('web'):
                 with store.lock:
