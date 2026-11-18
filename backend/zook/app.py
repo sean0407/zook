@@ -674,6 +674,7 @@ class App(GroupRuns, ThreadingHTTPServer):
         tools = [(runtime._schema('zook_remember', 'Save a long-term memory for future conversations (user preferences, facts, decisions). Never store secrets.',
                                   {'content': S('What to remember, one concise statement'), 'scope': S('bot (only you) or shared (all Bots); default bot')}, ['content'], False), remember, False)]
         tools += self.schedule_tools(bot, runtime, group_id)
+        if group_id: tools.append(group_file_tool(store, group_id, runtime))
         if not bot.get('isAdmin'): return tools
         def find_bot(name):
             hit = [b for b in store.data['bots'] if b['name'].strip().lower() == name.strip().lower()]

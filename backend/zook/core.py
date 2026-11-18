@@ -468,7 +468,7 @@ def describe_call(call):
     if name == 'native_write': return '修改檔案「%s」' % base(a.get('path'))
     if name == 'native_command': return '在工作資料夾執行指令'
     fixed = {'zook_read_skill': '閱讀 Skill「%s」的說明' % (call.get('sourceLabel') or 'Skill'), 'zook_read_skill_resource': '查看 Skill 的參考資料「%s」' % base(a.get('path')),
-             'zook_run_skill_helper': '執行 Skill 附帶的小程式', 'zook_workspace_list': '查看工作區裡有哪些檔案', 'zook_workspace_read': '讀取檔案「%s」' % base(a.get('path')),
+             'zook_run_skill_helper': '執行 Skill 附帶的小程式', 'zook_workspace_list': '查看工作區裡有哪些檔案', 'zook_group_file_read': '讀取群組共用檔案「%s」' % (a.get('name') or ''), 'zook_workspace_read': '讀取檔案「%s」' % base(a.get('path')),
              'zook_workspace_write': '把內容存成檔案「%s」' % base(a.get('path')), 'zook_list_team': '查看團隊裡有哪些 Bot 和群組', 'zook_create_bot': '新增 Bot「%s」' % (a.get('name') or ''),
              'zook_create_group': '建立群組「%s」' % (a.get('name') or '、'.join(a.get('bot_names') or [])), 'zook_start_group_discussion': '在群組「%s」發起討論' % (a.get('group_name') or ''),
              'zook_feature': '使用%s' % str(a.get('feature') or '特色功能'), 'zook_remember': '記住一件事：「%s」' % str(a.get('content') or '')[:60], 'zook_list_schedules': '查看排程',

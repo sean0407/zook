@@ -83,3 +83,16 @@ def sync_group_files_out(store, group_id, bot_name, bot_id, seen):
         if moved: name = free_group_file_name(shared, name, bot_name)
         temp = shared / ('.incoming-' + ID()); clone_file(entry.path, temp); os.replace(str(temp), str(shared / name)); saved.append(name)
     return saved, skipped
+
+
+def group_file_tool(store, group_id, runtime):
+    """Reads a shared text file for a Bot whose own file tools cannot reach it, such as in 謹慎."""
+    def read(args):
+        with store.lock:
+            group = store.find('groups', group_id)
+            found = group_file_path(store, group, args['name']) if group else None
+        if not found: raise RuntimeError('找不到這個共用檔案。')
+        if found.stat().st_size > runtime.MAX_TEXT: raise RuntimeError('這個檔案超過 128 KB，無法用這個工具讀取。')
+        try: return {'name': args['name'], 'content': found.read_text(encoding='utf-8')}
+        except UnicodeDecodeError: raise RuntimeError('這個檔案不是文字檔，無法用這個工具讀取。')
+    return (runtime._schema('zook_group_file_read', "Read a text file from this group's shared files by its exact name.", {'name': {'type': 'string', 'description': 'Exact file name'}}, ['name']), read, False)
