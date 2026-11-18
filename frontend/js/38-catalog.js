@@ -14,7 +14,7 @@
       const [label, hint] = CATALOG_AUTH[i.auth], busy = state.catalogBusy;
       const action = i.auth === 'manual' ? `<button class="link" data-action="catalog-why" data-id="${esc(i.id)}">為什麼不行？</button>` : `<button class="${i.auth === 'key' ? 'secondary' : 'primary'} small-btn" data-action="catalog-add" data-id="${esc(i.id)}" ${busy ? 'disabled' : ''}>${busy === i.id ? '處理中…' : label}</button>`;
       const failed = state.catalogErrors?.[i.id];
-      return `<article class="dir-card catalog-card ${i.auth === 'manual' ? 'off' : ''}">${itemIcon(i.name)}<div class="dir-body"><div class="dir-title"><h3 title="${esc(i.name)}">${esc(i.name)}</h3>${action}</div><p class="dir-desc">${esc(i.about)}</p><div class="dir-meta">${failed ? `<span class="error-text">沒有連上：${esc(failed)}</span>` : `<span>${esc(hint)}</span>`}</div></div></article>`;
+      return `<article class="dir-card catalog-card ${i.auth === 'manual' ? 'off' : ''}">${itemIcon(i.name, i.icon)}<div class="dir-body"><div class="dir-title"><h3 title="${esc(i.name)}">${esc(i.name)}</h3>${action}</div><p class="dir-desc">${esc(i.about.replace(/。$/, ''))}</p><div class="dir-meta">${failed ? `<span class="error-text">沒有連上：${esc(failed)}</span>` : `<span>由 ${esc(i.vendor || i.name)} 提供 · ${esc(hint)}</span>`}</div></div></article>`;
     };
     const body = Object.entries(groups).map(([name, items]) => `<section class="dir-section"><h2><span class="catalog-group">${esc(name)}</span><small>${items.length}</small></h2><div class="dir-grid">${items.map(card).join('')}</div></section>`).join('');
     return `<section class="dir-section catalog-intro"><h2 class="catalog-head">連接器目錄</h2><p class="muted">各家官方連接器，按一下加入。</p></section>${body || '<div class="detail-empty">目錄裡的連接器都已經加入，或沒有符合搜尋的項目。</div>'}`;

@@ -146,7 +146,7 @@ def inventory_for(store):
             elif not value: waiting = True
         data['_private']['mcp'][ident] = config
         data['mcp'].insert(3 + own.index(record), {'id': ident, 'name': record['name'], 'source': 'zook', 'transport': record['transport'], 'status': 'configured',
-                            'editable': True, 'config': connector_view(record), 'needsKey': waiting,
+                            'editable': True, 'config': connector_view(record), 'needsKey': waiting, 'icon': catalog_icon_for_url(record.get('url')) if record['transport'] == 'http' else None,
                             'canLogin': record['transport'] == 'http' and not record.get('secretName') and not secret,
                             'signedIn': bool(record.get('oauth')) and not oauth_needs_login(store, record['id']),
                             'needsLogin': bool(record.get('oauth')) and oauth_needs_login(store, record['id']), 'accounts': oauth_accounts(record)})
@@ -243,7 +243,7 @@ def integrations(store):
         record = records.get(item['id'])
         if record and record.get('originPath') and record.get('stamp') and os.path.isfile(os.path.join(record['originPath'], 'SKILL.md')):
             item['canUpdate'] = skill_stamp(record['originPath']) != record['stamp']
-    with_icons = lambda items, field: [dict(x, icon=icon_for(x.get(field)) or icon_for(x.get('plugin', '')) ) for x in items]
+    with_icons = lambda items, field: [dict(x, icon=x.get('icon') or icon_for(x.get(field)) or icon_for(x.get('plugin', '')) ) for x in items]
     return dict(skills=with_icons(data['skills'], 'name'), mcp=with_icons(data['mcp'], 'name'), plugins=with_icons(data.get('plugins', []), 'displayName'), providers=provider_info())
 
 

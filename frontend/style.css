@@ -1607,3 +1607,19 @@ button.run-row:hover { background: #f1f1f1; }
 .bot-preview { position: relative; }
 .bot-preview .pin-toggle { position: absolute; top: 30px; left: calc(50% + 62px); }
 .bot-preview .pin-toggle input { width: auto; border: 0; padding: 0; }
+/* Skills, connectors and the catalog as a plain list: rows separated by a hairline, two columns, no filled cards. */
+.dir-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 44px; }
+.dir-card, .dir-card:hover { background: none; border-radius: 0; padding: 14px 0; min-height: 0; border-bottom: 1px solid #ececec; align-items: flex-start; }
+.dir-icon { width: 30px; height: 30px; border-radius: 7px; border: 0; background: #f3f3f3; font-size: 14px; margin-top: 2px; }
+.dir-icon.has-img { background: none; }
+.dir-icon.has-img img { width: 100%; height: 100%; border-radius: 7px; }
+.dir-body { display: grid; gap: 3px; flex: 1; min-width: 0; }
+.dir-title { align-items: center; min-height: 24px; }
+.dir-title h3 { font-size: 14.5px; font-weight: 500; }
+.dir-desc { font-size: 13px; color: #6b6b6b; -webkit-line-clamp: 1; }
+.dir-meta { margin-top: 0; color: #9a9a9a; font-size: 12px; gap: 10px; }
+.dir-section { margin-bottom: 30px; }
+.dir-section h2 { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+.dir-card .small-btn { padding: 4px 12px; font-size: 12.5px; }
+.dir-more { display: none; }
+@media (max-width: 900px) { .dir-grid { grid-template-columns: minmax(0, 1fr); } }

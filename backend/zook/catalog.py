@@ -51,10 +51,21 @@ CONNECTOR_CATALOG = [
 ]
 
 
+def catalog_icon(item_id):
+    """The company's own logo for a catalog entry, when Zook carries one."""
+    name = 'asana.png' if item_id == 'asana' else 'cat-%s.png' % item_id
+    return '/icons/' + name if (pathlib.Path(__file__).resolve().parents[1] / 'frontend' / 'icons' / name).is_file() else None
+
+
+def catalog_icon_for_url(url):
+    item = next((x for x in CONNECTOR_CATALOG if x['url'] == url), None)
+    return catalog_icon(item['id']) if item else None
+
+
 def catalog_view(store):
     """The catalog, with which entries are already in Zook."""
     with store.lock: have = {c.get('url'): c['id'] for c in store.data.get('connectors') or []}
-    return dict(items=[dict(item, added=item['url'] in have, connector='zook:' + have[item['url']] if item['url'] in have else '') for item in CONNECTOR_CATALOG])
+    return dict(items=[dict(item, icon=catalog_icon(item['id']), vendor=item['name'].split('（')[0], added=item['url'] in have, connector='zook:' + have[item['url']] if item['url'] in have else '') for item in CONNECTOR_CATALOG])
 
 
 _catalog_lock = threading.Lock()  # one add at a time, so a double click cannot make two connectors
