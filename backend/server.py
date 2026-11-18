@@ -683,7 +683,11 @@ def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, 
 
 
 def find_cli(provider):
-    return P.binary_for(_active['data'], provider)
+    found = P.binary_for(_active['data'], provider)
+    if found: return found
+    s = P.spec(_active['data'], provider) or {}  # installed by Zook into its own tools folder
+    private = _active['dir'] / 'tools/bin' / str(s.get('binary')) if s.get('npm_package') else None
+    return str(private) if private and os.access(str(private), os.X_OK) else None
 
 
 def provider_kind(provider):
@@ -943,13 +947,13 @@ def provider_env(provider, account=None):
     if provider in ACCOUNT_HOME: env[ACCOUNT_HOME[provider]] = str(account_dir(account['id']))
     if account.get('type') == 'key':
         key = secret_get(account['id'])
-        if not key: raise RuntimeError('找不到帳號「%s」的 API 金鑰，請到「模型帳號」頁重新新增。' % account.get('name', ''))
+        if not key: raise RuntimeError('找不到帳號「%s」的 API 金鑰，請到「各模型使用量」頁重新新增。' % account.get('name', ''))
         for name in ACCOUNT_KEYS.get(provider, ()): env[name] = key
     return env
 
 
 def account_view(account):
-    """What the 模型帳號 page shows for one extra account."""
+    """What the 各模型使用量 page shows for one extra account."""
     provider = account['provider']
     item = dict(id=account['id'], name=account['name'], type=account['type'], status='unknown', method='', plan='', email='')
     if account['type'] == 'key':
@@ -976,7 +980,10 @@ def account_status(provider, account=None):
                 item['method'] = 'Grok 帳號'
                 item['email'] = str((_active['data'].get('accountInfo') or {}).get(info_key, {}).get('email') or '')
         elif s.get('kind') == 'generic':
-            if s.get('status'):
+            if s.get('signed_in_file'):  # only whether the CLI has signed in; the file is never opened
+                signed_in = os.path.exists(os.path.expanduser(s['signed_in_file'])) or bool(env.get('GEMINI_API_KEY'))
+                item.update(status='logged_in' if signed_in else 'not_logged_in', method='Google 帳號' if signed_in else '')
+            elif s.get('status'):
                 p = subprocess.run(shlex.split(s['status']), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
                 item['status'] = 'logged_in' if p.returncode == 0 else 'not_logged_in'
             else: item['status'] = 'installed'
@@ -1024,8 +1031,9 @@ def codex_account(path):
 
 class LoginFlow:
     """Runs the provider CLI's own interactive login; Zook never sees credentials."""
-    def __init__(self, provider, args, account=None):
+    def __init__(self, provider, args, account=None, failure='登入沒有完成。請重試，或在終端機執行登入指令查看詳細訊息。'):
         self.provider, self.lines, self.state, self.error = provider, [], 'running', ''
+        self.failure = failure
         self.started = time.time(); self.lock = threading.Lock()
         self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                      env=provider_env(provider, account), start_new_session=True)
@@ -1048,7 +1056,7 @@ class LoginFlow:
             if code == 0: self.state = 'succeeded'
             else:
                 self.state = 'failed'
-                self.error = '登入逾時，請重試。' if code is None else '登入沒有完成。請重試，或在終端機執行登入指令查看詳細訊息。'
+                self.error = '登入逾時，請重試。' if code is None else self.failure
 
     def send(self, text):
         if self.state != 'running' or not self.proc.stdin: raise RuntimeError('登入流程已結束。')
@@ -1132,6 +1140,8 @@ def install_args(provider):
     """Install (when missing) or update (when present) using the vendor's own installer or update command."""
     s = P.spec(_active['data'], provider)
     if not s: raise RuntimeError('找不到這個提供者。')
+    if s.get('npm_package'):
+        return [sys.executable, str(pathlib.Path(__file__).with_name('cli_installer.py')), '--tools', str(_active['dir'] / 'tools'), '--package', s['npm_package'], '--binary', s['binary']]
     path = find_cli(provider)
     if path and s.get('update'): return [path] + s['update']
     if not s.get('install'): raise RuntimeError('這個提供者沒有設定安裝指令。')
@@ -1714,10 +1724,10 @@ def codex_models_cli(binary):
     return normalize_models(result.get('data', []) if isinstance(result, dict) else [], 'cli')
 
 
-def codex_rpc(binary, method, params):
+def codex_rpc(binary, method, params, env=None):
     """One read-only JSON-RPC call to a short-lived `codex app-server`."""
     proc = subprocess.Popen([binary, 'app-server', '--listen', 'stdio://'], stdin=subprocess.PIPE,
-                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True, env=env)
     messages = queue.Queue(maxsize=128)
     def read_output():
         try:
@@ -2390,7 +2400,7 @@ class App(ThreadingHTTPServer):
                 if not job or job['status'] != 'running': return
                 if bot is None: bot = copy.deepcopy(store.find('bots', job['botId']))
             kind = provider_kind(provider)
-            if not kind: raise RuntimeError('找不到這個提供者，請到「模型帳號」頁確認。')
+            if not kind: raise RuntimeError('找不到這個提供者，請到「各模型使用量」頁確認。')
             web = web_enabled()
             # Each CLI keeps its own built-in tools (files, commands) inside the Bot's workspace when 主動性 is 自動 or 全部允許.
             # In 謹慎 only Zook's tools are available, because built-in tools cannot ask before each action.
@@ -2467,7 +2477,7 @@ class App(ThreadingHTTPServer):
                                                     for cell in ('MCPS', 'AGENTS', 'RULES', 'SKILLS', 'HOOKS')})
                     stdin_prompt = False
                 else:
-                    args, stdin_prompt = P.command_args(P.spec(store.data, provider), str(prompt_file), prompt, model, full=scope == 'full')
+                    args, stdin_prompt = P.command_args(P.spec(store.data, provider), str(prompt_file), prompt, model, full=scope == 'full', binary=binary)
             elif provider == 'codex':
                 images = [x for x in (job.get('attachments') or []) if pathlib.Path(x).suffix.lower() in IMAGE_TYPES]
                 args = [binary, 'exec'] + [a for x in images for a in ('-i', x)] + ['--json'] + ((['--dangerously-bypass-approvals-and-sandbox'] if scope == 'full' else codex_permission_args(binary)) if native and selected else ['--sandbox', 'read-only']) + ['--skip-git-repo-check', '--ephemeral', '--ignore-user-config', '--color', 'never',
@@ -2524,7 +2534,7 @@ class App(ThreadingHTTPServer):
                 raise RuntimeError('執行逾時。')
             if len(output) > MAX_BODY: raise RuntimeError('回覆超過大小限制。')
             parsed = parse_cli_output(kind if kind in ('codex', 'claude', 'grok') else 'plain', output.decode('utf-8', errors='replace'), model)
-            if parsed['quota'] and not account: self.record_quota(provider, parsed['quota'])  # the usage page tracks the CLI's own sign-in
+            if parsed['quota']: self.record_quota(provider, parsed['quota'], account['id'] if account else '')
             if parsed.get('web'):
                 with store.lock:
                     job = store.find('jobs', job_id)
@@ -2535,15 +2545,15 @@ class App(ThreadingHTTPServer):
                     try:
                         result = parsed['error']
                         if '403' in result and 'authenticat' in result.lower():
-                            raise RuntimeError('Claude 登入驗證被服務拒絕（403）。請到「模型帳號」頁重新登入，或確認帳號權限。')
+                            raise RuntimeError('Claude 登入驗證被服務拒絕（403）。請到「各模型使用量」頁重新登入，或確認帳號權限。')
                         if 'not logged in' in result.lower():
-                            raise RuntimeError('Claude 尚未登入。請到「模型帳號」頁登入後重試。')
+                            raise RuntimeError('Claude 尚未登入。請到「各模型使用量」頁登入後重試。')
                     except (ValueError, AttributeError): pass
                 detail = (stderr or b'').decode('utf-8', errors='replace').lower() + output.decode('utf-8', errors='replace').lower() + parsed['error'].lower()
                 if 'out of credits' in detail or 'insufficient credit' in detail or 'quota' in detail or 'usage limit' in detail:
                     raise RuntimeError('CLI 帳號額度不足或已達使用上限，請到該服務補充額度後重試。')
                 if 'not logged in' in detail or 'please log in' in detail or 'login required' in detail:
-                    raise RuntimeError('CLI 尚未登入。請到「模型帳號」頁登入後重試。')
+                    raise RuntimeError('CLI 尚未登入。請到「各模型使用量」頁登入後重試。')
                 raise RuntimeError('CLI 執行失敗，請檢查登入狀態及模型設定。')
             if parsed['isError']:
                 if 'out of credits' in parsed['error'].lower() or 'usage limit' in parsed['error'].lower() or 'rate limit' in parsed['error'].lower():
@@ -2554,7 +2564,7 @@ class App(ThreadingHTTPServer):
             if not content: raise RuntimeError('CLI 沒有回傳內容。')
             with store.lock:
                 job = store.find('jobs', job_id)
-                if parsed['usage']: job['usage'] = dict(parsed['usage'], provider=provider)
+                if parsed['usage']: job['usage'] = dict(parsed['usage'], provider=provider, account=account['id'] if account else '')
                 if job['status'] == 'running':
                     job.update(status='completed', content=content, finishedAt=NOW())
                     store.finish_message(job, content, 'completed'); store.save()
@@ -2737,12 +2747,12 @@ class App(ThreadingHTTPServer):
             if released: self.store.save()
         return released
 
-    def record_quota(self, provider, info):
+    def record_quota(self, provider, info, account_id='', source='reply'):
         snap = normalize_quota(provider, info)
         if not snap: return
-        snap.update(updatedAt=NOW(), source='reply')
+        snap.update(updatedAt=NOW(), source=source)
         with self.store.lock:
-            self.store.data.setdefault('quota', {})[provider] = snap; self.store.save()
+            self.store.data.setdefault('quota', {})[provider + ('@' + account_id if account_id else '')] = snap; self.store.save()
 
     def cancel_job(self, job):
         # Caller holds the store lock.
@@ -3013,25 +3023,28 @@ def normalize_quota(provider, info):
     return dict(windows=windows, status=info.get('status'), overage=info.get('overageStatus')) if windows or info.get('status') else None
 
 
-def claude_quota_probe():
+def claude_quota_probe(env=None):
     """Smallest possible Claude request (haiku, one word) to read the current limits. User-triggered only."""
     path = find_cli('claude')
     if not path: raise RuntimeError('找不到 Claude CLI。')
     p = subprocess.run([path, '--print', '--model', 'haiku', '--safe-mode', '--strict-mcp-config', '--no-session-persistence', '--tools', '',
                         '--output-format', 'stream-json', '--verbose'], input=b'Reply with OK', stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                       env=claude_personal_env(), timeout=90, cwd=tempfile.gettempdir())
+                       env=env or claude_personal_env(), timeout=90, cwd=tempfile.gettempdir())
     parsed = parse_cli_output('claude', p.stdout.decode('utf-8', 'replace'))
     if not parsed['quota']: raise RuntimeError('Claude 沒有回報額度資訊。' + ('請確認已登入。' if p.returncode else ''))
     return parsed['quota']
 
 
-def provider_usage(store, provider):
-    """What Zook itself spent through one provider in the last 5 hours and 7 days."""
+def provider_usage(store, provider, account_id=''):
+    """What Zook itself spent through one account of a provider ('' is the CLI's own sign-in) in the last 5 hours and 7 days."""
     now = time.time(); windows = {'fiveHour': 5 * 3600, 'week': 7 * 86400}
     out = {k: dict(replies=0, tokens=0, costUsd=0.0, hasCost=False) for k in windows}
+    bots = {b['id']: b for b in store.data['bots']}
     for job in store.data['jobs']:
         u = job.get('usage')
         if not isinstance(u, dict) or u.get('provider') != provider: continue
+        used = u['account'] if 'account' in u else (find_account((bots.get(job.get('botId')) or {}).get('account'), provider) or {}).get('id', '')  # older replies: the Bot's account
+        if used != account_id: continue
         try: age = now - datetime.datetime.fromisoformat(str(job.get('finishedAt') or job.get('createdAt'))).timestamp()
         except ValueError: continue
         for key, span in windows.items():
@@ -3081,29 +3094,63 @@ class Handler(BaseHTTPRequestHandler):
     server_version = 'Zook'; sys_version = ''
     def log_message(self, *args): pass
 
-    def quota(self):
+    def codex_live_quota(self, account=None):
+        """Codex limits straight from the CLI, at most once a minute per account."""
         store, app = self.server.store, self.server
+        key = 'codex' + ('@' + account['id'] if account else '')
+        caches = app.__dict__.setdefault('codex_quota_caches', {})
+        hit = caches.get(key)
+        if hit and time.time() - hit[0] < 60: return hit[1]
+        try: live = normalize_quota('codex', codex_rpc(find_cli('codex'), 'account/rateLimits/read', {}, provider_env('codex', account)))
+        except (OSError, ValueError, TimeoutError, AttributeError, RuntimeError): live = None
+        if not live: return None
+        live.update(updatedAt=NOW(), source='live'); caches[key] = (time.time(), live)
+        with store.lock: store.data.setdefault('quota', {})[key] = live; store.save()
+        return live
+
+    def quota(self):
+        store = self.server.store
         result = []
-        for provider in [x for x in P.active_ids(store.data) if x in ('codex', 'claude', 'grok')]:
+        for provider in P.active_ids(store.data):
             account = account_status(provider)
             with store.lock: snap = copy.deepcopy(store.data.get('quota', {}).get(provider))
-            if provider == 'codex' and account['status'] == 'logged_in':
-                cached = getattr(app, 'codex_quota_cache', None)
-                if cached and time.time() - cached[0] < 60: snap = cached[1]
-                else:
-                    try:
-                        live = normalize_quota('codex', codex_rpc(find_cli('codex'), 'account/rateLimits/read', {}))
-                        if live:
-                            live.update(updatedAt=NOW(), source='live'); snap = live; app.codex_quota_cache = (time.time(), live)
-                            with store.lock: store.data.setdefault('quota', {})['codex'] = live; store.save()
-                    except (OSError, ValueError, TimeoutError, AttributeError): pass
-            if provider == 'grok': snap = None  # Grok CLI does not expose plan limits outside its own /usage screen yet.
+            if provider == 'codex' and account['status'] == 'logged_in': snap = self.codex_live_quota() or snap
+            if provider not in ('codex', 'claude'): snap = None  # the other CLIs do not report plan limits to Zook
+            profiles = []
+            for extra in [a for a in store.data.get('accounts') or [] if a.get('provider') == provider]:
+                try: view = account_view(extra)
+                except (OSError, ValueError, RuntimeError): view = dict(id=extra['id'], name=extra['name'], type=extra['type'], status='unknown', method='', plan='', email='')
+                billed = extra['type'] == 'key' or view.get('method') in ('Anthropic Console', 'API 金鑰')
+                with store.lock:
+                    used = provider_usage(store, provider, extra['id']); saved = copy.deepcopy(store.data.get('quota', {}).get(provider + '@' + extra['id']))
+                if provider == 'codex' and view['status'] == 'logged_in' and not billed: saved = self.codex_live_quota(extra) or saved
+                profiles.append(dict(view, zookUsage=used, quota=saved if provider in ('codex', 'claude') else None, apiBilling=billed, noQuotaApi=provider not in ('codex', 'claude')))
             with store.lock: zook = provider_usage(store, provider)
             result.append(dict(id=provider, name=account['name'], vendor=(P.spec(store.data, provider) or {}).get('vendor', ''), zookUsage=zook,
-                               status=account['status'], method=account['method'], noQuotaApi=provider == 'grok',
+                               status=account['status'], method=account['method'], noQuotaApi=provider not in ('codex', 'claude'),
                                plan=(snap or {}).get('plan') or account['plan'], email=account['email'], workspace=account.get('workspace', ''), quota=snap,
-                               apiBilling=account['method'] in ('Anthropic Console', 'API 金鑰')))
+                               apiBilling=account['method'] in ('Anthropic Console', 'API 金鑰'), profiles=profiles))
         return {'providers': result}
+
+    def detect_usage(self):
+        """偵測使用量: read fresh limits for every signed-in account. Claude only reports them with a reply, so each subscription gets one tiny request."""
+        store, app = self.server.store, self.server
+        app.__dict__.setdefault('codex_quota_caches', {}).clear()
+        targets = []
+        if 'claude' in P.active_ids(store.data):
+            main = account_status('claude')
+            if main['status'] == 'logged_in' and main['method'] != 'Anthropic Console': targets.append(None)
+            for extra in [a for a in store.data.get('accounts') or [] if a.get('provider') == 'claude' and a.get('type') == 'login']:
+                view = account_view(extra)
+                if view['status'] == 'logged_in' and view['method'] != 'Anthropic Console': targets.append(extra)
+        def probe(extra):
+            try: app.record_quota('claude', claude_quota_probe(provider_env('claude', extra) if extra else None), extra['id'] if extra else '', 'probe')
+            except (RuntimeError, OSError, subprocess.TimeoutExpired): pass
+        threads = [threading.Thread(target=probe, args=(x,), daemon=True) for x in targets]
+        for t in threads: t.start()
+        for t in threads: t.join(100)
+        app.claude_probe_at = time.time()
+        return self.quota()
 
     def accounts(self, parts):
         logins = self.server.logins
@@ -3125,7 +3172,7 @@ class Handler(BaseHTTPRequestHandler):
                 ver = provider_version(provider)
                 item.update(version={k: ver[k] for k in ('current', 'latest', 'updateAvailable', 'error')} if ver else None)
                 item.update(login=flow.view() if flow else None, install=inst.view() if inst else None, loginMethods=[dict(id=m, label=l) for m, l in login_methods(provider)],
-                            canInstall=bool(s.get('install') or s.get('update')), installCommand=s.get('install', ''), canUpdate=bool(s.get('update')),
+                            canInstall=bool(s.get('install') or s.get('update')), terminalLogin=bool(s.get('terminal_login')), installCommand=s.get('install', ''), canUpdate=bool(s.get('update')),
                             canLogout=bool(provider in ('codex', 'claude') or s.get('logout')), removable=provider not in P.DEFAULT_ADDED,
                             requires=s.get('requires', ''), requirementMet=not s.get('requires') or bool(P.find_binary(s['requires'])),
                             config={k: s.get(k, '') for k in ('command', 'args', 'model_args', 'install', 'login', 'status')} if s.get('custom') else None,
@@ -3179,7 +3226,7 @@ class Handler(BaseHTTPRequestHandler):
                     store.data['accounts'] = [a for a in store.data['accounts'] if a['id'] != account['id']]
                     for b in store.data['bots']:
                         if b.get('account') == account['id']: b['account'] = ''  # back to the CLI's own sign-in
-                    (store.data.get('accountInfo') or {}).pop(login_key, None); store.save()
+                    (store.data.get('accountInfo') or {}).pop(login_key, None); (store.data.get('quota') or {}).pop(login_key, None); store.save()
                 secret_delete(account['id'])
                 shutil.rmtree(str(_active['dir'] / 'accounts' / account['id']), ignore_errors=True)
                 return self.respond(200, {'ok': True})
@@ -3205,8 +3252,16 @@ class Handler(BaseHTTPRequestHandler):
             if action == 'install':
                 inst = self.server.installs.get(provider)
                 if inst and inst.state == 'running': return self.error(409, '安裝流程已在進行中。')
-                self.server.installs[provider] = LoginFlow(provider, install_args(provider))
+                self.server.installs[provider] = LoginFlow(provider, install_args(provider), failure='安裝沒有完成，請確認網路連線後再試。')
                 return self.respond(202, self.server.installs[provider].view())
+            if action == 'terminal-login':
+                path = find_cli(provider); s = P.spec(self.server.store.data, provider) or {}
+                if not path or not s.get('terminal_login'): raise ValueError('這個模型不能用終端機登入。')
+                folder = _active['dir'] / 'tools'; folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+                script = folder / (provider + '-login.command')
+                script.write_text('#!/bin/sh\nexec %s\n' % shlex.quote(path), encoding='utf-8'); script.chmod(0o700)
+                subprocess.run(['/usr/bin/open', str(script)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=True)
+                return self.respond(200, {'ok': True})
             if action == 'install/cancel':
                 inst = self.server.installs.get(provider)
                 if inst: inst.cancel()
@@ -3368,6 +3423,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/quota' and self.command == 'GET':
                 if parse_qs(urlsplit(self.path).query).get('auto', [''])[0] == '1': self.server.auto_claude_quota()
                 return self.respond(200, self.quota())
+            if path == '/api/quota/detect' and self.command == 'POST' and not self.device:
+                self.body(); return self.respond(200, self.detect_usage())
             if path == '/api/quota/claude/refresh' and self.command == 'POST':
                 self.body()
                 self.server.claude_probe_at = time.time()

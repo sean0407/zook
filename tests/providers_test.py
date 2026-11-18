@@ -82,7 +82,7 @@ class ProvidersTest(unittest.TestCase):
         self.assertEqual((grok['status'], [m['id'] for m in grok['loginMethods']]), ('not_logged_in', ['browser', 'device']))
         self.assertEqual(grok['version'], {'current': '1.0.77', 'latest': '1.0.78', 'updateAvailable': True, 'error': ''})
         self.assertIn('gemini', [c['id'] for c in data['catalog']])
-        self.assertFalse(next(c for c in data['catalog'] if c['id'] == 'gemini')['requirementMet'])  # no npm in this PATH
+        self.assertTrue(next(c for c in data['catalog'] if c['id'] == 'gemini')['requirementMet'])  # Zook brings its own Node.js
         models = self.req('GET', '/api/models?provider=grok')[1]
         self.assertEqual([m['id'] for m in models['models']], ['grok-4.6', 'grok-4.5'])
         self.req('POST', '/api/accounts/grok/login', {'method': 'device'})
@@ -149,9 +149,6 @@ class ProvidersTest(unittest.TestCase):
             time.sleep(0.1)
         self.assertEqual(inst['state'], 'succeeded')
         self.assertIn('Updated to 1.0.78', ' '.join(inst['log']))
-        self.assertEqual(self.req('POST', '/api/accounts/gemini/add', {})[0], 200)
-        status, err = self.req('POST', '/api/accounts/gemini/install', {})
-        self.assertEqual(status, 409); self.assertIn('Node.js', err['error'])
 
     def test_custom_provider_lifecycle(self):
         self.assertEqual(self.req('POST', '/api/accounts/custom', {'name': 'X', 'command': 'echo-cli --bad'})[0], 400)

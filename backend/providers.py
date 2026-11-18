@@ -4,7 +4,7 @@ Built-in entries come from each vendor's own install script and CLI help:
 - Claude Code: https://claude.ai/install.sh, `claude update`
 - Codex:       https://chatgpt.com/codex/install.sh, `codex update`
 - Grok Build:  https://x.ai/cli/install.sh, `grok update`, `grok login`, `grok models`
-- Gemini CLI:  npm package @google/gemini-cli (needs Node.js / npm)
+- Gemini CLI:  npm package @google/gemini-cli (Zook installs its own Node.js for it; see cli_installer.py)
 
 Custom providers are any other CLI the user configures: a command, its arguments with
 {prompt}/{prompt_file}/{model} placeholders, and optional install/login/status commands.
@@ -30,9 +30,10 @@ CATALOG = {
                  login=[('browser', '用 Grok 帳號登入', ['login', '--oauth']), ('device', '裝置碼登入', ['login', '--device-auth'])],
                  logout=['logout'], docs='https://docs.x.ai', version_check=['update', '--check', '--json']),
     'gemini': dict(name='Gemini（Google）', vendor='Google', binary='gemini', kind='generic', tools=False,
-                   install='npm install -g @google/gemini-cli', requires='npm', args='-p {prompt}', model_args='-m {model}', full_args='--yolo',
+                   install='Zook 會從 https://nodejs.org 下載 Node.js，再安裝 @google/gemini-cli', npm_package='@google/gemini-cli', terminal_login=True,
+                   signed_in_file='~/.gemini/oauth_creds.json', args='-p {prompt}', model_args='-m {model}', full_args='--yolo',
                    latest_url='https://registry.npmjs.org/@google/gemini-cli/latest',
-                   login_note='第一次使用請在終端機執行 gemini 完成 Google 登入。', docs='https://github.com/google-gemini/gemini-cli'),
+                   docs='https://github.com/google-gemini/gemini-cli'),
 }
 DEFAULT_ADDED = ('codex', 'claude')
 CUSTOM_PREFIX = 'custom-'
@@ -130,10 +131,10 @@ def validate_custom(body, existing_ids):
                 install=text('install', 1000), login=text('login', 500), status=text('status', 500))
 
 
-def command_args(s, prompt_file, prompt, model, full=False):
+def command_args(s, prompt_file, prompt, model, full=False, binary=None):
     """argv for a generic/custom provider. Returns (argv, use_stdin).
     `full` adds the CLI's own switch for running every tool without asking, when the Bot may use the whole Mac."""
-    binary = find_binary(s.get('command') or s.get('binary'), s.get('extra_paths', ()))
+    binary = binary or find_binary(s.get('command') or s.get('binary'), s.get('extra_paths', ()))
     if not binary: raise RuntimeError('找不到這個 CLI，請先安裝。')
     template = s.get('args') or ''
     use_stdin = '{prompt}' not in template and '{prompt_file}' not in template

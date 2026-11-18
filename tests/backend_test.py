@@ -120,7 +120,7 @@ print(json.dumps({'result':'personal response'}))
             if job['status'] != 'running': break
             time.sleep(.02)
         self.assertEqual(job['status'], 'failed')
-        self.assertIn('模型帳號', job['error'])
+        self.assertIn('各模型使用量', job['error'])
 
     def test_models_rejects_invalid_provider(self):
         self.assertEqual(self.request('GET', '/api/models?provider=unknown')[0], 400)
