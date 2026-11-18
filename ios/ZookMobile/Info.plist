@@ -11,7 +11,7 @@
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>LSRequiresIPhoneOS</key><true/>
-    <key>NSCameraUsageDescription</key><string>用來掃描 Mac 上的配對 QR code。</string>
+    <key>NSCameraUsageDescription</key><string>用來掃描 Mac 上的配對 QR code，以及拍照傳給 Bot。</string>
     <key>NSFaceIDUsageDescription</key><string>用 Face ID 解鎖 Zook。</string>
     <key>UILaunchScreen</key><dict/>
     <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>

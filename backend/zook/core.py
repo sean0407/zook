@@ -509,7 +509,8 @@ MAX_REMOTE_DEVICES = 10
 DEVICE_ALLOWED = [('GET', r'/api/state'), ('GET', r'/api/jobs/[^/]+'), ('POST', r'/api/jobs/[^/]+/cancel'), ('POST', r'/api/approvals/[^/]+'),
                   ('POST', r'/api/chat'), ('GET', r'/api/groups/[^/]+'), ('POST', r'/api/groups/[^/]+/messages'), ('POST', r'/api/groups/[^/]+/stop'),
                   ('GET', r'/api/quota'), ('GET', r'/api/usage/bots'), ('GET', r'/api/integrations'), ('GET', r'/api/providers'), ('GET', r'/api/remote/me'),
-                  ('GET', r'/api/mobile/home'), ('GET', r'/api/mobile/bots/[^/]+'), ('GET', r'/api/mobile/groups/[^/]+'), ('POST', r'/api/mobile/bots'), ('GET', r'/api/mobile/settings')]
+                  ('GET', r'/api/mobile/home'), ('GET', r'/api/mobile/bots/[^/]+'), ('GET', r'/api/mobile/groups/[^/]+'), ('POST', r'/api/mobile/bots'), ('GET', r'/api/mobile/settings'),
+                  ('GET', r'/api/mobile/schedules'), ('POST', r'/api/mobile/schedules/[^/]+'), ('POST', r'/api/mobile/photos'), ('POST', r'/api/mobile/bots/[^/]+/chats'), ('GET', r'/api/notifications')]
 
 
 def describe_call(call):
@@ -544,6 +545,7 @@ def mobile_message(m, names):
     if m.get('botId'): out['botId'] = m['botId']; out['botName'] = names.get(m['botId'], '已刪除的 Bot')
     for key in ('note', 'author'):
         if m.get(key): out[key] = m[key]
+    if m.get('attachments'): out['attachments'] = len(m['attachments'])  # the phone shows how many, not the files
     if m.get('auto') and not m.get('note'): out['note'] = 'auto: ' + m['auto']
     return out
 
@@ -623,6 +625,7 @@ def mobile_bot(store, bot):
     active = next((j['id'] for j in direct if j.get('status') == 'running'), None)
     return dict(bot=dict(id=bot['id'], name=bot['name'], color=bot.get('color'), shape=bot.get('shape'), model=bot_model_text(store, bot)),
                 messages=[mobile_message(m, names) for m in (bot.get('messages') or [])[-80:]], running=bool(active), activeJobId=active,
+                chats=[dict(id=c['id'], title=c.get('title') or '新對話', updatedAt=c.get('updatedAt'), open=c['id'] == bot.get('chatId')) for c in sorted(ensure_chats(bot), key=lambda c: c.get('updatedAt') or '', reverse=True)][:50],
                 approvals=mobile_approvals(store, direct, names), activity=mobile_activity(own, names, groups, False))
 
 

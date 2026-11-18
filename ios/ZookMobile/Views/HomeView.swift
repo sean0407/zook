@@ -275,6 +275,7 @@ struct SettingsView: View {
                         }
                     }.padding(.vertical, 4)
                     NavigationLink { UsageView() } label: { Label("用量", systemImage: "chart.bar") }
+                    NavigationLink { SchedulesView() } label: { Label("排程", systemImage: "calendar.badge.clock") }
                 }
                 Section {
                     NavigationLink { SwitchListView(title: "連接器", items: settings?.connectors, empty: "Mac 上還沒有連接器。") } label: { row("連接器", "puzzlepiece.extension", settings.map { "已開啟 \($0.connectors.filter(\.on).count) 個" }) }

@@ -317,6 +317,26 @@ class Handler(BaseHTTPRequestHandler):
                 body = self.body()
                 with store.lock: bot = mobile_create_bot(store, body)
                 return self.respond(201, dict(id=bot['id'], name=bot['name']))
+            if path == '/api/mobile/schedules' and self.command == 'GET':
+                with store.lock: return self.respond(200, mobile_schedules(store))
+            if len(parts) == 4 and parts[:3] == ['api', 'mobile', 'schedules'] and self.command == 'POST':
+                try:
+                    with store.lock: mobile_schedule_action(store, parts[3], self.body().get('action'))
+                except LookupError as exc: return self.error(404, str(exc))
+                except ValueError as exc: return self.error(400, str(exc))
+                return self.respond(200, {'ok': True})
+            if path == '/api/mobile/photos' and self.command == 'POST':
+                try: return self.respond(201, mobile_photo(store, self.body()))
+                except ValueError as exc: return self.error(400, str(exc))
+            if len(parts) == 5 and parts[:3] == ['api', 'mobile', 'bots'] and parts[4] == 'chats' and self.command == 'POST':
+                try:
+                    with store.lock:
+                        bot = store.find('bots', parts[3])
+                        if not bot: return self.error(404, '找不到機器人。')
+                        mobile_chat_switch(store, bot, self.body())
+                except ValueError as exc: return self.error(400, str(exc))
+                except RuntimeError as exc: return self.error(409, str(exc))
+                return self.respond(200, {'ok': True})
             if self.command == 'GET' and path == '/api/mobile/settings':
                 inventory = inventory_for(store)   # reads files; never under the store lock
                 with store.lock: view = mobile_settings(store, inventory)
@@ -611,6 +631,7 @@ class Handler(BaseHTTPRequestHandler):
                 if path == '/api/chat' and self.command == 'POST':
                     body = self.body(); bot = store.find('bots', body.get('botId'))
                     if not bot: return self.error(404, '找不到機器人。')
+                    if self.device and isinstance(body.get('attachments'), list) and len(body['attachments']) > MOBILE_PHOTOS: return self.error(400, '手機每則訊息最多 %d 張照片。' % MOBILE_PHOTOS)
                     try: job = self.server.send_to_bot(bot, body.get('content'), inventory, attachments=attachments_for(store, body.get('attachments')), effort=body.get('effort'),
                                                          plan=body.get('plan', False))
                     except Busy as exc: return self.error(409, str(exc))

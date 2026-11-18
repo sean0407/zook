@@ -48,6 +48,11 @@ final class AppModel: ObservableObject {
     @Published var lastOnline: Date?
     /// The time of the last message the user has seen in each conversation; anything newer shows an unread dot.
     @Published var seen: [String: String] = (UserDefaults.standard.dictionary(forKey: "seen") as? [String: String]) ?? [:]
+    /// The conversation on screen, so finishing there does not also send a notification.
+    var openChat: String?
+    private var active = true
+    private var noticeSeq = -1
+    private var background = UIBackgroundTaskIdentifier.invalid
     private var link: ZookLink?
     private var leftAt: Date?
     private var homeTask: Task<Void, Never>?
@@ -91,7 +96,13 @@ final class AppModel: ObservableObject {
             for group in fresh.groups { seen[group.id] = group.lastAt ?? "" }
             UserDefaults.standard.set(seen, forKey: "seen")
         }
+        if let old = home { for (title, body) in homeNews(old: old, new: fresh, open: openChat, appActive: active) { Notifier.shared.show(title, body) } }
         if fresh != home { home = fresh }
+        Notifier.shared.prepare()
+        if let list = try? await api.notices(after: max(noticeSeq, 0)) {   // schedule results from the Mac
+            if noticeSeq >= 0 { for item in list.items where !(active && openChat != nil) { Notifier.shared.show(item.title, item.body) } }
+            noticeSeq = list.seq
+        }
     }
 
     func unread(_ id: String, _ lastAt: String?) -> Bool {
@@ -119,6 +130,14 @@ final class AppModel: ObservableObject {
     }
 
     func scene(active: Bool, background: Bool) {
+        self.active = active
+        if background {   // keep listening for a short while, so a reply that is about to finish still notifies
+            if self.background == .invalid {
+                self.background = UIApplication.shared.beginBackgroundTask { [weak self] in
+                    Task { @MainActor in if let task = self?.background, task != .invalid { UIApplication.shared.endBackgroundTask(task); self?.background = .invalid } }
+                }
+            }
+        } else if active, self.background != .invalid { UIApplication.shared.endBackgroundTask(self.background); self.background = .invalid }
         if background { leftAt = Date() }
         if active, let left = leftAt, Date().timeIntervalSince(left) > 60 { locked = true }
         if active { leftAt = nil }

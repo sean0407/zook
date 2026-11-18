@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 /// A conversation with one Bot or a group. The same screen handles both.
@@ -17,7 +18,12 @@ struct ChatView: View {
     @State private var problem: String?
     @State private var showActivity = false
     @State private var loaded = false
+    @State private var chats: [ChatSummary] = []
+    @State private var photos: [Data] = []
+    @State private var picked: [PhotosPickerItem] = []
+    @State private var showCamera = false
     @FocusState private var typing: Bool
+    static let photoLimit = 4
 
     var body: some View {
         VStack(spacing: 0) {
@@ -45,14 +51,50 @@ struct ChatView: View {
         }
         .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if kind == .bot { ToolbarItem(placement: .topBarTrailing) { Button { showActivity = true } label: { Image(systemName: "list.bullet.rectangle") }.accessibilityLabel("動態") } }
+            if kind == .bot {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button { switchChat(nil) } label: { Label("新對話", systemImage: "square.and.pencil") }
+                        ForEach(chats) { chat in Button { switchChat(chat.id) } label: { Label(chat.title, systemImage: chat.open ? "checkmark" : "bubble.left") } }
+                    } label: { Image(systemName: "bubble.left.and.bubble.right") }.accessibilityLabel("對話").disabled(running)
+                }
+                ToolbarItem(placement: .topBarTrailing) { Button { showActivity = true } label: { Image(systemName: "list.bullet.rectangle") }.accessibilityLabel("動態") }
+            }
         }
+        .sheet(isPresented: $showCamera) { CameraPicker { image in add(image) }.ignoresSafeArea() }
+        .onChange(of: picked) { _, items in load(items) }
+        .onAppear { model.openChat = id }
+        .onDisappear { if model.openChat == id { model.openChat = nil } }
         .sheet(isPresented: $showActivity) { ActivitySheet(items: activity) }
         .task(id: id) { await poll() }
     }
 
     private var composer: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !photos.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(photos.enumerated()), id: \.offset) { index, data in
+                            ZStack(alignment: .topTrailing) {
+                                if let image = UIImage(data: data) { Image(uiImage: image).resizable().scaledToFill().frame(width: 64, height: 64).clipShape(RoundedRectangle(cornerRadius: 10)) }
+                                Button { photos.remove(at: index) } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.white, .black.opacity(0.6)) }.accessibilityLabel("移除照片").offset(x: 5, y: -5)
+                            }
+                        }
+                    }.padding(.horizontal).padding(.top, 6)
+                }
+            }
+            composerRow
+        }
+    }
+
+    private var composerRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            if kind == .bot {
+                Menu {
+                    Button { showCamera = true } label: { Label("拍照", systemImage: "camera") }.disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+                    PhotosPicker(selection: $picked, maxSelectionCount: max(1, ChatView.photoLimit - photos.count), matching: .images) { Label("從相簿選", systemImage: "photo.on.rectangle") }
+                } label: { Image(systemName: "plus.circle").font(.system(size: 28)) }.accessibilityLabel("附上照片").disabled(photos.count >= ChatView.photoLimit)
+            }
             TextField(kind == .group ? "傳送訊息給群組，用 @ 指定 Bot" : "傳送訊息給 \(title)", text: $draft, axis: .vertical)
                 .lineLimit(1...5).focused($typing)
                 .padding(.horizontal, 14).padding(.vertical, 9)
@@ -68,7 +110,7 @@ struct ChatView: View {
                 Button { stop() } label: { Image(systemName: "stop.circle.fill").font(.system(size: 32)) }.accessibilityLabel("停止回覆")
             } else {
                 Button { send() } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 32)) }
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sending || model.state != .online).accessibilityLabel("送出")
+                    .disabled((draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && photos.isEmpty) || sending || model.state != .online).accessibilityLabel("送出")
             }
         }
         .padding(.horizontal).padding(.vertical, 8)
@@ -86,7 +128,7 @@ struct ChatView: View {
         do {
             if kind == .bot {
                 let view = try await api.bot(id)
-                messages = view.messages; approvals = view.approvals; activity = view.activity; running = view.running; activeJob = view.activeJobId
+                messages = view.messages; approvals = view.approvals; activity = view.activity; running = view.running; activeJob = view.activeJobId; chats = view.chats ?? []
             } else {
                 let view = try await api.group(id)
                 messages = view.messages; approvals = view.approvals; running = view.running; speaking = view.speaking
@@ -98,14 +140,39 @@ struct ChatView: View {
 
     private func send() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, let api = model.api else { return }
+        guard !text.isEmpty || !photos.isEmpty, let api = model.api else { return }
         sending = true; problem = nil; Haptics.tap()
         Task {
             do {
-                if kind == .bot { try await api.send(toBot: id, text) } else { try await api.send(toGroup: id, text) }
-                draft = ""; await refresh()
+                if kind == .bot {
+                    var ids: [String] = []
+                    for photo in photos { ids.append(try await api.upload(photo: photo)) }
+                    try await api.send(toBot: id, text, photos: ids)
+                } else { try await api.send(toGroup: id, text) }
+                draft = ""; photos = []; await refresh()
             } catch { problem = error.localizedDescription }
             sending = false
+        }
+    }
+
+    private func add(_ image: UIImage) {
+        guard photos.count < ChatView.photoLimit, let small = image.shrunkForSending() else { return }
+        photos.append(small)
+    }
+
+    private func load(_ items: [PhotosPickerItem]) {
+        guard !items.isEmpty else { return }
+        picked = []
+        Task {
+            for item in items { if let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) { add(image) } }
+        }
+    }
+
+    private func switchChat(_ chat: String?) {
+        guard let api = model.api else { return }
+        Task {
+            do { if let chat = chat { try await api.openChat(bot: id, chat: chat) } else { try await api.newChat(bot: id) } } catch { problem = error.localizedDescription }
+            await refresh()
         }
     }
 
@@ -134,7 +201,10 @@ private struct Bubble: View {
         if message.role == "system" {
             Text(message.content).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
         } else if message.role == "user" {
-            HStack { Spacer(minLength: 48); SelectableText(text: message.content).padding(.horizontal, 14).padding(.vertical, 9).background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18)) }
+            VStack(alignment: .trailing, spacing: 3) {
+                HStack { Spacer(minLength: 48); SelectableText(text: message.content).padding(.horizontal, 14).padding(.vertical, 9).background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 18)) }
+                if let count = message.attachments, count > 0 { Label("\(count) 個附件", systemImage: "paperclip").font(.caption).foregroundStyle(.secondary) }
+            }
         } else {
             VStack(alignment: .leading, spacing: 4) {
                 if showName, let name = message.botName { Text(name).font(.caption).foregroundStyle(.secondary) }
