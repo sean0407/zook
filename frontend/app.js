@@ -890,17 +890,24 @@
   const repeatName = id => (REPEATS.find(r => r[0] === id) || REPEATS[0])[1];
   function schedulesPage() {
     const items = state.data.schedules || [];
-    const intro = '<p class="muted sched-intro">時間到了，Zook 會自動把這則訊息送給 Bot，回覆留在對話裡。Mac 要開著、Zook 要在執行；需要你核准的動作仍會等你核准。</p>';
-    if (!items.length) return intro + '<div class="blank">目前沒有排程。按「新增排程」，讓 Bot 在固定時間自動做事。</div>';
+    const intro = '<p class="muted sched-intro">時間到了，Zook 會自動把這則訊息送給 Bot 或群組，回覆留在對話裡。Mac 要開著、Zook 要在執行；需要你核准的動作仍會等你核准。</p>';
+    if (!items.length) return intro + '<div class="blank">目前沒有排程。按「新增排程」，讓 Bot 或群組在固定時間自動做事。</div>';
     const last = x => !x.lastStatus ? '尚未執行' : (x.lastStatus === 'sent' ? '上次執行：' : x.lastStatus === 'missed' ? '上次錯過：' : '上次失敗：') + formatDate(x.lastAt) + (x.lastStatus !== 'sent' && x.lastError ? '（' + x.lastError + '）' : '');
-    return intro + `<div class="cards">${items.map(x => { const b = state.data.bots.find(b => b.id === x.botId); return `<article class="card sched-card"><div class="sched-head"><h3>${esc(repeatName(x.repeat))} ${esc(x.time)}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><p>${esc(x.content)}</p><span class="status">${esc(b ? b.name : '找不到 Bot')}</span><span class="status ${x.lastStatus && x.lastStatus !== 'sent' ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button><button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`; }).join('')}</div>`;
+    return intro + `<div class="cards">${items.map(x => `<article class="card sched-card"><div class="sched-head"><h3>${esc(repeatName(x.repeat))} ${esc(x.time)}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><p>${esc(x.content)}</p>${scheduleTarget(x)}<span class="status ${x.lastStatus && x.lastStatus !== 'sent' ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button><button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`).join('')}</div>`;
   }
+  // Who a schedule talks to: a Bot or a group, with its avatar.
+  function scheduleTarget(x) {
+    if (x.groupId) { const g = (state.data.groups || []).find(g => g.id === x.groupId); return `<span class="sched-target">${g ? avatarStack(g) + esc(g.name) : '找不到群組'}</span>`; }
+    const b = state.data.bots.find(b => b.id === x.botId);
+    return `<span class="sched-target">${b ? avatar(b) + esc(b.name) : '找不到 Bot'}</span>`;
+  }
+  const scheduleTargets = () => [...state.data.bots.map(b => ({id: 'bot:' + b.id, name: b.name})), ...(state.data.groups || []).map(g => ({id: 'group:' + g.id, name: g.name, hint: '群組'}))];
   function scheduleModal(x = {}) {
     if (!state.data.bots.length) { toast('請先建立一個 Bot'); return; }
     const two = n => String(n).padStart(2, '0'), [h, m] = (x.time || '10:00').split(':');
     const minutes = [...new Set([...Array.from({length: 12}, (_, i) => two(i * 5)), m])].sort();
-    const bot = x.botId || (state.page === 'chat' && state.selected) || state.data.bots[0].id;
-    modal(x.id ? '編輯排程' : '新增排程', `<form id="schedule-form"><div class="modal-body"><div class="field">Bot${dropdown('botId', bot, state.data.bots.map(b => ({id: b.id, name: b.name})))}</div><label class="field">要 Bot 做的事<textarea name="content" required placeholder="例如：整理今天的行事曆和未讀信件，列出三件最重要的事">${esc(x.content || '')}</textarea></label><div class="sched-when"><div class="field">重複${dropdown('repeat', x.repeat || 'daily', REPEATS.map(r => ({id: r[0], name: r[1]})))}</div><div class="field">時${dropdown('hour', h, Array.from({length: 24}, (_, i) => ({id: two(i), name: two(i)})))}</div><div class="field">分${dropdown('minute', m, minutes.map(v => ({id: v, name: v})))}</div></div><div class="setting-list in-form">${settingRow('啟用', '關閉後不會自動執行。', toggle('name="on"', x.on !== false, '啟用'))}${settingRow('錯過時補跑', '到時間時 Mac 在睡眠或 Zook 沒開，之後一開啟就補做一次（限 24 小時內）。', toggle('name="catchUp"', x.catchUp !== false, '錯過時補跑'))}</div></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">儲存</button></div></form>`);
+    const target = x.groupId ? 'group:' + x.groupId : x.botId ? 'bot:' + x.botId : state.page === 'chat' && state.groupId ? 'group:' + state.groupId : 'bot:' + ((state.page === 'chat' && state.selected) || state.data.bots[0].id);
+    modal(x.id ? '編輯排程' : '新增排程', `<form id="schedule-form"><div class="modal-body"><div class="field">對象${dropdown('target', target, scheduleTargets())}</div><label class="field">要做的事<textarea name="content" required placeholder="例如：整理今天的行事曆和未讀信件，列出三件最重要的事">${esc(x.content || '')}</textarea></label><div class="sched-when"><div class="field">重複${dropdown('repeat', x.repeat || 'daily', REPEATS.map(r => ({id: r[0], name: r[1]})))}</div><div class="field">時${dropdown('hour', h, Array.from({length: 24}, (_, i) => ({id: two(i), name: two(i)})))}</div><div class="field">分${dropdown('minute', m, minutes.map(v => ({id: v, name: v})))}</div></div><div class="setting-list in-form">${settingRow('啟用', '關閉後不會自動執行。', toggle('name="on"', x.on !== false, '啟用'))}${settingRow('錯過時補跑', '到時間時 Mac 在睡眠或 Zook 沒開，之後一開啟就補做一次（限 24 小時內）。', toggle('name="catchUp"', x.catchUp !== false, '錯過時補跑'))}</div></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">儲存</button></div></form>`);
     $('#schedule-form').dataset.id = x.id || '';
   }
   function noteModal(n = {}) {
@@ -1360,7 +1367,7 @@
         case 'run-schedule':
           await post('schedules/' + encodeURIComponent(id) + '/run', {});
           await refresh(); startPollers();
-          toast('已送出，回覆會出現在 Bot 的對話裡');
+          toast('已送出，回覆會出現在對話裡');
           break;
         case 'new-note':
           noteModal();
@@ -1836,7 +1843,8 @@
         toast(old ? '已重新命名分組' : '已新增分組，把 Bot 拖進去即可');
       } else if (form.id === 'schedule-form') {
         const d = new FormData(form), id = form.dataset.id;
-        const data = {botId: d.get('botId'), content: d.get('content'), repeat: d.get('repeat'), time: d.get('hour') + ':' + d.get('minute'), on: d.get('on') === 'on', catchUp: d.get('catchUp') === 'on'};
+        const [kind, targetId] = String(d.get('target')).split(':');
+        const data = {[kind === 'group' ? 'groupId' : 'botId']: targetId, content: d.get('content'), repeat: d.get('repeat'), time: d.get('hour') + ':' + d.get('minute'), on: d.get('on') === 'on', catchUp: d.get('catchUp') === 'on'};
         await post(id ? 'schedules/' + encodeURIComponent(id) : 'schedules', data, id ? 'PATCH' : 'POST');
         closeModal();
         await refresh();

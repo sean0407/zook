@@ -1673,9 +1673,13 @@ SCHEDULE_REPEATS = dict(daily=range(7), weekdays=range(5), mon=[0], tue=[1], wed
 
 def schedule_fields(store, body, record):
     """Check and apply what the schedule form sends. Times are the Mac's local time."""
-    if 'botId' in body:
+    # A schedule talks to one Bot or one group, never both.
+    if body.get('groupId'):
+        if not store.find('groups', body['groupId']): raise ValueError('找不到這個群組。')
+        record.update(groupId=body['groupId'], botId='')
+    elif body.get('botId') or 'botId' in body:
         if not store.find('bots', body['botId']): raise ValueError('找不到這個 Bot。')
-        record['botId'] = body['botId']
+        record.update(botId=body['botId'], groupId='')
     if 'content' in body:
         if not isinstance(body['content'], str) or not body['content'].strip() or len(body['content']) > 30000: raise ValueError('請填寫要 Bot 做的事。')
         record['content'] = body['content'].strip()
@@ -1689,7 +1693,7 @@ def schedule_fields(store, body, record):
         if key in body:
             if not isinstance(body[key], bool): raise ValueError('設定無效。')
             record[key] = body[key]
-    if not record.get('botId') or not record.get('content') or not record.get('time'): raise ValueError('請選擇 Bot、填寫內容和時間。')
+    if not (record.get('botId') or record.get('groupId')) or not record.get('content') or not record.get('time'): raise ValueError('請選擇 Bot 或群組、填寫內容和時間。')
     record['since'] = datetime.datetime.now().isoformat()  # only times after this moment count
     return record
 
@@ -1842,6 +1846,13 @@ class App(ThreadingHTTPServer):
 
     def run_schedule(self, item, inventory):
         """Send a schedule's message now. Returns None when sent, or the reason it could not be. Lock held."""
+        if item.get('groupId'):
+            group = self.store.find('groups', item['groupId'])
+            if not group: return '找不到這個群組。'
+            if group['status'] == 'running': raise Busy('群組正在討論，等討論結束再執行。')
+            try: self.post_group_message(group, item['content'], author='排程')
+            except (ValueError, RuntimeError) as exc: return str(exc)[:300]
+            return None
         bot = self.store.find('bots', item.get('botId'))
         if not bot: return '找不到這個 Bot。'
         try: self.send_to_bot(bot, item['content'], inventory, author='排程')
@@ -3046,7 +3057,9 @@ class Handler(BaseHTTPRequestHandler):
                         group.update(name=candidate['name'], botIds=candidate['botIds']); store.save(); return self.respond(200, group)
                     if len(parts) == 3 and self.command == 'DELETE':
                         if group['status'] == 'running': return self.error(409, '群組討論進行中，請先停止。')
-                        store.data['groups'].remove(group); store.save(); return self.respond(200, {'ok': True})
+                        store.data['groups'].remove(group)
+                        store.data['schedules'] = [x for x in store.data['schedules'] if x.get('groupId') != group['id']]
+                        store.save(); return self.respond(200, {'ok': True})
                     if len(parts) == 4 and parts[3] == 'messages' and self.command == 'POST':
                         try: run_id = self.server.post_group_message(group, self.body().get('content'))
                         except RuntimeError as exc: return self.error(409, str(exc))

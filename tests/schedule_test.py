@@ -93,6 +93,27 @@ class ScheduleTest(unittest.TestCase):
         time.sleep(1.2)
         self.assertEqual(len(self.messages(self.req('GET', '/api/state')[1])), 2)  # once, not on every check
 
+    def test_group_schedule(self):
+        other = self.req('POST', '/api/bots', {'name': 'Second', 'provider': 'codex'})[1]
+        status, group = self.req('POST', '/api/groups', {'name': 'Team', 'botIds': [self.bot['id'], other['id']]})
+        self.assertEqual(status, 201)
+        self.assertEqual(self.req('POST', '/api/schedules', {'groupId': 'nope', 'content': 'x', 'time': '10:00'})[0], 400)
+        status, item = self.req('POST', '/api/schedules', {'groupId': group['id'], 'content': 'discuss the market', 'time': '10:00', 'repeat': 'daily'})
+        self.assertEqual((status, item['groupId'], item.get('botId')), (201, group['id'], ''))
+        self.assertEqual(self.req('POST', '/api/schedules/%s/run' % item['id'], {})[0], 202)
+        self.assertEqual(self.req('POST', '/api/schedules/%s/run' % item['id'], {})[0], 409)  # the group is still discussing
+        g = lambda s: next(x for x in s['groups'] if x['id'] == group['id'])
+        state = self.wait(lambda s: g(s)['status'] == 'idle' and sum(m['role'] == 'assistant' for m in g(s)['messages']) == 2)
+        first = g(state)['messages'][0]
+        self.assertEqual((first['content'], first['author']), ('discuss the market', '排程'))
+        self.assertTrue(all(m['content'].startswith('done') for m in g(state)['messages'] if m['role'] == 'assistant'))
+        self.assertEqual(self.messages(state), [])  # nothing lands in the Bot's own conversation
+        # switching a schedule between a Bot and a group keeps exactly one target
+        self.assertEqual(self.req('PATCH', '/api/schedules/' + item['id'], {'botId': self.bot['id']})[1]['groupId'], '')
+        self.assertEqual(self.req('PATCH', '/api/schedules/' + item['id'], {'groupId': group['id']})[1]['botId'], '')
+        self.assertEqual(self.req('DELETE', '/api/groups/' + group['id'])[0], 200)  # its schedules go with it
+        self.assertEqual(self.req('GET', '/api/state')[1]['schedules'], [])
+
     def test_missed_is_skipped_when_catch_up_is_off(self):
         earlier = datetime.datetime.now() - datetime.timedelta(minutes=30)
         self.req('POST', '/api/schedules', {'botId': self.bot['id'], 'content': 'tick', 'time': earlier.strftime('%H:%M'), 'repeat': 'daily', 'catchUp': False})
