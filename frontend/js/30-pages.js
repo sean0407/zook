@@ -64,7 +64,7 @@
     const reply = (b.messages || []).filter(m => m.role !== 'user').slice(-1)[0];
     const job = reply && Object.values(state.jobDetails).find(j => j.messageId === reply.id);
     const acted = (job?.toolCalls || []).some(c => c.status === 'completed' && !['read', 'external_read'].includes(c.category));
-    return !acted || confirm('上一次回覆已經做過一些動作（例如改了檔案或對外送出），重來不會復原那些動作。確定要重來？');
+    return !acted || confirm('上一次回覆做過的動作不會復原。確定要重來？');
   }
   async function redo(b, body) {
     const sent = await post('chat/redo', {...body, botId: b.id});
@@ -146,7 +146,7 @@
     if (x.date && !days.includes(x.date)) days.unshift(x.date);
     const dates = days.map((d, i) => ({id: d, name: (i === 0 && d === iso(new Date()) ? '今天 ' : i === 1 ? '明天 ' : '') + dayLabel(d)}));
     const target = x.groupId ? 'group:' + x.groupId : x.botId ? 'bot:' + x.botId : state.page === 'chat' && state.groupId ? 'group:' + state.groupId : 'bot:' + ((state.page === 'chat' && state.selected) || state.data.bots[0].id);
-    modal(x.id ? '編輯排程' : '新增排程', `<form id="schedule-form"><div class="modal-body"><div class="field">對象${dropdown('target', target, scheduleTargets())}</div><label class="field">要做的事<textarea name="content" required placeholder="例如：整理今天的行事曆和未讀信件，列出三件最重要的事">${esc(x.content || '')}</textarea></label><div class="sched-when" data-repeat="${esc(x.repeat || 'daily')}"><div class="field">重複${dropdown('repeat', x.repeat || 'daily', REPEATS.map(r => ({id: r[0], name: r[1]})))}</div><div class="field when-date">日期${dropdown('date', x.date || dates[0].id, dates)}</div><div class="field when-day">日${dropdown('day', String(x.day || new Date().getDate()), Array.from({length: 31}, (_, i) => ({id: String(i + 1), name: (i + 1) + ' 號', hint: i >= 28 ? '沒有這天的月份在月底執行' : ''})))}</div><div class="field when-hour">時${dropdown('hour', h, Array.from({length: 24}, (_, i) => ({id: two(i), name: two(i)})))}</div><div class="field">分${dropdown('minute', m, minutes.map(v => ({id: v, name: v})))}</div></div><div class="setting-list in-form">${settingRow('啟用', '關閉後不會自動執行。', toggle('name="on"', x.on !== false, '啟用'))}${settingRow('錯過時補跑', '到時間時 Mac 在睡眠或 Zook 沒開，之後一開啟就補做一次（限 24 小時內）。', toggle('name="catchUp"', x.catchUp !== false, '錯過時補跑'))}</div></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">儲存</button></div></form>`);
+    modal(x.id ? '編輯排程' : '新增排程', `<form id="schedule-form"><div class="modal-body"><div class="field">對象${dropdown('target', target, scheduleTargets())}</div><label class="field">要做的事<textarea name="content" required placeholder="例如：整理今天的行事曆和未讀信件，列出三件最重要的事">${esc(x.content || '')}</textarea></label><div class="sched-when" data-repeat="${esc(x.repeat || 'daily')}"><div class="field">重複${dropdown('repeat', x.repeat || 'daily', REPEATS.map(r => ({id: r[0], name: r[1]})))}</div><div class="field when-date">日期${dropdown('date', x.date || dates[0].id, dates)}</div><div class="field when-day">日${dropdown('day', String(x.day || new Date().getDate()), Array.from({length: 31}, (_, i) => ({id: String(i + 1), name: (i + 1) + ' 號', hint: i >= 28 ? '沒有這天的月份在月底執行' : ''})))}</div><div class="field when-hour">時${dropdown('hour', h, Array.from({length: 24}, (_, i) => ({id: two(i), name: two(i)})))}</div><div class="field">分${dropdown('minute', m, minutes.map(v => ({id: v, name: v})))}</div></div><div class="setting-list in-form">${settingRow('啟用', '關閉後不會自動執行。', toggle('name="on"', x.on !== false, '啟用'))}${settingRow('錯過時補跑', '錯過時，24 小時內開啟會補做一次。', toggle('name="catchUp"', x.catchUp !== false, '錯過時補跑'))}</div></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">儲存</button></div></form>`);
     $('#schedule-form').dataset.id = x.id || '';
   }
   function noteModal(n = {}) {
@@ -217,7 +217,7 @@
   async function integrationsModal() {
     state.integrations = await api('integrations');
     let i = state.integrations;
-    modal('連結應用程式', `<div class="modal-body"><p class="muted">這裡顯示本機偵測到的設定。設定存在不代表已驗證連線。</p><input id="integration-search" class="secondary" style="width:100%;text-align:left" placeholder="搜尋應用程式"><div class="tabs" style="margin:16px 0"><button class="active" data-action="int-filter" data-id="all">全部</button><button data-action="int-filter" data-id="providers">提供者</button><button data-action="int-filter" data-id="skills">Skills</button><button data-action="int-filter" data-id="mcp">MCP</button></div><div class="cards" id="integration-cards">${integrationCards(i,'all','')}</div></div>`, '', true)
+    modal('連結應用程式', `<div class="modal-body"><p class="muted">這是偵測到的設定，不代表連線正常。</p><input id="integration-search" class="secondary" style="width:100%;text-align:left" placeholder="搜尋應用程式"><div class="tabs" style="margin:16px 0"><button class="active" data-action="int-filter" data-id="all">全部</button><button data-action="int-filter" data-id="providers">提供者</button><button data-action="int-filter" data-id="skills">Skills</button><button data-action="int-filter" data-id="mcp">MCP</button></div><div class="cards" id="integration-cards">${integrationCards(i,'all','')}</div></div>`, '', true)
   }
 
   function integrationCards(i, filter, q) {

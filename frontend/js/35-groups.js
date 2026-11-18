@@ -78,7 +78,7 @@
     const files = state.groupFiles[g.id];
     if (!files) { setTimeout(() => loadGroupFiles(g), 0); return '<div class="detail-empty">正在讀取檔案…</div>'; }
     const base = '/api/groups/' + encodeURIComponent(g.id) + '/files/';
-    return `<div class="group-files"><button type="button" class="secondary" data-action="group-file-pick">＋ 上傳檔案</button><input type="file" id="group-file-input" multiple hidden>${files.length ? files.map(f => `<div class="group-file"><a href="${base}${encodeURIComponent(f.name)}" download="${esc(f.name)}" title="下載"><strong>${esc(f.name)}</strong><small>${esc([fileSize(f.size), f.by].filter(Boolean).join(' · '))}</small></a><button type="button" class="link danger" data-action="group-file-delete" data-id="${esc(f.name)}">刪除</button></div>`).join('') : '<div class="detail-empty">還沒有檔案。成員都讀得到這裡的檔案，也可以把產出存進來。</div>'}<small class="muted">單檔 20 MB，每個群組 200 MB。謹慎模式的 Codex 只能讀 128 KB 內的文字檔和圖片。</small></div>`;
+    return `<div class="group-files"><button type="button" class="secondary" data-action="group-file-pick">＋ 上傳檔案</button><input type="file" id="group-file-input" multiple hidden>${files.length ? files.map(f => `<div class="group-file"><a href="${base}${encodeURIComponent(f.name)}" download="${esc(f.name)}" title="下載"><strong>${esc(f.name)}</strong><small>${esc([fileSize(f.size), f.by].filter(Boolean).join(' · '))}</small></a><button type="button" class="link danger" data-action="group-file-delete" data-id="${esc(f.name)}">刪除</button></div>`).join('') : '<div class="detail-empty">還沒有檔案。成員都能讀取和存入。</div>'}<small class="muted">單檔 20 MB，每個群組 200 MB。</small></div>`;
   }
   async function uploadGroupFiles(g, list) {
     for (const f of list) {

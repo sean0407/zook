@@ -942,13 +942,18 @@ button {
 #toast {
   position: fixed;
   bottom: 18px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: 0;
+  width: fit-content;
+  max-width: calc(100vw - 48px);
+  margin: 0 auto;
   background: #242424;
   color: #fff;
   padding: 10px 15px;
   border-radius: 10px;
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
   z-index: 20;
   opacity: 0;
   pointer-events: none;

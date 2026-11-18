@@ -130,7 +130,7 @@
           await reloadAccounts();
           break;
         case 'account-logout':
-          if (confirm('確定登出？使用這個提供者的 Bot 會無法回覆，直到重新登入。')) {
+          if (confirm('確定登出？使用它的 Bot 會無法回覆。')) {
             await post('accounts/' + encodeURIComponent(id) + '/logout');
             await reloadAccounts(); toast('已登出');
           }
@@ -416,7 +416,7 @@
           modal('語音輸入', '<div class="modal-body"><p class="muted">尚未安裝語音辨識模型。</p></div>', '<div class="modal-foot"><button class="primary" data-action="close-modal">知道了</button></div>');
           break;
         case 'composer-menu':
-          modal('更多選項', '<div class="modal-body more-options"><button class="secondary" data-action="pick-files">📎 附加檔案或圖片</button><p class="muted">也可以把檔案拖進對話，或直接貼上截圖。每則最多 10 個，單檔 20 MB。</p><button class="secondary" data-action="new-note">＋ 新增知識</button><p class="muted">新增知識，為 Bot 提供相關背景。</p></div>');
+          modal('更多選項', '<div class="modal-body more-options"><button class="secondary" data-action="pick-files">📎 附加檔案或圖片</button><p class="muted">也可以拖進對話或貼上截圖。最多 10 個，單檔 20 MB。</p><button class="secondary" data-action="new-note">＋ 新增知識</button><p class="muted">新增知識，為 Bot 提供相關背景。</p></div>');
           break;
         case 'approve':
         case 'deny':
@@ -441,7 +441,7 @@
           break;
         }
         case 'google-remove':
-          if (!confirm('登出目前使用的這個 Google 帳號？它的授權會從鑰匙圈刪除。還有其他帳號時會改用下一個。')) break;
+          if (!confirm('登出這個 Google 帳號？還有其他帳號時會改用下一個。')) break;
           await api('google', {method: 'DELETE'}); delete state.mcpTests['builtin:google'];
           state.integrations = await api('integrations'); await refresh(); toast('已登出 Google');
           break;
@@ -449,7 +449,7 @@
           gmailModal();
           break;
         case 'gmail-remove':
-          if (!confirm('中斷 Gmail 連接？所有 Bot 都會無法再使用 Gmail，儲存的應用程式密碼會從鑰匙圈刪除。')) break;
+          if (!confirm('中斷 Gmail 連接？所有 Bot 都會無法使用 Gmail。')) break;
           await api('gmail', {method: 'DELETE'});
           delete state.mcpTests['builtin:gmail'];
           state.integrations = await api('integrations'); await refresh(); toast('已中斷 Gmail 連接');
@@ -482,14 +482,14 @@
           try { state.mcpTests[made.id] = await post('mcp/' + encodeURIComponent(made.id) + '/test'); }
           catch (error) { state.mcpTests[made.id] = {status: 'error', error: error.message}; }
           render(true);
-          toast(state.mcpTests[made.id].status === 'ready' ? '已複製到 Zook，連線正常' : '已複製到 Zook，但連不上。如果它需要登入，授權還留在原本的工具裡');
+          toast(state.mcpTests[made.id].status === 'ready' ? '已複製到 Zook，連線正常' : '已複製，但連不上。需要登入的話請按「登入」');
           break;
         }
         case 'pack-export': {
           el.disabled = true;
           const pack = await api('pack');
           el.disabled = false;
-          if (!pack.skills && !pack.connectors) { toast('還沒有可以匯出的內容。先把 Skill 匯入 Zook，或把連接器複製到 Zook'); break; }
+          if (!pack.skills && !pack.connectors) { toast('還沒有可以匯出的內容'); break; }
           const raw = atob(pack.data), bytes = new Uint8Array(raw.length);
           for (let n = 0; n < raw.length; n++) bytes[n] = raw.charCodeAt(n);
           download(bytes, pack.name, 'application/zip');
@@ -503,7 +503,7 @@
             const file = input.files[0];
             if (!file) return;
             if (file.size > 150 * 1024 * 1024) { toast('設定包超過 150 MB，無法匯入'); return; }
-            if (!confirm(`匯入「${file.name}」？\n\n設定包裡的 Skill 和連接器可以在這台 Mac 上執行程式，請只匯入你自己匯出的檔案。`)) return;
+            if (!confirm(`匯入「${file.name}」？\n\n設定包可以在這台 Mac 上執行程式，只匯入你自己匯出的檔案。`)) return;
             try {
               const text = await new Promise((done, fail) => { const reader = new FileReader(); reader.onload = () => done(reader.result); reader.onerror = fail; reader.readAsDataURL(file); });
               const r = await post('pack', {data: String(text).split(',')[1] || ''});

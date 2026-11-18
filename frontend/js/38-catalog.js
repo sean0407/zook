@@ -16,7 +16,7 @@
       return `<article class="dir-card catalog-card ${i.auth === 'manual' ? 'off' : ''}">${itemIcon(i.name)}<div class="dir-body"><div class="dir-title"><h3 title="${esc(i.name)}">${esc(i.name)}</h3>${action}</div><p class="dir-desc">${esc(i.about)}</p><div class="dir-meta"><span>${esc(hint)}</span></div></div></article>`;
     };
     const body = Object.entries(groups).map(([name, items]) => `<section class="dir-section"><h2><span class="catalog-group">${esc(name)}</span><small>${items.length}</small></h2><div class="dir-grid">${items.map(card).join('')}</div></section>`).join('');
-    return `<section class="dir-section catalog-intro"><h2 class="catalog-head">連接器目錄</h2><p class="muted">各家公司自己提供的官方連接器。按一下就會加入，需要登入的會開啟登入頁；加入後會移到上方的「已連接」。</p></section>${body || '<div class="detail-empty">目錄裡的連接器都已經加入，或沒有符合搜尋的項目。</div>'}`;
+    return `<section class="dir-section catalog-intro"><h2 class="catalog-head">連接器目錄</h2><p class="muted">各家官方連接器，按一下加入。</p></section>${body || '<div class="detail-empty">目錄裡的連接器都已經加入，或沒有符合搜尋的項目。</div>'}`;
   }
   function renderCatalog() { render(true); }
   function catalogWhy(id) {
@@ -31,7 +31,7 @@
   async function catalogAdd(id, key) {
     const item = state.catalog.find(i => i.id === id);
     if (item.auth === 'key' && !key) {
-      modal(`連結 ${item.name}`, `<form id="catalog-key-form" data-id="${esc(id)}"><div class="modal-body"><p class="muted">${esc(item.about)}</p><label class="field">金鑰<input name="key" type="password" required autocomplete="off" spellcheck="false" placeholder="貼上金鑰"><small class="muted">金鑰只會存進 macOS 鑰匙圈，不會寫進 Zook 的資料檔，也不會傳到手機。</small></label></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">連結</button></div></form>`);
+      modal(`連結 ${item.name}`, `<form id="catalog-key-form" data-id="${esc(id)}"><div class="modal-body"><p class="muted">${esc(item.about)}</p><label class="field">金鑰<input name="key" type="password" required autocomplete="off" spellcheck="false" placeholder="貼上金鑰"><small class="muted">金鑰只存在鑰匙圈。</small></label></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">連結</button></div></form>`);
       return;
     }
     if (state.catalogBusy) return;  // one at a time
