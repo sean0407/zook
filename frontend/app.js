@@ -205,7 +205,8 @@
   function argsView(args) { try { return JSON.stringify(args, null, 2) || '{}'; } catch (_) { return String(args); } }
   // Plain-language descriptions of what a Bot does: no tool names, ids or JSON on screen.
   const FIELD_NAMES = {path: '檔案', content: '內容', name: '名稱', persona: '人格', instructions: '工作指示', provider: '模型', model: '模型版本',
-    color: '顏色', bot_names: '成員', group_name: '群組', message: '訊息', skill_id: 'Skill', argv: '要執行的內容', cwd: '位置', scope: '範圍', query: '搜尋內容'};
+    color: '顏色', bot_names: '成員', group_name: '群組', message: '訊息', skill_id: 'Skill', argv: '要執行的內容', cwd: '位置', scope: '範圍', query: '搜尋內容',
+    target: '對象', repeat: '重複', time: '時間', date: '日期', day: '每月幾號', enabled: '啟用', schedule_id: '排程'};
   const humanWords = t => String(t || '').replace(/[_-]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
   const skillName = id => (state.integrations?.skills || []).find(x => x.id === id)?.name || 'Skill';
   const fileName = p => String(p || '').split('/').pop() || '檔案';
@@ -223,6 +224,10 @@
       case 'zook_create_group': return `建立群組「${a.name || (a.bot_names || []).join('、')}」`;
       case 'zook_start_group_discussion': return `在群組「${a.group_name || ''}」發起討論`;
       case 'zook_remember': return `記住一件事：「${String(a.content || '').slice(0, 60)}」`;
+      case 'zook_list_schedules': return '查看排程';
+      case 'zook_create_schedule': return `建立排程「${String(a.content || '').slice(0, 40)}」`;
+      case 'zook_update_schedule': return `修改排程「${scheduleLabel(a.schedule_id)}」`;
+      case 'zook_delete_schedule': return `刪除排程「${scheduleLabel(a.schedule_id)}」`;
       case 'web_search': return a.query ? `上網搜尋「${String(a.query).slice(0, 60)}」` : '上網搜尋';
       case 'native_write': return `修改檔案「${fileName(a.path)}」`;
       case 'native_command': return '在工作資料夾執行指令';
@@ -241,16 +246,17 @@
     if (c.status === 'error' || c.status === 'failed') return ['bad', humanError(c.error)];
     return ['ok', c.autoApproved ? '已自動完成' : '完成'];
   }
+  const scheduleLabel = id => String((state.data?.schedules || []).find(x => x.id === id)?.content || '排程').slice(0, 40);
   function argsList(args) {
     const entries = Object.entries(args || {}).filter(([, v]) => v !== '' && v != null);
     if (!entries.length) return '<p class="muted">沒有其他內容。</p>';
-    return `<dl class="args-list">${entries.map(([k, v]) => `<dt>${esc(FIELD_NAMES[k] || humanWords(k))}</dt><dd>${esc(Array.isArray(v) ? v.join('、') : typeof v === 'object' ? Object.entries(v).map(([x, y]) => humanWords(x) + '：' + y).join('，') : k === 'skill_id' ? skillName(v) : String(v))}</dd>`).join('')}</dl>`;
+    return `<dl class="args-list">${entries.map(([k, v]) => `<dt>${esc(FIELD_NAMES[k] || humanWords(k))}</dt><dd>${esc(Array.isArray(v) ? v.join('、') : typeof v === 'object' ? Object.entries(v).map(([x, y]) => humanWords(x) + '：' + y).join('，') : k === 'skill_id' ? skillName(v) : k === 'repeat' ? repeatName(v) : k === 'enabled' ? (v === 'off' ? '停用' : '啟用') : k === 'schedule_id' ? scheduleLabel(v) : String(v))}</dd>`).join('')}</dl>`;
   }
   function approvalCards(botId, jobs) {
     return (jobs ? pendingIn(jobs) : pendingForBot(botId)).map(a => {
       const call = (a.job.toolCalls || []).find(c => c.id === a.toolCallId) || {name: a.name, label: a.label, sourceLabel: a.sourceLabel, arguments: a.arguments};
       const who = state.data.bots.find(x => x.id === a.job.botId)?.name || 'Bot';
-      return `<section class="approval-card" aria-label="需要你的核准"><strong>${esc(who)} 想要${esc(describeCall({...call, arguments: a.arguments}))}</strong>${CATEGORY_REASON[a.category] ? `<small class="approval-reason">${esc(CATEGORY_REASON[a.category])}</small>` : ''}<details data-approval-details="${esc(a.id)}"><summary>查看詳細內容</summary>${argsList(a.arguments)}</details><div class="actions"><button class="primary" data-action="approve" data-id="${esc(a.id)}" ${state.deciding[a.id]?'disabled':''}>允許這次</button><button class="secondary" data-action="deny" data-id="${esc(a.id)}" ${state.deciding[a.id]?'disabled':''}>不要</button></div></section>`;
+      return `<section class="approval-card" aria-label="需要你的核准"><strong>${esc(who)} 想要${esc(a.text || describeCall({...call, arguments: a.arguments}))}</strong>${approvalReason(a) ? `<small class="approval-reason">${esc(approvalReason(a))}</small>` : ''}<details data-approval-details="${esc(a.id)}"><summary>查看詳細內容</summary>${argsList(a.arguments)}</details><div class="actions"><button class="primary" data-action="approve" data-id="${esc(a.id)}" ${state.deciding[a.id]?'disabled':''}>允許這次</button><button class="secondary" data-action="deny" data-id="${esc(a.id)}" ${state.deciding[a.id]?'disabled':''}>不要</button></div></section>`;
     }).join('');
   }
   // Everything a Bot did (Skills, connectors, web) shows in that Bot's own panel, including work done inside groups.
@@ -590,6 +596,7 @@
     return `<div class="setting-list">${settingRow('主動性', 'Bot 執行動作前要不要先問你。這是所有 Bot 的預設，個別 Bot 可在編輯 Bot 時另外設定。', dropdown('permissionMode', current, permissionOptions(false), 'data-permission-mode'))}${settingRow('上網搜尋', '讓所有 Bot 可以搜尋、讀取網頁，取得價格、新聞等最新資訊。會記在動態，不會逐次詢問。', toggle('data-web-search', state.data.settings.webSearch, '上網搜尋'))}</div><p class="muted small perm-always">${ALWAYS_ASK}屬高風險，任何主動性都會先問。</p>`;
   }
 
+  const approvalReason = a => /^zook_(create|update|delete)_schedule$/.test(a.name) ? '排程會在你不在時自動執行，不論主動性都要你核准' : CATEGORY_REASON[a.category];
   const CATEGORY_REASON = {danger: '高風險動作（刪除、安全性或對外發送），一律需要核准', code: '會執行程式碼', external_write: '會修改外部服務', external_read: '會查詢外部服務', internal: '會變更 Zook 內的資料'};
 
   function personaPanel(b) {

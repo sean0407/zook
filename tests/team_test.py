@@ -37,9 +37,10 @@ class TeamToolsTest(unittest.TestCase):
         self.assertEqual(self.store.data['settings']['disabledSkills'], [])
 
     def test_only_admin_gets_team_tools(self):
-        self.assertEqual(set(self.tools(self.other)), {'zook_remember'})
+        everyone = {'zook_remember', 'zook_list_schedules', 'zook_create_schedule', 'zook_update_schedule', 'zook_delete_schedule'}
+        self.assertEqual(set(self.tools(self.other)), everyone)
         tools = self.tools(self.admin)
-        self.assertEqual(set(tools), {'zook_remember', 'zook_list_team', 'zook_create_bot', 'zook_create_group', 'zook_start_group_discussion'})
+        self.assertEqual(set(tools), everyone | {'zook_list_team', 'zook_create_bot', 'zook_create_group', 'zook_start_group_discussion'})
         self.assertFalse(tools['zook_list_team'][1])
         self.assertTrue(all(tools[n][1] for n in ('zook_create_bot', 'zook_create_group', 'zook_start_group_discussion')))
 
@@ -122,3 +123,78 @@ class ExtraToolBrokerTest(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class ScheduleToolsTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.store = server.Store(Path(self.temp.name) / 'data')
+        self.app = server.App(('127.0.0.1', 0), self.store, self.temp.name, 'token')
+        self.bot = next(b for b in self.store.data['bots'] if b['name'] == '工程師')
+        self.helper = next(b for b in self.store.data['bots'] if b['name'] == '研究助手')
+        self.group = dict(id='g1', name='行情小組', botIds=[self.bot['id'], self.helper['id']], messages=[], status='idle', runId=None, activeJobId=None)
+        self.store.data['groups'].append(self.group)
+
+    def tearDown(self):
+        self.app.server_close(); self.temp.cleanup()
+
+    def tools(self, bot, group_id=None):
+        return {schema['name']: (handler, approval, schema) for schema, handler, approval in self.app.app_tools(bot, runtime, group_id)}
+
+    def test_every_bot_gets_them_and_changes_always_ask(self):
+        for bot in self.store.data['bots']:
+            tools = self.tools(bot)
+            self.assertFalse(tools['zook_list_schedules'][1])
+            for name in ('zook_create_schedule', 'zook_update_schedule', 'zook_delete_schedule'):
+                self.assertEqual(tools[name][1], 'always', name)
+        # 'always' is the dangerous category, which asks in every permission mode, 全部允許 included
+        for mode in runtime.PERMISSION_MODES:
+            asked = []
+            create = self.tools(self.bot)['zook_create_schedule']
+            s = runtime.RuntimeSession([], [], True, self.temp.name, lambda *a: asked.append(a[1]) or False, lambda e: None,
+                                       inventory={'skills': [], 'mcp': [], '_private': {'skills': {}, 'mcp': {}}}, extra_tools=[(create[2], create[0], create[1])], permission_mode=mode)
+            self.assertEqual(s.classify('zook_create_schedule', {}), 'danger')
+            s.call('zook_create_schedule', {'content': 'x', 'repeat': 'daily', 'time': '10:00'})
+            self.assertEqual(asked, ['zook_create_schedule'], mode); s.close()
+        self.assertEqual(self.store.data['schedules'], [])  # denied: nothing created
+
+    def test_create_list_update_delete(self):
+        tools = self.tools(self.bot)
+        made = tools['zook_create_schedule'][0]({'content': '整理未讀信件', 'repeat': 'weekdays', 'time': '09:30'})
+        item = self.store.data['schedules'][0]
+        self.assertEqual((item['botId'], item['groupId'], item['repeat'], item['time'], item['on'], item['createdBy']), (self.bot['id'], '', 'weekdays', '09:30', True, self.bot['id']))
+        self.assertEqual((made['id'], made['target'], made['when']), (item['id'], '工程師', '週一到週五 09:30'))
+        # in a group conversation the group is the default target; a name picks another Bot or group
+        self.tools(self.bot, 'g1')['zook_create_schedule'][0]({'content': '討論行情給我結論', 'repeat': 'daily', 'time': '10:00'})
+        self.assertEqual(self.store.data['schedules'][1]['groupId'], 'g1')
+        tools['zook_create_schedule'][0]({'target': '研究助手', 'content': '月報', 'repeat': 'monthly', 'day': '31', 'time': '08:00'})
+        self.assertEqual((self.store.data['schedules'][2]['botId'], self.store.data['schedules'][2]['day']), (self.helper['id'], 31))
+        for bad in ({'repeat': 'yearly'}, {'time': '9am'}, {'target': '不存在'}, {'repeat': 'monthly'}, {'repeat': 'once', 'date': '2020-01-01'}):
+            with self.assertRaises(RuntimeError): tools['zook_create_schedule'][0](dict({'content': 'x', 'repeat': 'daily', 'time': '10:00'}, **bad))
+        listed = tools['zook_list_schedules'][0]({})['schedules']
+        self.assertEqual([(x['target'], x['when']) for x in listed], [('工程師', '週一到週五 09:30'), ('行情小組', '每天 10:00'), ('研究助手', '每月 31 號 08:00')])
+        tools['zook_update_schedule'][0]({'schedule_id': item['id'], 'time': '10:15', 'enabled': 'off'})
+        self.assertEqual((item['time'], item['on']), ('10:15', False))
+        with self.assertRaises(RuntimeError): tools['zook_update_schedule'][0]({'schedule_id': 'nope', 'time': '10:00'})
+        tools['zook_delete_schedule'][0]({'schedule_id': item['id']})
+        self.assertNotIn(item['id'], [x['id'] for x in self.store.data['schedules']])
+
+    def test_at_most_fifty(self):
+        create = self.tools(self.bot)['zook_create_schedule'][0]
+        self.store.data['schedules'] = [dict(id=str(i), botId=self.bot['id'], groupId='', content='x', time='10:00', repeat='daily', on=True) for i in range(50)]
+        with self.assertRaises(RuntimeError) as caught: create({'content': 'one more', 'repeat': 'daily', 'time': '10:00'})
+        self.assertIn('50', str(caught.exception))
+
+    def test_approval_card_says_what_will_happen(self):
+        item = dict(id='s1', botId=self.bot['id'], groupId='', content='整理未讀信件', time='09:30', repeat='weekdays', on=True)
+        self.store.data['schedules'].append(item)
+        say = lambda name, args, group=None: server.describe_schedule_call(self.store, self.bot, group, name, args)
+        self.assertEqual(say('zook_create_schedule', {'content': '討論行情給我結論', 'repeat': 'daily', 'time': '10:00'}, 'g1'),
+                         '建立排程：每天 10:00，在「行情小組」執行「討論行情給我結論」')
+        self.assertEqual(say('zook_create_schedule', {'target': '研究助手', 'content': '月報', 'repeat': 'once', 'date': '2026-12-01', 'time': '08:00'}),
+                         '建立排程：2026-12-01 08:00（只一次），在「研究助手」執行「月報」')
+        self.assertEqual(say('zook_update_schedule', {'schedule_id': 's1', 'time': '10:15'}), '修改排程「整理未讀信件」（週一到週五 09:30），改成週一到週五 10:15')
+        self.assertEqual(say('zook_delete_schedule', {'schedule_id': 's1'}), '刪除排程「整理未讀信件」（週一到週五 09:30）')
+
+    def test_instructions_mention_schedules(self):
+        self.assertIn('zook_create_schedule', server.schedule_instructions())

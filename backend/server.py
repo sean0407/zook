@@ -307,7 +307,8 @@ def describe_call(call):
              'zook_run_skill_helper': '執行 Skill 附帶的小程式', 'zook_workspace_list': '查看工作區裡有哪些檔案', 'zook_workspace_read': '讀取檔案「%s」' % base(a.get('path')),
              'zook_workspace_write': '把內容存成檔案「%s」' % base(a.get('path')), 'zook_list_team': '查看團隊裡有哪些 Bot 和群組', 'zook_create_bot': '新增 Bot「%s」' % (a.get('name') or ''),
              'zook_create_group': '建立群組「%s」' % (a.get('name') or '、'.join(a.get('bot_names') or [])), 'zook_start_group_discussion': '在群組「%s」發起討論' % (a.get('group_name') or ''),
-             'zook_remember': '記住一件事：「%s」' % str(a.get('content') or '')[:60]}
+             'zook_remember': '記住一件事：「%s」' % str(a.get('content') or '')[:60], 'zook_list_schedules': '查看排程',
+             'zook_create_schedule': '建立排程「%s」' % str(a.get('content') or '')[:40], 'zook_update_schedule': '修改排程', 'zook_delete_schedule': '刪除排程'}
     if name in fixed: return fixed[name]
     label = re.sub(r'[_-]+', ' ', str(call.get('label') or '')).strip()
     return '使用「%s」%s' % (call.get('sourceLabel') or '外部服務', '的%s功能' % label if label else '')
@@ -330,7 +331,7 @@ def mobile_message(m, names):
 
 def mobile_approvals(store, jobs, names):
     return [dict(id=a['id'], jobId=j['id'], botId=j['botId'], botName=names.get(j['botId'], 'Bot'), category=a.get('category') or '',
-                 text='%s 想要%s' % (names.get(j['botId'], 'Bot'), describe_call(dict(a, arguments=a.get('arguments')))))
+                 text='%s 想要%s' % (names.get(j['botId'], 'Bot'), a.get('text') or describe_call(dict(a, arguments=a.get('arguments')))))
             for j in jobs if j.get('status') == 'running' for a in j.get('approvals', []) if a.get('status') == 'pending']
 
 
@@ -1715,6 +1716,77 @@ def schedule_fields(store, body, record):
 
 
 SCHEDULE_HISTORY = 20
+MAX_SCHEDULES = 50
+SCHEDULE_TOOLS = ('zook_create_schedule', 'zook_update_schedule', 'zook_delete_schedule')
+REPEAT_NAMES = dict(daily='每天', weekdays='週一到週五', mon='每週一', tue='每週二', wed='每週三', thu='每週四', fri='每週五', sat='每週六', sun='每週日',
+                    hourly='每小時', monthly='每月', once='只一次')
+
+
+def schedule_when(item):
+    """When a schedule runs, in words."""
+    repeat, at = item.get('repeat'), item.get('time') or ''
+    if repeat == 'hourly': return '每小時的 %s 分' % at[3:]
+    if repeat == 'monthly': return '每月 %s 號 %s' % (item.get('day'), at)
+    if repeat == 'once': return '%s %s（只一次）' % (item.get('date'), at)
+    return '%s %s' % (REPEAT_NAMES.get(repeat, '每天'), at)
+
+
+def schedule_target_name(store, item):
+    found = store.find('groups', item['groupId']) if item.get('groupId') else store.find('bots', item.get('botId'))
+    return found['name'] if found else '已刪除的對象'
+
+
+def schedule_tool_body(store, bot, group_id, args, creating):
+    """What a Bot's schedule tool asks for, in the shape the schedule form sends. Lock held."""
+    body = {}
+    target = str(args.get('target') or '').strip()
+    if target:
+        bots = [b for b in store.data['bots'] if b['name'].strip().lower() == target.lower()]
+        groups = [g for g in store.data['groups'] if g['name'].strip().lower() == target.lower()]
+        if bots and groups: raise RuntimeError('「%s」同時是 Bot 和群組的名稱，請說清楚是哪一個。' % target)
+        if not bots and not groups: raise RuntimeError('找不到名為「%s」的 Bot 或群組。' % target)
+        body['groupId' if groups else 'botId'] = (groups or bots)[0]['id']
+    elif creating:  # by default: the conversation the request came from
+        body['groupId' if group_id else 'botId'] = group_id or bot['id']
+    for key in ('content', 'repeat', 'time', 'date'):
+        if key in args: body[key] = args[key]
+    if 'day' in args:
+        try: body['day'] = int(str(args['day']).strip())
+        except ValueError: raise RuntimeError('day 要是 1 到 31 的數字。')
+    if 'enabled' in args:
+        if args['enabled'] not in ('on', 'off'): raise RuntimeError('enabled 只能是 on 或 off。')
+        body['on'] = args['enabled'] == 'on'
+    return body
+
+
+def describe_schedule_call(store, bot, group_id, name, args):
+    """The approval card's sentence for a schedule tool: what will be created, changed or deleted."""
+    try:
+        if name == 'zook_create_schedule':
+            body = schedule_tool_body(store, bot, group_id, args, True)
+            item = dict(body, groupId=body.get('groupId', ''), botId=body.get('botId', ''))
+            return '建立排程：%s，在「%s」執行「%s」' % (schedule_when(item), schedule_target_name(store, item), str(args.get('content') or '')[:80])
+        item = store.find('schedules', args.get('schedule_id'))
+        if not item: return '修改排程' if name == 'zook_update_schedule' else '刪除排程'
+        what = '「%s」（%s）' % (item.get('content', '')[:40], schedule_when(item))
+        if name == 'zook_delete_schedule': return '刪除排程' + what
+        body = schedule_tool_body(store, bot, group_id, args, False)
+        after = dict(item, **{k: v for k, v in body.items() if k in ('repeat', 'time', 'date', 'day')})
+        changes = []
+        if schedule_when(after) != schedule_when(item): changes.append('改成' + schedule_when(after))
+        if 'content' in body: changes.append('內容改成「%s」' % str(body['content'])[:60])
+        if 'botId' in body or 'groupId' in body: changes.append('對象改成「%s」' % schedule_target_name(store, dict(groupId=body.get('groupId', ''), botId=body.get('botId', ''))))
+        if 'on' in body: changes.append('啟用' if body['on'] else '停用')
+        return '修改排程' + what + ('，' + '、'.join(changes) if changes else '')
+    except (RuntimeError, ValueError, TypeError, KeyError):
+        return {'zook_create_schedule': '建立排程', 'zook_update_schedule': '修改排程'}.get(name, '刪除排程')
+
+
+def schedule_instructions():
+    now = datetime.datetime.now()
+    return ('\n排程：使用者要你在固定時間、定期或之後某個時間做事時，用 zook_create_schedule 建立排程，不要說你做不到；Zook 會先請使用者核准。'
+            '在群組裡沒有指定對象時，排程建給這個群組。用 zook_list_schedules 查看現有排程，zook_update_schedule、zook_delete_schedule 修改或刪除。'
+            '現在是這台 Mac 的 %s（週%s），時間一律用這台 Mac 的時間。' % (now.strftime('%Y-%m-%d %H:%M'), '一二三四五六日'[now.weekday()]))
 MAX_NOTICES = 100
 
 
@@ -2048,9 +2120,11 @@ class App(ThreadingHTTPServer):
             # Runtime event has already redacted the displayed arguments.
             call = next((x for x in job.get('toolCalls', []) if x['id'] == call_id), {})
             approval = dict(id=approval_id, toolCallId=call_id, name=name, category=call.get('category', ''), label=call.get('label', name), sourceLabel=call.get('sourceLabel', source), arguments=copy.deepcopy(call.get('arguments', {})), status='pending')
+            if name in SCHEDULE_TOOLS:
+                approval['text'] = describe_schedule_call(self.store, self.store.find('bots', job['botId']) or {'id': job['botId']}, job.get('groupId'), name, arguments)
             job.setdefault('approvals', []).append(approval); self.approval_events[approval_id] = event
             run = self.schedule_run_for(job)
-            if run: self.notify_run(run, '需要你核准：' + describe_call(dict(approval, name=name)))
+            if run: self.notify_run(run, '需要你核准：' + (approval.get('text') or describe_call(dict(approval, name=name))))
             self.store.save()
         event.wait(APPROVAL_TIMEOUT)
         with self.store.lock:
@@ -2123,7 +2197,7 @@ class App(ThreadingHTTPServer):
                 with store.lock: skill_ids = shared_skill_ids(store, inventory); mcp_ids = shared_mcp_ids(store, inventory)
                 session = runtime.RuntimeSession(skill_ids, mcp_ids, bot['allowCommands'], root if scope == 'folder' else workspace,
                     lambda *a: self.approve(job_id, *a), lambda event: self.record_event(job_id, event), inventory=inventory,
-                    extra_tools=self.app_tools(bot, runtime), permission_mode=lambda bot_id=bot['id']: self.live_permission(bot_id))
+                    extra_tools=self.app_tools(bot, runtime, job.get('groupId')), permission_mode=lambda bot_id=bot['id']: self.live_permission(bot_id))
                 token = secrets.token_urlsafe(32)
                 with store.lock:
                     job = store.find('jobs', job_id)
@@ -2138,6 +2212,7 @@ class App(ThreadingHTTPServer):
                 descriptions = ['- %s（%s）：%s' % (x['name'], x['id'], (x.get('description') or '')[:150].replace('\n', ' ')) for x in inventory['skills'] if x['id'] in skill_ids]
                 if descriptions: prompt += '\n共用 Skills（符合任務時，先用 zook_read_skill 讀取完整指示再照做）：\n' + '\n'.join(descriptions)
                 if bot.get('isAdmin'): prompt += '\n你是團隊總管：可以用 zook_list_team 查看所有 Bot 和群組，用 zook_create_bot 新增 Bot，用 zook_create_group 把 Bot 拉成群組，用 zook_start_group_discussion 在群組發起討論。新增前先確認沒有重複的 Bot。'
+                prompt += schedule_instructions()
                 prompt += '\n記憶：使用者告訴你值得長期記住的偏好、事實或決定時，用 zook_remember 記下（scope=bot 只給你自己，scope=shared 給所有 Bot）。不要記錄密碼、金鑰或一次性的內容。'
                 if native: prompt += '\n工具說明：' + access_note(scope, root, kind == 'codex') + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。'
                 else: prompt += '\n工具說明：檔案讀寫與其他動作請使用 zook 工具。zook 工具會依使用者設定的主動性決定是否先請使用者核准，與本機 CLI 沙箱是否唯讀無關；需要時直接呼叫，被拒絕再說明即可。'
@@ -2262,8 +2337,9 @@ class App(ThreadingHTTPServer):
             for leftover in (store.dir / 'workspaces').glob('*/.grok/.zook-prompt-%s.txt' % job_id):
                 shutil.rmtree(str(leftover.parent), ignore_errors=True)  # per-job .grok dir: prompt, MCP config, adapter copy
 
-    def app_tools(self, bot, runtime):
-        """Tools backed by Zook's own data, offered through the runtime broker."""
+    def app_tools(self, bot, runtime, group_id=None):
+        """Tools backed by Zook's own data, offered through the runtime broker.
+        The third item says whether a call needs approval: False (never), True (depends on 主動性), 'always'."""
         store, bot_id = self.store, bot['id']
         S = lambda d: {'type': 'string', 'description': d}
         def remember(args):
@@ -2278,6 +2354,7 @@ class App(ThreadingHTTPServer):
             return {'saved': True, 'scope': scope}
         tools = [(runtime._schema('zook_remember', 'Save a long-term memory for future conversations (user preferences, facts, decisions). Never store secrets.',
                                   {'content': S('What to remember, one concise statement'), 'scope': S('bot (only you) or shared (all Bots); default bot')}, ['content'], False), remember, False)]
+        tools += self.schedule_tools(bot, runtime, group_id)
         if not bot.get('isAdmin'): return tools
         def find_bot(name):
             hit = [b for b in store.data['bots'] if b['name'].strip().lower() == name.strip().lower()]
@@ -2317,6 +2394,51 @@ class App(ThreadingHTTPServer):
                              {'name': S('Group name, optional'), 'bot_names': A('Exact Bot names, 2–6')}, ['bot_names'], False), create_group, True),
             (runtime._schema('zook_start_group_discussion', 'Post a kickoff message into a group so its Bots start working, after user approval. Use @Bot names to assign owners.',
                              {'group_name': S('Exact group name'), 'message': S('Kickoff message')}, ['group_name', 'message'], False), start_group, True)]
+
+    def schedule_tools(self, bot, runtime, group_id):
+        """Every Bot can list, create, change and delete schedules. Changes always wait for the user's approval."""
+        store = self.store
+        S = lambda d: {'type': 'string', 'description': d}
+        def find(args):
+            item = store.find('schedules', args.get('schedule_id'))
+            if not item: raise RuntimeError('找不到這個排程，先用 zook_list_schedules 查看。')
+            return item
+        def apply(body, record):
+            try: return schedule_fields(store, body, record)
+            except ValueError as exc: raise RuntimeError(str(exc))
+        def listing(args):
+            with store.lock:
+                return {'schedules': [dict(id=x['id'], target=schedule_target_name(store, x), kind='group' if x.get('groupId') else 'bot', content=x['content'],
+                                           when=schedule_when(x), enabled=bool(x.get('on')), finished=bool(x.get('done')), lastResult=x.get('lastStatus') or '')
+                                      for x in store.data['schedules']], 'limit': MAX_SCHEDULES}
+        def create(args):
+            with store.lock:
+                if len(store.data['schedules']) >= MAX_SCHEDULES: raise RuntimeError('排程已達上限 %d 個，請使用者先刪除不用的排程。' % MAX_SCHEDULES)
+                record = apply(schedule_tool_body(store, bot, group_id, args, True),
+                               dict(id=ID(), botId='', groupId='', content='', time='', repeat='daily', on=True, catchUp=True, createdAt=NOW(), createdBy=bot['id']))
+                store.data['schedules'].append(record); store.save()
+                return dict(id=record['id'], target=schedule_target_name(store, record), when=schedule_when(record), created=True)
+        def change(args):
+            with store.lock:
+                item = find(args); candidate = apply(schedule_tool_body(store, bot, group_id, args, False), copy.deepcopy(item)); candidate.pop('held', None)
+                item.clear(); item.update(candidate); store.save()
+                return dict(id=item['id'], target=schedule_target_name(store, item), when=schedule_when(item), enabled=bool(item.get('on')), updated=True)
+        def delete(args):
+            with store.lock:
+                item = find(args); store.data['schedules'].remove(item); store.save()
+                return dict(id=item['id'], deleted=True)
+        fields = {'target': S('Exact Bot or group name. Empty = this conversation (the group when in a group chat, otherwise you)'),
+                  'content': S('What to do each time, written as the message the Bot or group will receive'),
+                  'repeat': S('daily | weekdays | mon | tue | wed | thu | fri | sat | sun | hourly | monthly | once'),
+                  'time': S('24-hour HH:MM in the Mac\'s local time; for hourly only the minutes count'),
+                  'date': S('YYYY-MM-DD, only for once'), 'day': S('Day of the month 1-31, only for monthly; 29-31 run on the last day of shorter months')}
+        return [
+            (runtime._schema('zook_list_schedules', 'List all Zook schedules: id, target, what they do, when, enabled, last result.', {}), listing, False),
+            (runtime._schema('zook_create_schedule', 'Create a schedule so a Bot or group does something at a set time (once or repeating). The user is always asked to approve.',
+                             fields, ['content', 'repeat', 'time'], False), create, 'always'),
+            (runtime._schema('zook_update_schedule', 'Change a schedule (only the fields given). The user is always asked to approve.',
+                             dict(fields, schedule_id=S('Schedule id from zook_list_schedules'), enabled=S('on or off')), ['schedule_id'], False), change, 'always'),
+            (runtime._schema('zook_delete_schedule', 'Delete a schedule. The user is always asked to approve.', {'schedule_id': S('Schedule id from zook_list_schedules')}, ['schedule_id'], False), delete, 'always')]
 
     def post_group_message(self, group, content, author=None):
         # Caller holds the store lock.
@@ -3155,6 +3277,7 @@ class Handler(BaseHTTPRequestHandler):
                     except Busy as exc: return self.error(409, str(exc))
                     return self.respond(202, {'jobId': job['id']})
                 if path == '/api/schedules' and self.command == 'POST':
+                    if len(store.data['schedules']) >= MAX_SCHEDULES: return self.error(409, '排程已達上限 %d 個，請先刪除不用的排程。' % MAX_SCHEDULES)
                     item = schedule_fields(store, self.body(), dict(id=ID(), botId='', content='', time='', repeat='daily', on=True, catchUp=True, createdAt=NOW()))
                     store.data['schedules'].append(item); store.save(); return self.respond(201, item)
                 if len(parts) == 3 and parts[:2] == ['api', 'schedules'] and self.command in ('PATCH', 'DELETE'):

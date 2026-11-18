@@ -616,7 +616,7 @@ class RuntimeSession:
         self.clients, self.routes, self.catalog = {}, {}, None
         self.closed = False
         self.init_lock = threading.Lock()
-        # App-provided tools: {name: (schema, handler(args) -> value, needs_approval)}.
+        # App-provided tools: {name: (schema, handler(args) -> value, needs_approval)}; needs_approval 'always' asks in every mode.
         self.extras = {t[0]['name']: t for t in (extra_tools or [])}
         # A callable is read on every tool call, so a change in Settings applies mid-reply.
         self.permission_mode = permission_mode if callable(permission_mode) or permission_mode in PERMISSION_MODES else 'manual'
@@ -685,7 +685,9 @@ class RuntimeSession:
             if any(Path(str(a)).name in DANGER_COMMANDS for a in argv) or any(re.search(r'\brm\s+-|sudo\b', str(a)) for a in argv): return 'danger'
             return 'code'
         if name == 'zook_workspace_write': return 'internal'
-        if name in self.extras: return 'internal' if self.extras[name][2] else 'read'
+        if name in self.extras:
+            need = self.extras[name][2]
+            return 'danger' if need == 'always' else 'internal' if need else 'read'
         return 'read'
 
     def _path(self, root, relative, write=False):
