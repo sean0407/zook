@@ -1,4 +1,5 @@
   document.addEventListener('change', e => {
+    if (e.target.name === 'provider' && e.target.closest('#bot-form')) syncFeatureRows(e.target.closest('#bot-form'));
     if (e.target.name === 'access' && e.target.closest('#bot-form')) e.target.closest('form').querySelector('[data-access-folder]').hidden = e.target.value !== 'folder';
     if (e.target.name === 'transport' && e.target.closest('#connector-form')) e.target.closest('form').querySelectorAll('[data-for]').forEach(x => x.hidden = x.dataset.for !== e.target.value);
     if (e.target.name === 'accountType' && e.target.closest('#profile-form')) e.target.closest('form').querySelector('[data-key-field]').hidden = e.target.value !== 'key';
@@ -226,7 +227,7 @@
           model: d.get('model'),
           section: d.get('section'),
           pinned: d.has('pinned'),
-          fallbacks: d.get('fallbackChoice') === '__none' ? [] : !d.get('fallbackChoice') || d.get('fallbackChoice') === '__default' ? null : [d.get('fallbackChoice')], permissionMode: d.get('permissionMode') || '', effort: d.get('effort') || 'standard',
+          fallbacks: d.get('fallbackChoice') === '__none' ? [] : !d.get('fallbackChoice') || d.get('fallbackChoice') === '__default' ? null : [d.get('fallbackChoice')], permissionMode: d.get('permissionMode') || '', effort: d.get('effort') || 'standard', features: {multi: d.get('featureMulti') === 'on', image: d.get('featureImage') === 'on'},
           account: d.get('account') || '',
           access: d.get('access') || 'full', accessFolder: d.get('access') === 'folder' ? d.get('accessFolder') || '' : ''
         };

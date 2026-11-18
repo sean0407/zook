@@ -46,3 +46,29 @@ class Abilities(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class Features(unittest.TestCase):
+    def test_never_in_careful_or_plan_and_only_where_tried(self):
+        on = dict(features=dict(multi=True, image=True))
+        self.assertEqual(server.active_features(on, 'codex', True, False, 'workspace'), ['multi', 'image'])
+        self.assertEqual(server.active_features(on, 'codex', False, False, 'full'), [])
+        self.assertEqual(server.active_features(on, 'claude', True, True, 'full'), [])
+        self.assertEqual(server.active_features(on, 'claude', True, False, 'full'), ['multi'])
+        self.assertEqual(server.active_features(on, 'grok', True, False, 'workspace'), ['multi'])
+        self.assertEqual(server.active_features(on, 'grok', True, False, 'full'), ['multi', 'image'])
+        self.assertEqual(server.active_features(on, 'antigravity', True, False, 'full'), [])
+        self.assertEqual(server.active_features({}, 'codex', True, False, 'full'), [])
+        self.assertEqual(server.feature_support('generic'), [])
+
+    def test_activity_shows_what_was_really_used(self):
+        used = lambda *a: [e['arguments']['feature'] for e in server.feature_events(*a)]
+        codex = json.dumps(dict(type='item.completed', item=dict(type='collab_tool_call')))
+        claude = json.dumps(dict(type='assistant', message=dict(content=[dict(type='tool_use', name='Agent')])))
+        self.assertEqual(used('codex', codex, ['multi'], '/nonexistent', 0), ['多代理協作'])
+        self.assertEqual(used('claude', claude, ['multi'], '/nonexistent', 0), ['多代理協作'])
+        self.assertEqual(used('codex', 'nothing', ['multi'], '/nonexistent', 0), [])
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / 'cat.png').write_bytes(b'x')
+            self.assertEqual(used('grok', '', ['image'], d, 0), ['圖片生成'])
+            self.assertEqual(used('grok', '', ['image'], d, 9999999999), [])

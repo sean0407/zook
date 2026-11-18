@@ -33,6 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit, unquote, parse_qs
 
 MAX_BODY = 1024 * 1024
+MAX_CLI_OUTPUT = 128 * 1024 * 1024  # a CLI's event log can carry whole generated images
 # Thinking strength: 快速 / 標準 / 深入. 標準 passes nothing, so each CLI keeps its own default.
 EFFORTS = ('fast', 'standard', 'deep')
 EFFORT_LEVELS = dict(fast='low', deep='high')
@@ -466,7 +467,7 @@ def describe_call(call):
              'zook_run_skill_helper': '執行 Skill 附帶的小程式', 'zook_workspace_list': '查看工作區裡有哪些檔案', 'zook_workspace_read': '讀取檔案「%s」' % base(a.get('path')),
              'zook_workspace_write': '把內容存成檔案「%s」' % base(a.get('path')), 'zook_list_team': '查看團隊裡有哪些 Bot 和群組', 'zook_create_bot': '新增 Bot「%s」' % (a.get('name') or ''),
              'zook_create_group': '建立群組「%s」' % (a.get('name') or '、'.join(a.get('bot_names') or [])), 'zook_start_group_discussion': '在群組「%s」發起討論' % (a.get('group_name') or ''),
-             'zook_remember': '記住一件事：「%s」' % str(a.get('content') or '')[:60], 'zook_list_schedules': '查看排程',
+             'zook_feature': '使用%s' % str(a.get('feature') or '特色功能'), 'zook_remember': '記住一件事：「%s」' % str(a.get('content') or '')[:60], 'zook_list_schedules': '查看排程',
              'zook_create_schedule': '建立排程「%s」' % str(a.get('content') or '')[:40], 'zook_update_schedule': '修改排程', 'zook_delete_schedule': '刪除排程'}
     if name in fixed: return fixed[name]
     label = re.sub(r'[_-]+', ' ', str(call.get('label') or '')).strip()

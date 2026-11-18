@@ -223,6 +223,7 @@
       case 'zook_create_bot': return `新增 Bot「${a.name || ''}」`;
       case 'zook_create_group': return `建立群組「${a.name || (a.bot_names || []).join('、')}」`;
       case 'zook_start_group_discussion': return `在群組「${a.group_name || ''}」發起討論`;
+      case 'zook_feature': return `使用${a.feature || '特色功能'}`;
       case 'zook_remember': return `記住一件事：「${String(a.content || '').slice(0, 60)}」`;
       case 'zook_list_schedules': return '查看排程';
       case 'zook_create_schedule': return `建立排程「${String(a.content || '').slice(0, 40)}」`;

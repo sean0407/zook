@@ -341,7 +341,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, png, 'image/png') if png else self.error(404, '沒有這個圖示。')
             if path == '/api/providers' and self.command == 'GET':
                 data = self.server.store.data
-                return self.respond(200, {'providers': [dict(id=pid, name=provider_label(pid), installed=bool(find_cli(pid)), tools=bool((P.spec(data, pid) or {}).get('tools')),
+                return self.respond(200, {'providers': [dict(id=pid, name=provider_label(pid), installed=bool(find_cli(pid)), tools=bool((P.spec(data, pid) or {}).get('tools')), features=feature_support(provider_kind(pid)),
                                                              accounts=[dict(id=a['id'], name=a['name'], type=a['type']) for a in data.get('accounts') or [] if a.get('provider') == pid])
                                                         for pid in P.active_ids(data)]})
             if parts[:2] == ['api', 'accounts']:
@@ -793,6 +793,10 @@ def update(target, body, kind):
     if kind == 'bot' and 'isAdmin' in body:
         if not isinstance(body['isAdmin'], bool): raise ValueError('isAdmin 無效。')
         changes['isAdmin'] = body['isAdmin']
+    if kind == 'bot' and 'features' in body:
+        value = body['features']
+        if not isinstance(value, dict) or any(k not in FEATURES or not isinstance(v, bool) for k, v in value.items()): raise ValueError('特色功能設定無效。')
+        changes['features'] = value
     if kind == 'bot' and 'effort' in body:
         if body['effort'] not in EFFORTS: raise ValueError('思考強度無效。')
         changes['effort'] = body['effort']

@@ -284,7 +284,7 @@ class App(ThreadingHTTPServer):
         with store.lock:
             bot = store.find('bots', job['botId']) or {}
             native = next((c.get('native') or {} for c in bot.get('chats') or [] if c['id'] == job['chatId']), {})
-        same = native.get('provider') == provider and native.get('account') == (account['id'] if account else '') and native.get('model') == model and native.get('folder') == str(folder)
+        same = native.get('provider') == provider and native.get('account') == (account['id'] if account else '') and native.get('model') == model and native.get('folder') == str(folder) and native.get('features', []) == job.get('features', [])
         return str(native.get('session') or '') if same else ''
 
     def remember_session(self, job, provider, model, account, folder, session):
@@ -293,7 +293,7 @@ class App(ThreadingHTTPServer):
         bot = self.store.find('bots', job['botId']) or {}
         chat = next((c for c in bot.get('chats') or [] if c['id'] == job['chatId']), None)
         if chat is None: return
-        if session: chat['native'] = dict(provider=provider, account=account['id'] if account else '', model=model, folder=str(folder), session=session)
+        if session: chat['native'] = dict(provider=provider, account=account['id'] if account else '', model=model, folder=str(folder), session=session, features=job.get('features', []))
         else: chat.pop('native', None)
         if job.get('resumeLost'):
             message = find_message(bot, job['messageId'])
@@ -440,6 +440,8 @@ class App(ThreadingHTTPServer):
             cli_cwd = workspace if kind in ('grok', 'antigravity') else root
             account = find_account(bot.get('account'), provider)  # an extra account only applies to the provider it belongs to
             env = provider_env(provider, account)
+            features = active_features(bot, kind, native, planning, scope)
+            with store.lock: job['features'] = features
             resume = self.native_session(job, provider, model, account, cli_cwd)
             keep_session = bool(job.get('chatId')) and kind in PLAN_KINDS
             with store.lock: job['resumed'] = bool(resume)
@@ -467,7 +469,7 @@ class App(ThreadingHTTPServer):
                 descriptions = ['- %s（%s）：%s' % (x['name'], x['id'], (x.get('description') or '')[:150].replace('\n', ' ')) for x in inventory['skills'] if x['id'] in skill_ids]
                 if descriptions and not resume: prompt += '\n共用 Skills（符合任務時，先用 zook_read_skill 讀取完整指示再照做）：\n' + '\n'.join(descriptions)
                 if bot.get('isAdmin') and not resume: prompt += '\n你是團隊總管：可以用 zook_list_team 查看所有 Bot 和群組，用 zook_create_bot 新增 Bot，用 zook_create_group 把 Bot 拉成群組，用 zook_start_group_discussion 在群組發起討論。新增前先確認沒有重複的 Bot。'
-                if not resume: prompt += SUBAGENT_NOTE
+                if not resume: prompt += feature_note(features, kind)
                 if not planning and not resume: prompt += schedule_instructions()
                 if not planning and not resume: prompt += '\n記憶：使用者告訴你值得長期記住的偏好、事實或決定時，用 zook_remember 記下（scope=bot 只給你自己，scope=shared 給所有 Bot）。不要記錄密碼、金鑰或一次性的內容。'
                 if kind == 'grok': prompt += '\nZook 工具在這裡的完整名稱是 zook__ 加上工具名，例如 zook__zook_create_schedule。'
@@ -498,6 +500,7 @@ class App(ThreadingHTTPServer):
                         access_args = ['--permission-mode', 'bypassPermissions', '--no-subagents', '--trust', '--allow', 'Bash', '--allow', 'Read', '--allow', 'Write', '--allow', 'Edit']
                     else:
                         access_args = ['--permission-mode', 'dontAsk', '--no-subagents', '--trust', '--sandbox', 'strict'] + (['--deny', 'Bash', '--allow', 'Read', '--allow', 'Write', '--allow', 'Edit'] if native else ['--deny', 'Bash', '--deny', 'Edit', '--deny', 'Write'])
+                    if 'multi' in features: access_args = [a for a in access_args if a != '--no-subagents'] + ['--allow', 'Agent', '--allow', 'Task']
                     args = [binary, '--prompt-file', str(prompt_file), '--output-format', 'streaming-json'] + access_args + [
                             '--allow', 'MCPTool(zook_*)', '--cwd', str(workspace)] + (['--model', model] if model else []) + effort_args('grok', effort)
                     # zook_* (not zook__*) also lets a short tool name through, so Grok is told to use zook__… instead of being refused.
@@ -520,7 +523,7 @@ class App(ThreadingHTTPServer):
                 args = [binary, 'exec'] + [a for x in images for a in ('-i', x)] + ['--json'] + ((['--dangerously-bypass-approvals-and-sandbox'] if scope == 'full' else codex_permission_args(binary)) if native and selected else ['--sandbox', 'read-only']) + ['--skip-git-repo-check', '--ephemeral', '--ignore-user-config', '--color', 'never',
                         '-c', 'project_doc_max_bytes=0', '-c', 'developer_instructions=' + json.dumps(CODEX_DEVELOPER_NOTE, ensure_ascii=False)]
                 if selected:
-                    for feature in (() if native else ('shell_tool', 'unified_exec')) + ('apps', 'plugins', 'browser_use', 'computer_use', 'multi_agent', 'skill_search', 'memories'):
+                    for feature in (() if native else ('shell_tool', 'unified_exec')) + ('apps', 'plugins', 'browser_use', 'computer_use', 'skill_search', 'memories') + (() if 'multi' in features else ('multi_agent',)) + (() if 'image' in features else ('image_generation',)):
                         args += ['--disable', feature]
                     args += ['--enable', 'skip_host_skill_discovery', '-c', 'web_search=\"%s\"' % ('live' if web else 'disabled')]
                     args += ['-c', 'mcp_servers.zook.command='+json.dumps(sys.executable), '-c', 'mcp_servers.zook.args='+json.dumps([adapter]), '-c', 'mcp_servers.zook.env_vars='+json.dumps(['ZOOK_WORKER_URL', 'ZOOK_WORKER_TOKEN', 'ZOOK_TOOL_WAIT']),
@@ -532,7 +535,7 @@ class App(ThreadingHTTPServer):
                 args += ['resume', resume, '-'] if resume else ['-']
             else:
                 # With access to the whole Mac, Claude also gets Bash and its file tools may leave the starting folder.
-                claude_tools = (CLAUDE_NATIVE_TOOLS + (['Bash'] if scope == 'full' else [])) if native and selected else []
+                claude_tools = (CLAUDE_NATIVE_TOOLS + (['Bash'] if scope == 'full' else []) + (['Task'] if 'multi' in features else [])) if native and selected else []
                 attach_read = ['Read'] if job.get('attachments') and 'Read' not in claude_tools else []  # just to look at what was attached
                 args = [binary, '--print', '--restricted' if selected else '--safe-mode', '--strict-mcp-config', '--no-session-persistence', '--tools', ','.join(claude_tools + attach_read + (['WebSearch', 'WebFetch'] if web else [])), '--output-format', 'stream-json', '--verbose']
                 if native and selected: args += ['--permission-mode', 'acceptEdits'] + (['--add-dir', '/'] if scope == 'full' else [])
@@ -547,6 +550,7 @@ class App(ThreadingHTTPServer):
             with store.lock:
                 job = store.find('jobs', job_id)
                 if not job or job['status'] != 'running': return
+                started_at = time.time()
                 proc = subprocess.Popen(args, stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=str(cli_cwd), env=env)
                 self.processes[job_id] = proc
             try:
@@ -572,9 +576,10 @@ class App(ThreadingHTTPServer):
                     try: proc.communicate(timeout=2)
                     except subprocess.TimeoutExpired: pass
                 raise RuntimeError('執行逾時。')
-            if len(output) > MAX_BODY: raise RuntimeError('回覆超過大小限制。')
+            if len(output) > MAX_CLI_OUTPUT: raise RuntimeError('回覆超過大小限制。')
             parsed = parse_cli_output(kind if kind in PLAN_KINDS else 'plain', output.decode('utf-8', errors='replace'), model)
             if parsed['quota']: self.record_quota(provider, parsed['quota'], account['id'] if account else '')
+            parsed['web'] = (parsed.get('web') or []) + feature_events(kind, output.decode('utf-8', errors='replace'), features, cli_cwd, started_at)
             if parsed.get('web'):
                 with store.lock:
                     job = store.find('jobs', job_id)

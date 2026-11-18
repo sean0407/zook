@@ -67,3 +67,47 @@ def ability_view(store, provider):
     if not offered: return dict(abilities=[dict(id='chat', name='對話', state='on')], changed=[])
     items = [dict(id=key, name=name, state='broken' if key in missing else 'on') for key, name in ABILITIES if key in offered]
     return dict(abilities=items, changed=[name for key, name in ABILITIES if key in missing])
+
+
+# Special features a Bot can turn on. Each was tried on the real CLI: browser control is not offered because none could complete it,
+# and Antigravity's image generation often ended in a capacity error before it could reply.
+FEATURES = dict(multi=('codex', 'claude', 'grok'), image=('codex', 'grok'))
+FEATURE_NAMES = dict(multi='多代理協作', image='圖片生成')
+FEATURE_NEEDS_WHOLE_MAC = dict(image=('grok',))  # these only finish the job with full access
+
+
+def feature_support(kind):
+    return [name for name, kinds in FEATURES.items() if kind in kinds]
+
+
+def active_features(bot, kind, native, planning, scope):
+    """The features this reply may use. Never in 謹慎 or 先規劃."""
+    chosen = bot.get('features') if isinstance(bot.get('features'), dict) else {}
+    if not native or planning: return []
+    return [name for name in feature_support(kind) if chosen.get(name) is True and (kind not in FEATURE_NEEDS_WHOLE_MAC.get(name, ()) or scope == 'full')]
+
+
+def feature_note(features, kind):
+    note = '\n你可以派出子代理分工處理適合平行的工作。' if 'multi' in features else SUBAGENT_NOTE
+    if 'image' in features: note += '\n使用者要圖片時，用你的 AI 圖片生成工具產生，存到目前資料夾並告訴使用者檔名。'
+    elif kind == 'grok': note += '\n不要使用 AI 圖片生成工具。'
+    return note
+
+
+def feature_events(kind, text, features, folder, started):
+    """Activity entries for the special features a reply really used."""
+    used = []
+    if 'multi' in features:
+        for line in str(text or '').splitlines():
+            try: event = json.loads(line) if line.strip().startswith('{') else {}
+            except ValueError: continue
+            item = event.get('item') if isinstance(event.get('item'), dict) else {}
+            blocks = (event.get('message') or {}).get('content') if isinstance(event.get('message'), dict) else None
+            if item.get('type') == 'collab_tool_call' or event.get('toolName') == 'spawn_subagent' or any(isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') in ('Agent', 'Task') for b in blocks or []):
+                used.append('multi'); break
+    if 'image' in features:
+        try:
+            with os.scandir(str(folder)) as found:
+                if any(e.is_file() and pathlib.Path(e.name).suffix.lower() in IMAGE_TYPES and e.stat().st_mtime >= started for e in found): used.append('image')
+        except OSError: pass
+    return [dict(name='zook_feature', category='read', arguments=dict(feature=FEATURE_NAMES[x])) for x in used]
