@@ -93,3 +93,13 @@ class MobileViewsTest(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class MobileScheduleApprovalTest(unittest.TestCase):
+    def test_phone_card_spells_out_the_schedule(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = m.Store(pathlib.Path(tmp)); bot = store.data['bots'][0]
+            text = '建立排程：每天 10:00，在「%s」執行「提醒我喝水」' % bot['name']
+            store.data['jobs'].append(dict(id='j', botId=bot['id'], status='running', messageId='x', toolCalls=[],
+                                           approvals=[dict(id='a', status='pending', category='danger', name='zook_create_schedule', arguments={'content': '提醒我喝水'}, text=text)]))
+            self.assertEqual(m.mobile_bot(store, bot)['approvals'][0]['text'], bot['name'] + ' 想要' + text)
