@@ -1623,3 +1623,5 @@ button.run-row:hover { background: #f1f1f1; }
 .dir-card .small-btn { padding: 4px 12px; font-size: 12.5px; }
 .dir-more { display: none; }
 @media (max-width: 900px) { .dir-grid { grid-template-columns: minmax(0, 1fr); } }
+.found-section { margin-top: 34px; padding-top: 18px; border-top: 1px solid #ececec; }
+.found-section h2 .dir-fold span:first-child { color: #777; font-weight: 500; }

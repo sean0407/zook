@@ -473,7 +473,7 @@
           try { state.mcpTests[made.id] = await post('mcp/' + encodeURIComponent(made.id) + '/test'); }
           catch (error) { state.mcpTests[made.id] = {status: 'error', error: error.message}; }
           render(true);
-          toast(state.mcpTests[made.id].status === 'ready' ? '已複製到 Zook，連線正常' : '已複製，但連不上。需要登入的話請按「登入」');
+          toast(state.mcpTests[made.id].status === 'ready' ? '已加入，連線正常' : '已加入，但連不上。需要登入的話請按「登入」');
           break;
         }
         case 'pack-export': {
@@ -506,6 +506,7 @@
           break;
         }
         case 'catalog-why': catalogWhy(id); break;
+        case 'found-toggle': state.foundOpen = !state.foundOpen; render(true); break;
         case 'catalog-add': await catalogAdd(id); break;
         case 'connector-login': {
           const ids = item => (item?.accounts || []).map(x => x.id).join(), before = ids((state.integrations?.mcp || []).find(i => i.id === id)), adding = !!el.dataset.add;
