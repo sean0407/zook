@@ -679,6 +679,7 @@ class RuntimeSession:
         if name in self.routes:
             original = self.routes[name][1]
             if is_dangerous_name(original) or 'send' in str(original).lower(): return 'danger'  # sendmail, sendMessage, send_email…
+            if self.annotations.get(name, {}).get('alwaysApprove') is True: return 'danger'  # the connector itself says: always ask
             return 'external_read' if self.annotations.get(name, {}).get('readOnlyHint') is True else 'external_write'
         if name == 'zook_run_skill_helper':
             argv = args.get('argv') or []

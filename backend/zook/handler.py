@@ -384,6 +384,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, self.quota())
             if path == '/api/usage/bots' and self.command == 'GET':
                 with store.lock: return self.respond(200, bot_usage(store))
+            if path == '/api/google' and self.command in ('POST', 'DELETE') and not self.device:
+                if self.command == 'DELETE': google_logout(store); return self.respond(200, {'ok': True})
+                body = self.body()
+                try: url = google_begin(self.server, body.get('clientId'), body.get('clientSecret'), body.get('write') is True)
+                except ValueError as exc: return self.error(400, str(exc))
+                if not os.environ.get('ZOOK_NO_BROWSER'): subprocess.run(['/usr/bin/open', _oauth_url(url)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                return self.respond(200, {'url': url})
             if path == '/api/gmail' and self.command in ('POST', 'DELETE'):
                 with store.lock: saved = dict(store.data['settings'].get('gmail') or {})
                 if self.command == 'DELETE':

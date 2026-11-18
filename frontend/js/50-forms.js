@@ -275,6 +275,15 @@
         delete d.providerId;
         await post('accounts/custom', d);
         closeModal(); await reloadAccounts(); toast('已儲存，Bot 現在可以選用這個 CLI');
+      } else if (form.id === 'google-form') {
+        const d = new FormData(form);
+        await post('google', {clientId: d.get('clientId').trim(), clientSecret: d.get('clientSecret').trim(), write: form.elements.write.checked});
+        closeModal(); toast('已在瀏覽器開啟 Google 登入頁，完成後回到這裡');
+        for (let n = 0; n < 90 && state.page === 'mcp'; n++) {
+          await new Promise(r => setTimeout(r, 2000));
+          state.integrations = await api('integrations');
+          if (!(state.integrations.mcp || []).find(i => i.google)?.needsSetup) { await refresh(); toast('Google 已登入，所有 Bot 都可以使用'); break; }
+        }
       } else if (form.id === 'gmail-form') {
         const d = new FormData(form), button = form.querySelector('.primary');
         button.disabled = true; button.textContent = '正在連接…';

@@ -118,6 +118,14 @@ def inventory_for(store):
                                                  env={'ZOOK_GMAIL_ADDRESS': gmail['address'], 'ZOOK_GMAIL_PASSWORD': password})
     else: item['needsSetup'] = True
     data['mcp'].insert(1, item)
+    with store.lock: google = dict(store.data['settings'].get('google') or {})
+    access = google_access(store) if google else ''
+    data['mcp'].insert(2, {'id': GOOGLE_ID, 'name': 'Google（Gmail、行事曆、雲端硬碟）', 'source': 'builtin', 'transport': 'stdio', 'status': 'configured', 'google': True,
+                           'address': google.get('email', ''), 'write': bool(google.get('write')), 'needsSetup': not access, 'needsLogin': bool(google) and not access})
+    if access:
+        data['_private']['mcp'][GOOGLE_ID] = dict(transport='stdio', command=sys.executable, args=[str(pathlib.Path(__file__).with_name('google_mcp.py'))],
+                                                  env=dict({'ZOOK_GOOGLE_TOKEN': access, 'ZOOK_GOOGLE_WRITE': '1' if google.get('write') else '0'},
+                                                           **({'ZOOK_GOOGLE_API': os.environ['ZOOK_GOOGLE_API']} if os.environ.get('ZOOK_GOOGLE_API') else {})))
     for record in own:  # Connectors added in Zook itself; they do not depend on any other app's settings.
         ident = 'zook:' + record['id']; secret = secret_get(record['secretId']) if record.get('secretId') else ''
         if record['transport'] == 'stdio':
@@ -136,7 +144,7 @@ def inventory_for(store):
             if value and record['transport'] == 'stdio': config['env'][key] = value
             elif not value: waiting = True
         data['_private']['mcp'][ident] = config
-        data['mcp'].insert(2 + own.index(record), {'id': ident, 'name': record['name'], 'source': 'zook', 'transport': record['transport'], 'status': 'configured',
+        data['mcp'].insert(3 + own.index(record), {'id': ident, 'name': record['name'], 'source': 'zook', 'transport': record['transport'], 'status': 'configured',
                             'editable': True, 'config': connector_view(record), 'needsKey': waiting,
                             'canLogin': record['transport'] == 'http' and not record.get('secretName') and not secret,
                             'signedIn': bool(record.get('oauth')) and 'Authorization' in config.get('headers', {}),

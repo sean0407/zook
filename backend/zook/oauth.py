@@ -126,12 +126,14 @@ def oauth_finish(app, state, code):
     """The browser came back: trade the code for tokens and keep them in the Keychain."""
     flow = app.__dict__.get('oauth_flows', {}).pop(state, None) if isinstance(state, str) else None
     if not flow or time.time() - flow['at'] > OAUTH_FLOW_MINUTES * 60 or not isinstance(code, str) or not code: raise ValueError('這個登入連結已經失效，請回到 Zook 再按一次登入。')
-    form = dict(grant_type='authorization_code', code=code, redirect_uri=flow['redirect'], client_id=flow['client'], code_verifier=flow['verifier'], resource=flow['meta']['resource'])
+    form = dict(grant_type='authorization_code', code=code, redirect_uri=flow['redirect'], client_id=flow['client'], code_verifier=flow['verifier'])
+    if flow['meta']['resource']: form['resource'] = flow['meta']['resource']
     if flow['secret']: form['client_secret'] = flow['secret']
     status, _, token = _oauth_request(flow['meta']['token'], form=form)
     if status >= 300: raise RuntimeError('登入沒有完成，請再試一次。')
     kept = dict(_oauth_keep(token), secret=flow['secret'])
     store = app.store
+    if flow.get('kind') == 'google': return google_finish(store, flow, kept)
     with store.lock:
         record = next((c for c in store.data['connectors'] if c['id'] == flow['connector']), None)
         if not record: raise ValueError('找不到這個連接器。')
@@ -147,19 +149,25 @@ def oauth_finish(app, state, code):
 def oauth_access(store, record):
     """A usable access token for this connector, refreshed when it is about to run out. '' when the user must sign in again."""
     info = record.get('oauth') or {}
+    return oauth_token(info, info.get('resource') or record.get('url'), lambda: _oauth_lost(store, record['id']))
+
+
+def oauth_token(info, resource, lost):
+    """The access token kept for this sign-in, refreshed when needed. Calls lost() and returns '' when the user must sign in again."""
     if not info.get('secretId') or info.get('needsLogin'): return ''
     with _oauth_lock:
         kept = blob_get(info['secretId'])
-        if not kept: return _oauth_lost(store, record['id'])
-        if kept['expiresAt'] - time.time() > 60: return kept['access']
-        if not kept.get('refresh'): return _oauth_lost(store, record['id'])
-        form = dict(grant_type='refresh_token', refresh_token=kept['refresh'], client_id=info['clientId'], resource=info.get('resource') or record['url'])
+        if not kept: return lost()
+        if kept['expiresAt'] - time.time() > 300: return kept['access']
+        if not kept.get('refresh'): return kept['access'] if kept['expiresAt'] - time.time() > 30 else lost()
+        form = dict(grant_type='refresh_token', refresh_token=kept['refresh'], client_id=info['clientId'])
+        if resource: form['resource'] = resource
         if kept.get('secret'): form['client_secret'] = kept['secret']
         try: status, _, token = _oauth_request(info['tokenEndpoint'], form=form)
         except RuntimeError: return kept['access'] if kept['expiresAt'] > time.time() else ''  # offline: try again next time
-        if status >= 300: return _oauth_lost(store, record['id'])
+        if status >= 300: return lost()
         try: fresh = dict(_oauth_keep(token, kept), secret=kept.get('secret') or ''); blob_set(info['secretId'], fresh)
-        except RuntimeError: return _oauth_lost(store, record['id'])
+        except RuntimeError: return lost()
         return fresh['access']
 
 
@@ -181,3 +189,59 @@ def oauth_logout(store, connector_id):
 def oauth_page(message):
     return ('<!doctype html><meta charset="utf-8"><title>Zook</title><body style="font:16px -apple-system,sans-serif;display:grid;place-items:center;height:90vh;color:#333">'
             '<p>%s</p></body>' % html.escape(message)).encode()
+
+
+# ---- Google account (Gmail, Calendar, Drive) with the user's own Google Cloud client.
+GOOGLE_ID = 'builtin:google'
+GOOGLE_READ = ('https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/calendar.readonly', 'https://www.googleapis.com/auth/drive.readonly')
+GOOGLE_WRITE = ('https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/calendar.events', 'https://www.googleapis.com/auth/drive.file')
+
+
+def _google_endpoints():
+    test = os.environ.get('ZOOK_GOOGLE_API', '')  # tests point this at a stand-in on this Mac
+    if test.startswith('http://127.0.0.1:'): return test + '/authorize', test + '/token', test + '/gmail/v1/users/me/profile'
+    return 'https://accounts.google.com/o/oauth2/v2/auth', 'https://oauth2.googleapis.com/token', 'https://gmail.googleapis.com/gmail/v1/users/me/profile'
+
+
+def google_begin(app, client_id, client_secret, write):
+    """Start signing in to Google. Returns the page to open in the browser."""
+    if not isinstance(client_id, str) or not re.fullmatch(r'[A-Za-z0-9._-]{10,200}', client_id.strip()): raise ValueError('用戶端編號格式不對，請從 Google Cloud 複製完整的一串。')
+    if not isinstance(client_secret, str) or not re.fullmatch(r'[A-Za-z0-9._~+/=-]{8,200}', client_secret.strip()): raise ValueError('用戶端密鑰格式不對，請從 Google Cloud 複製完整的一串。')
+    authorize, token, _ = _google_endpoints()
+    redirect = 'http://127.0.0.1:%d/oauth/callback' % app.server_address[1]
+    state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(64)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
+    flows = app.__dict__.setdefault('oauth_flows', {})
+    flows[state] = dict(kind='google', connector='', verifier=verifier, meta=dict(token=token, resource=''), client=client_id.strip(), secret=client_secret.strip(), redirect=redirect, write=bool(write), at=time.time())
+    query = dict(response_type='code', client_id=client_id.strip(), redirect_uri=redirect, state=state, code_challenge=challenge, code_challenge_method='S256',
+                 scope=' '.join(GOOGLE_READ + (GOOGLE_WRITE if write else ())), access_type='offline', prompt='consent')
+    return authorize + '?' + urllib.parse.urlencode(query)
+
+
+def google_finish(store, flow, kept):
+    if not kept.get('refresh'): raise RuntimeError('Google 沒有給長期授權，請再登入一次並同意所有項目。')
+    try: _, _, profile = _oauth_request(_google_endpoints()[2], headers={'Authorization': 'Bearer ' + kept['access']})
+    except RuntimeError: profile = {}
+    with store.lock: old = dict(store.data['settings'].get('google') or {})
+    blob_id = old.get('secretId') or ID(); blob_set(blob_id, kept)
+    with store.lock:
+        st = store.data['settings']
+        st['google'] = dict(secretId=blob_id, clientId=flow['client'], tokenEndpoint=flow['meta']['token'], write=flow['write'], email=str(profile.get('emailAddress') or '')[:200], signedInAt=NOW())
+        st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + [GOOGLE_ID])); store.save()
+
+
+def google_access(store):
+    with store.lock: info = dict(store.data['settings'].get('google') or {})
+    def lost():
+        with store.lock:
+            now = store.data['settings'].get('google')
+            if now and not now.get('needsLogin'): now['needsLogin'] = True; store.save()
+        return ''
+    return oauth_token(info, '', lost)
+
+
+def google_logout(store):
+    with store.lock:
+        st = store.data['settings']; info = st.pop('google', None)
+        st['sharedMcp'] = [x for x in st.get('sharedMcp') or [] if x != GOOGLE_ID]; store.save()
+    if info and info.get('secretId'): blob_delete(info['secretId'])

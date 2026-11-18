@@ -414,6 +414,12 @@
             render(true);
           } finally { delete state.deciding[id]; if (el.isConnected) el.disabled = false; }
           break;
+        case 'google-setup': googleModal(); break;
+        case 'google-remove':
+          if (!confirm('登出 Google？所有 Bot 都會無法再使用 Gmail、行事曆和雲端硬碟，儲存的授權會從鑰匙圈刪除。')) break;
+          await api('google', {method: 'DELETE'}); delete state.mcpTests['builtin:google'];
+          state.integrations = await api('integrations'); await refresh(); toast('已登出 Google');
+          break;
         case 'gmail-setup':
           gmailModal();
           break;
