@@ -542,7 +542,7 @@
   }
   // 先規劃: for the next message only; the Bot proposes a plan and changes nothing.
   if (!state.plan) state.plan = {};
-  const planControl = b => `<label class="plan-toggle" title="這則訊息只請 Bot 提出計畫，不動手">${toggle(`data-plan`, !!state.plan[b.id], '先規劃')}<span>先規劃</span></label>`;
+  const planControl = b => !effortSupported() ? '' : `<label class="plan-toggle" title="這則訊息只請 Bot 提出計畫，不動手">${toggle(`data-plan`, !!state.plan[b.id], '先規劃')}<span>先規劃</span></label>`;
   function effortControl() {
     if (!effortSupported()) return `<span class="effort-off" title="這個模型不支援調整思考強度">思考強度：這個模型不支援</span>`;
     return `<div class="effort-pick" title="思考強度">${dropdown('effort', currentEffort(), EFFORTS, 'data-effort')}</div>`;
@@ -936,11 +936,12 @@
     return intro + `<div class="cards">${items.map(x => `<article class="card sched-card"><div class="sched-head"><h3>${esc(scheduleWhen(x))}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><p>${esc(x.content)}</p>${scheduleTarget(x)}<span class="status ${x.lastStatus && x.lastStatus !== 'sent' && !x.done ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button>${(x.runs || []).length ? `<button class="link" data-action="schedule-history" data-id="${esc(x.id)}">紀錄</button>` : ''}<button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`).join('')}</div>`;
   }
   // ---- Attachments: each file is uploaded as soon as it is added, then sent with the message.
-  if (!state.pending) state.pending = [];
+  if (!state.pendingBy) state.pendingBy = {};  // files waiting to be sent, per Bot or group
+  const pendingList = () => state.pendingBy[effortKey()] || (state.pendingBy[effortKey()] = []);
   const kb = n => n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1024 / 1024).toFixed(1) + ' MB';
   function pendingFiles() {
-    if (!state.pending.length) return '';
-    return `<div class="pending-files">${state.pending.map(f => `<div class="pending-file">${f.url ? `<img src="${esc(f.url)}" alt="">` : '<span class="file-icon">📄</span>'}<span class="pending-name">${esc(f.name)}<small>${f.uploading ? '上傳中…' : kb(f.size)}</small></span><button type="button" class="icon-btn mini" data-action="unattach" data-id="${esc(f.key)}" aria-label="移除 ${esc(f.name)}">×</button></div>`).join('')}</div>`;
+    if (!pendingList().length) return '';
+    return `<div class="pending-files">${pendingList().map(f => `<div class="pending-file">${f.url ? `<img src="${esc(f.url)}" alt="">` : '<span class="file-icon">📄</span>'}<span class="pending-name">${esc(f.name)}<small>${f.uploading ? '上傳中…' : kb(f.size)}</small></span><button type="button" class="icon-btn mini" data-action="unattach" data-id="${esc(f.key)}" aria-label="移除 ${esc(f.name)}">×</button></div>`).join('')}</div>`;
   }
   function attachmentsView(m) {
     if (!m.attachments || !m.attachments.length) return '';
@@ -949,20 +950,21 @@
       : `<a class="att-file" href="/api/uploads/${esc(a.id)}" download="${esc(a.name)}">📄 ${esc(a.name)}</a>`).join('')}</div>`;
   }
   async function addFiles(files) {
+    const list = pendingList();
     for (const f of files) {
-      if (state.pending.length >= 10) { toast('每則訊息最多 10 個檔案'); break; }
+      if (list.length >= 10) { toast('每則訊息最多 10 個檔案'); break; }
       if (f.size > 20 * 1024 * 1024) { toast(`「${f.name}」超過 20 MB，沒有加入`); continue; }
       if (!f.size) { toast(`「${f.name}」是空的`); continue; }
       const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
       const name = f.name && f.name !== 'image.png' ? f.name : `截圖-${stamp}.png`;
       const item = {key: Math.random().toString(36).slice(2), name, size: f.size, uploading: true, url: /^image\//.test(f.type) ? URL.createObjectURL(f) : ''};
-      state.pending.push(item); render(true);
+      list.push(item); render(true);
       try {
         const res = await fetch('/api/uploads', {method: 'POST', headers: {'X-File-Name': encodeURIComponent(name), 'Content-Type': 'application/octet-stream'}, body: f});
         const meta = await res.json();
         if (!res.ok) throw new Error(meta.error || '上傳失敗');
         Object.assign(item, {id: meta.id, kind: meta.kind, uploading: false});
-      } catch (e) { state.pending = state.pending.filter(x => x !== item); toast(`「${name}」${e.message}`); }
+      } catch (e) { list.splice(list.indexOf(item), 1); toast(`「${name}」${e.message}`); }
       render(true);
     }
   }
@@ -1551,7 +1553,7 @@
           break;
         }
         case 'unattach':
-          state.pending = state.pending.filter(f => f.key !== id); render(true);
+          pendingList().splice(pendingList().findIndex(f => f.key === id), 1); render(true);
           break;
         case 'view-image':
           modal(el.dataset.name || '圖片', `<div class="modal-body image-view"><img src="/api/uploads/${esc(id)}" alt="${esc(el.dataset.name || '')}"></div>`, '', true);
@@ -1994,13 +1996,13 @@
       if (form.id === 'chat-form') {
         let input = $('#chat-input'),
           content = input.value.trim();
-        if (state.pending.some(f => f.uploading)) { toast('檔案還在上傳，請稍等'); return; }
-        const attachments = state.pending.map(f => f.id);
+        if (pendingList().some(f => f.uploading)) { toast('檔案還在上傳，請稍等'); return; }
+        const attachments = pendingList().map(f => f.id);
         if (!content && !attachments.length) return;
         const g = activeGroup();
         if (g) {
           await post('groups/' + encodeURIComponent(g.id) + '/messages', {content, attachments, effort: currentEffort()});
-          input.value = ''; updateInputMirror(); state.pending = [];
+          input.value = ''; updateInputMirror(); pendingList().length = 0;
           await refresh();
           pollGroup(g.id);
           return;
@@ -2013,7 +2015,7 @@
           effort: currentEffort(),
           plan: !!state.plan[botId]
         });
-        input.value = ''; updateInputMirror(); state.pending = []; state.plan[botId] = false;
+        input.value = ''; updateInputMirror(); pendingList().length = 0; state.plan[botId] = false;
         await refresh();
         poll(result.jobId, botId)
       } else if (form.id === 'bot-form') {

@@ -167,5 +167,12 @@ class RedoTest(ConversationTest):
         for bad in ({'mode': 'edit', 'content': ' '}, {'mode': 'other'}, {'mode': 'again', 'provider': 'nope'}):
             self.redo(bad, 400)
 
+    def test_failed_redo_puts_the_previous_answer_back(self):
+        self.say('question')
+        before = self.state_bot()['messages']
+        (self.root / 'bin/codex').write_text('#!/bin/sh\nexit 1\n')
+        self.redo({'mode': 'edit', 'content': 'changed question'})
+        self.assertEqual(self.state_bot()['messages'], before)
+
     def test_nothing_to_redo(self):
         self.redo({'mode': 'again'}, 400)

@@ -73,6 +73,22 @@ class AttachmentTest(unittest.TestCase):
         asked = next(b for b in self.req('GET', '/api/state')[1]['bots'] if b['id'] == self.bot['id'])['messages'][0]
         self.assertEqual([a['name'] for a in asked['attachments']], ['螢幕截圖 1.png', '報告.txt'])
 
+    def test_files_stay_available_on_later_turns(self):
+        image = self.upload('圖.png', PNG)[1]
+        sent = self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': '看圖', 'attachments': [image['id']]})[1]; self.wait_job(sent['jobId'])
+        sent = self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': '再看一次'})[1]; self.wait_job(sent['jobId'])
+        self.assertEqual((self.root / 'bin/codex.args').read_text().splitlines()[1], '-i')
+        self.assertIn('圖.png', (self.root / 'bin/codex.prompt').read_text())
+
+    def test_group_members_can_see_an_image(self):
+        other = self.req('POST', '/api/bots', {'name': 'Second', 'provider': 'codex'})[1]
+        group = self.req('POST', '/api/groups', {'name': 'G', 'botIds': [self.bot['id'], other['id']]})[1]
+        image = self.upload('圖.png', PNG)[1]
+        self.assertEqual(self.req('POST', '/api/groups/%s/messages' % group['id'], {'content': '看圖', 'attachments': [image['id']]})[0], 202)
+        end = time.time() + 15
+        while time.time() < end and next(g for g in self.req('GET', '/api/state')[1]['groups'] if g['id'] == group['id'])['status'] == 'running': time.sleep(0.2)
+        self.assertEqual((self.root / 'bin/codex.args').read_text().splitlines()[1], '-i')
+
     def test_limits(self):
         status, _, _ = self.raw('POST', '/api/uploads', b'x', {'X-File-Name': 'big.bin', 'Content-Length': str(20 * 1024 * 1024 + 1)})
         self.assertEqual(status, 413)
