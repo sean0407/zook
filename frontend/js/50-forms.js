@@ -9,6 +9,7 @@
   document.addEventListener('change', e => {
     if (e.target.name === 'provider' && e.target.closest('#bot-form')) syncFeatureRows(e.target.closest('#bot-form'));
     if (e.target.dataset.autoModel) saveAutoModel(e.target);
+    if (e.target.name === 'projectFilter') { state.projectId = e.target.value; render(true); }
     if (e.target.name === 'groupMode' && activeGroup()) { state.groupMode[activeGroup().id] = e.target.value; updateGroupEstimate(); }
     if (e.target.name === 'botIds' && e.target.closest('#group-form')) syncGroupHost(e.target.closest('#group-form'));
     if (e.target.id === 'group-file-input' && activeGroup()) uploadGroupFiles(activeGroup(), [...e.target.files]);
@@ -275,6 +276,8 @@
         delete d.providerId;
         await post('accounts/custom', d);
         closeModal(); await reloadAccounts(); toast('已儲存，Bot 現在可以選用這個 CLI');
+      } else if (form.id === 'project-form') {
+        await saveProject(form);
       } else if (form.id === 'google-form') {
         const d = new FormData(form);
         await post('google', {clientId: d.get('clientId').trim(), clientSecret: d.get('clientSecret').trim(), write: form.elements.write.checked});

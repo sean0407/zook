@@ -378,6 +378,15 @@
             toast('已刪除 Bot')
           }
           break;
+        case 'project-new': projectModal(); break;
+        case 'project-edit': projectModal(activeProject()); break;
+        case 'project-folder': { const picked = (await post('choose-folder')).path, form = $('#project-form'); if (picked && form) { form.elements.folder.value = picked; form.querySelector('[data-project-path]').textContent = picked; } break; }
+        case 'project-delete': {
+          const form = $('#project-form');
+          if (!confirm('刪除這個專案？裡面的 Bot、群組、知識和檔案都會保留。')) break;
+          await api('projects/' + encodeURIComponent(form.dataset.id), {method: 'DELETE'}); closeModal(); state.projectId = ''; await refresh(); toast('已刪除專案');
+          break;
+        }
         case 'choose-folder': {
           const picked = (await post('choose-folder')).path, form = $('#bot-form');
           if (picked && form) { form.elements.accessFolder.value = picked; form.querySelector('[data-access-path]').textContent = picked; saveBotDraft(form); }

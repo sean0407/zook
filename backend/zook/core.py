@@ -155,7 +155,7 @@ class Store:
         for bot in self.data.get('bots', []):
             bot.setdefault('enabledSkills', []); bot.setdefault('enabledMcp', []); bot.setdefault('allowCommands', True)
             ensure_chats(bot)
-        self.data.setdefault('groups', []); self.data.setdefault('memories', []); self.data.setdefault('quota', {})
+        self.data.setdefault('groups', []); self.data.setdefault('projects', []); self.data.setdefault('memories', []); self.data.setdefault('quota', {})
         self.data.setdefault('customProviders', [])
         _active['data'] = self.data; _active['dir'] = self.dir
         self.data.setdefault('accounts', []); self.data.setdefault('connectors', []); self.data.setdefault('skills', []); self.data.setdefault('schedules', [])
