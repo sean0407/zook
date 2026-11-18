@@ -1526,6 +1526,9 @@ button.run-row:hover { background: #f1f1f1; }
 .plan-toggle .switch { width: 30px; height: 18px; margin: 0; flex: none; }
 .plan-toggle .switch::after { width: 14px; height: 14px; }
 .plan-toggle .switch:checked::after { transform: translateX(12px); }
+.auto-pick { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; font-size: 13px; color: var(--muted, #666); cursor: pointer; }
+.auto-pick .switch { margin: 0; flex: none; }
+[data-fixed-model][hidden] { display: none; }
 .effort-pick { display: inline-flex; align-items: center; margin-right: 2px; }
 .effort-pick .dd { width: auto; }
 .effort-pick .dd-btn { display: inline-flex; align-items: center; gap: 4px; width: auto; height: 30px; min-height: 30px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; font-size: 13px; line-height: 1; color: #555; box-shadow: none; }

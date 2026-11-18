@@ -444,6 +444,10 @@ def bot_model(store, bot):
     return provider, model
 
 
+def bot_model_text(store, bot):
+    return '自動選擇' if bot.get('provider') == 'auto' else ' '.join(x for x in bot_model(store, bot) if x)
+
+
 # ---- Remote access (other devices reach this Mac through a relay; see ZOOK-REMOTE-DESIGN.md)
 PAIRING_SECONDS = 300
 MAX_REMOTE_DEVICES = 10
@@ -518,7 +522,7 @@ def mobile_home(store):
     for b in data['bots']:
         preview, at = last(b.get('messages'))
         bots.append(dict(id=b['id'], name=b['name'], color=b.get('color'), shape=b.get('shape'), section=b.get('section') or '我的 Bots', pinned=bool(b.get('pinned')),
-                         model=' '.join(x for x in bot_model(store, b) if x), preview=preview, lastAt=at, running=b['id'] in running,
+                         model=bot_model_text(store, b), preview=preview, lastAt=at, running=b['id'] in running,
                          pending=sum(1 for a in pending if a['botId'] == b['id'] and not job_group.get(a['jobId']))))
     groups = []
     for g in data.get('groups', []):
@@ -562,7 +566,7 @@ def mobile_bot(store, bot):
     own = [j for j in data['jobs'] if j['botId'] == bot['id']]
     direct = [j for j in own if not j.get('groupId')]
     active = next((j['id'] for j in direct if j.get('status') == 'running'), None)
-    return dict(bot=dict(id=bot['id'], name=bot['name'], color=bot.get('color'), shape=bot.get('shape'), model=' '.join(x for x in bot_model(store, bot) if x)),
+    return dict(bot=dict(id=bot['id'], name=bot['name'], color=bot.get('color'), shape=bot.get('shape'), model=bot_model_text(store, bot)),
                 messages=[mobile_message(m, names) for m in (bot.get('messages') or [])[-80:]], running=bool(active), activeJobId=active,
                 approvals=mobile_approvals(store, direct, names), activity=mobile_activity(own, names, groups, False))
 
@@ -596,17 +600,7 @@ def quota_exhausted(store, provider):
     """True when the last known quota snapshot says this provider is used up and has not reset yet."""
     snap = (store.data.get('quota') or {}).get(provider) or {}
     now = time.time()
-    for w in snap.get('windows') or []:
-        if not isinstance(w.get('usedPercent'), (int, float)) or w['usedPercent'] < 100: continue
-        reset = w.get('resetsAt')
-        try:
-            if isinstance(reset, (int, float)): at = reset / 1000 if reset > 1e12 else reset
-            else: at = datetime.datetime.fromisoformat(str(reset).replace('Z', '+00:00')).timestamp()
-        except (ValueError, TypeError):
-            try: at = datetime.datetime.fromisoformat(snap['updatedAt']).timestamp() + 5 * 3600
-            except (KeyError, ValueError, TypeError): continue
-        if at > now: return True
-    return False
+    return any(isinstance(w.get('usedPercent'), (int, float)) and w['usedPercent'] >= 100 and _window_open(w, snap, now) for w in snap.get('windows') or [])
 
 
 def provider_chain(store, bot, provider, model):

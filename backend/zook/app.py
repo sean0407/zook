@@ -157,7 +157,8 @@ class App(ThreadingHTTPServer):
         if attachments and isinstance(content, str) and not content.strip(): content = '（請看附件）'
         if not isinstance(content, str) or not content.strip() or len(content) > 30000: raise ValueError('訊息內容無效。')
         if any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs']): raise Busy('此機器人已有執行中的工作。')
-        provider, model = use or bot_model(store, bot)
+        auto_chain, auto_note = pick_auto(store, content, [a.get('name') for a in attachments or []], plan) if not use and bot.get('provider') == AUTO else (None, '')
+        provider, model = use or (auto_chain[0] if auto_chain else bot_model(store, bot))
         if not P.spec(store.data, provider) or not isinstance(model, str) or len(model) > 100: raise ValueError('模型設定無效。')
         if plan and (provider_kind(provider) not in PLAN_KINDS or not ability_on(store, provider, 'plan')): raise ValueError('這個模型不支援先規劃。')
         knowledge = [x for x in store.data['knowledge'] if not x.get('botId') or x.get('botId') == bot['id']][-10:]
@@ -168,6 +169,7 @@ class App(ThreadingHTTPServer):
         short = prompt.replace('\n對話紀錄：\n' + context, '', 1)  # when the CLI continues its own conversation it already has the history
         msg = dict(id=ID(), role='assistant', content='', createdAt=NOW(), status='running')
         if use: msg['note'] = '這次用 %s 回答' % provider_label(provider).split('（')[0]
+        if auto_note: msg['note'] = auto_note
         if effort != 'standard': msg['effort'] = effort
         if plan: msg['plan'] = True
         asked = dict(id=ID(), role='user', content=content, createdAt=NOW())
@@ -182,6 +184,7 @@ class App(ThreadingHTTPServer):
         if placed or earlier: job['attachments'] = [str(x) for x in (earlier + placed)[-MAX_ATTACHMENTS:]]
         if replaces: job.update(redoOf=replaces, askedId=asked['id'])
         job['effort'] = effort
+        if auto_chain: job['autoChain'] = auto_chain
         if plan: job['plan'] = True
         if use or replaces: job['noResume'] = True  # another model, or a rewritten history: start a new CLI conversation
         self.__dict__.setdefault('short_prompts', {})[job['id']] = short
@@ -378,7 +381,7 @@ class App(ThreadingHTTPServer):
             job = store.find('jobs', job_id)
             if not job or job['status'] != 'running': return
             if bot is None: bot = copy.deepcopy(store.find('bots', job['botId']))
-            chain = provider_chain(store, bot, provider, model)
+            chain = [tuple(x) for x in job['autoChain']] if job.get('autoChain') else provider_chain(store, bot, provider, model)
             if job.get('plan'): chain = [x for x in chain if provider_kind(x[0]) in PLAN_KINDS] or chain[:1]  # a backup must be held to read-only too
             skipped = {}
             for p, _ in chain[:]:
@@ -845,12 +848,20 @@ class App(ThreadingHTTPServer):
             if any(j['botId'] == bot_id and j['status'] == 'running' for j in store.data['jobs']):
                 group['messages'].append(dict(id=ID(), role='system', content=bot['name'] + ' 正在其他對話中工作，這次略過。', createdAt=NOW()))
                 store.save(); return None
-            provider, model = bot_model(store, bot)
+            auto_chain, auto_note = None, ''
+            if bot.get('provider') == AUTO:
+                asked = next((m for m in reversed(group['messages']) if m.get('role') == 'user'), {})
+                try: auto_chain, auto_note = pick_auto(store, asked.get('content'), [a.get('name') for a in asked.get('attachments') or []])
+                except ValueError as exc:
+                    group['messages'].append(dict(id=ID(), role='system', content='%s 這次略過：%s' % (bot['name'], exc), createdAt=NOW()))
+                    store.save(); return None
+            provider, model = auto_chain[0] if auto_chain else bot_model(store, bot)
             prompt = group_prompt(store, group, bot, may_pass, moderator=role, moderated=moderated, blind=blind)
             msg = dict(id=ID(), role='assistant', botId=bot_id, content='', createdAt=NOW(), status='running')
             job = dict(id=ID(), botId=bot_id, groupId=group_id, messageId=msg['id'], status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[],
                        effort=group.get('runEffort') if group.get('runEffort') not in (None, '', 'standard') else pick_effort(bot.get('effort')))
             if job['effort'] != 'standard': msg['effort'] = job['effort']
+            if auto_chain: job['autoChain'] = auto_chain; msg['note'] = auto_note
             files = place_attachments(store, bot_id, recent_attachments(store, group['messages'][-20:]))
             if files: job['attachments'] = [str(x) for x in files]
             group['messages'].append(msg); store.data['jobs'].append(job)

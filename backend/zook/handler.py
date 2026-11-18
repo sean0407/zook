@@ -52,6 +52,11 @@ class Handler(BaseHTTPRequestHandler):
                                status=account['status'], method=account['method'], noQuotaApi=provider not in ('codex', 'claude', 'antigravity'),
                                plan=(snap or {}).get('plan') or account['plan'], email=account['email'], workspace=account.get('workspace', ''), quota=snap,
                                apiBilling=account['method'] in ('Anthropic Console', 'API 金鑰'), profiles=profiles))
+        with store.lock:
+            store.data.setdefault('autoStatus', {}).update({x['id']: dict(signedIn=x['status'] == 'logged_in', billed=x['apiBilling']) for x in result if x['id'] in AUTO_MODELS})
+            allowed = auto_allowed(store)
+            for item in result:
+                if item['id'] in AUTO_MODELS: item['autoOn'] = item['id'] in allowed
         return {'providers': result}
 
     def detect_usage(self):
@@ -625,7 +630,7 @@ class Handler(BaseHTTPRequestHandler):
                     body = self.body(); name = body.get('name', '')
                     if not isinstance(name, str) or not name.strip() or len(name)>100: raise ValueError('名稱無效。')
                     bot = dict(id=ID(), name=name, color='#8275f4', shape='circle', instructions='', persona='', provider='', model='', pinned=False, section='團隊', messages=[], enabledSkills=[], enabledMcp=[], allowCommands=True)
-                    update(bot, body, 'bot'); validate_selection(bot, inventory); ensure_chats(bot); store.data['bots'].append(bot); store.save(); return self.respond(201, bot)
+                    update(bot, body, 'bot'); validate_selection(bot, inventory); ensure_chats(bot); store.data['bots'].append(bot); store.save(); watch_auto_status(store, bot); return self.respond(201, bot)
                 if path == '/api/bots/arrange' and self.command == 'POST':
                     body = self.body(); arrange_bots(store, body); store.save()
                     return self.respond(200, dict(bots=[dict(id=b['id'], section=b.get('section'), pinned=b.get('pinned')) for b in store.data['bots']], sections=store.data['settings']['sections']))
@@ -661,7 +666,7 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) == 3 and parts[:2] == ['api', 'bots'] and self.command == 'PATCH':
                     bot = store.find('bots', parts[2])
                     if not bot: return self.error(404, '找不到機器人。')
-                    body = self.body(); candidate = copy.deepcopy(bot); update(candidate, body, 'bot'); validate_selection(candidate, inventory); bot.update(candidate); store.save()
+                    body = self.body(); candidate = copy.deepcopy(bot); update(candidate, body, 'bot'); validate_selection(candidate, inventory); bot.update(candidate); store.save(); watch_auto_status(store, bot)
                     if 'permissionMode' in body: self.server.release_approvals()
                     return self.respond(200, bot)
                 if len(parts) == 3 and parts[:2] == ['api', 'bots'] and self.command == 'DELETE':
@@ -725,8 +730,12 @@ def update(target, body, kind):
         if key in body:
             value = body[key]
             if not isinstance(value, str) or len(value) > limit or (key == 'name' and not value.strip()): raise ValueError('欄位 %s 無效。' % key)
-            if key == 'provider' and not ((kind == 'bot' and value == '') or P.spec(_active['data'], value)): raise ValueError('供應商無效。')
+            if key == 'provider' and not ((kind == 'bot' and value in ('', AUTO)) or P.spec(_active['data'], value)): raise ValueError('供應商無效。')
             changes[key] = value
+    if kind == 'settings' and 'autoModels' in body:
+        value = body['autoModels']
+        if not isinstance(value, list) or any(x not in AUTO_MODELS for x in value): raise ValueError('自動選擇的模型無效。')
+        changes['autoModels'] = list(dict.fromkeys(value))
     if kind == 'bot':
         for key in ('enabledSkills', 'enabledMcp'):
             if key in body:
@@ -807,6 +816,7 @@ def update(target, body, kind):
         tags = body['tags']
         if not isinstance(tags, list) or len(tags)>30 or any(not isinstance(t, str) or len(t)>100 for t in tags): raise ValueError('標籤無效。')
         changes['tags'] = tags
+    if kind == 'bot' and changes.get('provider') == AUTO: changes.update(model='', account='')  # each reply picks its own model
     target.update(changes)
 
 
@@ -824,6 +834,7 @@ def main():
     signal.signal(signal.SIGTERM, stop_server)
     threading.Thread(target=app.sync_remote, daemon=True).start()
     threading.Thread(target=app.schedule_loop, daemon=True).start()
+    if any(b.get('provider') == AUTO for b in app.store.data['bots']): threading.Thread(target=refresh_auto_status, args=(app.store,), daemon=True).start()
     try: app.serve_forever()
     except KeyboardInterrupt: pass
     finally:

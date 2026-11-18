@@ -1,5 +1,14 @@
+  async function saveAutoModel(input) {
+    const item = (state.quota?.providers || []).find(p => p.id === input.dataset.autoModel);
+    if (!item) return;
+    const was = item.autoOn;
+    item.autoOn = input.checked;
+    try { state.data.settings = await post('settings', {autoModels: state.quota.providers.filter(p => p.autoOn).map(p => p.id)}, 'PATCH'); toast(input.checked ? '自動選擇可以用這個模型' : '自動選擇不會用這個模型'); }
+    catch (error) { item.autoOn = was; input.checked = was; toast(error.message); }
+  }
   document.addEventListener('change', e => {
     if (e.target.name === 'provider' && e.target.closest('#bot-form')) syncFeatureRows(e.target.closest('#bot-form'));
+    if (e.target.dataset.autoModel) saveAutoModel(e.target);
     if (e.target.name === 'access' && e.target.closest('#bot-form')) e.target.closest('form').querySelector('[data-access-folder]').hidden = e.target.value !== 'folder';
     if (e.target.name === 'transport' && e.target.closest('#connector-form')) e.target.closest('form').querySelectorAll('[data-for]').forEach(x => x.hidden = x.dataset.for !== e.target.value);
     if (e.target.name === 'accountType' && e.target.closest('#profile-form')) e.target.closest('form').querySelector('[data-key-field]').hidden = e.target.value !== 'key';
