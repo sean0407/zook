@@ -326,6 +326,7 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError as exc: return self.error(400, str(exc))
                 return self.respond(200, {'ok': True})
             if path == '/api/mobile/photos' and self.command == 'POST':
+                if not mobile_photo_allowed(self.server, (self.device or {}).get('id', '')): return self.error(429, '照片傳得太頻繁，請稍後再試。')
                 try: return self.respond(201, mobile_photo(store, self.body()))
                 except ValueError as exc: return self.error(400, str(exc))
             if len(parts) == 5 and parts[:3] == ['api', 'mobile', 'bots'] and parts[4] == 'chats' and self.command == 'POST':
@@ -424,7 +425,7 @@ class Handler(BaseHTTPRequestHandler):
                 body = self.body()
                 try: url = google_begin(self.server, body.get('clientId'), body.get('clientSecret'), body.get('write') is True)
                 except ValueError as exc: return self.error(400, str(exc))
-                if not os.environ.get('ZOOK_NO_BROWSER'): subprocess.run(['/usr/bin/open', _oauth_url(url)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                if not os.environ.get('ZOOK_NO_BROWSER'): subprocess.run(['/usr/bin/open', _oauth_url(url, _same_place(url, None))], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
                 return self.respond(200, {'url': url})
             if path == '/api/gmail' and self.command in ('POST', 'DELETE'):
                 with store.lock: saved = dict(store.data['settings'].get('gmail') or {})
@@ -506,7 +507,7 @@ class Handler(BaseHTTPRequestHandler):
                 try: url = oauth_begin(self.server, record)
                 except ValueError as exc: return self.error(400, str(exc))
                 except RuntimeError as exc: return self.error(409, str(exc))
-                if not os.environ.get('ZOOK_NO_BROWSER'): subprocess.run(['/usr/bin/open', _oauth_url(url)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                if not os.environ.get('ZOOK_NO_BROWSER'): subprocess.run(['/usr/bin/open', _oauth_url(url, _is_local_host(urllib.parse.urlparse(record['url']).hostname or ''))], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
                 return self.respond(200, {'url': url})
             if parts[:2] == ['api', 'connectors'] and len(parts) in (2, 3):
                 body = self.body() if self.command in ('POST', 'PATCH') else {}
@@ -515,6 +516,8 @@ class Handler(BaseHTTPRequestHandler):
                     if len(parts) == 3 and not existing: return self.error(404, '找不到這個連接器。')
                     if (len(parts) == 2 and self.command == 'POST') or (existing and self.command == 'PATCH'):
                         record, secret = connector_fields(body, existing)
+                        stale = (existing or {}).get('oauth')
+                        if stale and record['transport'] == 'http' and record['url'] == existing.get('url') and not secret: record['oauth'] = stale; stale = None  # still the same sign-in
                         with store.lock:
                             if any(c['name'] == record['name'] and c['id'] != record['id'] for c in store.data['connectors']): raise ValueError('已經有同名的連接器。')
                         if secret:
@@ -527,6 +530,7 @@ class Handler(BaseHTTPRequestHandler):
                                 record['moreSecrets'][key] = record['moreSecrets'][key] or ID(); secret_set(record['moreSecrets'][key], value.strip())
                         with store.lock:
                             store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]
+                            if stale and stale.get('secretId'): blob_delete(stale['secretId'])  # the address or the way to sign in changed
                             if not existing:  # a connector you just added is switched on for every Bot
                                 st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + ['zook:' + record['id']]))
                             store.save()
@@ -714,6 +718,7 @@ class Handler(BaseHTTPRequestHandler):
                         store.save(); return self.respond(200, {'ok': True})
                     if len(parts) == 4 and parts[3] == 'messages' and self.command == 'POST':
                         body = self.body()
+                        if self.device and isinstance(body.get('attachments'), list) and len(body['attachments']) > MOBILE_PHOTOS: return self.error(400, '手機每則訊息最多 %d 張照片。' % MOBILE_PHOTOS)
                         try: run_id = self.server.post_group_message(group, body.get('content'), attachments=attachments_for(store, body.get('attachments')), effort=body.get('effort'), mode=body.get('mode'))
                         except RuntimeError as exc: return self.error(409, str(exc))
                         store.save(); return self.respond(202, {'runId': run_id})

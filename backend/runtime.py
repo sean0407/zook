@@ -652,11 +652,15 @@ class RuntimeSession:
                      'cwd': _str('Relative Bot workspace directory, default .')}, ['skill_id', 'argv'], False))
             try:
                 for ident in sorted(self.mcp_ids - {'builtin:workspace'}):
+                    config = self.inventory['_private']['mcp'][ident]; label = next((x['name'] for x in self.inventory.get('mcp', []) if x['id'] == ident), ident)
+                    signed = any(str(k).lower() == 'authorization' for k in list(config.get('headers') or {}) + list(config.get('http_headers') or {}) + list(config.get('env_http_headers') or {})) or bool(config.get('bearer_token_env_var'))
                     try:
-                        client = ProtocolClient(self.inventory['_private']['mcp'][ident]); found = client.tools()
-                    except AuthorizationNeeded:  # one connector waiting for a sign-in does not stop the whole reply
-                        self.unavailable.append(next((x['name'] for x in self.inventory.get('mcp', []) if x['id'] == ident), ident)); continue
-                    self.clients[ident] = client
+                        client = ProtocolClient(config); self.clients[ident] = client; found = client.tools()
+                    except AuthorizationNeeded:
+                        stale = self.clients.pop(ident, None)
+                        if stale: stale.close()
+                        if signed: raise RuntimeError('連接器「%s」的授權被拒絕。請到連接器頁重新登入或更新金鑰，或先關閉這個連接器。' % label)
+                        self.unavailable.append(label); continue  # never signed in: left out, and the reply goes on
                     for tool in found:
                         original = tool.get('name')
                         if not isinstance(original, str) or not isinstance(tool.get('inputSchema'), dict):

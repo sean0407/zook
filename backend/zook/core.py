@@ -8,6 +8,7 @@ import stat
 import ctypes
 import hashlib
 import html
+import ipaddress
 import datetime
 import glob
 import http.cookies
@@ -55,7 +56,7 @@ APPROVAL_TIMEOUT = 600
 # A schedule runs while nobody may be watching: an action it needs approval for waits this long (and the user gets a
 # notification), then counts as declined. The CLI and its tool calls are kept alive meanwhile.
 SCHEDULE_APPROVAL_WAIT = 24 * 3600
-SEND_TOOLS = ('send_email', 'send_message', 'sendmessage', 'send_mail', 'sendmail', 'send')
+SEND_TOOLS = ('send_email', 'send_message', 'sendmessage', 'send_mail', 'sendmail', 'send', 'gmail_send')
 GROUP_MIN_BOTS, GROUP_MAX_BOTS = 2, 6
 GROUP_MAX_TURNS = 8  # Bot replies per user message, including handoffs.
 GROUP_MAX_TURNS_MODERATED = 16  # With 管理員 hosting: kickoff, assignments, cross-discussion rounds and a summary.

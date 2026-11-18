@@ -96,13 +96,19 @@ final class AppModel: ObservableObject {
             for group in fresh.groups { seen[group.id] = group.lastAt ?? "" }
             UserDefaults.standard.set(seen, forKey: "seen")
         }
-        if let old = home { for (title, body) in homeNews(old: old, new: fresh, open: openChat, appActive: active) { Notifier.shared.show(title, body) } }
-        if fresh != home { home = fresh }
         Notifier.shared.prepare()
+        var told: Set<String> = []   // conversations a schedule result already speaks for
         if let list = try? await api.notices(after: max(noticeSeq, 0)) {   // schedule results from the Mac
-            if noticeSeq >= 0 { for item in list.items where !(active && openChat != nil) { Notifier.shared.show(item.title, item.body) } }
+            if noticeSeq >= 0 {
+                for item in list.items {
+                    if let target = item.targetId { told.insert(target) }
+                    if !(active && item.targetId != nil && openChat == item.targetId) { Notifier.shared.show(item.title, item.body) }
+                }
+            }
             noticeSeq = list.seq
         }
+        if let old = home { for (title, body) in homeNews(old: old, new: fresh, open: openChat, appActive: active, told: told) { Notifier.shared.show(title, body) } }
+        if fresh != home { home = fresh }
     }
 
     func unread(_ id: String, _ lastAt: String?) -> Bool {

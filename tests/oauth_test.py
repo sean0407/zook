@@ -17,7 +17,7 @@ class Provider(BaseHTTPRequestHandler):
         self.end_headers(); self.wfile.write(raw)
     def do_GET(self):
         base = 'http://127.0.0.1:%d' % self.server.server_address[1]; path = urlsplit(self.path).path
-        if path.startswith('/.well-known/oauth-protected-resource'): return self.send(200, {'resource': base + '/mcp', 'authorization_servers': [base]})
+        if path.startswith('/.well-known/oauth-protected-resource'): return self.send(200, {'resource': Provider.state.get('resource') or base + '/mcp', 'authorization_servers': [base]})
         if path.startswith('/.well-known/oauth-authorization-server'):
             return self.send(200, {'authorization_endpoint': base + '/authorize', 'token_endpoint': base + '/token', 'registration_endpoint': base + '/register', 'code_challenge_methods_supported': ['S256']})
         self.send(404, {})
@@ -31,6 +31,7 @@ class Provider(BaseHTTPRequestHandler):
                 good = base64.urlsafe_b64encode(hashlib.sha256(form['code_verifier'].encode()).digest()).decode().rstrip('=') == s['challenge']
                 if form['code'] != 'CODE-1' or not good: return self.send(400, {'error': 'invalid_grant'})
                 return self.send(200, {'access_token': 'ACCESS-1-' + 'x' * 1800, 'refresh_token': 'REFRESH-1', 'expires_in': s.get('life', 3600)})
+            if s.get('busy'): return self.send(503, {})
             if form.get('refresh_token') == 'REFRESH-1' and not s.get('revoked'): return self.send(200, {'access_token': 'ACCESS-2', 'expires_in': 3600})
             return self.send(400, {'error': 'invalid_grant'})
         if path == '/mcp':
@@ -103,6 +104,29 @@ class OAuthTest(unittest.TestCase):
         inventory = {'skills': [], 'mcp': [{'id': 'x', 'name': 'Remote'}], '_private': {'skills': {}, 'mcp': {'x': {'transport': 'http', 'url': self.base + '/mcp'}}}}
         session = rt.RuntimeSession([], ['x'], False, self.root / 'w', None, None, inventory=inventory)
         self.assertEqual(session.tools(), []); self.assertEqual(session.unavailable, ['Remote']); session.close()
+        inventory['_private']['mcp']['x']['headers'] = {'Authorization': 'Bearer wrong-key'}  # a key that was refused is a real failure, and is shown
+        session = rt.RuntimeSession([], ['x'], False, self.root / 'w', None, None, inventory=inventory)
+        self.assertRaises(RuntimeError, session.tools); session.close()
+
+    def test_editing_keeps_the_sign_in_and_changing_the_address_removes_it(self):
+        state = self.login(); self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % state, auth=False)
+        self.req('PATCH', '/api/connectors/' + self.cid, {'name': 'Renamed'}); self.assertTrue(self.item()['signedIn'])
+        self.req('PATCH', '/api/connectors/' + self.cid, {'url': self.base + '/other'}); self.assertFalse(self.item()['signedIn']); self.assertEqual(list((self.root / 'secrets').iterdir()), [])
+
+    def test_a_busy_token_service_does_not_force_signing_in_again(self):
+        Provider.state['life'] = 61; Provider.state['busy'] = True; state = self.login(); self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % state, auth=False)
+        time.sleep(1.5); self.assertFalse(self.item()['needsLogin']); Provider.state['busy'] = False; self.assertTrue(self.item()['signedIn'])
+
+    def test_a_connector_naming_another_service_is_refused(self):
+        Provider.state['resource'] = 'https://victim.example/mcp'
+        status, body = self.req('POST', '/api/connectors/%s/login' % self.cid, {}); self.assertEqual(status, 409); self.assertIn('不一致', body['error'])
+
+    def test_remote_services_cannot_point_sign_in_at_this_mac(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('zook_oauth_urls', SERVER); z = importlib.util.module_from_spec(spec); spec.loader.exec_module(z)
+        for url in ('http://127.0.0.1:9/x', 'https://127.0.0.1/x', 'https://10.0.0.5/x', 'https://localhost/x', 'http://example.com/x', 'file:///etc/passwd', 'https://a:b@example.com/'):
+            self.assertRaises(RuntimeError, z._oauth_url, url)
+        self.assertEqual(z._oauth_url('https://example.com/x'), 'https://example.com/x'); self.assertEqual(z._oauth_url('http://127.0.0.1:9/x', True), 'http://127.0.0.1:9/x')
 
     def test_cancelled_sign_in_and_wrong_host(self):
         state = self.login(); status, page = self.req('GET', '/oauth/callback?state=%s&error=access_denied' % state, auth=False); self.assertIn('取消', page)

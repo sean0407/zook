@@ -42,3 +42,14 @@ def mobile_chat_switch(store, bot, body):
     elif isinstance(body.get('chatId'), str) and any(c['id'] == body['chatId'] for c in bot['chats']): open_chat(bot, body['chatId'])
     else: raise ValueError('找不到這個對話。')
     store.save()
+
+
+MOBILE_PHOTOS_PER_HOUR = 60
+
+
+def mobile_photo_allowed(app, device_id):
+    """A phone may send a limited number of photos an hour, so it cannot fill the Mac's disk."""
+    now = time.time(); sent = app.__dict__.setdefault('mobile_photo_times', {})
+    recent = [t for t in sent.get(device_id, []) if now - t < 3600]
+    if len(recent) >= MOBILE_PHOTOS_PER_HOUR: sent[device_id] = recent; return False
+    sent[device_id] = recent + [now]; return True

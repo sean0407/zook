@@ -7,8 +7,10 @@ from email.message import EmailMessage
 TOKEN = os.environ.get('ZOOK_GOOGLE_TOKEN', '')
 CAN_WRITE = os.environ.get('ZOOK_GOOGLE_WRITE') == '1'
 _test = os.environ.get('ZOOK_GOOGLE_API', '')
-API = _test if _test.startswith('http://127.0.0.1:') else 'https://www.googleapis.com'
-GMAIL = _test + '/gmail' if API == _test else 'https://gmail.googleapis.com/gmail'
+_at = urllib.parse.urlparse(_test)
+if not (_at.scheme == 'http' and _at.hostname == '127.0.0.1' and not _at.username and not _at.password): _test = ''  # the stand-in for tests must be on this Mac
+API = _test or 'https://www.googleapis.com'
+GMAIL = _test + '/gmail' if _test else 'https://gmail.googleapis.com/gmail'
 MAX_TEXT = 128 * 1024
 
 

@@ -95,7 +95,10 @@ class ScheduleNotices(unittest.TestCase):
 
     def test_mail_card_names_the_recipient_and_subject(self):
         say = load().describe_send
-        self.assertEqual(say('send_email', {'to': 'amy@example.com', 'subject': '週報', 'body': '...'}), '寄信給 amy@example.com，主旨「週報」')
+        self.assertEqual(say('send_email', {'to': 'amy@example.com', 'subject': '週報', 'body': '...'}), '寄信給 amy@example.com，主旨「週報」，內容開頭：...')
+        self.assertEqual(say('gmail_send', {'to': ['amy@example.com'], 'subject': '嗨'}), '寄信給 amy@example.com，主旨「嗨」')
+        self.assertIn('建立行程「站會」', load().describe_write('calendar_create', {'title': '站會', 'start': '2026-11-19T09:00:00+08:00', 'end': '2026-11-19T09:30:00+08:00', 'attendees': ['amy@example.com']}))
+        self.assertIn('上傳檔案「計畫.txt」', load().describe_write('drive_upload', {'name': '計畫.txt', 'content': 'abc'}))
         self.assertEqual(say('send_message', {'to': ['a@x.com', 'b@x.com'], 'subject': 'Hi'}), '寄信給 a@x.com、b@x.com，主旨「Hi」')
         self.assertIsNone(say('create_draft', {'to': 'a@x.com'}))
 

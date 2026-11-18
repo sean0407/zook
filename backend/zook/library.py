@@ -612,7 +612,18 @@ def describe_send(label, args):
     """The approval card's sentence for sending mail: who gets it and the subject."""
     if str(label or '').lower().replace('-', '_') not in SEND_TOOLS or not isinstance(args, dict) or not args.get('to'): return None
     to = args['to'] if isinstance(args['to'], list) else [args['to']]
-    return '寄信給 %s，主旨「%s」' % ('、'.join(str(x) for x in to[:5]), str(args.get('subject') or '')[:80])
+    return '寄信給 %s，主旨「%s」%s' % ('、'.join(str(x) for x in to[:5]), str(args.get('subject') or '')[:80], '，內容開頭：' + re.sub(r'\s+', ' ', str(args['body']))[:80] if args.get('body') else '')
+
+
+def describe_write(label, args):
+    """The approval card's sentence for Google's calendar and Drive changes, so a phone shows what is being approved."""
+    name = str(label or '').lower(); args = args if isinstance(args, dict) else {}
+    short = lambda key, n=60: str(args.get(key) or '')[:n]
+    if name == 'calendar_create': return '建立行程「%s」，%s 到 %s%s' % (short('title'), short('start', 25), short('end', 25), '，邀請 ' + '、'.join(str(x) for x in (args.get('attendees') or [])[:5]) if args.get('attendees') else '')
+    if name == 'calendar_update': return '修改行程%s' % ('：' + '、'.join('%s 改成「%s」' % (n, short(k, 40)) for k, n in (('title', '標題'), ('start', '開始'), ('end', '結束'), ('location', '地點')) if args.get(k)) or '')
+    if name == 'drive_upload': return '上傳檔案「%s」到 Google 雲端硬碟（%d 字）' % (short('name'), len(str(args.get('content') or '')))
+    if name == 'drive_update': return '覆寫 Google 雲端硬碟上的一個檔案（%d 字）' % len(str(args.get('content') or ''))
+    return None
 
 
 def first_sentence(text, limit=120):

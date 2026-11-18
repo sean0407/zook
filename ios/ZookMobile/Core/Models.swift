@@ -35,7 +35,7 @@ struct BotConversation: Codable, Equatable {
 
 struct ScheduleItem: Codable, Identifiable, Equatable { var id: String, content: String, when: String, target: String, on: Bool, group: Bool }
 struct ScheduleList: Codable, Equatable { var schedules: [ScheduleItem] }
-struct Notice: Codable, Equatable { var seq: Int, title: String, body: String }
+struct Notice: Codable, Equatable { var seq: Int, title: String, body: String, targetId: String? }
 struct NoticeList: Codable, Equatable { var seq: Int, items: [Notice] }
 private struct UploadedPhoto: Codable { var id: String }
 

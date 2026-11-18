@@ -356,8 +356,8 @@ class App(GroupRuns, ThreadingHTTPServer):
             approval = dict(id=approval_id, toolCallId=call_id, name=name, category=call.get('category', ''), label=call.get('label', name), sourceLabel=call.get('sourceLabel', source), arguments=copy.deepcopy(call.get('arguments', {})), status='pending')
             if name in SCHEDULE_TOOLS:
                 approval['text'] = describe_schedule_call(self.store, self.store.find('bots', job['botId']) or {'id': job['botId']}, job.get('groupId'), name, approval['arguments'])
-            elif describe_send(approval['label'], approval['arguments']):
-                approval['text'] = describe_send(approval['label'], approval['arguments'])
+            elif describe_send(approval['label'], approval['arguments']) or describe_write(approval['label'], approval['arguments']):
+                approval['text'] = describe_send(approval['label'], approval['arguments']) or describe_write(approval['label'], approval['arguments'])
             job.setdefault('approvals', []).append(approval); self.approval_events[approval_id] = event
             run = self.schedule_run_for(job)
             if run: self.notify_run(run, '需要你核准：' + (approval.get('text') or describe_call(dict(approval, name=name))))

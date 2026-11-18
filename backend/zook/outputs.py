@@ -12,15 +12,18 @@ def _output_kind(name):
 
 
 def bot_outputs(store, bot):
-    """Files in the Bot's working folder, plus files elsewhere that its replies recorded changing. Newest first."""
-    workspace = store.dir / 'workspaces' / bot['id']; found = {}
-    def add(path):
-        try:
-            real = pathlib.Path(os.path.realpath(str(path))); info = os.lstat(str(real))
+    """Files in the Bot's working folder, plus files elsewhere that one of its replies really changed. Newest first."""
+    workspace = pathlib.Path(os.path.realpath(str(store.dir / 'workspaces' / bot['id']))); found = {}
+    def add(path, since=None):
+        path = os.path.abspath(str(path))
+        try: info = os.lstat(path)
         except OSError: return
-        if not stat.S_ISREG(info.st_mode) or real.name.startswith('.') or str(real) in found: return
-        found[str(real)] = dict(id=hashlib.sha256(str(real).encode()).hexdigest()[:20], name=real.name, path=str(real), size=info.st_size, kind=_output_kind(real.name),
-                                at=datetime.datetime.fromtimestamp(info.st_mtime, datetime.timezone.utc).isoformat())
+        # A link of either kind, or a path that passes through one, could show a file the Bot never made.
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or os.path.realpath(path) != os.path.join(os.path.realpath(os.path.dirname(path)), os.path.basename(path)): return
+        path = os.path.realpath(path); name = os.path.basename(path)
+        if name.startswith('.') or path in found or (since is not None and info.st_mtime < since): return
+        found[path] = dict(id=hashlib.sha256(path.encode()).hexdigest()[:20], name=name, path=path, size=info.st_size, kind=_output_kind(name),
+                           at=datetime.datetime.fromtimestamp(info.st_mtime, datetime.timezone.utc).isoformat())
     pending = [(workspace, 0)]; seen = 0
     while pending and seen < 2000:
         folder, depth = pending.pop()
@@ -33,13 +36,18 @@ def bot_outputs(store, bot):
                 if depth < 3 and entry.name not in _OUTPUT_SKIP: pending.append((pathlib.Path(entry.path), depth + 1))
             elif entry.is_file(follow_symlinks=False): add(entry.path)
     with store.lock:
-        wrote = [str((c.get('arguments') or {}).get('path') or '') for j in store.data['jobs'] if j.get('botId') == bot['id'] for c in j.get('toolCalls') or [] if c.get('name') == 'native_write']
+        wrote = [(str((c.get('arguments') or {}).get('path') or ''), j.get('createdAt')) for j in store.data['jobs'] if j.get('botId') == bot['id'] for c in j.get('toolCalls') or [] if c.get('name') == 'native_write']
         folder = bot.get('accessFolder') if bot.get('access') == 'folder' else ''
-    for path in wrote[-400:]:
-        if not path or len(path) >= 300: continue  # a cut-off path is not a real one
-        if os.path.isabs(path): add(path)
-        else:
-            for base in [workspace] + ([pathlib.Path(folder)] if folder else []): add(base / path)
+    for path, started in wrote[-400:]:
+        if not path or len(path) >= 300 or not os.path.isabs(path): continue  # cut off, or relative to a folder Zook cannot be sure of
+        try: since = datetime.datetime.fromisoformat(started).timestamp() - 2
+        except (TypeError, ValueError): continue
+        # A reply only says it tried to write. The file counts when it really changed during that reply and is not Zook's own data.
+        real = os.path.realpath(path)
+        if real.startswith(os.path.realpath(str(store.dir)) + os.sep) and not real.startswith(str(workspace) + os.sep): continue
+        if folder and not real.startswith(os.path.realpath(folder) + os.sep) and bot.get('access') == 'folder': continue
+        if bot.get('access') == 'workspace' and not real.startswith(str(workspace) + os.sep): continue
+        add(path, since)
     return sorted(found.values(), key=lambda x: x['at'], reverse=True)[:OUTPUT_LIMIT]
 
 
