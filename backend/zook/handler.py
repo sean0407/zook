@@ -451,6 +451,7 @@ class Handler(BaseHTTPRequestHandler):
                     st = store.data['settings']; st['gmail'] = dict(address=address.strip(), secretId=secret_id)
                     st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + [GMAIL_ID])); store.save()
                 return self.respond(200, {'ok': True, 'address': address.strip()})
+            if parts[:2] == ['api', 'sync']: return sync_route(self, store, parts, path)
             if path == '/api/skill-templates' and self.command == 'GET': return self.respond(200, dict(items=template_view(store)))
             if path == '/api/skills/template' and self.command == 'POST' and not self.device: return self.respond(201, template_add(store, self.body().get('id')))
             if path == '/api/skills/import' and self.command == 'POST':

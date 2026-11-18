@@ -41,7 +41,7 @@
       try { const out = await api(path); state[key] = pick ? pick(out) : out; } catch (e) { state[key] = pick ? [] : {error: e.message}; }
       if (state.page === p) render(true);
     };
-    if (p === 'settings') fill('backups', 'backups', x => x.items);
+    if (p === 'settings') { fill('backups', 'backups', x => x.items); fill('sync', 'sync'); }
     if (p === 'usage') fill('budget', 'budget');
     if (p === 'activity') fill('activity', 'activity' + (state.activityKind ? '?kind=' + encodeURIComponent(state.activityKind) : ''));
   }
@@ -177,4 +177,37 @@
   document.addEventListener('change', async e => {
     if (e.target.dataset.voiceLang === undefined) return;
     try { state.data.settings = await post('settings', {voiceLang: e.target.value}, 'PATCH'); toast('已更新'); } catch (err) { toast(err.message); }
+  });
+
+  // Several Macs kept alike through a folder they all see.
+  const SYNC_JOIN = [{id: 'replace', name: '換成同步資料夾的內容', hint: '這台現有的 Bot、對話、知識和記憶會先備份再移除'}, {id: 'merge', name: '兩邊合併', hint: '這台現有的資料也會出現在其他 Mac'}];
+  function syncSection() {
+    const s = state.sync;
+    const note = '<p class="muted small settings-note">選一個每台 Mac 都看得到的資料夾（例如 iCloud 雲碟）。會同步 Bot、對話、知識、記憶和固定規則；密碼、登入、連接器、權限、排程、群組和檔案留在各自的 Mac。</p>';
+    if (!s) return `<h2 class="settings-h">多台 Mac 同步</h2>${note}${loadingBlock('正在讀取…')}`;
+    if (!s.on) return `<h2 class="settings-h">多台 Mac 同步</h2>${note}<div class="setting-list">${settingRow('同步資料夾', '尚未設定', '<button class="secondary" data-up="sync-pick">選擇資料夾</button>')}</div>`;
+    const others = (s.others || []).map(o => o.name).join('、');
+    const status = s.lastError ? `<span class="error-text">${esc(s.lastError)}</span>` : `${s.lastAt ? '上次同步 ' + esc(formatDate(s.lastAt)) : '尚未同步'}${others ? ' · 其他 Mac：' + esc(others) : ' · 還沒有其他 Mac 加入'}`;
+    return `<h2 class="settings-h">多台 Mac 同步</h2>${note}<div class="setting-list">${settingRow('同步資料夾', esc(s.folder), '<button class="secondary" data-up="sync-stop">停止同步</button>')}${settingRow('這台 Mac：' + esc(s.deviceName), status, '<button class="secondary" data-up="sync-now">立即同步</button>')}</div>`;
+  }
+  document.addEventListener('click', async e => {
+    const el = e.target.closest?.('[data-up^="sync-"]');
+    if (!el) return;
+    try {
+      if (el.dataset.up === 'sync-pick') {
+        const picked = (await post('choose-folder')).path;
+        if (!picked) return;
+        const found = await post('sync/check', {folder: picked});
+        if (!found.others.length) { state.sync = await post('sync', {folder: found.folder, join: 'merge'}); render(true); toast('已開始同步'); return; }
+        modal('加入同步', `<form id="sync-form" data-folder="${esc(found.folder)}"><div class="modal-body"><p class="muted">這個資料夾已有其他 Mac 的資料：${esc(found.others.map(o => o.name).join('、'))}。</p><div class="field">這台 Mac 現有的資料${dropdown('join', 'replace', SYNC_JOIN)}</div></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">開始同步</button></div></form>`);
+      }
+      if (el.dataset.up === 'sync-now') { el.disabled = true; state.sync = await post('sync/now'); await refresh(); toast(state.sync.lastError || '已同步'); }
+      if (el.dataset.up === 'sync-stop' && confirm('停止後，這台 Mac 的資料會留著，只是不再和其他 Mac 同步。')) { state.sync = await post('sync', {}, 'DELETE'); render(true); toast('已停止同步'); }
+    } catch (err) { toast(err.message); render(true); }
+  });
+  document.addEventListener('submit', async e => {
+    if (e.target.id !== 'sync-form') return;
+    e.preventDefault();
+    try { state.sync = await post('sync', {folder: e.target.dataset.folder, join: new FormData(e.target).get('join')}); closeModal(); await refresh(); toast('已開始同步'); }
+    catch (err) { toast(err.message); }
   });
