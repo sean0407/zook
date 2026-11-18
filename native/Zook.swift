@@ -1,4 +1,5 @@
 import AppKit
+import UserNotifications
 import WebKit
 
 // The page reports its header areas (and the buttons inside them); a press on empty header space moves the window.
@@ -27,7 +28,7 @@ final class ZookWebView: WKWebView {
     }
 }
 
-final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, WKScriptMessageHandler {
+final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, WKScriptMessageHandler, UNUserNotificationCenterDelegate {
     private var window: NSWindow!
     private var webView: ZookWebView!
     private var backend: Process?
@@ -36,6 +37,10 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
     private var origin: URL?
     private var downloads: [WKDownload] = []
     private var launched = false
+    private var token = ""
+    private var noticeSeq = 0
+    private var noticeTimer: Timer?
+    private var noticeBusy = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         buildMenu()
@@ -180,6 +185,8 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
               let url = URL(string: "http://127.0.0.1:\(port)/") else { showError("本機服務啟動回應格式不符。"); return }
         launched = true
         origin = url
+        self.token = token
+        startNotices()
         let cookie = HTTPCookie(properties: [.domain: "127.0.0.1", .path: "/", .name: "swarmr_session", .value: token, HTTPCookiePropertyKey("HttpOnly"): "TRUE", HTTPCookiePropertyKey("SameSite"): "Strict"])!
         webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie) { [weak self] in
             self?.webView.load(URLRequest(url: url))
@@ -235,9 +242,67 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
         alert.addButton(withTitle: "確定"); alert.addButton(withTitle: "取消")
         alert.beginSheetModal(for: window) { completionHandler($0 == .alertFirstButtonReturn) }
     }
+    // Mac notifications for schedules. The backend keeps a short queue; this asks for new entries every few seconds
+    // (the page itself may be paused while the window is hidden, so the app does it, not the page).
+    private func startNotices() {
+        guard Bundle.main.bundleIdentifier != nil else { return }
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        noticeTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.pollNotices() }
+    }
+
+    private func pollNotices() {
+        guard !noticeBusy, let origin = origin, let url = URL(string: "api/notifications?after=\(noticeSeq)", relativeTo: origin) else { return }
+        var request = URLRequest(url: url, timeoutInterval: 10)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        noticeBusy = true
+        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.noticeBusy = false
+                guard let data = data, let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let seq = object["seq"] as? Int, let items = object["items"] as? [[String: Any]] else { return }
+                if seq < self.noticeSeq { self.noticeSeq = 0; return }  // the backend restarted
+                self.noticeSeq = seq
+                for item in items.suffix(5) { self.post(item) }
+            }
+        }.resume()
+    }
+
+    private func post(_ item: [String: Any]) {
+        let content = UNMutableNotificationContent()
+        content.title = item["title"] as? String ?? "Zook"
+        content.body = item["body"] as? String ?? ""
+        content.sound = .default
+        content.userInfo = ["kind": item["kind"] as? String ?? "", "id": item["targetId"] as? String ?? "", "messageId": item["messageId"] as? String ?? ""]
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "zook-\(item["seq"] as? Int ?? 0)-\(UUID().uuidString)", content: content, trigger: nil))
+    }
+
+    // Show banners while Zook is in front, too.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound])
+    }
+
+    // Clicking a notification brings Zook forward on that conversation.
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        let info = response.notification.request.content.userInfo
+        let args = [info["kind"] as? String ?? "", info["id"] as? String ?? "", info["messageId"] as? String ?? ""]
+        DispatchQueue.main.async {
+            if self.window.isMiniaturized { self.window.deminiaturize(nil) }
+            self.window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            if let json = try? JSONSerialization.data(withJSONObject: args), let list = String(data: json, encoding: .utf8) {
+                self.webView.evaluateJavaScript("window.zookOpen && window.zookOpen(...\(list))", completionHandler: nil)
+            }
+            completionHandler()
+        }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationWillTerminate(_ notification: Notification) {
         outputPipe?.fileHandleForReading.readabilityHandler = nil
+        noticeTimer?.invalidate()
         let task = backend; backend = nil
         if task?.isRunning == true { task?.terminate(); task?.waitUntilExit() }
     }

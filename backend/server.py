@@ -1715,6 +1715,18 @@ def schedule_fields(store, body, record):
 
 
 SCHEDULE_HISTORY = 20
+MAX_NOTICES = 100
+
+
+def first_sentence(text, limit=120):
+    """The first sentence of a reply, without Markdown marks, for a notification."""
+    for line in re.sub(r'[*_`>#|]+', '', text or '').splitlines():
+        line = line.strip(' -•\t')
+        if not line: continue
+        found = re.match(r'(.+?(?:[。！？!?]|\.(?=\s|$)))', line)
+        line = found.group(1) if found else line
+        return line if len(line) <= limit else line[:limit - 1] + '…'
+    return ''
 
 
 def schedule_add_run(item, run):
@@ -1764,6 +1776,35 @@ class App(ThreadingHTTPServer):
         self.logins = {}
         self.installs = {}
         self.updater = Updater(lambda: any(j.get('status') == 'running' for j in self.store.data['jobs']))
+        self.notices, self.notice_seq = [], 0  # for Mac notifications; the window asks for new ones
+
+    def notify(self, title, body, kind, target_id, message_id):
+        """Queue a Mac notification about a schedule. Lock held."""
+        if self.store.data['settings'].get('scheduleNotify') is False: return
+        self.notice_seq += 1
+        self.notices.append(dict(seq=self.notice_seq, title=str(title)[:80], body=str(body)[:200], kind=kind, targetId=target_id, messageId=message_id or '', createdAt=NOW()))
+        del self.notices[:-MAX_NOTICES]
+
+    def notices_after(self, after):
+        with self.store.lock:
+            return dict(seq=self.notice_seq, items=[n for n in self.notices if n['seq'] > after])
+
+    def target_name(self, kind, target_id):
+        found = self.store.find('groups' if kind == 'group' else 'bots', target_id)
+        return found['name'] if found else ('群組' if kind == 'group' else 'Bot')
+
+    def notify_run(self, run, body):
+        self.notify(self.target_name(run.get('kind'), run.get('targetId')), body, run.get('kind'), run.get('targetId'), run.get('messageId'))
+
+    def schedule_run_for(self, job):
+        """The schedule run a reply belongs to, if a schedule started it. Lock held."""
+        group = self.store.find('groups', job['groupId']) if job.get('groupId') else None
+        for item in self.store.data['schedules']:
+            for run in item.get('runs') or []:
+                if run.get('status') != 'running': continue
+                if run.get('jobId') == job['id'] or (group and run.get('kind') == 'group' and run.get('targetId') == group['id'] and run.get('runId') == group.get('runId')):
+                    return run
+        return None
 
     def sync_remote(self):
         """Start or stop the connection to the relay so it matches 設定. Off by default; nothing leaves this Mac until it is turned on."""
@@ -1905,6 +1946,7 @@ class App(ThreadingHTTPServer):
         except (ValueError, RuntimeError) as exc:
             run.update(status='failed', reason=str(exc)[:300])
         schedule_add_run(item, run)
+        if run['status'] == 'failed': self.notify_run(run, '失敗：' + run['reason'])
         return run.get('reason')
 
     def settle_schedule_runs(self):
@@ -1928,6 +1970,7 @@ class App(ThreadingHTTPServer):
                     else: outcome = ('failed', (job or {}).get('error') or '找不到這次的回覆。', '')
                 run.update(status=outcome[0], reason=outcome[1], summary=outcome[2][:300], finishedAt=NOW())
                 if outcome[0] == 'failed': item.update(lastStatus='failed', lastError=outcome[1])
+                self.notify_run(run, first_sentence(outcome[2]) or '已完成。' if outcome[0] == 'done' else '失敗：' + outcome[1])
                 store.save()
 
     def run_schedules(self, now=None):
@@ -1957,7 +2000,8 @@ class App(ThreadingHTTPServer):
                         if late > 6 * 3600: missed = '一直在忙，這次沒有執行。'
                         else: continue
                 if missed:
-                    schedule_add_run(item, dict(kind='group' if item.get('groupId') else 'bot', targetId=item.get('groupId') or item.get('botId'), status='missed', reason=missed))
+                    run = schedule_add_run(item, dict(kind='group' if item.get('groupId') else 'bot', targetId=item.get('groupId') or item.get('botId'), status='missed', reason=missed))
+                    self.notify_run(run, '錯過：' + missed)
                     handled(item, due, 'missed', missed); continue
                 handled(item, due, 'failed' if problem else 'sent', problem or '')
             store.save()
@@ -2004,7 +2048,10 @@ class App(ThreadingHTTPServer):
             # Runtime event has already redacted the displayed arguments.
             call = next((x for x in job.get('toolCalls', []) if x['id'] == call_id), {})
             approval = dict(id=approval_id, toolCallId=call_id, name=name, category=call.get('category', ''), label=call.get('label', name), sourceLabel=call.get('sourceLabel', source), arguments=copy.deepcopy(call.get('arguments', {})), status='pending')
-            job.setdefault('approvals', []).append(approval); self.approval_events[approval_id] = event; self.store.save()
+            job.setdefault('approvals', []).append(approval); self.approval_events[approval_id] = event
+            run = self.schedule_run_for(job)
+            if run: self.notify_run(run, '需要你核准：' + describe_call(dict(approval, name=name)))
+            self.store.save()
         event.wait(APPROVAL_TIMEOUT)
         with self.store.lock:
             self.approval_events.pop(approval_id, None)
@@ -3075,6 +3122,10 @@ class Handler(BaseHTTPRequestHandler):
                 inventory = inventory_for(store)
             with store.lock:
                 if self.command == 'GET' and path == '/api/state' : return self.respond(200, store.data)
+                if self.command == 'GET' and path == '/api/notifications':
+                    try: after = int((parse_qs(urlsplit(self.path).query).get('after') or ['0'])[0])
+                    except ValueError: after = 0
+                    return self.respond(200, dict(seq=self.server.notice_seq, items=[n for n in self.server.notices if n['seq'] > after]))
                 if self.command == 'GET' and path == '/api/diagnostics': return self.respond(200, dict(providers=provider_info(), python=__import__('platform').python_version(), system=__import__('platform').system()))
                 if self.command == 'GET' and path == '/api/usage': return self.respond(200, usage())
                 if self.command == 'POST' and path == '/api/export': return self.respond(200, store.data)
@@ -3283,6 +3334,9 @@ def update(target, body, kind):
     if kind == 'settings' and 'autoUpdateCheck' in body:
         if not isinstance(body['autoUpdateCheck'], bool): raise ValueError('autoUpdateCheck 無效。')
         changes['autoUpdateCheck'] = body['autoUpdateCheck']
+    if kind == 'settings' and 'scheduleNotify' in body:
+        if not isinstance(body['scheduleNotify'], bool): raise ValueError('scheduleNotify 無效。')
+        changes['scheduleNotify'] = body['scheduleNotify']
     if kind == 'settings' and 'webSearch' in body:
         if not isinstance(body['webSearch'], bool): raise ValueError('webSearch 無效。')
         changes['webSearch'] = body['webSearch']

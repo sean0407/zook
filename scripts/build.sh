@@ -6,7 +6,7 @@ if [ "${1:-}" = "--preview" ]; then
     APP="$PROJECT_ROOT/build/Zook Preview.app"
 fi
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-/usr/bin/swiftc -O -target "$(uname -m)-apple-macosx12.0" -framework AppKit -framework WebKit "$PROJECT_ROOT/native/Zook.swift" -o "$APP/Contents/MacOS/Zook"
+/usr/bin/swiftc -O -target "$(uname -m)-apple-macosx12.0" -framework AppKit -framework WebKit -framework UserNotifications "$PROJECT_ROOT/native/Zook.swift" -o "$APP/Contents/MacOS/Zook"
 /usr/bin/swiftc -O -target "$(uname -m)-apple-macosx12.0" -framework AppKit "$PROJECT_ROOT/native/IconTool.swift" -o "$APP/Contents/MacOS/zook-icon"
 /usr/bin/swiftc -O -swift-version 5 -target "$(uname -m)-apple-macosx12.0" -framework AppKit -framework CoreImage "$PROJECT_ROOT/native/remote/RemoteCore.swift" "$PROJECT_ROOT/native/remote/main.swift" -o "$APP/Contents/MacOS/zook-remote"
 /usr/bin/ditto "$PROJECT_ROOT/backend" "$APP/Contents/Resources/backend"

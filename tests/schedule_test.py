@@ -47,6 +47,34 @@ class ScheduleHistory(unittest.TestCase):
         self.assertTrue(all(r['id'] and r['at'] for r in item['runs']))
 
 
+class ScheduleNotices(unittest.TestCase):
+    def test_first_sentence(self):
+        first = load().first_sentence
+        self.assertEqual(first('## 今日結論\n\n**大盤偏多**。理由如下：一、二。'), '今日結論')
+        self.assertEqual(first('大盤偏多。理由如下'), '大盤偏多。')
+        self.assertEqual(first('x' * 300), 'x' * 119 + '…')
+        self.assertEqual(first(''), '')
+
+    def test_asks_by_notification_when_a_scheduled_run_needs_approval(self):
+        import threading
+        server = load()
+        with tempfile.TemporaryDirectory() as d:
+            store = server.Store(Path(d)); app = server.App(('127.0.0.1', 0), store, d, 't')
+            try:
+                bot = store.data['bots'][0]
+                store.data['jobs'] += [dict(id='j', botId=bot['id'], messageId='m', status='running', toolCalls=[dict(id='c', name='zook_create_bot', category='danger', arguments={'name': 'X'})], approvals=[]),
+                                       dict(id='k', botId=bot['id'], messageId='n', status='running', toolCalls=[dict(id='c', name='zook_create_bot', category='danger', arguments={'name': 'Y'})], approvals=[])]
+                store.data['schedules'].append(dict(id='s', botId=bot['id'], content='x', time='10:00', repeat='daily', on=True, runs=[dict(id='r', kind='bot', targetId=bot['id'], jobId='j', messageId='q', status='running')]))
+                for job in ('j', 'k'): threading.Thread(target=app.approve, args=(job, 'c', 'zook_create_bot', {}, 'builtin:zook'), daemon=True).start()
+                for _ in range(100):
+                    if all(j['approvals'] for j in store.data['jobs']): break
+                    threading.Event().wait(0.02)
+                items = app.notices_after(0)['items']
+                self.assertEqual([(n['title'], n['body'], n['messageId']) for n in items], [(bot['name'], '需要你核准：新增 Bot「X」', 'q')])  # only the scheduled run asks this way
+                for job in store.data['jobs']: job['status'] = 'cancelled'; app.expire_job(job['id'])
+            finally: app.server_close()
+
+
 class ScheduleTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name)
@@ -106,6 +134,14 @@ class ScheduleTest(unittest.TestCase):
         run = state['schedules'][0]['runs'][-1]
         self.assertEqual((run['kind'], run['targetId'], run['messageId']), ('bot', self.bot['id'], asked['id']))
         self.assertTrue(run['summary'].startswith('done'))
+        notes = self.req('GET', '/api/notifications?after=0')[1]
+        self.assertEqual([(n['title'], n['kind'], n['targetId'], n['messageId']) for n in notes['items']], [('Tester', 'bot', self.bot['id'], asked['id'])])
+        self.assertTrue(notes['items'][0]['body'].startswith('done'))
+        self.assertEqual(self.req('GET', '/api/notifications?after=%d' % notes['seq'])[1]['items'], [])
+        self.assertEqual(self.req('PATCH', '/api/settings', {'scheduleNotify': False})[0], 200)
+        self.assertEqual(self.req('POST', '/api/schedules/%s/run' % item['id'], {})[0], 202)
+        self.wait(lambda s: s['schedules'][0]['runs'][-1]['status'] == 'done')
+        self.assertEqual(self.req('GET', '/api/notifications?after=%d' % notes['seq'])[1]['items'], [])
         self.assertEqual(self.req('PATCH', '/api/schedules/' + item['id'], {'time': '11:30', 'repeat': 'weekdays', 'on': False})[1]['time'], '11:30')
         self.assertEqual(self.req('DELETE', '/api/bots/' + self.bot['id'])[0], 200)  # its schedules go with it
         self.assertEqual(self.req('GET', '/api/state')[1]['schedules'], [])
@@ -166,6 +202,7 @@ class ScheduleTest(unittest.TestCase):
         state = self.wait(lambda s: s['schedules'][0].get('lastStatus') == 'missed')
         self.assertEqual(self.messages(state), [])
         self.assertEqual([(r['status'], r['reason']) for r in state['schedules'][0]['runs']], [('missed', '到時間時 Zook 沒有開著。')])
+        self.assertEqual([(n['title'], n['body']) for n in self.req('GET', '/api/notifications?after=0')[1]['items']], [('Tester', '錯過：到時間時 Zook 沒有開著。')])
 
     def test_waits_while_the_bot_is_busy(self):
         now = datetime.datetime.now()

@@ -535,6 +535,7 @@
   const permissionOptions = withDefault => (withDefault ? [{id: '', name: '使用預設（' + permissionName(state.data.settings.permissionMode) + '）', hint: '跟著「設定」裡的主動性'}] : []).concat(PERMISSIONS.map(p => ({id: p.id, name: p.name, hint: p.hint})));
   // Remote access: off unless turned on here. Pairing and revoking can only be done on this Mac.
   // App updates: checked automatically unless turned off; installing is always the user's decision.
+  const noticeSection = () => `<h2 class="settings-h">通知</h2><div class="setting-list">${settingRow('排程通知', '排程跑完、失敗或錯過，以及排程執行中需要你核准時，在這台 Mac 跳出通知。點通知會打開那段對話。', toggle('data-schedule-notify', state.data.settings.scheduleNotify !== false, '排程通知'))}</div>`;
   function updateSection() {
     const u = state.update || {};
     const status = u.state === 'checking' ? '正在檢查…' : u.available ? `有新版 ${esc(u.latest)}` : u.error ? esc(u.error) : u.latest ? '已是最新版' : '尚未檢查';
@@ -812,7 +813,7 @@
       content = accountsPage();
     } else if (state.page === 'settings') {
       let s = state.data.settings || {};
-      content = permissionSection(s.permissionMode || 'manual') + `<form id="settings-form" class="setting-list">${settingRow('預設提供者', '新對話預設使用的模型服務。登入狀態在「模型帳號」管理。', `<select name="provider" class="plain-select" aria-label="預設提供者">${providerOptions(s.provider || 'codex', false)}</select>`)}${settingRow('預設模型', '未個別指定模型的 Bot 會使用這個模型。', modelPicker(s.model||'', true))}${[0, 1].map(i => settingRow('備用模型 ' + (i + 1), i ? '第一個備用也不能用時，再換這一個。' : '預設模型額度用完、未登入或回覆失敗時，自動換這個模型，並在回覆下方註明。', dropdown('fallback' + i, (s.fallbacks || [])[i] || '', [{id: '', name: '不使用'}, ...providerList()], 'data-fallback-slot'))).join('')}<div class="setting-actions"><button class="primary">儲存模型設定</button><button type="button" class="secondary" data-action="export">匯出所有資料</button></div></form>` + updateSection() + remoteSection()
+      content = permissionSection(s.permissionMode || 'manual') + `<form id="settings-form" class="setting-list">${settingRow('預設提供者', '新對話預設使用的模型服務。登入狀態在「模型帳號」管理。', `<select name="provider" class="plain-select" aria-label="預設提供者">${providerOptions(s.provider || 'codex', false)}</select>`)}${settingRow('預設模型', '未個別指定模型的 Bot 會使用這個模型。', modelPicker(s.model||'', true))}${[0, 1].map(i => settingRow('備用模型 ' + (i + 1), i ? '第一個備用也不能用時，再換這一個。' : '預設模型額度用完、未登入或回覆失敗時，自動換這個模型，並在回覆下方註明。', dropdown('fallback' + i, (s.fallbacks || [])[i] || '', [{id: '', name: '不使用'}, ...providerList()], 'data-fallback-slot'))).join('')}<div class="setting-actions"><button class="primary">儲存模型設定</button><button type="button" class="secondary" data-action="export">匯出所有資料</button></div></form>` + noticeSection() + updateSection() + remoteSection()
     }
     return `<main class="main"><header class="main-header"><div class="bot-pill">Zook</div></header><div class="page"><div class="page-inner"><div class="page-top"><h1>${name}</h1>${state.page==='knowledge'?'<button class="primary" data-action="new-note">＋ 新增知識</button>':state.page==='schedules'?'<button class="primary" data-action="new-schedule">＋ 新增排程</button>':''}</div>${content}</div></div></main>`
   }
@@ -928,10 +929,13 @@
     if (!state.focus || Date.now() > state.focus.until) { state.focus = null; return false; }
     const el = [...document.querySelectorAll('[data-mid]')].find(x => x.dataset.mid === state.focus.id);
     if (!el) return false;
-    el.scrollIntoView({block: 'center'}); el.classList.add('flash');
+    el.scrollIntoView({block: 'center', behavior: 'instant'}); el.classList.add('flash');
     return true;
   }
-  window.zookOpen = (kind, id, messageId) => { if (state.data) openConversation(kind, id, messageId); };
+  window.zookOpen = async (kind, id, messageId) => {  // from a Mac notification: the reply may be newer than this page
+    try { await refresh(); startPollers(); } catch (_) {}
+    if (state.data) openConversation(kind, id, messageId);
+  };
   // Who a schedule talks to: a Bot or a group, with its avatar.
   function scheduleTarget(x) {
     if (x.groupId) { const g = (state.data.groups || []).find(g => g.id === x.groupId); return `<span class="sched-target">${g ? avatarStack(g) + esc(g.name) : '找不到群組'}</span>`; }
@@ -1676,6 +1680,11 @@
     }
     if (e.target.name === 'repeat' && e.target.closest('#schedule-form')) {
       e.target.closest('.sched-when').dataset.repeat = e.target.value;
+      return;
+    }
+    if (e.target.dataset.scheduleNotify !== undefined) {
+      try { state.data.settings = await post('settings', {scheduleNotify: e.target.checked}, 'PATCH'); toast(e.target.checked ? '會跳出排程通知' : '已關閉排程通知'); }
+      catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
       return;
     }
     if (e.target.dataset.scheduleSwitch !== undefined) {
