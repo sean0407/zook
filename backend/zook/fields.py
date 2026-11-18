@@ -84,9 +84,9 @@ def update(target, body, kind):
     if kind == 'bot' and 'account' in body:
         if body['account'] != '' and not find_account(body['account'] if isinstance(body['account'], str) else None): raise ValueError('帳號無效。')
         changes['account'] = body['account']
-    if kind == 'bot' and ('access' in body or 'accessFolder' in body):
-        access = body.get('access', target.get('access') or 'full'); folder = body.get('accessFolder', target.get('accessFolder') or '')
-        if access not in ACCESS_SCOPES or not isinstance(folder, str) or len(folder) > 1000: raise ValueError('存取範圍無效。')
+    if kind in ('bot', 'settings') and ('access' in body or 'accessFolder' in body):
+        access = body.get('access', target.get('access') or ('' if kind == 'bot' and 'access' in target else 'full')); folder = body.get('accessFolder', target.get('accessFolder') or '')
+        if access not in ACCESS_SCOPES + (('',) if kind == 'bot' else ()) or not isinstance(folder, str) or len(folder) > 1000: raise ValueError('存取範圍無效。')
         if access == 'folder':
             chosen = pathlib.Path(folder.strip()).expanduser()
             if not folder.strip() or not chosen.is_absolute() or not chosen.is_dir(): raise ValueError('請選擇一個存在的資料夾。')
@@ -108,12 +108,12 @@ def update(target, body, kind):
     if kind == 'bot' and 'isAdmin' in body:
         if not isinstance(body['isAdmin'], bool): raise ValueError('isAdmin 無效。')
         changes['isAdmin'] = body['isAdmin']
-    if kind == 'bot' and 'features' in body:
+    if kind in ('bot', 'settings') and 'features' in body:
         value = body['features']
         if not isinstance(value, dict) or any(k not in FEATURES or not isinstance(v, bool) for k, v in value.items()): raise ValueError('特色功能設定無效。')
         changes['features'] = value
-    if kind == 'bot' and 'effort' in body:
-        if body['effort'] not in EFFORTS: raise ValueError('思考強度無效。')
+    if kind in ('bot', 'settings') and 'effort' in body:
+        if body['effort'] not in tuple(EFFORTS) + (('',) if kind == 'bot' else ()): raise ValueError('思考強度無效。')
         changes['effort'] = body['effort']
     if kind == 'bot' and 'pinned' in body:
         if not isinstance(body['pinned'], bool): raise ValueError('pinned 無效。')

@@ -261,7 +261,7 @@ class GroupRuns:
             prompt = group_prompt(store, group, bot, may_pass, moderator=role, moderated=moderated, blind=blind, target=target, writable=writable, hidden=set(step.get('hide') or ()), hidden_files=set(step.get('hideFiles') or ()))
             msg = dict(id=ID(), role='assistant', botId=bot_id, content='', createdAt=NOW(), status='running')
             job = dict(id=ID(), botId=bot_id, groupId=group_id, messageId=msg['id'], status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[],
-                       effort=group.get('runEffort') if group.get('runEffort') not in (None, '', 'standard') else pick_effort(bot.get('effort')))
+                       effort=group.get('runEffort') if group.get('runEffort') not in (None, '', 'standard') else pick_effort(bot_effort(bot)))
             if job['effort'] != 'standard': msg['effort'] = job['effort']
             if readonly: job['plan'] = True
             if step.get('targetId'): msg['checkOf'] = step['targetId']

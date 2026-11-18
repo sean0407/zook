@@ -82,7 +82,8 @@ def feature_support(kind):
 
 def active_features(bot, kind, native, planning, scope):
     """The features this reply may use. Never in 謹慎 or 先規劃."""
-    chosen = bot.get('features') if isinstance(bot.get('features'), dict) else {}
+    defaults = (_active['data'].get('settings') or {}).get('features') or {}
+    chosen = dict(defaults, **(bot.get('features') if isinstance(bot.get('features'), dict) else {}))  # the Bot's own choice wins over the default in 設定
     if not native or planning: return []
     return [name for name in feature_support(kind) if chosen.get(name) is True and (kind not in FEATURE_NEEDS_WHOLE_MAC.get(name, ()) or scope == 'full')]
 

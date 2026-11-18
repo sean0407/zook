@@ -42,8 +42,8 @@ def bot_outputs(store, bot):
             elif entry.is_file(follow_symlinks=False): add(entry.path)
     with store.lock:
         wrote = [(str((c.get('arguments') or {}).get('path') or ''), j.get('createdAt'), j.get('finishedAt')) for j in store.data['jobs'] if j.get('botId') == bot['id'] for c in j.get('toolCalls') or [] if c.get('name') == 'native_write']
-        scope = bot.get('access') if bot.get('access') in ACCESS_SCOPES else 'full'
-        folder = os.path.realpath(bot['accessFolder']) if scope == 'folder' and bot.get('accessFolder') else ''
+        scope, chosen = bot_scope(bot)
+        folder = os.path.realpath(chosen) if scope == 'folder' and chosen else ''
     for path, started, finished in wrote[-400:]:
         if not path or len(path) >= 300 or not os.path.isabs(path) or '..' in pathlib.PurePosixPath(path).parts: continue  # cut off, relative, or climbing out
         try:

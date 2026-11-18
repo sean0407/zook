@@ -1,3 +1,13 @@
+  async function saveBotDefault(input) {
+    const key = input.dataset.botDefault, st = state.data.settings; let body;
+    if (key === 'access') {
+      if (input.value === 'folder' && !st.accessFolder) { const picked = (await post('choose-folder')).path; if (!picked) { render(true); return; } body = {access: 'folder', accessFolder: picked}; }
+      else body = {access: input.value, accessFolder: st.accessFolder || ''};
+    } else if (key === 'effort') body = {effort: input.value};
+    else body = {features: {...(st.features || {}), [key]: input.checked}};
+    try { state.data.settings = await post('settings', body, 'PATCH'); toast('已更新 Bot 預設'); } catch (error) { toast(error.message); }
+    render(true);
+  }
   async function switchConnectorAccount(input) {
     const id = input.dataset.connector;
     try {
@@ -19,6 +29,7 @@
     if (e.target.name === 'provider' && e.target.closest('#bot-form')) syncFeatureRows(e.target.closest('#bot-form'));
     if (e.target.dataset.autoModel) saveAutoModel(e.target);
     if (e.target.name === 'projectFilter') { state.projectId = e.target.value; render(true); }
+    if (e.target.dataset.botDefault) saveBotDefault(e.target);
     if (e.target.name === 'connectorAccount') switchConnectorAccount(e.target);
     if (e.target.name === 'groupMode' && activeGroup()) { state.groupMode[activeGroup().id] = e.target.value; updateGroupEstimate(); }
     if (e.target.name === 'botIds' && e.target.closest('#group-form')) syncGroupHost(e.target.closest('#group-form'));
@@ -251,9 +262,9 @@
           model: d.get('model'),
           section: d.get('section'),
           pinned: d.has('pinned'),
-          fallbacks: d.get('fallbackChoice') === '__none' ? [] : !d.get('fallbackChoice') || d.get('fallbackChoice') === '__default' ? null : [d.get('fallbackChoice')], permissionMode: d.get('permissionMode') || '', effort: d.get('effort') || 'standard', features: {multi: d.get('featureMulti') === 'on', image: d.get('featureImage') === 'on'},
+          fallbacks: d.get('fallbackChoice') === '__none' ? [] : !d.get('fallbackChoice') || d.get('fallbackChoice') === '__default' ? null : [d.get('fallbackChoice')], permissionMode: d.get('permissionMode') || '', effort: d.get('effort') || '', features: Object.fromEntries([['multi', d.get('featureMulti')], ['image', d.get('featureImage')]].filter(x => x[1]).map(x => [x[0], x[1] === 'on'])),
           account: d.get('account') || '',
-          access: d.get('access') || 'full', accessFolder: d.get('access') === 'folder' ? d.get('accessFolder') || '' : ''
+          access: d.get('access') || '', accessFolder: d.get('access') === 'folder' ? d.get('accessFolder') || '' : ''
         };
         if (data.access === 'folder' && !data.accessFolder) { toast('請先選擇資料夾'); return; }
         let result = await post(id ? 'bots/' + encodeURIComponent(id) : 'bots', data, id ? 'PATCH' : 'POST');

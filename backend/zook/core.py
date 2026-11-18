@@ -403,13 +403,25 @@ ACCESS_SCOPES = ('full', 'folder', 'workspace')
 
 def bot_access(bot, workspace):
     """(scope, folder the CLI starts in). A Bot whose chosen folder has gone away is stopped rather than given more room."""
-    scope = bot.get('access') if bot.get('access') in ACCESS_SCOPES else 'full'
+    scope, chosen = bot_scope(bot)
     if scope == 'workspace': return scope, pathlib.Path(workspace)
     if scope == 'full': return scope, pathlib.Path.home()
-    folder = pathlib.Path(bot.get('accessFolder') or '')
-    if not bot.get('accessFolder') or not folder.is_absolute() or not folder.is_dir():
-        raise RuntimeError('這個 Bot 指定的資料夾已經不存在，請在「編輯 Bot」重新選擇存取範圍。')
+    folder = pathlib.Path(chosen or '')
+    if not chosen or not folder.is_absolute() or not folder.is_dir():
+        raise RuntimeError('這個 Bot 指定的資料夾已經不存在，請在「編輯 Bot」或「設定」重新選擇存取範圍。')
     return scope, folder
+
+
+def bot_scope(bot):
+    """(access scope, chosen folder). A Bot without its own choice follows the default in 設定."""
+    if bot.get('access') in ACCESS_SCOPES: return bot['access'], bot.get('accessFolder') or ''
+    settings = _active['data'].get('settings') or {}
+    return (settings['access'], settings.get('accessFolder') or '') if settings.get('access') in ACCESS_SCOPES else ('full', '')
+
+
+def bot_effort(bot):
+    """The Bot's own 思考強度, or the default in 設定."""
+    return bot.get('effort') or (_active['data'].get('settings') or {}).get('effort') or 'standard'
 
 
 def access_note(scope, root, commands, grok=False):

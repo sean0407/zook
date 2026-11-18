@@ -150,7 +150,7 @@ class App(GroupRuns, ThreadingHTTPServer):
         use=(provider, model) answers this one message with another model without changing the Bot."""
         store = self.store
         chat_id = chat_id or ensure_chats(bot) and bot['chatId']
-        effort = pick_effort(effort, bot.get('effort'))
+        effort = pick_effort(effort, bot_effort(bot))
         if not isinstance(plan, bool): raise ValueError('先規劃設定無效。')
         messages = chat_messages(bot, chat_id)
         validate_selection(bot, inventory)

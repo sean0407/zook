@@ -274,6 +274,11 @@
     document.querySelector('.launcher .popup')?.remove();
     document.querySelector('[data-action="launcher"]')?.setAttribute('aria-expanded', 'false');
   }, true);
+  // The shape and colour picker in the Bot form closes the same way.
+  document.addEventListener('click', e => {
+    const panel = document.querySelector('#bot-form .avatar-panel');
+    if (panel && !panel.hidden && !e.target.closest?.('.avatar-panel') && !e.target.closest?.('[data-action="avatar-pick"]')) panel.hidden = true;
+  }, true);
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.launcher) { state.launcher = false; render(true); } });
   document.addEventListener('click', e => {
     const opt = e.target.closest?.('.dd-opt'), btn = e.target.closest?.('.dd-btn');
