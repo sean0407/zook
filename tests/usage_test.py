@@ -37,7 +37,7 @@ class ParseTest(unittest.TestCase):
     def test_claude_stream_json(self):
         out = server.parse_cli_output('claude', CLAUDE_OUT)
         self.assertEqual(out['content'], 'OK')
-        self.assertEqual(out['usage'], {'input': 3261, 'cachedInput': 649, 'output': 4, 'model': 'claude-haiku-5-5', 'costUsd': 0.00053069})
+        self.assertEqual(out['usage'], {'input': 3261, 'cachedInput': 649, 'cacheWrite': 2610, 'output': 4, 'model': 'claude-haiku-5-5', 'costUsd': 0.00053069})
         q = server.normalize_quota('claude', out['quota'])
         self.assertEqual([(w['label'], w['usedPercent']) for w in q['windows']], [('5 小時', 4.0), ('每週', 1.0)])
         self.assertTrue(server.parse_cli_output('claude', 'not json')['unparsable'])
@@ -66,7 +66,7 @@ class ParseTest(unittest.TestCase):
                           'output_tokens': 198, 'reasoning_tokens': 197, 'total_tokens': 21189}, 'total_cost_usd': 0.029922, 'modelUsage': {'grok-4.7-build': {}}})
         out = server.parse_cli_output('grok', raw)
         self.assertEqual(out['content'], 'OK')
-        self.assertEqual(out['usage'], {'input': 20991, 'cachedInput': 8832, 'output': 198, 'model': 'grok-4.7-build', 'costUsd': 0.029922})
+        self.assertEqual(out['usage'], {'input': 20991, 'cachedInput': 8832, 'cacheWrite': 0, 'output': 198, 'model': 'grok-4.7-build', 'costUsd': 0.029922})
         self.assertEqual(server.parse_cli_output('grok', 'plain fallback')['content'], 'plain fallback')
 
     def test_codex_quota(self):
