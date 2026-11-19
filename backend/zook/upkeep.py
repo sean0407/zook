@@ -84,19 +84,41 @@ def backup_restore(app, name):
         data.update(keep)
         if keep_remote is not None: data['settings']['remote'] = keep_remote
         with store.path.open('w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False)
-        fresh = Store(store.dir)  # runs the same upgrades an old data file gets at startup
+        fresh = Store(store.dir, recover=False)  # runs the same upgrades an old data file gets at startup
     except Exception:
         store.path.write_bytes(previous); _active['data'] = store.data
         raise ValueError('這份備份無法讀取，資料沒有變動。')
     store.data = fresh.data; _active['data'] = store.data
     # Older data must not be sent to the other Macs as if it were new, nor its gaps as deletions: syncing stops until it is switched on again.
+    return safety, sync_halt(store)
+
+
+def sync_halt(store):
+    """Lock held. Stop syncing after the data went back in time. True when it was on."""
     sync = store.data.get('sync') or {}
-    stopped = bool(sync.get('folder'))
-    if stopped:
-        try: os.unlink(os.path.join(sync['folder'], 'zook-sync-%s.json' % sync.get('deviceId')))
-        except OSError: pass
-        sync.update(folder='', others=[], lastError=''); sync_marks(store, reset=True); store.save()
-    return safety, stopped
+    if not sync.get('folder'): return False
+    try: os.unlink(os.path.join(sync['folder'], 'zook-sync-%s.json' % sync.get('deviceId')))
+    except OSError: pass
+    sync.update(folder='', others=[], lastError=''); sync_marks(store, reset=True); store.save()
+    return True
+
+
+def recover_data(store):
+    """The data file cannot be read. Keep it under another name, load the newest backup that is whole, and say what happened.
+    Sets store.data and returns the note the window shows once."""
+    kept = 'swarmr.corrupt-%s.json' % datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+    try: os.replace(store.path, store.dir / kept)
+    except OSError: kept = ''
+    for backup in backup_list(store):
+        if backup['kind'] == 'file' or backup['size'] > MAX_BACKUP_FILE: continue  # a file brought in from elsewhere was never this Mac's data
+        try:
+            with (backup_dir(store) / backup['name']).open(encoding='utf-8') as f: store.data = backup_check(json.load(f))
+        except (OSError, ValueError, UnicodeError, RecursionError): continue
+        log_activity(store, 'backup', '資料檔無法讀取，改用備份 %s（損壞的檔案留存為 %s）' % (backup['name'], kept or '無法留存'), by='Zook')
+        return dict(at=NOW(), backup=backup['name'], backupAt=backup['at'], kept=kept)
+    log_activity(store, 'backup', '資料檔無法讀取，也沒有可用的備份，從全新狀態開始（損壞的檔案留存為 %s）' % (kept or '無法留存'), by='Zook')
+    store.data = seeds()
+    return dict(at=NOW(), backup='', backupAt='', kept=kept)
 
 
 # ---- Activity: who changed or approved what. Kept in its own file so restoring a backup does not rewrite history.
@@ -283,6 +305,9 @@ def upkeep_fields(data, body, changes):
     if 'voiceLang' in body:
         if body['voiceLang'] not in ('', 'zh-TW', 'en-US', 'ja-JP'): raise ValueError('語音語言無效。')
         changes['voiceLang'] = body['voiceLang']
+    if 'recoveredSeen' in body:
+        if body['recoveredSeen'] is not True: raise ValueError('recoveredSeen 無效。')
+        changes['recovered'] = None
     if 'onboarded' in body:
         if body['onboarded'] is not True: raise ValueError('onboarded 無效。')
         changes['onboarded'] = True

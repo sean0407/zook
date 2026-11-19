@@ -211,3 +211,17 @@
     try { state.sync = await post('sync', {folder: e.target.dataset.folder, join: new FormData(e.target).get('join')}); closeModal(); await refresh(); toast('已開始同步'); }
     catch (err) { toast(err.message); }
   });
+
+  // The data file could not be read at startup: say once what Zook did about it.
+  function recoveryNotice() {
+    const r = state.data?.settings?.recovered;
+    if (!r || state.recoveryShown || document.querySelector('.modal')) return;
+    state.recoveryShown = true;
+    const what = r.backup ? `已改用 ${esc(formatDate(r.backupAt))} 的備份，那之後的變動沒有保留。` : '找不到可用的備份，所以從全新的狀態開始。';
+    modal('資料檔無法讀取', `<div class="modal-body"><p>Zook 的資料檔損壞了。${what}</p>${r.kept ? `<p class="muted">損壞的檔案沒有刪除，改名為 <code>${esc(r.kept)}</code>，留在 Zook 的資料夾裡。</p>` : ''}${r.backup ? '<p class="muted">多台 Mac 同步如果原本開著，已經先停止，確認資料後再到設定重新開啟。</p>' : ''}</div>`, '<div class="modal-foot"><button class="primary" data-up="recovery-ok">知道了</button></div>');
+  }
+  document.addEventListener('click', async e => {
+    if (!e.target.closest?.('[data-up="recovery-ok"]')) return;
+    try { state.data.settings = await post('settings', {recoveredSeen: true}, 'PATCH'); } catch (_) {}
+    closeModal();
+  });

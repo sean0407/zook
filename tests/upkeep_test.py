@@ -232,6 +232,28 @@ class UpkeepTest(unittest.TestCase):
         usage = self.req('GET', '/api/usage/bots')[1]['bots'][0]
         self.assertEqual((usage['replies'], usage['input'], usage['output']), (13, 13 * 600000, 13 * 300000))
 
+    def test_damaged_data_file_does_not_stop_startup(self):
+        made = self.req('POST', '/api/backups', {})[1]['name']
+        self.req('POST', '/api/bots', {'name': '備份之後', 'provider': 'codex'})
+        path = self.root / 'data/swarmr.json'
+        for damage in (b'{"bots": [{"id": "x", "na', b'\x00' * 4096, b'', b'[1, 2]'):
+            self.stop(); path.write_bytes(damage); self.start()
+            state = self.req('GET', '/api/state')[1]
+            self.assertIn('小幫手', [b['name'] for b in state['bots']]); self.assertNotIn('備份之後', [b['name'] for b in state['bots']])
+            note = state['settings']['recovered']
+            self.assertEqual(note['backup'], made)
+            self.assertEqual((self.root / 'data' / note['kept']).read_bytes(), damage)  # the damaged file is kept, not deleted
+            json.loads(path.read_text())  # and a good file is back in place
+            self.assertEqual(self.req('PATCH', '/api/settings', {'recoveredSeen': True})[1].get('recovered'), None)
+            time.sleep(1.1)  # the kept files are named by the second
+        # A damaged backup is passed over; with none left, Zook starts fresh rather than not at all.
+        self.stop()
+        for p in (self.root / 'data/backups').glob('*.json'): p.write_text('{broken')
+        path.write_text('nope'); self.start()
+        state = self.req('GET', '/api/state')[1]
+        self.assertEqual(state['settings']['recovered']['backup'], ''); self.assertEqual(len(state['bots']), 3)
+        self.assertIs(state['settings']['onboarded'], False)
+
 
 if __name__ == '__main__':
     unittest.main()

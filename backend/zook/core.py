@@ -144,14 +144,20 @@ def schedule_chat(bot):
 
 
 class Store:
-    def __init__(self, directory):
+    def __init__(self, directory, recover=True):
         self.dir = pathlib.Path(directory).resolve()
         self.dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = self.dir / 'swarmr.json'
         self.lock = threading.RLock()
+        recovered = None
         if self.path.exists():
-            with self.path.open(encoding='utf-8') as f:
-                self.data = json.load(f)
+            try:
+                with self.path.open(encoding='utf-8') as f: self.data = json.load(f)
+                if not isinstance(self.data, dict) or not isinstance(self.data.get('bots'), list): raise ValueError('not Zook data')
+            except (ValueError, UnicodeError, RecursionError):
+                # A file cut short by a power loss or a full disk must not keep Zook from opening.
+                if not recover: raise
+                recovered = recover_data(self)
         else:
             self.data = seeds()
         for bot in self.data.get('bots', []):
@@ -200,6 +206,7 @@ class Store:
             if job['status'] == 'running':
                 job.update(status='failed', error='服務重新啟動，工作已中斷。')
                 self.finish_message(job, '', 'failed')
+        if recovered: self.data['settings']['recovered'] = recovered; sync_halt(self)
         self.save()
 
     rev = int(time.time() * 1000)  # differs for every start, and goes up with every save, so a window can ask whether anything changed since it last looked
