@@ -191,6 +191,7 @@
           break;
         }
         case 'select-bot':
+          state.memberWork = null;
           state.groupId = null;
           state.selected = id;
           state.page = 'chat';
