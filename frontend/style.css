@@ -1709,3 +1709,25 @@ body[data-voice="on"] [data-action="voice"] { color: #c0564f; background: #fdece
 .choice-btn:disabled { opacity:.5; cursor:default; }
 .answer-form { display:flex; gap:8px; margin-top:10px; }
 .answer-form input { flex:1; min-width:0; padding:8px 10px; border:1px solid var(--line, #d9d9d9); border-radius:8px; font:inherit; background:var(--panel, #fff); color:inherit; }
+
+/* What is left of each model's limits */
+.side-rings { position:relative; display:flex; gap:6px; padding:8px 4px 2px; flex-wrap:wrap; }
+.ring { display:flex; flex-direction:column; align-items:center; gap:1px; width:44px; padding:4px 0; border:0; border-radius:10px; background:none; color:#555; font:inherit; font-size:10.5px; cursor:pointer; }
+.ring:hover, .ring.active { background:#e9e9e9; }
+.ring svg { width:26px; height:26px; }
+.ring-track { fill:none; stroke:#dcdcdc; stroke-width:3; }
+.ring-fill { fill:none; stroke:#13bf78; stroke-width:3; stroke-linecap:round; }
+.ring.low .ring-fill { stroke:#e5484d; }
+.ring.low { color:#c22; }
+.ring.none .ring-track { stroke-dasharray:3 3; }
+.ring-card { position:absolute; left:0; right:0; bottom:100%; margin-bottom:6px; padding:14px; border:1px solid #e2e2e2; border-radius:12px; background:#fff; box-shadow:0 8px 24px rgba(0,0,0,.12); z-index:20; display:flex; flex-direction:column; gap:10px; }
+.ring-card .text-btn { align-self:flex-start; padding:0; }
+.left-track .quota-bar { background:#13bf78; }
+.left-track .quota-bar.bad { background:#e5484d; }
+.left-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:12px; }
+.left-card { padding:14px 16px; border:1px solid var(--line); border-radius:12px; display:flex; flex-direction:column; gap:10px; }
+.left-card h3 { margin:0; font-size:14px; }
+.usage-fold { margin:14px 0; border:1px solid var(--line); border-radius:12px; padding:0 16px; }
+.usage-fold > summary { cursor:pointer; padding:14px 0; font-weight:650; }
+.usage-fold[open] { padding-bottom:12px; }
+.usage-fold .usage-block > h2 { display:none; }

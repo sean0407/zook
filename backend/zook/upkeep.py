@@ -418,7 +418,7 @@ def state_view(store, whole=False):
     view = dict(store.data, rev=store.rev)
     view['jobs'] = [j for j in store.data['jobs'] if not j.get('slim') and not j.get('internal')]
     if not whole: view['bots'] = [page_bot(b) for b in store.data['bots']]  # the newest part of each open conversation; older parts are asked for
-    view.pop('usageArchive', None)
+    view.pop('usageArchive', None); view['rings'] = usage_rings(store)
     view['deletedBots'] = [{k: b.get(k) for k in ('id', 'name', 'color', 'shape', 'deletedAt')} for b in store.data.get('deletedBots') or []]  # their conversations stay on disk
     return view
 
