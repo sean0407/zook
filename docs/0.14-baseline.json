@@ -1,0 +1,45 @@
+{
+ "Codex 回覆": true,
+ "Codex 用量數字": true,
+ "Codex 接續對話": true,
+ "Claude 回覆": true,
+ "Claude 用量數字": true,
+ "Claude 接續對話": true,
+ "Grok 回覆": true,
+ "Grok 用量數字": true,
+ "Grok 接續對話": true,
+ "Antigravity 回覆": null,
+ "Antigravity 用量數字": null,
+ "Antigravity 接續對話": null,
+ "排程：手動執行": true,
+ "排程：資料夾有新檔案時執行": true,
+ "群組：兩個成員都有回覆": true,
+ "備用模型：主要模型失敗時接手": true,
+ "停止回覆": true,
+ "核准：動作前先問": true,
+ "核准：核准後才執行": true,
+ "Claude 額度資訊（從回覆取得）": true,
+ "_speed": {
+  "codex": {
+   "first": 3.9,
+   "done": 4.3,
+   "model": "預設模型"
+  },
+  "claude": {
+   "first": 1.5,
+   "done": 3.5,
+   "model": "claude-fable-5-2"
+  },
+  "grok": {
+   "first": 7.0,
+   "done": 8.2,
+   "model": "grok-4.7-build"
+  },
+  "antigravity": null,
+  "auto": {
+   "first": 4.6,
+   "done": 5.8,
+   "model": "grok-4.7-build"
+  }
+ }
+}

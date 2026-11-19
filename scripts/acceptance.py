@@ -138,10 +138,58 @@ def check_fallback_and_stop(z):
     return out
 
 
+def check_speed(z, provider, more=None):
+    """Seconds from sending one short question to the first visible character and to the finished reply."""
+    bot = z.req('POST', 'bots', dict(dict(name='速度-' + provider, provider=provider), **(more or {})))
+    for _ in range(8):  # 自動選擇 first has to learn which models are signed in
+        started = time.time(); sent = z.req('POST', 'chat', dict(botId=bot['id'], content='一加一等於多少？只回覆數字。'))
+        if 'jobId' in sent or provider != 'auto': break
+        time.sleep(10)
+    if 'jobId' not in sent: return None
+    first = None
+    while time.time() - started < 300:
+        job = z.req('GET', 'jobs/' + sent['jobId'])
+        if first is None and (job.get('partial') or job.get('content')): first = time.time() - started
+        if job.get('status') != 'running':
+            if job.get('status') != 'completed': return None
+            return dict(first=round(first if first is not None else time.time() - started, 1), done=round(time.time() - started, 1), model=' '.join(x for x in (job.get('auto'), (job.get('usage') or {}).get('model')) if x))
+        time.sleep(0.2)
+    return None
+
+
+def measure_speed(z):
+    out = {}
+    for provider in PROVIDERS:  # one at a time, so they do not slow each other down
+        try: out[provider] = check_speed(z, provider)
+        except Exception: out[provider] = None
+    try: out['auto'] = check_speed(z, 'auto')
+    except Exception: out['auto'] = None
+    return out
+
+
+def print_speed(speed, base=None):
+    print('\n速度（秒）：送出到第一個字／送出到完成')
+    for name, now in speed.items():
+        old = (base or {}).get(name)
+        line = '%-12s %s' % (NAMES.get(name, '自動選擇'), '沒有量到（額度用完或失敗）' if not now else '%5.1f / %5.1f  %s' % (now['first'], now['done'], now.get('model') or ''))
+        if now and old: line += '   基準 %.1f / %.1f' % (old['first'], old['done'])
+        print(line)
+
+
 def main():
     parser = argparse.ArgumentParser(); parser.add_argument('--save'); parser.add_argument('--compare'); parser.add_argument('--port', type=int, default=8788)
+    parser.add_argument('--speed', action='store_true', help='also measure reply speed'); parser.add_argument('--speed-only', action='store_true')
     args = parser.parse_args()
-    results, started = {}, time.time()
+    results, started, speed = {}, time.time(), None
+    if args.speed_only:
+        with tempfile.TemporaryDirectory() as directory:
+            folder = pathlib.Path(directory); z = Zook(folder, args.port)
+            try:
+                z.req('PATCH', 'settings', dict(permissionMode='auto', onboarded=True)); speed = measure_speed(z)
+            finally: z.close()
+        print_speed(speed, (json.loads(pathlib.Path(args.compare).read_text(encoding='utf-8')).get('_speed') if args.compare else None))
+        if args.save: pathlib.Path(args.save).write_text(json.dumps(dict(_speed=speed), ensure_ascii=False, indent=1), encoding='utf-8')
+        sys.exit(0)
     with tempfile.TemporaryDirectory() as directory:
         folder = pathlib.Path(directory); z = Zook(folder, args.port)
         try:
@@ -155,17 +203,21 @@ def main():
             except Exception as exc: results['檢查本身出錯：核准'] = (False, str(exc)[:120])
             quota = (z.req('GET', 'state').get('quota') or {}).get('claude') or {}
             results['Claude 額度資訊（從回覆取得）'] = (bool(quota.get('windows')), '視窗數 %d' % len(quota.get('windows') or []))
+            if args.speed:
+                z.req('PATCH', 'settings', dict(permissionMode='auto')); speed = measure_speed(z)
         finally: z.close()
     for name, (ok, detail) in results.items(): print('%s  %s%s' % ('略過' if ok is None else '通過' if ok else '失敗', name, '' if ok else '：' + detail))
     failed = [n for n, (ok, _) in results.items() if ok is False]; skipped = [n for n, (ok, _) in results.items() if ok is None]
     print('\n%d 項通過，%d 項失敗，%d 項略過，用時 %d 秒' % (len(results) - len(failed) - len(skipped), len(failed), len(skipped), time.time() - started))
-    if args.save: pathlib.Path(args.save).write_text(json.dumps({n: ok for n, (ok, _) in results.items()}, ensure_ascii=False, indent=1), encoding='utf-8')
+    if args.save: pathlib.Path(args.save).write_text(json.dumps(dict({n: ok for n, (ok, _) in results.items()}, **(dict(_speed=speed) if speed else {})), ensure_ascii=False, indent=1), encoding='utf-8')
     worse = []
     if args.compare:
-        base = json.loads(pathlib.Path(args.compare).read_text(encoding='utf-8'))
+        base = json.loads(pathlib.Path(args.compare).read_text(encoding='utf-8')); base_speed = base.pop('_speed', None)
+        if speed: print_speed(speed, base_speed)
         worse = [n for n, ok in base.items() if ok and results.get(n, (False,))[0] is False]  # a skipped check is neither better nor worse
         print('和基準相比：' + ('沒有變差' if not worse else '變差的有 ' + '、'.join(worse)))
         sys.exit(1 if worse else 0)
+    if speed and not args.compare: print_speed(speed)
     sys.exit(1 if failed else 0)
 
 
