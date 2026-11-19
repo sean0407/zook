@@ -355,6 +355,7 @@ class App(GroupRuns, Triggers, Syncing, ThreadingHTTPServer):
             item = next((x for x in calls if x['id'] == event.get('id')), None)
             if item is None:
                 item = {'id': event.get('id', ID()), 'createdAt': NOW()}; calls.append(item)
+            if job_id in self.__dict__.get('job_activity', {}): self.job_activity[job_id] = time.monotonic()  # using a tool is a sign of work
             if event.get('autoApproved') and not item.get('autoApproved') and event.get('category', item.get('category')) in ('external_write', 'danger'):
                 log_activity(self.store, 'tool', '未詢問即執行：%s（%s）' % (describe_call(dict(item, **event)), self.target_name('bot', job['botId'])), by='Zook')
             for key in ('name', 'source', 'status', 'arguments', 'resultSummary', 'error', 'label', 'sourceLabel', 'category', 'autoApproved'):
@@ -594,29 +595,33 @@ class App(GroupRuns, Triggers, Syncing, ThreadingHTTPServer):
                 proc = subprocess.Popen(args, stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=str(cli_cwd), env=env)
                 self.processes[job_id] = proc
             try:
-                deadline, sent = time.monotonic() + (LONG_JOB_TIMEOUT if job.get('long') else JOB_TIMEOUT), False
+                # A reply may take as long as it keeps working. It is stopped when nothing has happened for a while (no output from the
+                # CLI, no tool use), or at the overall limit. A 長任務 is given its whole time even when its CLI stays silent.
+                quiet_limit = LONG_JOB_TIMEOUT if job.get('long') else JOB_TIMEOUT
+                deadline = time.monotonic() + (LONG_JOB_TIMEOUT if job.get('long') else max(JOB_HARD_TIMEOUT, JOB_TIMEOUT))
+                pipes = Pipes(proc, prompt.encode('utf-8') if stdin_prompt else None, MAX_CLI_OUTPUT)
+                active = self.__dict__.setdefault('job_activity', {}); active[job_id] = time.monotonic()
+                stopped_for = ''
                 while True:
                     began = time.monotonic()
-                    try:
-                        output, stderr = proc.communicate(None if sent or not stdin_prompt else prompt.encode('utf-8'), timeout=max(1, min(30, deadline - time.monotonic())))
-                        break
-                    except subprocess.TimeoutExpired:
-                        sent = True
-                        with store.lock:
-                            asking = any(a.get('status') == 'pending' for a in (store.find('jobs', job_id) or {}).get('approvals', []))
-                        if asking: deadline += time.monotonic() - began  # time spent waiting for the user does not count
-                        elif time.monotonic() >= deadline: raise
+                    if pipes.wait(min(2, max(0.05, quiet_limit / 4))): break
+                    with store.lock:
+                        asking = any(a.get('status') == 'pending' for a in (store.find('jobs', job_id) or {}).get('approvals', []))
+                    now = time.monotonic()
+                    if asking: deadline += now - began; active[job_id] = now; continue  # time spent waiting for the user does not count
+                    if now - max(pipes.last, active.get(job_id, 0)) >= quiet_limit: stopped_for = '已經 %d 分鐘沒有任何進展。' % max(1, round(quiet_limit / 60))
+                    elif now >= deadline: stopped_for = '已超過時間上限。'
+                    if stopped_for: raise subprocess.TimeoutExpired(args, quiet_limit)
+                output, stderr = pipes.result()
             except subprocess.TimeoutExpired:
                 terminate_tree(proc)
-                try:
-                    proc.communicate(timeout=5)
-                except subprocess.TimeoutExpired:
+                if not pipes.wait(5):
                     try: os.killpg(proc.pid, signal.SIGKILL)
                     except ProcessLookupError: pass
-                    try: proc.communicate(timeout=2)
-                    except subprocess.TimeoutExpired: pass
+                    pipes.wait(2)
                 with store.lock: job['mayHaveActed'] = bool(native)  # stopped midway, so what its tools already did is unknown
-                raise RuntimeError('執行逾時。')
+                raise RuntimeError('執行逾時：' + stopped_for)
+            finally: self.__dict__.get('job_activity', {}).pop(job_id, None)
             if len(output) > MAX_CLI_OUTPUT:
                 with store.lock: job['mayHaveActed'] = bool(native)
                 raise RuntimeError('回覆超過大小限制。')

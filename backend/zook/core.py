@@ -49,7 +49,8 @@ PLAN_NOTE = ('\n先規劃：這次只提出計畫，不要動手。用條列說�
 MAX_UPLOAD = 20 * 1024 * 1024   # one attached file
 MAX_ATTACHMENTS = 10            # files in one message
 IMAGE_TYPES = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp'}
-JOB_TIMEOUT = 900
+JOB_TIMEOUT = 900  # a reply is stopped after this long with no sign of work: no output from the CLI and no tool use
+JOB_HARD_TIMEOUT = 2 * 3600  # and after this long whatever it is doing
 LONG_JOB_TIMEOUT = 4 * 3600  # a reply sent as 長任務
 # Grok's strict sandbox cannot start the Python inside Xcode or the Command Line Tools (sys.executable), only the system one.
 GROK_PYTHON = '/usr/bin/python3'

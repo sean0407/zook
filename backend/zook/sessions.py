@@ -59,3 +59,38 @@ def latest_ask_note(content):
 
 def skipped_connectors(session):
     return ['%s（%s）' % (name, session.unavailable_why.get(name, '連不上')) for name in session.unavailable]
+
+
+class Pipes:
+    """Reads what a CLI writes as it comes, so a CLI that is busy can be told from one that is stuck. Nothing beyond the size limit is kept."""
+    def __init__(self, proc, data, limit):
+        self.proc, self.limit, self.last, self.out = proc, limit, time.monotonic(), [bytearray(), bytearray()]
+        self.threads = [threading.Thread(target=self._read, args=(proc.stdout, 0), daemon=True), threading.Thread(target=self._read, args=(proc.stderr, 1), daemon=True)]
+        if data is not None: self.threads.append(threading.Thread(target=self._write, args=(data,), daemon=True))
+        for t in self.threads: t.start()
+
+    def _read(self, pipe, index):
+        try:
+            while True:
+                chunk = pipe.read1(65536)
+                if not chunk: return
+                self.last = time.monotonic()
+                if len(self.out[index]) <= self.limit: self.out[index] += chunk
+        except (OSError, ValueError): pass
+
+    def _write(self, data):
+        try: self.proc.stdin.write(data); self.proc.stdin.close()
+        except (OSError, ValueError): pass  # the CLI left without reading its prompt
+
+    def wait(self, seconds):
+        """True once the CLI has ended and its last output has been read."""
+        try: self.proc.wait(timeout=seconds)
+        except subprocess.TimeoutExpired: return False
+        for t in self.threads: t.join(timeout=5)  # a child it left behind may hold the pipe open: do not wait for that one
+        for thread, pipe in zip(self.threads, (self.proc.stdout, self.proc.stderr)):
+            if not thread.is_alive():  # a pipe still being read is left to its reader
+                try: pipe.close()
+                except (OSError, ValueError): pass
+        return True
+
+    def result(self): return bytes(self.out[0]), bytes(self.out[1])
