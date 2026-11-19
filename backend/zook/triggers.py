@@ -200,3 +200,13 @@ class Triggers:
                 else: item['mailWaiting'] = waiting[len(batch):][:100]
                 if len(batch) < len(fresh if kind == 'folder' else waiting): checks[ident] = now + min(15, every)  # more are waiting
                 item.update(lastAt=NOW(), lastStatus='failed' if reason else 'sent', lastError=reason or ''); store.save()
+
+
+# ---- Quiet schedules: a run that found nothing new says so in three words, and then no notification is shown.
+QUIET_REPLY = '沒有新消息'
+QUIET_NOTE = '\n\n（這是自動執行的排程。如果這次沒有任何值得告訴使用者的新消息，就只回覆「%s」，不要加其他內容。有任何新消息、變動或需要使用者處理的事，就照常回覆。）' % QUIET_REPLY
+
+
+def is_quiet_reply(content):
+    """Only the bare phrase counts, so a real answer that happens to contain it is still announced."""
+    return str(content or '').strip().strip('「」『』"\'。.!！ \n') == QUIET_REPLY

@@ -388,7 +388,7 @@
         const d = new FormData(form), id = form.dataset.id;
         const [kind, targetId] = String(d.get('target')).split(':');
         const trigger = d.get('trigger') || 'time', repeat = trigger === 'time' ? d.get('repeat') : 'daily';
-        const data = {trigger, [kind === 'group' ? 'groupId' : 'botId']: targetId, content: d.get('content'), repeat, time: trigger !== 'time' ? '00:00' : (repeat === 'hourly' ? '00' : d.get('hour')) + ':' + d.get('minute'), on: d.get('on') === 'on', catchUp: d.get('catchUp') === 'on'};
+        const data = {trigger, [kind === 'group' ? 'groupId' : 'botId']: targetId, content: d.get('content'), repeat, time: trigger !== 'time' ? '00:00' : (repeat === 'hourly' ? '00' : d.get('hour')) + ':' + d.get('minute'), on: d.get('on') === 'on', catchUp: d.get('catchUp') === 'on', quiet: d.get('quiet') === 'on'};
         if (repeat === 'once') data.date = d.get('date');
         if (repeat === 'monthly') data.day = Number(d.get('day'));
         if (trigger === 'folder') data.watchFolder = d.get('watchFolder');

@@ -210,7 +210,7 @@ class App(GroupRuns, Triggers, Syncing, ThreadingHTTPServer):
                 bot = self.store.find('bots', item.get('botId'))
                 if not bot: raise RuntimeError('找不到這個 Bot。')
                 run['chatId'] = schedule_chat(bot)
-                run['jobId'] = self.send_to_bot(bot, item['content'] + extra, inventory, author='排程', chat_id=run['chatId'])['id']
+                run['jobId'] = self.send_to_bot(bot, item['content'] + extra + (QUIET_NOTE if item.get('quiet') else ''), inventory, author='排程', chat_id=run['chatId'])['id']
                 run['messageId'] = next(m['id'] for m in reversed(chat_messages(bot, run['chatId'])) if m['role'] == 'user')
         except Busy: raise
         except (ValueError, RuntimeError) as exc:
@@ -241,6 +241,8 @@ class App(GroupRuns, Triggers, Syncing, ThreadingHTTPServer):
                 if run.get('approvalExpired') and outcome[0] == 'done': outcome = ('done', '有動作等你核准超過 24 小時，視為拒絕。', outcome[2])
                 run.update(status=outcome[0], reason=outcome[1], summary=outcome[2][:300], finishedAt=NOW())
                 if outcome[0] == 'failed': item.update(lastStatus='failed', lastError=outcome[1])
+                if outcome[0] == 'done' and item.get('quiet') and run.get('kind') != 'group' and not outcome[1] and is_quiet_reply(outcome[2]):
+                    run['quiet'] = True; store.save(); continue  # nothing new: it is in the history, and nobody is interrupted
                 self.notify_run(run, first_sentence(outcome[2]) or '已完成。' if outcome[0] == 'done' else '失敗：' + outcome[1])
                 store.save()
 

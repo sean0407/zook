@@ -523,7 +523,7 @@ def schedule_fields(store, body, record):
     if 'day' in body:
         if type(body['day']) is not int or not 1 <= body['day'] <= 31: raise ValueError('每月的日期無效。')
         record['day'] = body['day']
-    for key in ('on', 'catchUp'):
+    for key in ('on', 'catchUp', 'quiet'):
         if key in body:
             if not isinstance(body[key], bool): raise ValueError('設定無效。')
             record[key] = body[key]

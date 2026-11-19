@@ -125,6 +125,32 @@ class TriggerTest(unittest.TestCase):
         prompt = self.wait_runs(1)[0]
         self.assertIn('真的', prompt); self.assertNotIn('假的', prompt)
 
+    def test_quiet_schedule_does_not_announce_nothing_new(self):
+        reply = self.root / 'bin/reply.txt'
+        (self.root / 'bin/codex').write_text(CLI.replace("'text': 'done'", "'text': open(os.path.join(here, 'reply.txt')).read()"))
+        notices = lambda: [n['body'] for n in self.req('GET', '/api/notifications?after=0')[1]['items']]
+        def run_once(text, name, count):
+            reply.write_text(text); self.drop(name); self.wait_runs(count)
+            end = time.time() + 6
+            while time.time() < end:
+                runs = self.req('GET', '/api/state')[1]['schedules'][0].get('runs') or []
+                if len(runs) >= count and runs[-1]['status'] != 'running': return runs[-1]
+                time.sleep(0.1)
+            self.fail('the run did not finish')
+        self.assertEqual(self.schedule(trigger='folder', watchFolder=str(self.root / 'inbox'), quiet='yes')[0], 400)
+        status, item = self.schedule(trigger='folder', watchFolder=str(self.root / 'inbox'), quiet=True)
+        self.assertEqual((status, item['quiet']), (201, True))
+        run = run_once('「沒有新消息」。', 'a.txt', 1)
+        self.assertIn('就只回覆「沒有新消息」', self.prompts()[0])
+        self.assertEqual((run['status'], run.get('quiet')), ('done', True)); self.assertEqual(notices(), [])
+        run = run_once('有一份新的報價單，但目前沒有新消息要補充。', 'b.txt', 2)  # a real answer that merely contains the phrase
+        self.assertEqual((run['status'], run.get('quiet')), ('done', None)); self.assertEqual(len(notices()), 1)
+        # Switched off: the Bot is not told about it, and the bare phrase is announced like any other reply.
+        self.req('PATCH', '/api/schedules/' + item['id'], {'quiet': False})
+        run = run_once('沒有新消息', 'c.txt', 3)
+        self.assertNotIn('就只回覆', self.prompts()[2].rsplit('新檔案：）', 1)[1])
+        self.assertEqual(run.get('quiet'), None); self.assertEqual(len(notices()), 2)
+
 
 if __name__ == '__main__':
     unittest.main()
