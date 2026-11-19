@@ -1795,7 +1795,8 @@ body[data-voice="on"] [data-action="voice"] { color: #c0564f; background: #fdece
 .composer > .round-btn svg { width:17px; height:17px; }
 .composer > .send { width:32px; height:32px; margin:0 0 0 6px; background:#111; color:#fff; font-size:15px; }
 .composer > .send:disabled { background:#bbb; }
-.composer textarea { padding:8px 10px; }
+.composer textarea { padding:8px 10px; overflow-x:hidden; scrollbar-width:none; }
+.composer textarea::-webkit-scrollbar { display:none; }  /* WebKit draws scroll bars inside a one-line box once the text is enlarged */
 .composer > .effort-pick, .composer > .effort-off { margin:0 4px 0 0; }
 .mode-chip { height:24px; margin:0 6px 0 0; padding:0 9px; border:1px solid #dcdcdc; border-radius:99px; background:#f4f4f4; color:#444; font:inherit; font-size:12px; white-space:nowrap; cursor:pointer; flex:none; }
 .mode-chip:hover { background:#e9e9e9; }
@@ -1806,7 +1807,10 @@ body[data-voice="on"] [data-action="voice"] { color: #c0564f; background: #fdece
 .slash-option.off { opacity:.5; }
 
 /* Dark: the whole window is turned over in one step, and pictures and Bot faces are turned back */
-html.dark { filter:invert(.92) hue-rotate(180deg); background:#fff; }
+/* (On the page root itself the app window's WebKit draws nothing at all, so each top-level block is turned over instead.) */
+html.dark, html.dark body { background:#151515; }
+html.dark body > * { filter:invert(.92) hue-rotate(180deg); }
+html.dark #app { background:#fff; min-height:100vh; }
 html.dark img, html.dark video, html.dark .avatar, html.dark .user-avatar, html.dark .pairing-qr, html.dark .attachment-thumb { filter:invert(1) hue-rotate(180deg); }
 html.dark .modal-overlay { background:#fff6; }
 html.dark .ring-card, html.dark .popup, html.dark .modal, html.dark .mention-menu { box-shadow:none; }
