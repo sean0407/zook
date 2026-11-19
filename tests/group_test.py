@@ -117,6 +117,7 @@ class GroupTest(unittest.TestCase):
         self.req('POST', '/api/groups/%s/messages' % group['id'], {'content': '@Alpha SLOW'})
         time.sleep(0.5)
         self.assertEqual(self.req('POST', '/api/groups/%s/messages' % group['id'], {'content': 'again'})[0], 409)
+        self.req('PATCH', '/api/settings', {'queueWhenBusy': False})  # with the waiting line off, a busy Bot refuses as it always did
         self.assertEqual(self.req('POST', '/api/chat', {'botId': self.ids['Alpha'], 'content': 'hi'})[0], 409)
         self.assertEqual(self.req('DELETE', '/api/groups/' + group['id'])[0], 409)
         status, stopped = self.req('POST', '/api/groups/%s/stop' % group['id'], {})

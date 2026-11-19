@@ -146,6 +146,7 @@ print(json.dumps({'result':'personal response'}))
         self.assertEqual(job['status'], 'completed'); self.assertEqual(job['content'], 'test response')
         status, reply = self.request('POST', '/api/chat', {'botId':bot['id'], 'content':'WAIT_FOR_CANCEL'})
         self.assertEqual(status, 202)
+        self.request('PATCH', '/api/settings', {'queueWhenBusy': False})  # with the waiting line off, a busy Bot refuses as it always did
         self.assertEqual(self.request('POST', '/api/chat', {'botId':bot['id'], 'content':'busy'})[0], 409)
         self.assertEqual(self.request('POST', '/api/jobs/'+reply['jobId']+'/cancel')[1]['status'], 'cancelled')
         time.sleep(.1)

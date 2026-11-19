@@ -275,6 +275,7 @@ class UpkeepTest(unittest.TestCase):
         # A send that was refused is not remembered: the same message can be tried again.
         (self.root / 'bin/codex').write_text(CLI.replace("print(json.dumps({'type': 'item.completed'", "import time; time.sleep(1.2)\nprint(json.dumps({'type': 'item.completed'"))
         slow = self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': '慢的'})[1]['jobId']
+        self.req('PATCH', '/api/settings', {'queueWhenBusy': False})
         retry = {'botId': self.bot['id'], 'content': 'Bot 在忙時送的', 'clientId': 'msg-0002-abcdef'}
         self.assertEqual(self.req('POST', '/api/chat', retry)[0], 409)
         wait(slow)

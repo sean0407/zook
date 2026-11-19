@@ -35,3 +35,17 @@
     };
     source.onerror = () => { if (source.readyState === EventSource.CLOSED) stop(); };  // otherwise the browser reconnects by itself
   }
+
+  // Messages waiting for a busy Bot: shown after the conversation, each with a way to take it back.
+  function queuedView(b) {
+    const waiting = (b.queue || []).filter(e => e.chatId === b.chatId);
+    return waiting.map(e => `<div class="message user queued" data-qid="${esc(e.id)}"><div class="bubble">${esc(e.content)}</div><div class="queued-note"><span>排隊中，Bot 回覆完就會送出</span><button class="link" data-queue-cancel="${esc(e.id)}">取消</button></div></div>`).join('');
+  }
+  document.addEventListener('click', async e => {
+    const el = e.target.closest?.('[data-queue-cancel]');
+    if (!el) return;
+    el.disabled = true;
+    try { await post('bots/' + encodeURIComponent(state.selected) + '/queue/' + encodeURIComponent(el.dataset.queueCancel), {}, 'DELETE'); toast('已取消'); }
+    catch (err) { toast(err.message); }
+    await refresh();
+  });

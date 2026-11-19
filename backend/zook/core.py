@@ -537,7 +537,7 @@ PAIRING_SECONDS = 300
 MAX_REMOTE_DEVICES = 10
 # What a paired device may do. Everything else can only be done on the Mac itself.
 DEVICE_ALLOWED = [('GET', r'/api/state'), ('GET', r'/api/jobs/[^/]+'), ('POST', r'/api/jobs/[^/]+/cancel'), ('POST', r'/api/approvals/[^/]+'),
-                  ('POST', r'/api/chat'), ('GET', r'/api/groups/[^/]+'), ('POST', r'/api/groups/[^/]+/messages'), ('POST', r'/api/groups/[^/]+/stop'),
+                  ('POST', r'/api/chat'), ('DELETE', r'/api/bots/[^/]+/queue/[^/]+'), ('GET', r'/api/groups/[^/]+'), ('POST', r'/api/groups/[^/]+/messages'), ('POST', r'/api/groups/[^/]+/stop'),
                   ('GET', r'/api/quota'), ('GET', r'/api/usage/bots'), ('GET', r'/api/integrations'), ('GET', r'/api/providers'), ('GET', r'/api/remote/me'),
                   ('GET', r'/api/mobile/home'), ('GET', r'/api/mobile/bots/[^/]+'), ('GET', r'/api/mobile/groups/[^/]+'), ('POST', r'/api/mobile/bots'), ('GET', r'/api/mobile/settings'),
                   ('GET', r'/api/mobile/schedules'), ('POST', r'/api/mobile/schedules/[^/]+'), ('POST', r'/api/mobile/photos'), ('POST', r'/api/mobile/bots/[^/]+/chats'), ('GET', r'/api/notifications')]
@@ -656,7 +656,9 @@ def mobile_bot(store, bot):
     direct = [j for j in own if not j.get('groupId')]
     active = next((j['id'] for j in direct if j.get('status') == 'running'), None)
     return dict(bot=dict(id=bot['id'], name=bot['name'], color=bot.get('color'), shape=bot.get('shape'), model=bot_model_text(store, bot)),
-                messages=[mobile_message(m, names) for m in (bot.get('messages') or [])[-80:]], running=bool(active), activeJobId=active,
+                messages=[mobile_message(m, names) for m in (bot.get('messages') or [])[-80:]]
+                         + [dict(id=e['id'], role='user', content=e['content'], status='queued', createdAt=e.get('createdAt'), note='排隊中，Bot 回覆完就會送出') for e in bot.get('queue') or [] if e.get('chatId') == bot.get('chatId')],
+                running=bool(active), activeJobId=active,
                 chats=[dict(id=c['id'], title=c.get('title') or '新對話', updatedAt=c.get('updatedAt'), open=c['id'] == bot.get('chatId')) for c in sorted(ensure_chats(bot), key=lambda c: c.get('updatedAt') or '', reverse=True)][:50],
                 approvals=mobile_approvals(store, direct, names), activity=mobile_activity(own, names, groups, False))
 

@@ -453,6 +453,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, {'ok': True, 'address': address.strip()})
             if len(parts) == 4 and parts[:2] == ['api', 'jobs'] and parts[3] == 'stream' and self.command == 'GET' and not self.device: return stream_route(self, parts[2])
             if parts[:2] == ['api', 'sync']: return sync_route(self, store, parts, path)
+            if len(parts) == 5 and parts[:2] == ['api', 'bots'] and parts[3] == 'queue' and self.command == 'DELETE':
+                with store.lock:
+                    bot = store.find('bots', parts[2])
+                    if not bot: return self.error(404, '找不到機器人。')
+                    return self.respond(200, {'ok': True}) if queue_cancel(store, bot, parts[4]) else self.error(409, '這則訊息已經送出了。')
             if len(parts) == 4 and parts[:2] == ['api', 'bots'] and parts[3] == 'restore' and self.command == 'POST' and not self.device:
                 self.body()
                 with store.lock: bot = restore_bot(store, parts[2]); store.save()
@@ -680,7 +685,11 @@ class Handler(BaseHTTPRequestHandler):
                     if sent: return self.respond(202, dict(sent, duplicate=True))  # the same message again: its answer was lost on the way
                     try: job = self.server.send_to_bot(bot, body.get('content'), inventory, attachments=attachments_for(store, body.get('attachments')), effort=body.get('effort'),
                                                          plan=body.get('plan', False), long=body.get('long', False))
-                    except Busy as exc: return self.error(409, str(exc))
+                    except Busy as exc:
+                        if not queue_on(store): return self.error(409, str(exc))
+                        waiting = {'queued': True, 'queueId': queue_add(store, bot, body)['id']}  # it waits in line and is sent when the Bot is free
+                        send_remember(self.server, once, waiting)
+                        return self.respond(202, waiting)
                     send_remember(self.server, once, {'jobId': job['id']})
                     return self.respond(202, {'jobId': job['id']})
                 if path == '/api/chat/redo' and self.command == 'POST':
@@ -828,6 +837,7 @@ class Handler(BaseHTTPRequestHandler):
                     if len(parts) == 5 and self.command == 'DELETE':
                         if any(j['botId'] == bot['id'] and j['status'] == 'running' and j.get('chatId', bot['chatId']) == chat['id'] for j in store.data['jobs']):
                             return self.error(409, '這個對話還在回覆中，請等回覆完成或先停止。')
+                        queue_forget_chat(bot, chat['id'])
                         if chat['id'] == bot['chatId']:
                             rest = sorted((c for c in bot['chats'] if c['id'] != chat['id']), key=lambda c: c.get('updatedAt') or '', reverse=True)
                             if rest: open_chat(bot, rest[0]['id'])
@@ -901,11 +911,13 @@ def main():
             if call.get('name') == 'native_command' and isinstance((call.get('arguments') or {}).get('command'), str): call['arguments']['command'] = hide_command_secrets(call['arguments']['command'])
     trim_jobs(app.store); recover_deleted_bots(app.store)
     app.store.save()
+    later = threading.Timer(2.0, app.queue_drain_all); later.daemon = True; later.start()  # messages that were waiting when Zook was closed
     app.auto_refreshed = time.time()
     if any(b.get('provider') == AUTO for b in app.store.data['bots']): threading.Thread(target=refresh_auto_status, args=(app.store,), daemon=True).start()
     try: app.serve_forever()
     except KeyboardInterrupt: pass
     finally:
+        app.closing = True  # replies end now because Zook is closing: what is waiting in line stays there for next time
         with app.store.lock:
             processes = list(app.processes.values())
             workers = [app.expire_job(job_id) for job_id in list(app.workers)]

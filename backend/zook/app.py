@@ -1,5 +1,5 @@
 # The running service: schedules, replies, group discussions. Loaded by backend/server.py into one shared namespace.
-class App(GroupRuns, Triggers, Syncing, ThreadingHTTPServer):
+class App(GroupRuns, Triggers, Syncing, Waiting, ThreadingHTTPServer):
     daemon_threads = True
     def __init__(self, address, store, assets, token):
         super().__init__(address, Handler)
@@ -403,6 +403,10 @@ class App(GroupRuns, Triggers, Syncing, ThreadingHTTPServer):
                     body = '長任務完成：' + (first_sentence(job.get('content') or '') or '已完成。') if job['status'] == 'completed' else '長任務已停止。' if job['status'] == 'cancelled' else '長任務失敗：' + (job.get('error') or '')
                     self.notify(self.target_name('bot', job['botId']), body, 'bot', job['botId'], job.get('messageId'), always=True)
                 if trim_jobs(self.store): self.store.save()
+                bot_id = job['botId'] if job else None
+            if bot_id:
+                try: self.queue_drain(bot_id)  # the Bot is free: whatever was waiting for it goes next
+                except Exception: pass
 
     def _run_job(self, job_id, prompt, provider, model, bot=None, inventory=None):
         """Run one reply. When the Bot's model cannot answer (used up, not signed in, not installed, failed),

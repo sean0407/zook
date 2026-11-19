@@ -257,7 +257,7 @@
         delete state.sendIds[sendFor];
         input.value = ''; updateInputMirror(); pendingList().length = 0; state.plan[botId] = false; state.long[botId] = false;
         await refresh();
-        poll(result.jobId, botId)
+        if (result.jobId) poll(result.jobId, botId);  // a message that is waiting in line has no reply yet; it is picked up when its turn comes
       } else if (form.id === 'bot-form') {
         let d = new FormData(form),
           id = form.dataset.id;
