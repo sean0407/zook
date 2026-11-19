@@ -29,7 +29,7 @@ class Mac:
         resp = conn.getresponse(); data = resp.read(); conn.close()
         return resp.status, json.loads(data)
 
-    def state(self): return self.req('GET', '/api/state')[1]
+    def state(self): return self.req('GET', '/api/state?full=1')[1]
     def bots(self): return {b['name']: b for b in self.state()['bots']}
     def sync(self): return self.req('POST', '/api/sync/now', {})[1]
 

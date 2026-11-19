@@ -137,7 +137,7 @@ class ScheduleTest(unittest.TestCase):
     def wait(self, check, seconds=15):
         end = time.time() + seconds
         while time.time() < end:
-            state = self.req('GET', '/api/state')[1]
+            state = self.req('GET', '/api/state?full=1')[1]
             if check(state): return state
             time.sleep(0.2)
         self.fail('timed out')
@@ -179,19 +179,19 @@ class ScheduleTest(unittest.TestCase):
         self.wait(lambda s: s['schedules'][0]['runs'][-1]['status'] == 'done')
         self.assertEqual(self.req('GET', '/api/notifications?after=%d' % notes['seq'])[1]['items'], [])
         self.assertEqual(self.req('PATCH', '/api/schedules/' + item['id'], {'time': '11:30', 'repeat': 'weekdays', 'on': False})[1]['time'], '11:30')
-        self.assertEqual(len(self.req('GET', '/api/state')[1]['schedules'][0]['runs']), 2)  # editing keeps the history
+        self.assertEqual(len(self.req('GET', '/api/state?full=1')[1]['schedules'][0]['runs']), 2)  # editing keeps the history
         self.assertEqual(self.req('DELETE', '/api/bots/' + self.bot['id'])[0], 200)  # its schedules go with it
-        self.assertEqual(self.req('GET', '/api/state')[1]['schedules'], [])
+        self.assertEqual(self.req('GET', '/api/state?full=1')[1]['schedules'], [])
 
     def test_runs_when_the_time_comes_once(self):
         now = datetime.datetime.now()
         self.req('POST', '/api/schedules', {'botId': self.bot['id'], 'content': 'tick', 'time': now.strftime('%H:%M'), 'repeat': 'daily'})
         time.sleep(1.2)
-        self.assertEqual(self.messages(self.req('GET', '/api/state')[1]), [])  # saved after today's time: waits for tomorrow
+        self.assertEqual(self.messages(self.req('GET', '/api/state?full=1')[1]), [])  # saved after today's time: waits for tomorrow
         self.backdate(now - datetime.timedelta(hours=3))  # as if Zook had been closed over the time
         state = self.wait(lambda s: s['schedules'][0].get('lastStatus') == 'sent' and self.messages(s)[-1].get('status') == 'completed')
         time.sleep(1.2)
-        self.assertEqual(len(self.messages(self.req('GET', '/api/state')[1])), 2)  # once, not on every check
+        self.assertEqual(len(self.messages(self.req('GET', '/api/state?full=1')[1])), 2)  # once, not on every check
 
     def test_group_schedule(self):
         other = self.req('POST', '/api/bots', {'name': 'Second', 'provider': 'codex'})[1]
@@ -215,7 +215,7 @@ class ScheduleTest(unittest.TestCase):
         self.assertEqual(self.req('PATCH', '/api/schedules/' + item['id'], {'botId': self.bot['id']})[1]['groupId'], '')
         self.assertEqual(self.req('PATCH', '/api/schedules/' + item['id'], {'groupId': group['id']})[1]['botId'], '')
         self.assertEqual(self.req('DELETE', '/api/groups/' + group['id'])[0], 200)  # its schedules go with it
-        self.assertEqual(self.req('GET', '/api/state')[1]['schedules'], [])
+        self.assertEqual(self.req('GET', '/api/state?full=1')[1]['schedules'], [])
 
     def test_once_runs_then_turns_itself_off(self):
         now = datetime.datetime.now(); later = now + datetime.timedelta(days=2)
@@ -227,7 +227,7 @@ class ScheduleTest(unittest.TestCase):
         state = self.wait(lambda s: s['schedules'][0].get('lastStatus') == 'sent')
         self.assertEqual((state['schedules'][0]['on'], state['schedules'][0]['done']), (False, True))
         time.sleep(1)
-        self.assertEqual(len([m for m in self.messages(self.req('GET', '/api/state')[1]) if m['role'] == 'user']), 1)
+        self.assertEqual(len([m for m in self.messages(self.req('GET', '/api/state?full=1')[1]) if m['role'] == 'user']), 1)
         # a monthly schedule keeps its day
         later = now + datetime.timedelta(days=40)
         status, item = self.req('POST', '/api/schedules', {'botId': self.bot['id'], 'content': 'x', 'repeat': 'once', 'date': '%d-%d-%d' % (later.year, later.month, later.day), 'time': '10:00'})

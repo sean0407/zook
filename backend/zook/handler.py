@@ -647,7 +647,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.command == 'GET' and path == '/api/state':
                     for b in store.data['bots']: ensure_chats(b)  # Bots added by an import, too
                     if (parse_qs(urlsplit(self.path).query).get('since') or [''])[0] == str(store.rev): return self.respond(200, {'unchanged': True, 'rev': store.rev})
-                    return self.respond(200, state_view(store))
+                    return self.respond(200, state_view(store, whole=(parse_qs(urlsplit(self.path).query).get('full') or [''])[0] == '1'))  # full=1: every conversation whole, as before paging
                 if self.command == 'GET' and path == '/api/notifications':
                     try: after = int((parse_qs(urlsplit(self.path).query).get('after') or ['0'])[0])
                     except ValueError: after = 0
@@ -656,6 +656,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.command == 'GET' and path == '/api/usage': return self.respond(200, usage())
                 if self.command == 'POST' and path == '/api/export': return self.respond(200, store.data)
                 if parts[:2] == ['api', 'backups'] or path in ('/api/activity', '/api/budget'): return upkeep_route(self, store, parts, path)
+                if self.command == 'GET' and (path == '/api/search' or (len(parts) == 4 and parts[:2] == ['api', 'bots'] and parts[3] == 'messages')): return paging_route(self, store, parts, path)
                 if len(parts) == 3 and parts[:2] == ['api', 'jobs'] and self.command == 'GET':
                     job = store.find('jobs', parts[2]); return self.respond(200, job_view(job)) if job else self.error(404, '找不到工作。')
                 if len(parts) == 3 and parts[:2] == ['api', 'approvals'] and self.command == 'POST':

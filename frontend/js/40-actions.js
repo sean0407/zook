@@ -553,7 +553,8 @@
             break
           }
           let b = activeBot();
-          download(`# ${b.name}\n\n${(b.messages||[]).map(m=>`## ${m.role==='user'?'我':b.name}\n\n${m.content}`).join('\n\n')}`, `${b.name.replace(/[\\/:*?"<>|]/g,'_')}-對話.md`, 'text/markdown;charset=utf-8');
+          const whole = (await api(`bots/${encodeURIComponent(b.id)}/messages?chat=${encodeURIComponent(b.chatId)}&all=1`)).messages;  // not only the part on the page
+          download(`# ${b.name}\n\n${whole.map(m=>`## ${m.role==='user'?'我':b.name}\n\n${m.content}`).join('\n\n')}`, `${b.name.replace(/[\\/:*?"<>|]/g,'_')}-對話.md`, 'text/markdown;charset=utf-8');
           break
         }
         case 'export': {

@@ -5,6 +5,6 @@ The code is in backend/zook/, one file per area. The files run in this order and
 exactly as if they were a single file."""
 import pathlib as _pathlib
 
-for _part in ('core', 'accounts', 'library', 'oauth', 'catalog', 'outputs', 'mobile', 'groupfiles', 'groups', 'triggers', 'sync', 'errors', 'stream', 'waiting', 'app', 'parsing', 'abilities', 'sessions', 'routing', 'fields', 'upkeep', 'templates', 'handler'):
+for _part in ('core', 'accounts', 'library', 'oauth', 'catalog', 'outputs', 'mobile', 'groupfiles', 'groups', 'triggers', 'sync', 'errors', 'stream', 'waiting', 'paging', 'app', 'parsing', 'abilities', 'sessions', 'routing', 'fields', 'upkeep', 'templates', 'handler'):
     _file = _pathlib.Path(__file__).with_name('zook') / (_part + '.py')
     exec(compile(_file.read_text(encoding='utf-8'), str(_file), 'exec'), globals())

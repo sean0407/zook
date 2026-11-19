@@ -407,10 +407,11 @@ def trim_jobs(store):
     return changed
 
 
-def state_view(store):
+def state_view(store, whole=False):
     """Lock held. What the window and the phone load: everything except the trimmed jobs and the usage totals, which only the usage page needs."""
     view = dict(store.data, rev=store.rev)
     view['jobs'] = [j for j in store.data['jobs'] if not j.get('slim')]
+    if not whole: view['bots'] = [page_bot(b) for b in store.data['bots']]  # the newest part of each open conversation; older parts are asked for
     view.pop('usageArchive', None)
     view['deletedBots'] = [{k: b.get(k) for k in ('id', 'name', 'color', 'shape', 'deletedAt')} for b in store.data.get('deletedBots') or []]  # their conversations stay on disk
     return view

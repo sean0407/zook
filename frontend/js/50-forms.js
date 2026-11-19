@@ -60,13 +60,19 @@
       return;
     }
     if (e.target.id === 'chat-search') {
-      const value = e.target.value; chatsModal(activeBot(), value);
-      const box = $('#chat-search'); box.focus(); box.setSelectionRange(value.length, value.length);
+      const value = e.target.value, bot = activeBot();
+      const show = () => { chatsModal(bot, value); const box = $('#chat-search'); box.focus(); box.setSelectionRange(value.length, value.length); };
+      show();
+      if (value.trim()) api('search?q=' + encodeURIComponent(value) + '&bot=' + encodeURIComponent(bot.id)).then(out => {  // which conversations contain it: asked of the Mac side, which has all of them
+        if ($('#chat-search')?.value !== value) return;
+        state.chatSearch = {q: value.trim().toLowerCase(), chats: out.chats}; show();
+      }).catch(() => {});
       return;
     }
     if (e.target.id === 'side-search') {
       let pos = e.target.selectionStart;
       state.query = e.target.value;
+      searchMessages();
       render(true);
       let x = $('#side-search');
       x.focus();

@@ -76,19 +76,14 @@
   function chatsModal(b, query = '') {
     const q = query.trim().toLowerCase();
     const chats = [...(b.chats || [])].sort((x, y) => String(y.updatedAt || '').localeCompare(String(x.updatedAt || '')))
-      .filter(c => !q || chatName(b, c).toLowerCase().includes(q) || chatMessages(b, c).some(m => String(m.content || '').toLowerCase().includes(q)));
-    const rows = chats.map(c => `<div class="chat-row ${c.id === b.chatId ? 'current' : ''}"><button type="button" class="chat-open" data-action="open-chat" data-id="${esc(c.id)}"><strong>${esc(chatName(b, c))}</strong><small>${esc(formatDate(c.updatedAt))} · ${chatMessages(b, c).filter(m => m.role === 'user').length} 則</small></button><button type="button" class="link" data-action="rename-chat" data-id="${esc(c.id)}">改名</button><button type="button" class="link danger-link" data-action="delete-chat" data-id="${esc(c.id)}">刪除</button></div>`).join('');
+      .filter(c => !q || chatName(b, c).toLowerCase().includes(q) || (state.chatSearch?.q === q && state.chatSearch.chats.includes(c.id)));
+    const rows = chats.map(c => `<div class="chat-row ${c.id === b.chatId ? 'current' : ''}"><button type="button" class="chat-open" data-action="open-chat" data-id="${esc(c.id)}"><strong>${esc(chatName(b, c))}</strong><small>${esc(formatDate(c.updatedAt))} · ${c.count ?? chatMessages(b, c).filter(m => m.role === 'user').length} 則</small></button><button type="button" class="link" data-action="rename-chat" data-id="${esc(c.id)}">改名</button><button type="button" class="link danger-link" data-action="delete-chat" data-id="${esc(c.id)}">刪除</button></div>`).join('');
     modal(`${b.name} 的對話`, `<div class="modal-body"><input id="chat-search" class="chat-search" placeholder="搜尋這個 Bot 的對話" value="${esc(query)}" aria-label="搜尋對話"><div class="chat-list">${rows || '<p class="muted">沒有符合的對話。</p>'}</div></div>`, '<div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">關閉</button><button type="button" class="primary" data-action="new-chat">＋ 新對話</button></div>');
   }
   // Messages across every Bot's conversations that match the sidebar search.
   function messageHits() {
     if (!state.query) return [];
-    const hits = [];
-    for (const b of state.data.bots) for (const c of b.chats || []) for (const m of chatMessages(b, c)) {
-      if (m.content && matches(m.content)) hits.push({b, c, m});
-      if (hits.length >= 30) return hits;
-    }
-    return hits;
+    return (state.searchHits || []).map(h => ({...h, b: state.data.bots.find(b => b.id === h.botId)})).filter(h => h.b);
   }
   function snippet(text) {
     const t = String(text || '').replace(/\s+/g, ' '), i = t.toLowerCase().indexOf(state.query.toLowerCase());
@@ -107,9 +102,10 @@
     const exists = kind === 'group' ? (state.data.groups || []).some(g => g.id === id) : state.data.bots.some(b => b.id === id);
     if (!exists) { toast(kind === 'group' ? '找不到這個群組' : '找不到這個 Bot'); return; }
     if (kind !== 'group' && messageId) {
-      const b = state.data.bots.find(x => x.id === id);
-      const c = (b.chats || []).find(c => chatMessages(b, c).some(m => m.id === messageId));
-      if (c && c.id !== b.chatId) { await post(`bots/${encodeURIComponent(id)}/chats/${encodeURIComponent(c.id)}/open`, {}); await refresh(); }
+      let b = state.data.bots.find(x => x.id === id);
+      const where = await api(`bots/${encodeURIComponent(id)}/messages?find=${encodeURIComponent(messageId)}`).catch(() => null);  // the page no longer holds every conversation
+      if (where?.chatId && where.chatId !== b.chatId) { await post(`bots/${encodeURIComponent(id)}/chats/${encodeURIComponent(where.chatId)}/open`, {}); await refresh(); b = state.data.bots.find(x => x.id === id); }
+      await loadUpTo(b, messageId);
     }
     if (state.modal) closeModal();
     if (kind === 'group') state.groupId = id; else { state.groupId = null; state.selected = id; }

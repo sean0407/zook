@@ -38,7 +38,7 @@ class ConversationTest(unittest.TestCase):
         return resp.status, json.loads(raw)
 
     def state_bot(self):
-        return next(b for b in self.req('GET', '/api/state')[1]['bots'] if b['id'] == self.bot['id'])
+        return next(b for b in self.req('GET', '/api/state?full=1')[1]['bots'] if b['id'] == self.bot['id'])
 
     def say(self, text):
         status, sent = self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': text})
@@ -108,7 +108,7 @@ class ConversationTest(unittest.TestCase):
         self.assertEqual(bot['chatId'], mine)  # what you were doing is not interrupted
         self.assertEqual(sched['title'], '排程')
         self.assertEqual(sched['messages'][0]['content'], 'daily report')
-        run = self.req('GET', '/api/state')[1]['schedules'][0]['runs'][-1]
+        run = self.req('GET', '/api/state?full=1')[1]['schedules'][0]['runs'][-1]
         self.assertEqual((run['chatId'], run['messageId']), (sched['id'], sched['messages'][0]['id']))
 
     def test_old_data_becomes_the_first_conversation(self):
