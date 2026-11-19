@@ -7,6 +7,7 @@ CLI = '''#!/usr/bin/env python3
 import json, os, sys
 name = os.path.basename(sys.argv[0])
 if 'auth' in sys.argv: print(json.dumps({'loggedIn': True, 'authMethod': os.environ.get('CLAUDE_METHOD', 'claude.ai')})); sys.exit(0)
+if '--help' in sys.argv or '--version' in sys.argv: sys.exit(0)  # Zook asking what this CLI can do
 if 'login' in sys.argv: print('Logged in using ChatGPT'); sys.exit(0)
 if set(sys.argv) & {'models', '--version', '--help', 'app-server'}: print('Logged in'); sys.exit(0)
 sys.stdin.read()

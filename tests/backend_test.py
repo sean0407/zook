@@ -23,7 +23,7 @@ class BackendTest(unittest.TestCase):
         cli.write_text('#!/usr/bin/env python3\nimport os,sys,time,subprocess\ns=sys.stdin.read()\nif "FAIL_CLI" in s: sys.exit(1)\nif "WAIT_FOR_CANCEL" in s:\n child=subprocess.Popen([sys.executable,"-c","import time;time.sleep(60)"])\n open(os.environ["FAKE_CHILD_PID"],"w").write(str(child.pid))\n time.sleep(30)\nprint("test response")\n')
         cli.chmod(0o755)
         claude = self.root / 'bin/claude'
-        claude.write_text('#!/usr/bin/env python3\nimport json,sys\nsys.stdin.read()\nprint(json.dumps({"result":"claude response"}))\n')
+        claude.write_text('#!/usr/bin/env python3\nimport json,sys\nif \'--help\' in sys.argv or \'--version\' in sys.argv: sys.exit(0)\nsys.stdin.read()\nprint(json.dumps({"result":"claude response"}))\n')
         claude.chmod(0o755)
         self.env = dict(os.environ, PATH=str(self.root / 'bin')+os.pathsep+os.environ['PATH'], FAKE_CHILD_PID=str(self.root/'child.pid'))
         self.start_server()

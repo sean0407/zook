@@ -8,6 +8,7 @@ SERVER = Path(__file__).resolve().parents[1] / 'backend/server.py'
 CLAUDE = '''#!/usr/bin/env python3
 import json, os, subprocess, sys
 if 'auth' in sys.argv: print(json.dumps({'loggedIn': True})); sys.exit(0)
+if '--help' in sys.argv or '--version' in sys.argv: sys.exit(0)  # Zook asking what this CLI can do
 prompt = sys.stdin.read()
 here = os.path.dirname(sys.argv[0])
 config = json.loads(sys.argv[sys.argv.index('--mcp-config') + 1])['mcpServers']['zook']

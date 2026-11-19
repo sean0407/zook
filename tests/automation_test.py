@@ -10,6 +10,7 @@ CLI = ROOT / 'backend/zook_cli.py'
 CLAUDE = '''#!/usr/bin/env python3
 import json, os, subprocess, sys, time
 if 'auth' in sys.argv: print(json.dumps({'loggedIn': True})); sys.exit(0)
+if '--help' in sys.argv or '--version' in sys.argv: sys.exit(0)  # Zook asking what this CLI can do
 prompt = sys.stdin.read()
 here = os.path.dirname(sys.argv[0])
 ask = prompt.strip().splitlines()[-1]

@@ -10,6 +10,7 @@ DRAFT = dict(team='香氛品牌', coordinator=ROLE('統籌', '專案統籌'), me
 CLAUDE = '''#!/usr/bin/env python3
 import json, os, sys
 if 'auth' in sys.argv: print(json.dumps({'loggedIn': True})); sys.exit(0)
+if '--help' in sys.argv or '--version' in sys.argv: sys.exit(0)  # Zook asking what this CLI can do
 here = os.path.dirname(sys.argv[0])
 open(os.path.join(here, 'prompt.txt'), 'w').write(sys.stdin.read())
 print(json.dumps({'type': 'result', 'result': open(os.path.join(here, 'reply.txt')).read(), 'is_error': False}))

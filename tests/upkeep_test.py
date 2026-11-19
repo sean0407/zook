@@ -149,7 +149,7 @@ class UpkeepTest(unittest.TestCase):
         self.assertEqual(self.req('GET', '/api/state')[1]['settings']['budgets'], {})
 
     def test_budget_switches_to_backup_model(self):
-        cli = self.root / 'bin/claude'; cli.write_text('#!/usr/bin/env python3\nimport json\nprint(json.dumps({"result": "ok from claude", "usage": {"input_tokens": 5, "output_tokens": 5}}))\n'); cli.chmod(0o755)
+        cli = self.root / 'bin/claude'; cli.write_text('#!/usr/bin/env python3\nimport json, sys\nif "--help" in sys.argv or "--version" in sys.argv: sys.exit(0)\nprint(json.dumps({"result": "ok from claude", "usage": {"input_tokens": 5, "output_tokens": 5}}))\n'); cli.chmod(0o755)
         self.req('PATCH', '/api/settings', {'budgets': {'codex': 1000000}, 'budgetOver': 'switch', 'fallbacks': ['claude']})
         self.ask(); self.ask()
         job = self.ask()
@@ -320,7 +320,7 @@ class UpkeepTest(unittest.TestCase):
         self.assertEqual([m['content'] for m in back['messages']], ['以前的對話', 'ok from codex'])
 
     def test_stop_also_holds_for_a_backup_model_over_budget(self):
-        cli = self.root / 'bin/claude'; cli.write_text('#!/usr/bin/env python3\nimport json\nprint(json.dumps({"type": "result", "result": "ok from claude", "is_error": False, "usage": {"input_tokens": 700000, "output_tokens": 400000}}))\n'); cli.chmod(0o755)
+        cli = self.root / 'bin/claude'; cli.write_text('#!/usr/bin/env python3\nimport json, sys\nif "--help" in sys.argv or "--version" in sys.argv: sys.exit(0)\nprint(json.dumps({"type": "result", "result": "ok from claude", "is_error": False, "usage": {"input_tokens": 700000, "output_tokens": 400000}}))\n'); cli.chmod(0o755)
         self.req('PATCH', '/api/settings', {'budgets': {'codex': 1000000, 'claude': 1000000}, 'budgetOver': 'stop', 'fallbacks': ['claude']})
         self.ask(); self.ask()  # codex is over its budget now
         job = self.ask()
