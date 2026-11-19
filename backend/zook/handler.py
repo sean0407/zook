@@ -644,6 +644,12 @@ class Handler(BaseHTTPRequestHandler):
                 data = (store.dir / 'uploads' / meta['id'] / 'file').read_bytes()
                 kind = IMAGE_TYPES.get(pathlib.Path(meta['name']).suffix.lower())
                 return self.respond(200, data, kind or 'application/octet-stream')
+            if path == '/api/team/draft' and self.command == 'POST' and not self.device:  # one model call; never under the store lock
+                try: return self.respond(200, self.server.draft_team(self.body().get('goal'), inventory_for(store)))
+                except RuntimeError as exc: return self.error(502, str(exc))
+            if path == '/api/team' and self.command == 'POST' and not self.device:
+                body = self.body()
+                with store.lock: return self.respond(201, self.server.create_team(body))
             inventory = None
             if (path in ('/api/chat', '/api/chat/redo') and self.command == 'POST') or (parts[:2] == ['api', 'bots'] and self.command in ('POST', 'PATCH')) or (len(parts) == 4 and parts[:2] == ['api', 'schedules']):
                 inventory = inventory_for(store)

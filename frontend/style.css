@@ -1763,3 +1763,17 @@ body[data-voice="on"] [data-action="voice"] { color: #c0564f; background: #fdece
 .job-title { margin-left:6px; padding:1px 7px; border-radius:99px; background:#ececec; color:#666; font-size:11px; font-weight:500; white-space:nowrap; }
 .bot-names { display:flex; flex-direction:column; gap:6px; flex:1; min-width:0; }
 .bot-names input[name="jobTitle"] { font-size:13px; }
+
+/* A team from one sentence */
+.team-link { display:block; width:100%; margin:0 0 14px; padding:10px 12px; border:1px dashed #cfcfcf; border-radius:10px; background:#fafafa; color:inherit; font:inherit; text-align:left; cursor:pointer; }
+.team-link:hover { border-color:#111; }
+.team-cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:12px; margin:12px 0; }
+.team-card { border:1px solid var(--line); border-radius:12px; padding:12px 14px; display:flex; flex-direction:column; gap:6px; }
+.team-card.lead { border-color:#111; }
+.team-card header { display:flex; align-items:center; gap:10px; }
+.team-names { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; }
+.team-names input { width:100%; padding:5px 8px; border:1px solid var(--line); border-radius:8px; font:inherit; }
+.team-names input[name="name"] { font-weight:650; }
+.team-names input[name="jobTitle"] { font-size:12px; color:#555; }
+.team-card p { margin:0; font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
+.team-card p span { display:inline-block; min-width:5.5em; color:var(--muted); font-size:12px; }

@@ -1,5 +1,5 @@
 # The running service: schedules, replies, group discussions. Loaded by backend/server.py into one shared namespace.
-class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, ThreadingHTTPServer):
+class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTTPServer):
     daemon_threads = True
     def __init__(self, address, store, assets, token):
         super().__init__(address, Handler)
