@@ -1785,3 +1785,9 @@ body[data-voice="on"] [data-action="voice"] { color: #c0564f; background: #fdece
 .workspace-btn { display:flex; align-items:center; gap:8px; width:100%; padding:4px 6px; border:0; border-radius:10px; background:none; color:inherit; font:inherit; text-align:left; cursor:pointer; }
 .workspace-btn:hover, .workspace-btn[aria-expanded="true"] { background:#ebebeb; }
 .workspace-btn .user-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* Message box: smaller send and stop buttons; 長任務 and 先規劃 live under the ＋ button and show here only when on */
+.composer > .send { width:28px; height:28px; font-size:14px; margin-bottom:5px; }
+.mode-chip { height:24px; margin:0 4px 7px 0; padding:0 9px; border:1px solid #f1c7b6; border-radius:99px; background:#fff4ef; color:#b4502b; font:inherit; font-size:12px; white-space:nowrap; cursor:pointer; flex:none; }
+.mode-chip:hover { background:#ffe9df; }
+.more-options .mode-rows { margin-top:14px; }

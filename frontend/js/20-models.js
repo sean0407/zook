@@ -84,8 +84,13 @@
   // 先規劃: for the next message only; the Bot proposes a plan and changes nothing.
   if (!state.plan) state.plan = {};
   if (!state.long) state.long = {};
-  const longControl = b => `<label class="plan-toggle" title="最長可以跑 4 小時，結束時通知你">${toggle(`data-long`, !!state.long[b.id], '長任務')}<span>長任務</span></label>`;
-  const planControl = b => !effortSupported() ? '' : `<label class="plan-toggle" title="這則訊息只請 Bot 提出計畫，不動手">${toggle(`data-plan`, !!state.plan[b.id], '先規劃')}<span>先規劃</span></label>`;
+  // 長任務 and 先規劃 are switched on under the ＋ button; in the message box only what is on shows, as a small tag that turns it off.
+  const modeRows = b => !b ? '' : settingRow('長任務', '這則訊息最長可以跑 4 小時，結束時通知你', toggle('data-long', !!state.long[b.id], '長任務')) + (effortSupported() ? settingRow('先規劃', '這則訊息只請 Bot 提出計畫，不動手', toggle('data-plan', !!state.plan[b.id], '先規劃')) : '');
+  const modeChips = b => [['long', '長任務'], ['plan', '先規劃']].filter(([k]) => state[k][b.id]).map(([k, name]) => `<button type="button" class="mode-chip" data-mode-off="${k}" title="按一下關閉">${name} ×</button>`).join('');
+  document.addEventListener('click', e => {
+    const chip = e.target.closest('[data-mode-off]');
+    if (chip && state.selected) { state[chip.dataset.modeOff][state.selected] = false; render(true); }
+  });
   function effortControl() {
     if (!effortSupported()) return `<span class="effort-off" title="這個模型不支援調整思考強度">思考強度：這個模型不支援</span>`;
     return `<div class="effort-pick" title="思考強度">${dropdown('effort', currentEffort(), EFFORTS, 'data-effort')}</div>`;
