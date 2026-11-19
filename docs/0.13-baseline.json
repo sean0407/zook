@@ -1,0 +1,22 @@
+{
+ "Codex 回覆": true,
+ "Codex 用量數字": true,
+ "Codex 接續對話": true,
+ "Claude 回覆": true,
+ "Claude 用量數字": true,
+ "Claude 接續對話": true,
+ "Grok 回覆": true,
+ "Grok 用量數字": true,
+ "Grok 接續對話": true,
+ "Antigravity 回覆": true,
+ "Antigravity 用量數字": true,
+ "Antigravity 接續對話": true,
+ "排程：手動執行": true,
+ "排程：資料夾有新檔案時執行": true,
+ "群組：兩個成員都有回覆": true,
+ "備用模型：主要模型失敗時接手": true,
+ "停止回覆": true,
+ "核准：動作前先問": true,
+ "核准：核准後才執行": true,
+ "Claude 額度資訊（從回覆取得）": true
+}
