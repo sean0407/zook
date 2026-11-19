@@ -407,6 +407,10 @@ class Handler(BaseHTTPRequestHandler):
                 except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc: return self.error(409, str(exc) if isinstance(exc, RuntimeError) else '無法查詢 Claude 額度。')
                 with store.lock: store.data['quota']['claude']['source'] = 'probe'; store.save()
                 return self.respond(200, self.quota())
+            if path == '/api/usage/overview' and self.command == 'GET':
+                try: span = int((parse_qs(urlsplit(self.path).query).get('days') or ['30'])[0])
+                except ValueError: span = 0
+                with store.lock: return self.respond(200, usage_overview(store, span))
             if path == '/api/usage/bots' and self.command == 'GET':
                 with store.lock: return self.respond(200, bot_usage(store))
             if len(parts) in (4, 5, 6) and parts[:2] == ['api', 'bots'] and parts[3] == 'outputs' and not self.device:

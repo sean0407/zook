@@ -697,6 +697,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, ThreadingHTTPServer
             if not account and (store.data.get('providerIssues') or {}).get(provider, {}).get('issue'): self.note_provider_issue(provider, '')
             with store.lock:
                 job = store.find('jobs', job_id)
+                if parsed['usage'] and kind == 'codex' and not model: parsed['usage']['model'] = codex_default_model(env) or parsed['usage'].get('model')  # so the reply can be priced
                 if parsed['usage']: job['usage'] = dict(parsed['usage'], provider=provider, account=account['id'] if account else ''); budget_add(self, provider, parsed['usage']); compact_note_usage(store, job, kind, parsed['usage'])
                 if job['status'] == 'running':
                     content, options = split_choices(content) if choices_for(store, job) else (content, None)

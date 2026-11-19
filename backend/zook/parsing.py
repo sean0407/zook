@@ -95,7 +95,7 @@ def parse_cli_output(provider, text, model=''):
             cached = _int(u.get('cache_read_input_tokens'))
             models = list(d['modelUsage'].keys()) if isinstance(d.get('modelUsage'), dict) else []
             cost = d.get('total_cost_usd')
-            out['usage'] = dict(input=_int(u.get('input_tokens')) + cached + _int(u.get('cache_creation_input_tokens')), cachedInput=cached,
+            out['usage'] = dict(input=_int(u.get('input_tokens')) + cached + _int(u.get('cache_creation_input_tokens')), cachedInput=cached, cacheWrite=_int(u.get('cache_creation_input_tokens')),
                                 output=_int(u.get('output_tokens')), model=models[0] if models else (model or '預設模型'),
                                 costUsd=cost if isinstance(cost, (int, float)) else None)
         return out
@@ -154,7 +154,7 @@ def parse_cli_output(provider, text, model=''):
         cached = _int(u.get('cache_read_input_tokens'))
         models = list((result.get('modelUsage') or {}).keys()) if isinstance(result.get('modelUsage'), dict) else []
         cost = result.get('total_cost_usd')
-        out['usage'] = dict(input=_int(u.get('input_tokens')) + _int(u.get('cache_creation_input_tokens')) + cached, cachedInput=cached,
+        out['usage'] = dict(input=_int(u.get('input_tokens')) + _int(u.get('cache_creation_input_tokens')) + cached, cachedInput=cached, cacheWrite=_int(u.get('cache_creation_input_tokens')),
                             output=_int(u.get('output_tokens')), model=(models[0] if models else model or '預設模型'),
                             costUsd=cost if isinstance(cost, (int, float)) else None)
     return out
