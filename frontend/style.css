@@ -1693,3 +1693,10 @@ body[data-voice="on"] [data-action="voice"] { color: #c0564f; background: #fdece
 /* Where a long conversation was turned into a summary */
 .compact-line { display: flex; align-items: center; gap: 12px; margin: 18px 0 6px; color: #999; font-size: 12px; }
 .compact-line::before, .compact-line::after { content: ""; flex: 1; height: 1px; background: #e6e6e6; }
+
+/* Deleted Bots on the usage table: last, and faded. The tag and the bring-back link keep their own look. */
+.bot-usage-row.deleted > span:not(.bot-cell) { opacity: .45; }
+.bot-usage-row.deleted .avatar { opacity: .4; filter: grayscale(.6); }
+.bot-usage-row.deleted .bot-cell strong { color: #9a9a9a; font-weight: 500; }
+.bot-usage-row.deleted .bot-cell small { color: #bdbdbd; }
+.bot-usage-row.deleted .restore-bot { color: #2585f6; }
