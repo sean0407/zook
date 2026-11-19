@@ -673,6 +673,9 @@ class Handler(BaseHTTPRequestHandler):
                             if event: event.set()
                             return self.respond(200, approval)
                     return self.error(404, '找不到審批。')
+                if len(parts) == 3 and parts[:2] == ['api', 'questions'] and self.command == 'POST':
+                    status, out = answer_question(self.server, parts[2], self.body(), by=('手機：' + str(self.device.get('name') or '已配對裝置')) if self.device else '')
+                    return self.respond(200, out) if status == 200 else self.error(status, out)
                 if len(parts) == 4 and parts[:2] == ['api', 'jobs'] and parts[3] == 'cancel'  and self.command == 'POST':
                     job = store.find('jobs', parts[2])
                     if not job: return self.error(404, '找不到工作。')

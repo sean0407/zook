@@ -317,6 +317,9 @@ def upkeep_fields(data, body, changes):
     if 'autoCompact' in body:
         if not isinstance(body['autoCompact'], bool): raise ValueError('autoCompact 無效。')
         changes['autoCompact'] = body['autoCompact']
+    if 'choiceButtons' in body:
+        if not isinstance(body['choiceButtons'], bool): raise ValueError('choiceButtons 無效。')
+        changes['choiceButtons'] = body['choiceButtons']
     if 'streamReplies' in body:
         if not isinstance(body['streamReplies'], bool): raise ValueError('streamReplies 無效。')
         changes['streamReplies'] = body['streamReplies']

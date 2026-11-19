@@ -549,7 +549,7 @@ def bot_model_text(store, bot):
 PAIRING_SECONDS = 300
 MAX_REMOTE_DEVICES = 10
 # What a paired device may do. Everything else can only be done on the Mac itself.
-DEVICE_ALLOWED = [('GET', r'/api/state'), ('GET', r'/api/jobs/[^/]+'), ('POST', r'/api/jobs/[^/]+/cancel'), ('POST', r'/api/approvals/[^/]+'),
+DEVICE_ALLOWED = [('GET', r'/api/state'), ('GET', r'/api/jobs/[^/]+'), ('POST', r'/api/jobs/[^/]+/cancel'), ('POST', r'/api/approvals/[^/]+'), ('POST', r'/api/questions/[^/]+'),
                   ('POST', r'/api/chat'), ('DELETE', r'/api/bots/[^/]+/queue/[^/]+'), ('GET', r'/api/groups/[^/]+'), ('POST', r'/api/groups/[^/]+/messages'), ('POST', r'/api/groups/[^/]+/stop'),
                   ('GET', r'/api/quota'), ('GET', r'/api/usage/bots'), ('GET', r'/api/integrations'), ('GET', r'/api/providers'), ('GET', r'/api/remote/me'),
                   ('GET', r'/api/mobile/home'), ('GET', r'/api/mobile/bots/[^/]+'), ('GET', r'/api/mobile/groups/[^/]+'), ('POST', r'/api/mobile/bots'), ('GET', r'/api/mobile/settings'),
@@ -569,7 +569,7 @@ def describe_call(call):
              'zook_run_skill_helper': '執行 Skill 附帶的小程式', 'zook_workspace_list': '查看工作區裡有哪些檔案', 'zook_group_file_read': '讀取群組共用檔案「%s」' % (a.get('name') or ''), 'zook_workspace_read': '讀取檔案「%s」' % base(a.get('path')),
              'zook_workspace_write': '把內容存成檔案「%s」' % base(a.get('path')), 'zook_list_team': '查看團隊裡有哪些 Bot 和群組', 'zook_create_bot': '新增 Bot「%s」' % (a.get('name') or ''),
              'zook_create_group': '建立群組「%s」' % (a.get('name') or '、'.join(a.get('bot_names') or [])), 'zook_start_group_discussion': '在群組「%s」發起討論' % (a.get('group_name') or ''),
-             'zook_feature': '使用%s' % str(a.get('feature') or '特色功能'), 'zook_remember': '記住一件事：「%s」' % str(a.get('content') or '')[:60], 'zook_list_schedules': '查看排程',
+             'zook_feature': '使用%s' % str(a.get('feature') or '特色功能'), 'zook_remember': '記住一件事：「%s」' % str(a.get('content') or '')[:60], 'zook_ask_user': '問你：「%s」' % str(a.get('question') or '')[:60], 'zook_list_schedules': '查看排程',
              'zook_create_schedule': '建立排程「%s」' % str(a.get('content') or '')[:40], 'zook_update_schedule': '修改排程', 'zook_delete_schedule': '刪除排程'}
     if name in fixed: return fixed[name]
     label = re.sub(r'[_-]+', ' ', str(call.get('label') or '')).strip()
@@ -590,6 +590,7 @@ def mobile_message(m, names):
     for key in ('note', 'author'):
         if m.get(key): out[key] = m[key]
     if m.get('attachments'): out['attachments'] = len(m['attachments'])  # the phone shows how many, not the files
+    if isinstance(m.get('options'), list) and (_active['data'].get('settings') or {}).get('choiceButtons') is not False: out['options'] = [str(o) for o in m['options']][:4]
     if m.get('auto') and not m.get('note'): out['note'] = 'auto: ' + m['auto']
     if m.get('skipped'): out['note'] = '；'.join(x for x in (out.get('note'), '這次沒用到的連接器：' + '、'.join(m['skipped'])) if x)
     return out
@@ -673,7 +674,8 @@ def mobile_bot(store, bot):
                          + [dict(id=e['id'], role='user', content=e['content'], status='queued', createdAt=e.get('createdAt'), note='排隊中，Bot 回覆完就會送出') for e in bot.get('queue') or [] if e.get('chatId') == bot.get('chatId')],
                 running=bool(active), activeJobId=active,
                 chats=[dict(id=c['id'], title=c.get('title') or '新對話', updatedAt=c.get('updatedAt'), open=c['id'] == bot.get('chatId')) for c in sorted(ensure_chats(bot), key=lambda c: c.get('updatedAt') or '', reverse=True)][:50],
-                approvals=mobile_approvals(store, direct, names), activity=mobile_activity(own, names, groups, False))
+                approvals=mobile_approvals(store, direct, names), activity=mobile_activity(own, names, groups, False),
+                questions=[dict(id=q['id'], botName=bot['name'], question=q['question'], options=q.get('options') or []) for j in direct if j.get('status') == 'running' for q in j.get('questions') or [] if q.get('status') == 'pending'])
 
 
 def mobile_group(store, group):

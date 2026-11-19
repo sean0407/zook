@@ -8,6 +8,7 @@ struct ChatView: View {
     @EnvironmentObject var model: AppModel
     @State private var messages: [ChatMessage] = []
     @State private var approvals: [Approval] = []
+    @State private var questions: [BotQuestion] = []
     @State private var activity: [ActivityItem] = []
     @State private var running = false
     @State private var activeJob: String?
@@ -34,6 +35,12 @@ struct ChatView: View {
                     LazyVStack(alignment: .leading, spacing: 12) {
                         if !loaded && model.state == .online { HStack { Spacer(); ProgressView(); Spacer() }.padding(.top, 40) }
                         ForEach(messages) { message in Bubble(message: message, showName: kind == .group).id(message.id) }
+                        if kind == .bot, !running, !sending, let last = messages.last, last.role != "user", last.status == "completed", let options = last.options, !options.isEmpty {
+                            ChoiceRow(options: options) { option in draft = option; send() }
+                        }
+                        ForEach(questions) { question in
+                            QuestionCard(question: question, busy: deciding.contains(question.id)) { text in answer(question, text) }.id("question-" + question.id)
+                        }
                         ForEach(approvals) { approval in
                             ApprovalCard(approval: approval, busy: deciding.contains(approval.id)) { approve in decide(approval, approve) }.id("approval-" + approval.id)
                         }
@@ -121,7 +128,7 @@ struct ChatView: View {
     private func poll() async {
         while !Task.isCancelled {
             await refresh()
-            try? await Task.sleep(nanoseconds: running || !approvals.isEmpty ? 1_500_000_000 : 4_000_000_000)
+            try? await Task.sleep(nanoseconds: running || !approvals.isEmpty || !questions.isEmpty ? 1_500_000_000 : 4_000_000_000)
         }
     }
 
@@ -130,7 +137,7 @@ struct ChatView: View {
         do {
             if kind == .bot {
                 let view = try await api.bot(id)
-                messages = view.messages; approvals = view.approvals; activity = view.activity; running = view.running; activeJob = view.activeJobId; chats = view.chats ?? []
+                messages = view.messages; approvals = view.approvals; activity = view.activity; running = view.running; activeJob = view.activeJobId; chats = view.chats ?? []; questions = view.questions ?? []
             } else {
                 let view = try await api.group(id)
                 messages = view.messages; approvals = view.approvals; running = view.running; speaking = view.speaking
@@ -187,6 +194,16 @@ struct ChatView: View {
         }
     }
 
+    private func answer(_ question: BotQuestion, _ text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, let api = model.api else { return }
+        deciding.insert(question.id); Haptics.tap()
+        Task {
+            do { try await api.answer(question.id, text) } catch { problem = error.localizedDescription }
+            await refresh(); deciding.remove(question.id)
+        }
+    }
+
     private func decide(_ approval: Approval, _ approve: Bool) {
         guard let api = model.api else { return }
         deciding.insert(approval.id); Haptics.tap()
@@ -229,6 +246,45 @@ private struct Bubble: View {
                 }
             }
         }
+    }
+}
+
+/// The options a Bot listed at the end of its reply. Tapping one sends it as the next message.
+private struct ChoiceRow: View {
+    let options: [String]
+    let pick: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(options, id: \.self) { option in
+                Button(option) { pick(option) }.buttonStyle(.bordered).buttonBorderShape(.capsule).multilineTextAlignment(.leading)
+            }
+        }
+    }
+}
+
+private struct QuestionCard: View {
+    let question: BotQuestion, busy: Bool
+    let answer: (String) -> Void
+    @State private var own = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("\(question.botName) 想問你").font(.subheadline.weight(.semibold))
+            Text(question.question).font(.subheadline)
+            ForEach(question.options, id: \.self) { option in
+                Button(option) { answer(option) }.buttonStyle(.bordered).buttonBorderShape(.capsule).multilineTextAlignment(.leading)
+            }
+            HStack {
+                TextField(question.options.isEmpty ? "輸入你的回答" : "或自己回答", text: $own).textFieldStyle(.roundedBorder)
+                Button("送出") { answer(own) }.buttonStyle(.bordered).disabled(own.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if busy { ProgressView().controlSize(.small) }
+            }
+            Text("回答只會告訴 Bot 你的選擇，不代表核准任何動作。").font(.caption).foregroundStyle(.secondary)
+        }
+        .disabled(busy)
+        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
     }
 }
 

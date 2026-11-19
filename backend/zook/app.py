@@ -358,6 +358,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, ThreadingHTTPServer
                     approval['status'] = 'expired'
                     event = self.approval_events.get(approval['id'])
                     if event: event.set()
+            expire_questions(self, job)
         worker = self.workers.pop(job_id, None)
         return worker
 
@@ -514,7 +515,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, ThreadingHTTPServer
                 with store.lock: skill_ids = shared_skill_ids(store, inventory); mcp_ids = shared_mcp_ids(store, inventory)
                 session = runtime.RuntimeSession(skill_ids, mcp_ids, bot['allowCommands'], root if scope == 'folder' else workspace,
                     lambda *a: self.approve(job_id, *a), lambda event: self.record_event(job_id, event), inventory=inventory,
-                    extra_tools=(plan_safe if planning else list)(self.app_tools(bot, runtime, job.get('groupId'), job.get('origin') or 'user')), permission_mode=lambda bot_id=bot['id']: self.live_permission(bot_id, job_id))
+                    extra_tools=(plan_safe if planning else list)(self.app_tools(bot, runtime, job.get('groupId'), job.get('origin') or 'user') + ([] if job.get('groupId') or job.get('internal') else question_tools(self, job_id, runtime, job.get('origin') or 'user'))), permission_mode=lambda bot_id=bot['id']: self.live_permission(bot_id, job_id))
                 token = secrets.token_urlsafe(32)
                 with store.lock:
                     job = store.find('jobs', job_id)
@@ -539,10 +540,12 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, ThreadingHTTPServer
                 if not resume: prompt += feature_note(features, kind)
                 if not planning and not resume: prompt += schedule_instructions()
                 if not planning and not resume: prompt += '\n記憶：使用者告訴你值得長期記住的偏好、事實或決定時，用 zook_remember 記下（scope=bot 只給你自己，scope=shared 給所有 Bot）。不要記錄密碼、金鑰或一次性的內容。'
+                if choices_for(store, job): prompt += ASK_NOTE
                 if kind == 'grok': prompt += '\nZook 工具在這裡的完整名稱是 zook__ 加上工具名，例如 zook__zook_create_schedule。'
                 if native: prompt += '\n工具說明：' + access_note(scope, root, kind in ('codex', 'antigravity'), kind == 'grok') + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。'
                 else: prompt += '\n工具說明：檔案讀寫與其他動作請使用 zook 工具。zook 工具會依使用者設定的主動性決定是否先請使用者核准，與本機 CLI 沙箱是否唯讀無關；需要時直接呼叫，被拒絕再說明即可。'
             if not selected and scope != 'workspace': prompt += '\n工具說明：' + access_note(scope, root, True)
+            if choices_for(store, job): prompt += CHOICE_NOTE
             prompt += latest_ask_note(self.__dict__.get('latest_asks', {}).get(job_id))  # the Skill list and tool notes above can bury the question
             adapter = str(pathlib.Path(__file__).with_name('tool_server.py'))
             stdin_prompt = True
@@ -696,9 +699,12 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, ThreadingHTTPServer
                 job = store.find('jobs', job_id)
                 if parsed['usage']: job['usage'] = dict(parsed['usage'], provider=provider, account=account['id'] if account else ''); budget_add(self, provider, parsed['usage']); compact_note_usage(store, job, kind, parsed['usage'])
                 if job['status'] == 'running':
+                    content, options = split_choices(content) if choices_for(store, job) else (content, None)
                     job.update(status='completed', content=content, finishedAt=NOW())
                     self.remember_session(job, provider, model, account, cli_cwd, cli_session(kind, output.decode('utf-8', errors='replace')))
-                    store.finish_message(job, content, 'completed'); store.save()
+                    store.finish_message(job, content, 'completed')
+                    if options: (find_message(store.find('bots', job['botId']), job['messageId']) or {})['options'] = options
+                    store.save()
         except (OSError, RuntimeError, ValueError) as exc:
             with store.lock:
                 job = store.find('jobs', job_id)

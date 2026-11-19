@@ -22,7 +22,7 @@ def partial_start(job):
 def partial_end(job_id): PARTIALS.pop(job_id, None)
 
 
-def partial_text(job_id): return (PARTIALS.get(job_id) or {}).get('text') or ''
+def partial_text(job_id): return hide_choice_block((PARTIALS.get(job_id) or {}).get('text') or '')
 
 
 def partial_of_message(message_id):

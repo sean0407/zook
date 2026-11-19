@@ -14,7 +14,12 @@ struct Home: Codable, Equatable {
 }
 
 struct ChatMessage: Codable, Identifiable, Equatable {
-    var id: String, role: String, content: String, status: String, createdAt: String?, botId: String?, botName: String?, note: String?, author: String?, attachments: Int?
+    var id: String, role: String, content: String, status: String, createdAt: String?, botId: String?, botName: String?, note: String?, author: String?, attachments: Int?, options: [String]?
+}
+
+/// A question a Bot asks in the middle of its work. Answering it approves nothing.
+struct BotQuestion: Codable, Identifiable, Equatable {
+    var id: String, botName: String, question: String, options: [String]
 }
 
 struct Approval: Codable, Identifiable, Equatable {
@@ -30,7 +35,7 @@ struct BotHeader: Codable, Equatable { var id: String, name: String, color: Stri
 struct ChatSummary: Codable, Identifiable, Equatable { var id: String, title: String, updatedAt: String?, open: Bool }
 
 struct BotConversation: Codable, Equatable {
-    var bot: BotHeader, messages: [ChatMessage], running: Bool, activeJobId: String?, approvals: [Approval], activity: [ActivityItem], chats: [ChatSummary]?
+    var bot: BotHeader, messages: [ChatMessage], running: Bool, activeJobId: String?, approvals: [Approval], activity: [ActivityItem], chats: [ChatSummary]?, questions: [BotQuestion]?
 }
 
 struct ScheduleItem: Codable, Identifiable, Equatable { var id: String, content: String, when: String, target: String, on: Bool, group: Bool }
@@ -100,6 +105,7 @@ struct ZookAPI {
     func newChat(bot id: String) async throws { try await post("/api/mobile/bots/" + id + "/chats", ["new": true]) }
     func notices(after seq: Int) async throws -> NoticeList { try await get("/api/notifications?after=\(seq)") }
     func send(toGroup id: String, _ text: String, clientId: String = UUID().uuidString) async throws { try await post("/api/groups/" + id + "/messages", ["content": text, "clientId": clientId]) }
+    func answer(_ question: String, _ text: String) async throws { try await post("/api/questions/" + question, ["answer": text]) }
     func decide(_ approval: String, approve: Bool) async throws { try await post("/api/approvals/" + approval, ["decision": approve ? "approve" : "deny"]) }
     func providers() async throws -> [ProviderOption] { let list: ProviderList = try await get("/api/providers"); return list.providers }
     /// `provider` empty means the Mac's default model.
