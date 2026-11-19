@@ -44,7 +44,9 @@ class FallbackTest(unittest.TestCase):
         while time.time() < end:
             state = self.req('GET', '/api/state')[1]
             last = next(b for b in state['bots'] if b['id'] == self.bot['id'])['messages'][-1]
-            if last.get('status') != 'running': return last, state['jobs'][-1]
+            if last.get('status') != 'running':
+                time.sleep(0.3); state = self.req('GET', '/api/state')[1]  # the note about the model that took over is added a moment after the reply
+                return next(b for b in state['bots'] if b['id'] == self.bot['id'])['messages'][-1], state['jobs'][-1]
             time.sleep(0.2)
         self.fail('no reply')
 
