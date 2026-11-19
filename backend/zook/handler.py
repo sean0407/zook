@@ -451,6 +451,7 @@ class Handler(BaseHTTPRequestHandler):
                     st = store.data['settings']; st['gmail'] = dict(address=address.strip(), secretId=secret_id)
                     st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + [GMAIL_ID])); store.save()
                 return self.respond(200, {'ok': True, 'address': address.strip()})
+            if len(parts) == 4 and parts[:2] == ['api', 'jobs'] and parts[3] == 'stream' and self.command == 'GET' and not self.device: return stream_route(self, parts[2])
             if parts[:2] == ['api', 'sync']: return sync_route(self, store, parts, path)
             if len(parts) == 4 and parts[:2] == ['api', 'bots'] and parts[3] == 'restore' and self.command == 'POST' and not self.device:
                 self.body()
@@ -651,7 +652,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.command == 'POST' and path == '/api/export': return self.respond(200, store.data)
                 if parts[:2] == ['api', 'backups'] or path in ('/api/activity', '/api/budget'): return upkeep_route(self, store, parts, path)
                 if len(parts) == 3 and parts[:2] == ['api', 'jobs'] and self.command == 'GET':
-                    job = store.find('jobs', parts[2]); return self.respond(200, job) if job else self.error(404, '找不到工作。')
+                    job = store.find('jobs', parts[2]); return self.respond(200, job_view(job)) if job else self.error(404, '找不到工作。')
                 if len(parts) == 3 and parts[:2] == ['api', 'approvals'] and self.command == 'POST':
                     body = self.body(); decision = body.get('decision')
                     if decision not in ('approve', 'deny'): raise ValueError('決定無效。')
@@ -737,7 +738,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not group: return self.error(404, '找不到群組。')
                     if len(parts) == 3 and self.command == 'GET':
                         ids = group.get('activeJobIds') or ([group['activeJobId']] if group.get('activeJobId') else [])
-                        return self.respond(200, {'group': group, 'jobs': [j for j in (store.find('jobs', x) for x in ids) if j]})
+                        return self.respond(200, {'group': group, 'jobs': [job_view(j) for j in (store.find('jobs', x) for x in ids) if j]})
                     if len(parts) == 3 and self.command == 'PATCH':
                         candidate = copy.deepcopy(group); set_group_fields(store, candidate, self.body())
                         added = candidate['messages'][len(group['messages']):]  # the discussion may still be running, so its messages stay as they are

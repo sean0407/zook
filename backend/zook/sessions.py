@@ -63,8 +63,8 @@ def skipped_connectors(session):
 
 class Pipes:
     """Reads what a CLI writes as it comes, so a CLI that is busy can be told from one that is stuck. Nothing beyond the size limit is kept."""
-    def __init__(self, proc, data, limit):
-        self.proc, self.limit, self.last, self.out = proc, limit, time.monotonic(), [bytearray(), bytearray()]
+    def __init__(self, proc, data, limit, on_output=None):
+        self.proc, self.limit, self.last, self.out, self.on_output = proc, limit, time.monotonic(), [bytearray(), bytearray()], on_output
         self.threads = [threading.Thread(target=self._read, args=(proc.stdout, 0), daemon=True), threading.Thread(target=self._read, args=(proc.stderr, 1), daemon=True)]
         if data is not None: self.threads.append(threading.Thread(target=self._write, args=(data,), daemon=True))
         for t in self.threads: t.start()
@@ -76,6 +76,7 @@ class Pipes:
                 if not chunk: return
                 self.last = time.monotonic()
                 if len(self.out[index]) <= self.limit: self.out[index] += chunk
+                if index == 0 and self.on_output: self.on_output(chunk)
         except (OSError, ValueError): pass
 
     def _write(self, data):

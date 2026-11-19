@@ -572,6 +572,7 @@ def call_state(call, job_running):
 
 def mobile_message(m, names):
     out = dict(id=m['id'], role=m['role'], content=m.get('content') or '', status=m.get('status') or 'completed', createdAt=m.get('createdAt'))
+    if out['status'] == 'running' and not out['content']: out['content'] = partial_of_message(m['id'])  # what it has written so far
     if m.get('botId'): out['botId'] = m['botId']; out['botName'] = names.get(m['botId'], '已刪除的 Bot')
     for key in ('note', 'author'):
         if m.get(key): out[key] = m[key]

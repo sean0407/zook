@@ -158,7 +158,7 @@ def activity_list(store, kind=''):
 
 SETTING_NAMES = {'permissionMode': '主動性', 'webSearch': '上網搜尋', 'provider': '預設提供者', 'model': '預設模型', 'fallbacks': '備用模型', 'access': '存取範圍', 'accessFolder': '存取範圍',
                  'features': '功能開關', 'effort': '思考強度', 'remote': '手機連線', 'autoUpdateCheck': '自動檢查更新', 'scheduleNotify': '通知', 'sharedMcp': '共用連接器', 'disabledSkills': 'Skills 開關',
-                 'disabledPlugins': '插件開關', 'autoModels': '自動選擇的模型', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步', 'voiceLang': '語音輸入語言'}
+                 'disabledPlugins': '插件開關', 'autoModels': '自動選擇的模型', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步', 'voiceLang': '語音輸入語言', 'streamReplies': '回覆逐字顯示'}
 BOT_FIELD_NAMES = {'name': '名稱', 'persona': '人格檔案', 'instructions': '工作指示', 'provider': '模型', 'model': '模型', 'account': '帳號', 'permissionMode': '主動性', 'access': '存取範圍', 'accessFolder': '存取範圍',
                    'fallbacks': '備用模型', 'features': '功能開關', 'effort': '思考強度', 'isAdmin': '管理員身分', 'enabledMcp': '連接器'}
 
@@ -309,6 +309,9 @@ def upkeep_fields(data, body, changes):
     if 'recoveredSeen' in body:
         if body['recoveredSeen'] is not True: raise ValueError('recoveredSeen 無效。')
         changes['recovered'] = None
+    if 'streamReplies' in body:
+        if not isinstance(body['streamReplies'], bool): raise ValueError('streamReplies 無效。')
+        changes['streamReplies'] = body['streamReplies']
     if 'onboarded' in body:
         if body['onboarded'] is not True: raise ValueError('onboarded 無效。')
         changes['onboarded'] = True

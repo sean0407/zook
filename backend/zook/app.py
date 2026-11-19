@@ -468,6 +468,7 @@ class App(GroupRuns, Triggers, Syncing, ThreadingHTTPServer):
             # In 謹慎 only Zook's tools are available, because built-in tools cannot ask before each action.
             with store.lock:
                 planning = bool((store.find('jobs', job_id) or {}).get('plan'))
+                streaming = stream_on(store)
                 native = permission_mode(store, bot) in ('auto', 'bypass') and not planning
             selected = kind in PLAN_KINDS  # Zook tools need MCP support in the CLI; other CLIs run as plain chat.
             workspace = store.dir / 'workspaces' / bot['id']; workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -580,7 +581,7 @@ class App(GroupRuns, Triggers, Syncing, ThreadingHTTPServer):
                 # With access to the whole Mac, Claude also gets Bash and its file tools may leave the starting folder.
                 claude_tools = (CLAUDE_NATIVE_TOOLS + (['Bash'] if scope == 'full' else []) + (['Task'] if 'multi' in features else [])) if native and selected else []
                 attach_read = ['Read'] if (job.get('attachments') or job.get('groupFiles')) and 'Read' not in claude_tools else []  # just to look at what was attached
-                args = [binary, '--print', '--restricted' if selected else '--safe-mode', '--strict-mcp-config', '--no-session-persistence', '--tools', ','.join(claude_tools + attach_read + (['WebSearch', 'WebFetch'] if web else [])), '--output-format', 'stream-json', '--verbose']
+                args = [binary, '--print', '--restricted' if selected else '--safe-mode', '--strict-mcp-config', '--no-session-persistence', '--tools', ','.join(claude_tools + attach_read + (['WebSearch', 'WebFetch'] if web else [])), '--output-format', 'stream-json', '--verbose'] + (['--include-partial-messages'] if streaming else [])
                 if native and selected: args += ['--permission-mode', 'acceptEdits'] + (['--add-dir', '/'] if scope == 'full' else [])
                 if attach_read or (job.get('groupFiles') and scope == 'folder'): args += ['--add-dir', str(workspace / 'attachments')]  # its working folder may be elsewhere
                 if selected:
@@ -594,6 +595,7 @@ class App(GroupRuns, Triggers, Syncing, ThreadingHTTPServer):
                 job = store.find('jobs', job_id)
                 if not job or job['status'] != 'running': return
                 started_at = time.time()
+                if streaming: partial_start(job)
                 proc = subprocess.Popen(args, stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=str(cli_cwd), env=env)
                 self.processes[job_id] = proc
             try:
@@ -601,7 +603,7 @@ class App(GroupRuns, Triggers, Syncing, ThreadingHTTPServer):
                 # CLI, no tool use), or at the overall limit. A 長任務 is given its whole time even when its CLI stays silent.
                 quiet_limit = LONG_JOB_TIMEOUT if job.get('long') else JOB_TIMEOUT
                 deadline = time.monotonic() + (LONG_JOB_TIMEOUT if job.get('long') else max(JOB_HARD_TIMEOUT, JOB_TIMEOUT))
-                pipes = Pipes(proc, prompt.encode('utf-8') if stdin_prompt else None, MAX_CLI_OUTPUT)
+                pipes = Pipes(proc, prompt.encode('utf-8') if stdin_prompt else None, MAX_CLI_OUTPUT, on_output=partial_feeder(kind, job_id) if streaming else None)
                 active = self.__dict__.setdefault('job_activity', {}); active[job_id] = time.monotonic()
                 stopped_for = ''
                 while True:
@@ -623,7 +625,7 @@ class App(GroupRuns, Triggers, Syncing, ThreadingHTTPServer):
                     pipes.wait(2)
                 with store.lock: job['mayHaveActed'] = bool(native)  # stopped midway, so what its tools already did is unknown
                 raise RuntimeError('執行逾時：' + stopped_for)
-            finally: self.__dict__.get('job_activity', {}).pop(job_id, None)
+            finally: self.__dict__.get('job_activity', {}).pop(job_id, None); partial_end(job_id)
             if len(output) > MAX_CLI_OUTPUT:
                 with store.lock: job['mayHaveActed'] = bool(native)
                 raise RuntimeError('回覆超過大小限制。')
