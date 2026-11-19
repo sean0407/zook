@@ -335,6 +335,12 @@ def upkeep_fields(data, body, changes):
     if 'autoCompact' in body:
         if not isinstance(body['autoCompact'], bool): raise ValueError('autoCompact 無效。')
         changes['autoCompact'] = body['autoCompact']
+    if 'appearance' in body:
+        if body['appearance'] not in ('system', 'light', 'dark'): raise ValueError('深淺色設定無效。')
+        changes['appearance'] = body['appearance']
+    if 'textSize' in body:
+        if body['textSize'] not in ('small', 'normal', 'large', 'xlarge'): raise ValueError('字體大小設定無效。')
+        changes['textSize'] = body['textSize']
     if 'choiceButtons' in body:
         if not isinstance(body['choiceButtons'], bool): raise ValueError('choiceButtons 無效。')
         changes['choiceButtons'] = body['choiceButtons']

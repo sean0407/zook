@@ -19,12 +19,12 @@
     if (!x.windows.length) return '<p class="quota-empty">這個模型不提供額度資料。</p>';
     return x.windows.map(w => `<div class="quota-row"><div class="quota-label"><span>${esc(w.label)}</span><span><b>剩餘 ${Math.round(w.left)}%</b></span></div><div class="quota-track left-track"><div class="quota-bar ${w.left < 20 ? 'bad' : ''}" style="width:${w.left}%"></div></div><small class="quota-reset">${esc(w.left >= 100 ? '' : fmtReset(w.resetsAt))}</small></div>`).join('');
   }
-  // Its own block in the lower right corner of the window, with every model Zook knows.
+  // At the foot of the right-hand column, three to a row, with every model Zook knows. It is hidden together with that column.
   function usageDock() {
     const rings = state.data?.rings || [];
     if (!rings.length) return '';
     const open = rings.find(x => x.id === state.ringOpen);
-    return `<div class="usage-dock ${state.page === 'chat' ? 'over-chat' : ''}" aria-label="各模型剩餘額度">${open ? `<div class="ring-card" role="dialog" aria-label="${esc(open.name)} 剩餘額度"><strong>${esc(open.name)}</strong>${leftBars(open)}${open.fiveHour != null && open.week != null ? '<small class="muted">外圈是 5 小時額度，內圈是每週額度。</small>' : ''}<button class="text-btn" data-action="page" data-id="usage">查看用量</button></div>` : ''}${rings.map(x => `<button class="ring ${ringLevel(x)} ${state.ringOpen === x.id ? 'active' : ''}" data-ring="${esc(x.id)}" title="${esc(ringText(x))}" aria-label="${esc(ringText(x))}" aria-expanded="${state.ringOpen === x.id}">${ringSvg(x)}<span>${esc(x.name)}</span></button>`).join('')}</div>`;
+    return `<div class="usage-dock" aria-label="各模型剩餘額度">${open ? `<div class="ring-card" role="dialog" aria-label="${esc(open.name)} 剩餘額度"><strong>${esc(open.name)}</strong>${leftBars(open)}${open.fiveHour != null && open.week != null ? '<small class="muted">外圈是 5 小時額度，內圈是每週額度。</small>' : ''}<button class="text-btn" data-action="page" data-id="usage">查看用量</button></div>` : ''}${rings.map(x => `<button class="ring ${ringLevel(x)} ${state.ringOpen === x.id ? 'active' : ''}" data-ring="${esc(x.id)}" title="${esc(ringText(x))}" aria-label="${esc(ringText(x))}" aria-expanded="${state.ringOpen === x.id}">${ringSvg(x)}<span>${esc(x.name)}</span></button>`).join('')}</div>`;
   }
   // The top of the usage page: every model's limits as bars, with the same wording as the rings.
   function leftSection() {

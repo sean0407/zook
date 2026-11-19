@@ -84,12 +84,16 @@
   // 先規劃: for the next message only; the Bot proposes a plan and changes nothing.
   if (!state.plan) state.plan = {};
   if (!state.long) state.long = {};
-  // 長任務 and 先規劃 are switched on under the ＋ button; in the message box only what is on shows, as a small tag that turns it off.
-  const modeRows = b => !b ? '' : settingRow('長任務', '這則訊息最長可以跑 4 小時，結束時通知你', toggle('data-long', !!state.long[b.id], '長任務')) + (effortSupported() ? settingRow('先規劃', '這則訊息只請 Bot 提出計畫，不動手', toggle('data-plan', !!state.plan[b.id], '先規劃')) : '');
-  const modeChips = b => [['long', '長任務'], ['plan', '先規劃']].filter(([k]) => state[k][b.id]).map(([k, name]) => `<button type="button" class="mode-chip" data-mode-off="${k}" title="按一下關閉">${name} ×</button>`).join('');
+  // 長任務 (/goal) and 先規劃 (/plan) are commands typed into the message box; the thinking level is chosen under the ＋ button.
+  // In the box itself only what is switched on shows, as a small tag that turns it off again.
+  const effortRow = () => settingRow('思考強度', '這個對話接下來的訊息用的思考強度', effortControl());
+  const effortChip = () => { const picked = state.effort[effortKey()]; return picked && picked !== 'standard' && effortSupported() ? `<button type="button" class="mode-chip" data-mode-off="effort" title="按一下改回預設">${esc(EFFORTS.find(x => x.id === picked)?.name || picked)} ×</button>` : ''; };
+  const modeChips = b => [['long', '長任務'], ['plan', '先規劃']].filter(([k]) => state[k][b.id]).map(([k, name]) => `<button type="button" class="mode-chip" data-mode-off="${k}" title="按一下關閉">${name} ×</button>`).join('') + effortChip();
   document.addEventListener('click', e => {
     const chip = e.target.closest('[data-mode-off]');
-    if (chip && state.selected) { state[chip.dataset.modeOff][state.selected] = false; render(true); }
+    if (!chip) return;
+    if (chip.dataset.modeOff === 'effort') delete state.effort[effortKey()]; else if (state.selected) state[chip.dataset.modeOff][state.selected] = false;
+    render(true);
   });
   function effortControl() {
     if (!effortSupported()) return `<span class="effort-off" title="這個模型不支援調整思考強度">思考強度：這個模型不支援</span>`;
@@ -293,7 +297,7 @@
 
   function detail(b) {
     let notes = state.data.knowledge.filter(n => n.botId === b.id);
-    return `<aside class="detail"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatar(b,'big')}<h2>${esc(b.name)}</h2><p>${esc(b.provider === 'auto' ? '自動選擇' : b.provider||state.data.settings.provider||'')} ${esc(b.model||'')}</p><p>主動性：${esc(permissionName(b.permissionMode || state.data.settings.permissionMode))}${b.permissionMode ? '' : '（預設）'}</p><button class="secondary detail-edit" data-action="edit-bot">編輯設定</button></div><div class="tabs"><button data-action="detail" data-id="persona" class="${state.detail==='persona'?'active':''}">人格</button><button data-action="detail" data-id="activity" class="${state.detail==='activity'?'active':''}">動態</button><button data-action="detail" data-id="database" class="${state.detail==='database'?'active':''}">資料庫</button><button data-action="detail" data-id="outputs" class="${state.detail==='outputs'?'active':''}">產出</button></div>${state.detail==='persona'?personaPanel(b):state.detail==='outputs'?outputsPanel(b):state.detail==='database'?`<div class="detail-title">知識 <button class="link" data-action="new-note">＋ 新增</button></div>${notes.length?notes.map(n=>`<button class="note-row" data-action="edit-note" data-id="${esc(n.id)}"><strong>${esc(n.title)}</strong><small>${esc(n.content)}</small></button>`).join(''):'<div class="detail-empty">尚未新增知識。加入資料，讓這個 Bot 有更多背景。</div>'}`:`<div class="detail-title">最近動態</div>${toolTimeline(b.id)}${(b.messages||[]).length?`<div class="detail-empty">最近對話 ${esc(formatDate(b.messages.at(-1).createdAt))}</div>`:'<div class="detail-empty">這裡會顯示最近的對話動態。</div>'}`}</aside>`
+    return `<aside class="detail"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatar(b,'big')}<h2>${esc(b.name)}</h2><p>${esc(b.provider === 'auto' ? '自動選擇' : b.provider||state.data.settings.provider||'')} ${esc(b.model||'')}</p><p>主動性：${esc(permissionName(b.permissionMode || state.data.settings.permissionMode))}${b.permissionMode ? '' : '（預設）'}</p><button class="secondary detail-edit" data-action="edit-bot">編輯設定</button></div><div class="tabs"><button data-action="detail" data-id="persona" class="${state.detail==='persona'?'active':''}">人格</button><button data-action="detail" data-id="activity" class="${state.detail==='activity'?'active':''}">動態</button><button data-action="detail" data-id="database" class="${state.detail==='database'?'active':''}">資料庫</button><button data-action="detail" data-id="outputs" class="${state.detail==='outputs'?'active':''}">產出</button></div>${state.detail==='persona'?personaPanel(b):state.detail==='outputs'?outputsPanel(b):state.detail==='database'?`<div class="detail-title">知識 <button class="link" data-action="new-note">＋ 新增</button></div>${notes.length?notes.map(n=>`<button class="note-row" data-action="edit-note" data-id="${esc(n.id)}"><strong>${esc(n.title)}</strong><small>${esc(n.content)}</small></button>`).join(''):'<div class="detail-empty">尚未新增知識。加入資料，讓這個 Bot 有更多背景。</div>'}`:`<div class="detail-title">最近動態</div>${toolTimeline(b.id)}${(b.messages||[]).length?`<div class="detail-empty">最近對話 ${esc(formatDate(b.messages.at(-1).createdAt))}</div>`:'<div class="detail-empty">這裡會顯示最近的對話動態。</div>'}`}${usageDock()}</aside>`
   }
 
   function formatDate(d) {
@@ -424,12 +428,13 @@
       }).join('')}</div>` : '<div class="blank">沒有偵測到插件。</div>'}`;
     } else if (state.page === 'settings') {
       let s = state.data.settings || {};
-      content = permissionSection(s.permissionMode || 'manual') + rulesSection() + `<h2 class="settings-h">模型</h2><form id="settings-form" class="setting-list">${settingRow('預設提供者', '', `<select name="provider" class="plain-select" aria-label="預設提供者">${providerOptions(s.provider || 'codex', false)}</select>`)}${settingRow('預設模型', '沒指定模型的 Bot 使用', modelPicker(s.model||'', true))}${[0, 1].map(i => settingRow('備用模型 ' + (i + 1), i ? '第一個備用也不能用時' : '模型不能用時改用', dropdown('fallback' + i, (s.fallbacks || [])[i] || '', [{id: '', name: '不使用'}, ...providerList()], 'data-fallback-slot'))).join('')}<div class="setting-actions"><button class="primary">儲存模型設定</button></div></form>` + chatSection() + noticeSection() + voiceSection() + remoteSection() + syncSection() + backupSection() + updateSection()
+      content = lookSection() + permissionSection(s.permissionMode || 'manual') + rulesSection() + `<h2 class="settings-h">模型</h2><form id="settings-form" class="setting-list">${settingRow('預設提供者', '', `<select name="provider" class="plain-select" aria-label="預設提供者">${providerOptions(s.provider || 'codex', false)}</select>`)}${settingRow('預設模型', '沒指定模型的 Bot 使用', modelPicker(s.model||'', true))}${[0, 1].map(i => settingRow('備用模型 ' + (i + 1), i ? '第一個備用也不能用時' : '模型不能用時改用', dropdown('fallback' + i, (s.fallbacks || [])[i] || '', [{id: '', name: '不使用'}, ...providerList()], 'data-fallback-slot'))).join('')}<div class="setting-actions"><button class="primary">儲存模型設定</button></div></form>` + chatSection() + noticeSection() + voiceSection() + remoteSection() + syncSection() + backupSection() + updateSection()
     }
     return `<main class="main"><header class="main-header"><div class="bot-pill">Zook</div></header><div class="page"><div class="page-inner"><div class="page-top"><h1>${name}</h1>${state.page==='knowledge'?'<button class="primary" data-action="new-note">＋ 新增知識</button>':state.page==='usage'?`<div class="page-top-actions"><button class="secondary" data-action="detect-usage" ${state.usageBusy ? 'disabled' : ''}>${state.usageBusy === 'detect' ? '偵測中…' : '偵測使用量'}</button><button class="secondary" data-action="update-all" ${state.usageBusy ? 'disabled' : ''}>${state.usageBusy === 'update' ? '更新中…' : '一鍵全更新'}</button><button class="primary" data-action="provider-add">＋ 新增模型</button></div>`:state.page==='schedules'?'<button class="primary" data-action="new-schedule">＋ 新增排程</button>':''}</div>${content}</div></div></main>`
   }
 
   function render(keepScroll = false) {
+    applyLook();
     let settingsForm = $('#settings-form');
     let settingsDraft = settingsForm ? Object.fromEntries(new FormData(settingsForm)) : null;
     settingsForm?.modelRequest?.abort();
@@ -441,7 +446,7 @@
     let input = previousInput?.value || '';
     let cursor = document.activeElement === previousInput ? [previousInput.selectionStart, previousInput.selectionEnd] : null;
     let openApprovals = [...document.querySelectorAll('[data-approval-details][open]')].map(x => x.dataset.approvalDetails);
-    app.innerHTML = `<div class="layout">${sidebar()}${state.page==='chat'?(activeGroup()?groupChat():chat()):page()}</div>${usageDock()}`;
+    app.innerHTML = `<div class="layout">${sidebar()}${state.page==='chat'?(activeGroup()?groupChat():chat()):page()}</div>`;
     if ($('#chat-input')) {
       $('#chat-input').value = input;
       if (cursor !== null) { $('#chat-input').focus(); $('#chat-input').setSelectionRange(cursor[0], cursor[1]); }

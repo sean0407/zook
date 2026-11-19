@@ -123,8 +123,8 @@
       if (e.target.checked) toast('這則訊息 Bot 只會提出計畫，不會動手');
       render(true); return;
     }
-    if (e.target.dataset.effort !== undefined && e.target.closest('#chat-form')) {
-      state.effort[effortKey()] = e.target.value;
+    if (e.target.dataset.effort !== undefined && e.target.closest('#chat-form, .mode-rows')) {
+      state.effort[effortKey()] = e.target.value; render(true);
       return;
     }
     if (e.target.name === 'trigger' && e.target.closest('#schedule-form')) { e.target.closest('#schedule-form').dataset.trigger = e.target.value; return; }

@@ -87,3 +87,15 @@
     }
     await loadGroupFiles(g);
   }
+
+  // One member of the group, in the right-hand column: what it looked up and which Skills it used in this discussion.
+  function memberPanel(g, b) {
+    const jobs = jobsForGroup(g.id).filter(j => j.botId === b.id).sort((x, y) => String(x.createdAt).localeCompare(String(y.createdAt)));
+    const replies = (g.messages || []).filter(m => m.botId === b.id && m.role === 'assistant' && m.status === 'completed').length;
+    const did = toolTimeline(b.id, jobs);
+    return `<button class="link member-back" data-member="">‹ 所有成員</button><div class="member-head">${avatar(b)}<span><strong>${esc(b.name)}${jobTitle(b)}</strong><small>在這個討論中發言 ${replies} 次</small></span></div>${did || '<div class="detail-empty">他在這個討論中還沒有查資料或使用 Skill。只有最近的回覆會留下這些紀錄。</div>'}<button class="secondary member-open" data-action="select-bot" data-id="${esc(b.id)}">開啟和 ${esc(b.name)} 的對話</button>`;
+  }
+  document.addEventListener('click', e => {
+    const row = e.target.closest('[data-member]');
+    if (row) { state.groupMember = row.dataset.member || null; render(true); }
+  });

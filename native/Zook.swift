@@ -129,8 +129,14 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
         }
         guard message.name == "zookWindow", let body = message.body as? [String: Any] else { return }
         if body["quit"] as? Bool == true { NSApp.terminate(nil); return }  // an update is ready to be swapped in
+        if let zoom = body["zoom"] as? Double {  // 設定 → 外觀：text size for the whole window, and light or dark for its frame
+            webView.pageZoom = CGFloat(min(1.6, max(0.6, zoom)))
+            if let dark = body["dark"] as? Bool { window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua) }
+            return
+        }
+        let scale = Double(webView.pageZoom)  // the page reports its own units; an enlarged page covers more of the window
         func rects(_ key: String) -> [CGRect] {
-            ((body[key] as? [[Double]]) ?? []).prefix(400).compactMap { r in r.count == 4 ? CGRect(x: r[0], y: r[1], width: r[2], height: r[3]) : nil }
+            ((body[key] as? [[Double]]) ?? []).prefix(400).compactMap { r in r.count == 4 ? CGRect(x: r[0] * scale, y: r[1] * scale, width: r[2] * scale, height: r[3] * scale) : nil }
         }
         webView.dragAreas = rects("drag")
         webView.blockedAreas = rects("block")
