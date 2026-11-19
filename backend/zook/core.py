@@ -709,6 +709,8 @@ def fallback_reason(error):
     if '尚未登入' in error or '重新登入' in error: return '尚未登入'
     if '找不到' in error or '安裝' in error: return '尚未安裝'
     if '逾時' in error: return '回應逾時'
+    for mark, reason in (('太多請求', '請求太頻繁'), ('太忙', '服務太忙'), ('對話太長', '對話太長'), ('不支援目前選的模型', '模型不可用'), ('連不上', '連線有問題')):
+        if mark in error: return reason
     return '無法回覆'
 
 

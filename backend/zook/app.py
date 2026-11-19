@@ -640,32 +640,19 @@ class App(GroupRuns, Triggers, Syncing, ThreadingHTTPServer):
                     job = store.find('jobs', job_id)
                     if job:
                         job.setdefault('toolCalls', []).extend(dict(dict(category='external_read'), id=ID(), createdAt=NOW(), status='completed', autoApproved=True, **w) for w in parsed['web'][:80])
-            if proc.returncode != 0:
-                if kind == 'claude':
-                    try:
-                        result = parsed['error']
-                        if '403' in result and 'authenticat' in result.lower():
-                            raise RuntimeError('Claude 登入驗證被服務拒絕（403）。請到「各模型使用量」頁重新登入，或確認帳號權限。')
-                        if 'not logged in' in result.lower():
-                            raise RuntimeError('Claude 尚未登入。請到「各模型使用量」頁登入後重試。')
-                    except (ValueError, AttributeError): pass
-                detail = (stderr or b'').decode('utf-8', errors='replace').lower() + output.decode('utf-8', errors='replace').lower() + parsed['error'].lower()
-                if kind == 'antigravity' and antigravity_error(parsed['error'], (stderr or b'').decode('utf-8', errors='replace')):
-                    raise RuntimeError(antigravity_error(parsed['error'], (stderr or b'').decode('utf-8', errors='replace')))
-                issue = cli_issue((stderr or b'').decode('utf-8', errors='replace')) if provider == 'gemini' else ''  # what the CLI itself reports, not the Bot's text
+            if proc.returncode != 0 or parsed['isError']:
+                # What the CLI itself reported: its error field and its error output. For a CLI whose output Zook cannot take apart,
+                # the end of that output too. The Bot's own words in a structured reply are never searched for error phrases.
+                said = (stderr or b'').decode('utf-8', errors='replace')
+                reported = parsed['error'] + '\n' + said[-6000:] + ('' if kind in PLAN_KINDS else '\n' + output.decode('utf-8', errors='replace')[-3000:])
+                if kind == 'antigravity' and antigravity_error(parsed['error'], said): raise RuntimeError(antigravity_error(parsed['error'], said))
+                issue = cli_issue(said) if provider == 'gemini' and proc.returncode != 0 else ''  # what the CLI itself reports, not the Bot's text
                 if issue:
                     if not account: self.note_provider_issue(provider, issue)
                     raise RuntimeError(issue)
-                if 'out of credits' in detail or 'insufficient credit' in detail or 'quota' in detail or 'usage limit' in detail:
-                    raise RuntimeError('CLI 帳號額度不足或已達使用上限，請到該服務補充額度後重試。')
-                if 'not logged in' in detail or 'please log in' in detail or 'login required' in detail:
-                    raise RuntimeError('CLI 尚未登入。請到「各模型使用量」頁登入後重試。')
-                raise RuntimeError('CLI 執行失敗，請檢查登入狀態及模型設定。')
-            if parsed['isError']:
-                if kind == 'antigravity' and antigravity_error(parsed['error']): raise RuntimeError(antigravity_error(parsed['error']))
-                if 'out of credits' in parsed['error'].lower() or 'usage limit' in parsed['error'].lower() or 'rate limit' in parsed['error'].lower():
-                    raise RuntimeError('CLI 帳號額度不足或已達使用上限，請到「使用量」頁查看額度。')
-                raise RuntimeError('CLI 執行失敗，請檢查登入狀態及模型設定。')
+                failure, sentence = cli_failure(provider, reported)
+                with store.lock: job['errorKind'] = failure
+                raise RuntimeError(sentence)
             if parsed['unparsable']: raise RuntimeError('CLI 回傳無法解析的結果。')
             content = parsed['content']
             if not content and kind == 'antigravity' and 'auto-denied' in (stderr or b'').decode('utf-8', errors='replace'):
