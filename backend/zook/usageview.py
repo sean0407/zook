@@ -11,19 +11,21 @@ def _left(window, snap, now):
 
 
 def usage_rings(store):
-    """Lock held. One entry per model that is signed in or has been used: what is left of its limits, or None when it reports none (Grok, API keys)."""
+    """Lock held. One entry per model Zook knows, in the order of the usage page: what is left of its five-hour and weekly limits.
+    None means there is no figure: the model reports none (Grok, API keys), or it is not signed in yet (known is False)."""
     data = store.data; quota = data.get('quota') or {}; status = data.get('autoStatus') or {}; now = time.time()
     used = {(j.get('usage') or {}).get('provider') for j in data['jobs'] if isinstance(j.get('usage'), dict)}
     out = []
-    for provider in RING_ORDER:
+    for provider in P.active_ids(data):
         snap = quota.get(provider) if isinstance(quota.get(provider), dict) else {}
         windows = [w for w in snap.get('windows') or [] if isinstance(w, dict)]
-        if not windows and (status.get(provider) or {}).get('signedIn') is not True and provider not in used: continue
-        if not P.spec(data, provider): continue
         rows = [dict(label=str(w.get('label') or ''), left=_left(w, snap, now), resetsAt=w.get('resetsAt')) for w in windows]
         rows = [r for r in rows if r['left'] is not None]
-        main = [r for r in rows if 'gemini' in r['label'].lower()] or rows if provider == 'antigravity' else rows  # the ring follows the model Zook runs by default
-        out.append(dict(id=provider, name=provider_label(provider).split('（')[0], left=min(r['left'] for r in main) if main else None, windows=rows, updatedAt=snap.get('updatedAt')))
+        main = [r for r in rows if 'gemini' in r['label'].lower()] or rows if provider == 'antigravity' else rows  # the rings follow the model Zook runs by default
+        short = [r['left'] for r in main if '小時' in r['label']]; long = [r['left'] for r in main if '週' in r['label']]
+        out.append(dict(id=provider, name=provider_label(provider).split('（')[0], fiveHour=min(short) if short else None, week=min(long) if long else None,
+                        left=min(r['left'] for r in main) if main else None, windows=rows, updatedAt=snap.get('updatedAt'),
+                        known=bool(rows) or (status.get(provider) or {}).get('signedIn') is True or provider in used))
     return out
 
 

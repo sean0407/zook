@@ -1,24 +1,34 @@
 
   // What is left of each model's limits: small rings at the bottom of the sidebar, and the same bars at the top of the usage page.
-  const ringLevel = left => left == null ? 'none' : left < 20 ? 'low' : '';
-  function ringSvg(left) {
-    const r = 9, c = 2 * Math.PI * r, part = left == null ? 0 : Math.max(0, Math.min(100, left)) / 100 * c;
-    return `<svg viewBox="0 0 24 24" aria-hidden="true"><circle class="ring-track" cx="12" cy="12" r="${r}"></circle>${left == null ? '' : `<circle class="ring-fill" cx="12" cy="12" r="${r}" stroke-dasharray="${part.toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 12 12)"></circle>`}<text class="ring-num" x="12" y="15" text-anchor="middle">${left == null ? '–' : Math.round(left)}</text></svg>`;
+  // Two rings per model: the outer one is the five-hour limit, the inner one the weekly limit.
+  const ringLevel = x => !x.known ? 'off' : x.left == null ? 'none' : x.left < 20 ? 'low' : '';
+  const ringTone = left => left < 20 ? 'low' : left < 50 ? 'mid' : '';
+  function ringArc(r, left) {
+    const c = 2 * Math.PI * r, part = left == null ? 0 : Math.max(0, Math.min(100, left)) / 100 * c;
+    return `<circle class="ring-track ${left == null ? 'empty' : ''}" cx="20" cy="20" r="${r}"></circle>${left == null || part < 0.5 ? '' : `<circle class="ring-fill ${ringTone(left)}" cx="20" cy="20" r="${r}" stroke-dasharray="${part.toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 20 20)"></circle>`}`;
   }
-  const ringText = x => x.left == null ? `${x.name}：沒有額度資料` : `${x.name}：剩餘 ${Math.round(x.left)}%`;
+  // A model with both limits gets two rings; one with a single limit gets one; one without any gets a faint dotted ring.
+  function ringSvg(x) {
+    const both = x.fiveHour != null && x.week != null, only = x.fiveHour ?? x.week;
+    return `<svg viewBox="0 0 40 40" aria-hidden="true">${both ? ringArc(17.5, x.fiveHour) + ringArc(13, x.week) : ringArc(17.5, only)}<text class="ring-num" x="20" y="23.2" text-anchor="middle">${x.left == null ? '–' : Math.round(x.left)}</text></svg>`;
+  }
+  const ringPart = (label, v) => `${label}${v == null ? '沒有資料' : '剩餘 ' + Math.round(v) + '%'}`;
+  const ringText = x => !x.known ? `${x.name}：尚未登入` : x.left == null ? `${x.name}：沒有額度資料` : `${x.name}：${[x.fiveHour != null ? ringPart('5 小時', x.fiveHour) : '', x.week != null ? ringPart('每週', x.week) : ''].filter(Boolean).join('，')}`;
   function leftBars(x) {
+    if (!x.known) return '<p class="quota-empty">登入後才能查看額度。</p>';
     if (!x.windows.length) return '<p class="quota-empty">這個模型不提供額度資料。</p>';
     return x.windows.map(w => `<div class="quota-row"><div class="quota-label"><span>${esc(w.label)}</span><span><b>剩餘 ${Math.round(w.left)}%</b></span></div><div class="quota-track left-track"><div class="quota-bar ${w.left < 20 ? 'bad' : ''}" style="width:${w.left}%"></div></div><small class="quota-reset">${esc(w.left >= 100 ? '' : fmtReset(w.resetsAt))}</small></div>`).join('');
   }
-  function usageRings() {
-    const rings = state.data.rings || [];
+  // Its own block in the lower right corner of the window, with every model Zook knows.
+  function usageDock() {
+    const rings = state.data?.rings || [];
     if (!rings.length) return '';
     const open = rings.find(x => x.id === state.ringOpen);
-    return `<div class="side-rings">${open ? `<div class="ring-card" role="dialog" aria-label="${esc(open.name)} 剩餘額度"><strong>${esc(open.name)}</strong>${leftBars(open)}<button class="text-btn" data-action="page" data-id="usage">查看用量</button></div>` : ''}${rings.map(x => `<button class="ring ${ringLevel(x.left)} ${state.ringOpen === x.id ? 'active' : ''}" data-ring="${esc(x.id)}" title="${esc(ringText(x))}" aria-label="${esc(ringText(x))}" aria-expanded="${state.ringOpen === x.id}">${ringSvg(x.left)}<span>${esc(x.name)}</span></button>`).join('')}</div>`;
+    return `<div class="usage-dock ${state.page === 'chat' ? 'over-chat' : ''}" aria-label="各模型剩餘額度">${open ? `<div class="ring-card" role="dialog" aria-label="${esc(open.name)} 剩餘額度"><strong>${esc(open.name)}</strong>${leftBars(open)}${open.fiveHour != null && open.week != null ? '<small class="muted">外圈是 5 小時額度，內圈是每週額度。</small>' : ''}<button class="text-btn" data-action="page" data-id="usage">查看用量</button></div>` : ''}${rings.map(x => `<button class="ring ${ringLevel(x)} ${state.ringOpen === x.id ? 'active' : ''}" data-ring="${esc(x.id)}" title="${esc(ringText(x))}" aria-label="${esc(ringText(x))}" aria-expanded="${state.ringOpen === x.id}">${ringSvg(x)}<span>${esc(x.name)}</span></button>`).join('')}</div>`;
   }
   // The top of the usage page: every model's limits as bars, with the same wording as the rings.
   function leftSection() {
-    const rings = state.data.rings || [];
+    const rings = (state.data.rings || []).filter(x => x.known);
     if (!rings.length) return '';
     return `<section class="usage-block"><h2>剩餘額度</h2><div class="left-grid">${rings.map(x => `<article class="left-card"><h3>${esc(x.name)}</h3>${leftBars(x)}</article>`).join('')}</div></section>`;
   }

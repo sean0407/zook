@@ -32,12 +32,14 @@ class UsageViewTest(unittest.TestCase):
                                     'claude': {'windows': [{'label': '5 小時', 'usedPercent': 96, 'resetsAt': past}], 'updatedAt': ago()},
                                     'antigravity': {'windows': [{'label': 'Gemini 模型 · 每週', 'usedPercent': 100, 'resetsAt': soon}, {'label': 'Claude 與 GPT 模型 · 每週', 'usedPercent': 20, 'resetsAt': soon}], 'updatedAt': ago()}}
         self.store.data['autoStatus'] = {'grok': dict(signedIn=True, billed=False), 'gemini': dict(signedIn=False, billed=False)}
+        self.store.data['settings']['addedProviders'] = ['codex', 'claude', 'grok', 'antigravity', 'gemini']
         rings = {r['id']: r for r in self.m.usage_rings(self.store)}
-        self.assertEqual(list(rings), ['codex', 'claude', 'grok', 'antigravity'])  # not signed in and never used: no ring
-        self.assertEqual(rings['codex']['left'], 15); self.assertEqual([w['left'] for w in rings['codex']['windows']], [93, 15])
-        self.assertEqual(rings['claude']['left'], 100)  # that limit has reset since it was read
-        self.assertEqual((rings['grok']['left'], rings['grok']['windows']), (None, []))  # no limit data: shown as such
-        self.assertEqual(rings['antigravity']['left'], 0)  # follows the model Zook runs by default
+        self.assertEqual(list(rings)[:5], ['codex', 'claude', 'grok', 'antigravity', 'gemini'])  # every model, signed in or not
+        self.assertEqual((rings['codex']['fiveHour'], rings['codex']['week'], rings['codex']['left']), (93, 15, 15)); self.assertEqual([w['left'] for w in rings['codex']['windows']], [93, 15])
+        self.assertEqual((rings['claude']['fiveHour'], rings['claude']['week']), (100, None))  # that limit has reset since it was read
+        self.assertEqual((rings['grok']['left'], rings['grok']['windows'], rings['grok']['known']), (None, [], True))  # signed in, no limit data
+        self.assertEqual((rings['antigravity']['fiveHour'], rings['antigravity']['week']), (None, 0))  # follows the model Zook runs by default
+        self.assertEqual((rings['gemini']['known'], rings['gemini']['left']), (False, None))
         self.assertEqual(self.m.state_view(self.store)['rings'], self.m.usage_rings(self.store))
 
     def test_price_only_for_models_on_the_list(self):
