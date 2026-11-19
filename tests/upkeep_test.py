@@ -281,6 +281,43 @@ class UpkeepTest(unittest.TestCase):
         status, out = self.req('POST', '/api/chat', retry)
         self.assertEqual(status, 202); self.assertNotIn('duplicate', out)
 
+    def test_deleted_bot_keeps_its_name_and_can_be_brought_back(self):
+        self.ask('刪除前的對話')
+        self.req('PATCH', '/api/bots/' + self.bot['id'], {'persona': '很細心', 'pinned': True})
+        self.assertEqual(self.req('DELETE', '/api/bots/' + self.bot['id'])[0], 200)
+        state = self.req('GET', '/api/state')[1]
+        self.assertEqual([(b['id'], b['name']) for b in state['deletedBots']], [(self.bot['id'], '小幫手')])
+        self.assertNotIn('messages', state['deletedBots'][0])  # the window gets the name, not the conversations
+        row = next(r for r in self.req('GET', '/api/usage/bots')[1]['bots'] if r['botId'] == self.bot['id'])
+        self.assertEqual((row['name'], row['deleted'], row['restorable']), ('小幫手', True, True))
+        status, back = self.req('POST', '/api/bots/%s/restore' % self.bot['id'], {})
+        self.assertEqual(status, 200, back)
+        self.assertEqual((back['name'], back['persona'], back['pinned']), ('小幫手', '很細心', False))
+        state = self.req('GET', '/api/state')[1]
+        mine = next(b for b in state['bots'] if b['id'] == self.bot['id'])
+        self.assertEqual([m['content'] for m in mine['messages']], ['刪除前的對話', 'ok from codex']); self.assertEqual(state['deletedBots'], [])
+        row = next(r for r in self.req('GET', '/api/usage/bots')[1]['bots'] if r['botId'] == self.bot['id'])
+        self.assertEqual((row['deleted'], row['restorable']), (False, False))
+        self.assertEqual(self.req('POST', '/api/bots/%s/restore' % self.bot['id'], {})[0], 400)  # nothing left to bring back
+        self.assertIn('喚回 Bot「小幫手」', [x['text'] for x in self.req('GET', '/api/activity')[1]['items']])
+        self.assertEqual(self.ask('喚回後還能回答', bot=mine)['status'], 'completed')
+
+    def test_bots_deleted_before_are_found_in_older_copies(self):
+        self.ask('以前的對話')
+        old = self.req('POST', '/api/export', {})[1]
+        self.stop()
+        path = self.root / 'data/swarmr.json'; data = json.loads(path.read_text())
+        data['bots'] = [b for b in data['bots'] if b['id'] != self.bot['id']]  # deleted by an earlier version, which kept nothing
+        data['settings'].pop('trashSeeded', None); data.pop('deletedBots', None)
+        path.write_text(json.dumps(data))
+        (self.root / 'data/swarmr-before-something.json').write_text(json.dumps(old))
+        (self.root / 'data/swarmr-broken.json').write_text('{nope')
+        self.start()
+        row = next(r for r in self.req('GET', '/api/usage/bots')[1]['bots'] if r['botId'] == self.bot['id'])
+        self.assertEqual((row['name'], row['deleted'], row['restorable']), ('小幫手', True, True))
+        back = self.req('POST', '/api/bots/%s/restore' % self.bot['id'], {})[1]
+        self.assertEqual([m['content'] for m in back['messages']], ['以前的對話', 'ok from codex'])
+
 
 if __name__ == '__main__':
     unittest.main()

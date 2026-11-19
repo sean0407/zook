@@ -181,6 +181,7 @@ def describe_request(method, parts, body, hint, result):
     if area == 'bots':
         if n == 2 and method == 'POST': return 'bot', '新增 Bot「%s」' % (result.get('name') or body.get('name') or '')
         if n == 3 and method == 'DELETE': return 'bot', '刪除 Bot' + named
+        if n == 4 and parts[3] == 'restore': return 'bot', '喚回 Bot「%s」' % (result.get('name') or '')
         if n == 3 and method == 'PATCH':
             changed = list(dict.fromkeys(BOT_FIELD_NAMES[k] for k in body if k in BOT_FIELD_NAMES))
             return ('bot', '修改 Bot%s：%s' % (named, '、'.join(changed))) if changed else None
@@ -403,6 +404,7 @@ def state_view(store):
     view = dict(store.data, rev=store.rev)
     view['jobs'] = [j for j in store.data['jobs'] if not j.get('slim')]
     view.pop('usageArchive', None)
+    view['deletedBots'] = [{k: b.get(k) for k in ('id', 'name', 'color', 'shape', 'deletedAt')} for b in store.data.get('deletedBots') or []]  # their conversations stay on disk
     return view
 
 
@@ -429,3 +431,59 @@ def send_seen(app, key):
 def send_remember(app, key, result):
     """Lock held. Only an accepted send is remembered: one that was refused can simply be tried again."""
     if key: app.__dict__.setdefault('recent_sends', {})[key] = (time.monotonic() + SEND_ONCE_SECONDS, result)
+
+
+# ---- Deleted Bots: a Bot that is deleted is kept aside with its conversations, so it can be brought back with one click.
+TRASH_KEEP = 30
+
+
+def trash_bot(store, bot):
+    """Lock held. Called just before a Bot is removed from the list."""
+    kept = copy.deepcopy(bot); kept['deletedAt'] = NOW()
+    trash = store.data.setdefault('deletedBots', [])
+    trash[:] = [b for b in trash if b.get('id') != bot['id']] + [kept]
+    del trash[:-TRASH_KEEP]
+
+
+def restore_bot(store, bot_id):
+    """Lock held. Put a deleted Bot back, with its conversations. Its group seats and schedules were removed when it was deleted and do not return."""
+    trash = store.data.get('deletedBots') or []
+    kept = next((b for b in trash if b.get('id') == bot_id), None)
+    if not kept or store.find('bots', bot_id): raise ValueError('找不到可以喚回的 Bot。')
+    bot = copy.deepcopy(kept); bot.pop('deletedAt', None); bot.pop('recovered', None)
+    if bot.get('isAdmin') and any(b.get('isAdmin') for b in store.data['bots']): bot['isAdmin'] = False  # there is one 管理員
+    bot.setdefault('isAdmin', False); bot['pinned'] = False
+    for key, value in (('enabledSkills', []), ('enabledMcp', []), ('allowCommands', True), ('persona', ''), ('webSearch', False), ('messages', [])): bot.setdefault(key, value)
+    if bot.get('provider') and bot['provider'] != AUTO and not P.spec(store.data, bot['provider']): bot.update(provider='', model='')
+    if bot.get('account') and not find_account(bot['account']): bot['account'] = ''
+    ensure_chats(bot)
+    section = bot.get('section') or '我的 Bots'
+    if section not in store.data['settings'].setdefault('sections', []): store.data['settings']['sections'].append(section)
+    store.data['bots'].append(bot); trash.remove(kept)
+    return bot
+
+
+def recover_deleted_bots(store):
+    """Lock held, once. Bots deleted before Zook kept them aside are looked up in the older copies of the data that are still on
+    this Mac, so their usage rows can show a name and they can be brought back."""
+    if store.data['settings'].get('trashSeeded'): return False
+    store.data['settings']['trashSeeded'] = True
+    alive = {b['id'] for b in store.data['bots']} | {b.get('id') for b in store.data.get('deletedBots') or []}
+    wanted = ({j['botId'] for j in store.data['jobs']} | set(store.data.get('usageArchive') or {})) - alive
+    if not wanted: return True
+    files = [p for p in list(store.dir.glob('swarmr*.json')) + list(backup_dir(store).glob('zook-*.json')) if p != store.path]
+    def age(path):
+        try: return path.stat().st_mtime
+        except OSError: return 0
+    for path in sorted(files, key=age, reverse=True)[:60]:  # the newest copy that still has the Bot is the closest to how it was
+        if not wanted: break
+        try:
+            if path.is_symlink() or path.stat().st_size > MAX_BACKUP_FILE: continue
+            with path.open(encoding='utf-8') as f: old = json.load(f)
+        except (OSError, ValueError, UnicodeError, RecursionError): continue
+        for bot in (old.get('bots') if isinstance(old, dict) and isinstance(old.get('bots'), list) else []):
+            if isinstance(bot, dict) and bot.get('id') in wanted and isinstance(bot.get('name'), str) and bot['name'].strip():
+                wanted.discard(bot['id'])
+                store.data.setdefault('deletedBots', []).append(dict(copy.deepcopy(bot), deletedAt='', recovered=path.name))
+    del store.data.get('deletedBots', [])[:-TRASH_KEEP]
+    return True

@@ -1671,3 +1671,7 @@ button.run-row:hover { background: #f1f1f1; }
 /* Voice input */
 body[data-voice="on"] [data-action="voice"] { color: #c0564f; background: #fdecea; border-radius: 50%; animation: voice-pulse 1.2s ease-in-out infinite; }
 @keyframes voice-pulse { 50% { box-shadow: 0 0 0 5px rgba(192, 86, 79, .15); } }
+
+/* Deleted Bots on the usage page */
+.gone-tag { margin-left: 6px; font-style: normal; font-weight: 400; font-size: 11px; color: #999; }
+.bot-usage .restore-bot { margin-left: 8px; font-size: 12px; font-weight: 500; }

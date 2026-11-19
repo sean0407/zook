@@ -452,6 +452,10 @@ class Handler(BaseHTTPRequestHandler):
                     st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + [GMAIL_ID])); store.save()
                 return self.respond(200, {'ok': True, 'address': address.strip()})
             if parts[:2] == ['api', 'sync']: return sync_route(self, store, parts, path)
+            if len(parts) == 4 and parts[:2] == ['api', 'bots'] and parts[3] == 'restore' and self.command == 'POST' and not self.device:
+                self.body()
+                with store.lock: bot = restore_bot(store, parts[2]); store.save()
+                return self.respond(200, bot)
             if path == '/api/skill-templates' and self.command == 'GET': return self.respond(200, dict(items=template_view(store)))
             if path == '/api/skills/template' and self.command == 'POST' and not self.device: return self.respond(201, template_add(store, self.body().get('id')))
             if path == '/api/skills/import' and self.command == 'POST':
@@ -849,6 +853,7 @@ class Handler(BaseHTTPRequestHandler):
                             g['botIds'].remove(bot['id'])
                             if was_host: drop_group_host(store, g)
                     store.data['schedules'][:] = [x for x in store.data['schedules'] if x.get('botId') != bot['id']]
+                    trash_bot(store, bot)  # kept aside, so it can be brought back
                     store.data['bots'].remove(bot); store.save(); return self.respond(200, {'ok': True})
                 if path == '/api/settings' and self.command == 'PATCH':
                     body = self.body(); update(store.data['settings'], body, 'settings'); store.save()
@@ -893,7 +898,7 @@ def main():
     for job in app.store.data['jobs']:  # activity saved by earlier versions
         for call in job.get('toolCalls') or []:
             if call.get('name') == 'native_command' and isinstance((call.get('arguments') or {}).get('command'), str): call['arguments']['command'] = hide_command_secrets(call['arguments']['command'])
-    trim_jobs(app.store)
+    trim_jobs(app.store); recover_deleted_bots(app.store)
     app.store.save()
     app.auto_refreshed = time.time()
     if any(b.get('provider') == AUTO for b in app.store.data['bots']): threading.Thread(target=refresh_auto_status, args=(app.store,), daemon=True).start()

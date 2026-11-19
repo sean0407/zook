@@ -143,6 +143,7 @@ def sync_drop_bot(store, bot):
     store.data['schedules'][:] = [x for x in store.data['schedules'] if x.get('botId') != bot['id']]
     for note in store.data['knowledge']:
         if note.get('botId') == bot['id']: note['botId'] = ''
+    trash_bot(store, bot)  # a deletion that came from another Mac can be undone here too
     store.data['bots'].remove(bot)
 
 

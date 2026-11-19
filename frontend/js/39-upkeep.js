@@ -225,3 +225,15 @@
     try { state.data.settings = await post('settings', {recoveredSeen: true}, 'PATCH'); } catch (_) {}
     closeModal();
   });
+
+  // Bringing a deleted Bot back from the usage page.
+  document.addEventListener('click', async e => {
+    const el = e.target.closest?.('[data-up="restore-bot"]');
+    if (!el) return;
+    el.disabled = true;
+    try {
+      const bot = await post('bots/' + encodeURIComponent(el.dataset.id) + '/restore');
+      await refresh(); state.botUsage = await api('usage/bots'); render(true);
+      toast('已喚回「' + bot.name + '」，對話都還在');
+    } catch (err) { el.disabled = false; toast(err.message); }
+  });

@@ -223,7 +223,8 @@ def provider_usage(store, provider, account_id=''):
 
 def bot_usage(store):
     """Token totals per Bot from Zook's own jobs (only replies made after usage tracking began)."""
-    names = {b['id']: b for b in store.data['bots']}
+    alive = {b['id'] for b in store.data['bots']}; gone = {b['id']: b for b in store.data.get('deletedBots') or [] if b.get('id') not in alive}
+    names = dict(gone, **{b['id']: b for b in store.data['bots']})  # a deleted Bot that is kept aside still has its name and looks
     today = datetime.datetime.now().astimezone().date()
     days = [(today - datetime.timedelta(days=i)).isoformat() for i in range(6, -1, -1)]
     rows = {}
@@ -248,7 +249,9 @@ def bot_usage(store):
         if old.get('hasCost'): row['costUsd'] += old.get('costUsd') or 0; row['hasCost'] = True
         for label, tokens in (old.get('models') or {}).items(): row['models'][label] = row['models'].get(label, 0) + _int(tokens)
     result = sorted(rows.values(), key=lambda r: r['input'] + r['output'], reverse=True)
-    for r in result: r['costUsd'] = round(r['costUsd'], 4) if r['hasCost'] else None
+    for r in result:
+        r['costUsd'] = round(r['costUsd'], 4) if r['hasCost'] else None
+        r['deleted'] = r['botId'] not in alive; r['restorable'] = r['botId'] in gone
     return dict(bots=result, days=days, untracked=sum(1 for j in store.data['jobs'] if j.get('status') == 'completed' and not j.get('usage')))
 
 
