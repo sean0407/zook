@@ -213,7 +213,7 @@ class Store:
                 group.update(status='idle', activeJobId=None, activeJobIds=[], runId=None)
         for job in self.data.get('jobs', []):
             job.setdefault('toolCalls', []); job.setdefault('approvals', [])
-            for approval in job['approvals']:
+            for approval in job['approvals'] + (job.get('questions') or []):
                 if approval['status'] == 'pending': approval['status'] = 'expired'
             if job['status'] == 'running':
                 job.update(status='failed', error='服務重新啟動，工作已中斷。')

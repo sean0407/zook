@@ -1703,6 +1703,9 @@ body[data-voice="on"] [data-action="voice"] { color: #c0564f; background: #fdece
 
 /* Choices answered with one click */
 .choice-row { display:flex; flex-wrap:wrap; gap:8px; margin:4px 0 10px 44px; }
+.question-card { margin:0 auto 12px; padding:14px 16px; border:1px solid #c9d8f0; border-radius:12px; background:#f4f8ff; max-width:800px; }
+.question-card p { margin:6px 0; overflow-wrap:anywhere; }
+.question-card small { display:block; margin-top:8px; color:var(--muted); }
 .question-card .choice-row { margin:10px 0 0; }
 .choice-btn { padding:8px 14px; border:1px solid var(--line, #d9d9d9); border-radius:999px; background:var(--panel, #fff); color:inherit; font:inherit; cursor:pointer; text-align:left; max-width:100%; overflow-wrap:anywhere; }
 .choice-btn:hover:not(:disabled) { border-color:#111; }

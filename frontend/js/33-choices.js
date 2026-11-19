@@ -11,10 +11,10 @@
     return `<div class="choice-row" role="group" aria-label="選項">${last.options.map(o => `<button type="button" class="choice-btn" data-choice="${esc(o)}">${esc(o)}</button>`).join('')}</div>`;
   }
 
-  function pendingQuestions(botId) { return jobsForBot(botId).flatMap(j => (j.questions || []).filter(q => q.status === 'pending')); }
+  function pendingQuestions(botId) { return jobsForBot(botId).filter(j => j.status === 'running').flatMap(j => (j.questions || []).filter(q => q.status === 'pending')); }
   function questionCards(botId) {
     const who = state.data.bots.find(x => x.id === botId)?.name || 'Bot';
-    return pendingQuestions(botId).map(q => `<section class="approval-card question-card" aria-label="Bot 的提問"><strong>${esc(who)} 想問你</strong><p>${esc(q.question)}</p>
+    return pendingQuestions(botId).map(q => `<section class="question-card" aria-label="Bot 的提問"><strong>${esc(who)} 想問你</strong><p>${esc(q.question)}</p>
       ${(q.options || []).length ? `<div class="choice-row">${q.options.map(o => `<button type="button" class="choice-btn" data-answer="${esc(q.id)}" data-text="${esc(o)}" ${state.answering[q.id] ? 'disabled' : ''}>${esc(o)}</button>`).join('')}</div>` : ''}
       <form class="answer-form" data-answer-form="${esc(q.id)}"><input type="text" maxlength="2000" placeholder="${(q.options || []).length ? '或自己回答' : '輸入你的回答'}" aria-label="自己回答" value="${esc(state.answerDraft[q.id] || '')}" data-answer-draft="${esc(q.id)}"><button class="secondary" ${state.answering[q.id] ? 'disabled' : ''}>送出</button></form>
       <small class="approval-reason">回答只會告訴 Bot 你的選擇；它之後要做的動作仍照你設定的主動性核准。</small></section>`).join('');
@@ -35,9 +35,12 @@
   document.addEventListener('click', e => {
     const pick = e.target.closest('[data-choice]');
     if (pick) {
-      const input = $('#chat-input'), form = $('#chat-form');
-      if (!input || !form) return;
-      input.value = pick.dataset.choice; form.requestSubmit();
+      const botId = state.selected;  // sent on its own: what is typed in the box, and its attachments, stay where they are
+      if (pick.disabled || !botId) return;
+      pick.closest('.choice-row').querySelectorAll('button').forEach(x => x.disabled = true);
+      post('chat', {botId, content: pick.dataset.choice, clientId: 'choice-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)})
+        .then(async sent => { await refresh(); if (sent.jobId) poll(sent.jobId, botId); })
+        .catch(err => { toast(err.message); render(true); });
       return;
     }
     const answer = e.target.closest('[data-answer]');

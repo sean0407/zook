@@ -36,7 +36,7 @@ struct ChatView: View {
                         if !loaded && model.state == .online { HStack { Spacer(); ProgressView(); Spacer() }.padding(.top, 40) }
                         ForEach(messages) { message in Bubble(message: message, showName: kind == .group).id(message.id) }
                         if kind == .bot, !running, !sending, let last = messages.last, last.role != "user", last.status == "completed", let options = last.options, !options.isEmpty {
-                            ChoiceRow(options: options) { option in draft = option; send() }
+                            ChoiceRow(options: options) { option in pick(option) }
                         }
                         ForEach(questions) { question in
                             QuestionCard(question: question, busy: deciding.contains(question.id)) { text in answer(question, text) }.id("question-" + question.id)
@@ -191,6 +191,16 @@ struct ChatView: View {
         Task {
             do { if kind == .group { try await api.stop(group: id) } else if let job = activeJob { try await api.stop(job: job) } } catch { problem = error.localizedDescription }
             await refresh()
+        }
+    }
+
+    /// Sends one of the Bot's options as the next message, leaving whatever is typed in the box alone.
+    private func pick(_ option: String) {
+        guard let api = model.api, !sending else { return }
+        sending = true; problem = nil; Haptics.tap()
+        Task {
+            do { try await api.send(toBot: id, option); await refresh() } catch { problem = error.localizedDescription }
+            sending = false
         }
     }
 

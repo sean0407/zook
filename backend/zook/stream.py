@@ -16,13 +16,15 @@ def stream_on(store): return store.data['settings'].get('streamReplies') is not 
 
 def partial_start(job):
     """A new attempt begins with nothing on screen: what an earlier model wrote before it failed is not carried over."""
-    PARTIALS[job['id']] = dict(text='', messageId=job.get('messageId'))
+    PARTIALS[job['id']] = dict(text='', messageId=job.get('messageId'), choices=(_active['data'].get('settings') or {}).get('choiceButtons') is not False and not job.get('groupId') and not job.get('origin') and not job.get('internal'))
 
 
 def partial_end(job_id): PARTIALS.pop(job_id, None)
 
 
-def partial_text(job_id): return hide_choice_block((PARTIALS.get(job_id) or {}).get('text') or '')
+def partial_text(job_id):
+    entry = PARTIALS.get(job_id) or {}
+    return hide_choice_block(entry.get('text') or '') if entry.get('choices') else entry.get('text') or ''
 
 
 def partial_of_message(message_id):

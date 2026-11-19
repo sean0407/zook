@@ -49,6 +49,19 @@ class SplitTest(unittest.TestCase):
         self.assertEqual(hide('要用哪一種？\n【選項】'), '要用哪一種？')
         self.assertEqual(hide('文章提到【選項】這個詞，後面還有很多內容。\n第二段\n第三段\n第四段\n第五段\n第六段'), '文章提到【選項】這個詞，後面還有很多內容。\n第二段\n第三段\n第四段\n第五段\n第六段')
         self.assertEqual(hide('一般文字'), '一般文字')
+        self.assertEqual(hide('報告\n【選項】\n第一段很長的內容\n\n第二段'), '報告\n【選項】\n第一段很長的內容\n\n第二段')  # ordinary text after the word stays
+
+    def test_long_or_odd_text_is_quick_and_never_becomes_a_button(self):
+        m = load(); began = time.time()
+        deep = '表格\n【選項】\n' + '\n'.join(' ' * 60 + 'x' for _ in range(8))
+        self.assertEqual(m.hide_choice_block(deep), deep); self.assertEqual(m.split_choices(deep), (deep, None))
+        wide = 'a' + ' ' * 80000 + '\n【選項】\n- A' + ' ' * 20000 + '\n- B'
+        self.assertEqual(m.split_choices(wide)[1], ['A', 'B'])
+        self.assertLess(time.time() - began, 1)
+        for bad in ('- a\x0bevil\n- b', '- a\u202eb\n- c', '- a\u200bb\n- c', '- a\x1cb\n- c'):
+            text = '選一個\n【選項】\n' + bad
+            self.assertEqual(m.split_choices(text), (text, None), repr(bad))
+        self.assertIsNone(m.clean_choice('a\nb')); self.assertEqual(m.clean_choice('  表格 '), '表格')
 
 
 class ChoicesTest(origin_test.OriginTest):
@@ -129,6 +142,13 @@ class ChoicesTest(origin_test.OriginTest):
         job = self.req('GET', '/api/jobs/' + job_id)[1]
         self.assertEqual(job['questions'][0]['status'], 'expired')
         self.assertEqual(self.req('POST', '/api/questions/' + pending[0]['id'], {'answer': 'A'})[0], 409)
+
+    def test_restart_ends_an_open_question(self):
+        m = load(); folder = self.root / 'other'; store = m.Store(folder)
+        store.data['bots'].append(dict(id='b', name='x', messages=[dict(id='m', role='assistant', content='', status='running')]))
+        store.data['jobs'].append(dict(id='j', botId='b', messageId='m', status='running', questions=[dict(id='q', question='?', options=[], status='pending')]))
+        store.save()
+        self.assertEqual(m.Store(folder).data['jobs'][0]['questions'][0]['status'], 'expired')
 
     def test_nobody_to_ask_in_a_scheduled_turn(self):
         mine = self.req('POST', '/api/schedules', {'botId': self.bot['id'], 'content': '排程', 'time': '00:00', 'repeat': 'daily', 'on': False})[1]

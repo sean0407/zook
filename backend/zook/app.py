@@ -644,7 +644,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, ThreadingHTTPServer
                     began = time.monotonic()
                     if pipes.wait(min(2, max(0.05, quiet_limit / 4))): break
                     with store.lock:
-                        asking = any(a.get('status') == 'pending' for a in (store.find('jobs', job_id) or {}).get('approvals', []))
+                        waiting_on = store.find('jobs', job_id) or {}; asking = any(a.get('status') == 'pending' for a in waiting_on.get('approvals', []) + (waiting_on.get('questions') or []))
                     now = time.monotonic()
                     if asking: deadline += now - began; active[job_id] = now; continue  # time spent waiting for the user does not count
                     if now - max(pipes.last, active.get(job_id, 0)) >= quiet_limit: stopped_for = '已經 %d 分鐘沒有任何進展。' % max(1, round(quiet_limit / 60))
