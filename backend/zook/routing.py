@@ -5,7 +5,7 @@ AUTO_DEFAULT_OFF = ('antigravity',)  # the user accepted an account risk for thi
 AUTO_SUBSCRIPTIONS = ('Claude 訂閱帳號', 'ChatGPT 帳號', 'Grok 帳號', 'Google 帳號')
 AUTO_MIN_LEFT = 10  # percent of quota that must remain
 AUTO_TASKS = dict(image=('看圖', ('codex', 'claude', 'antigravity', 'grok')), code=('寫程式', ('codex', 'claude', 'grok', 'antigravity')),
-                  analysis=('長篇分析', ('claude', 'codex', 'antigravity', 'grok')), quick=('簡短問答', ('grok', 'antigravity', 'codex', 'claude')))
+                  analysis=('長篇分析', ('claude', 'codex', 'antigravity', 'grok')), quick=('簡短問答', ('claude', 'codex', 'antigravity', 'grok')))  # measured: Grok thinks for tens of seconds before a short answer
 AUTO_MARKS = dict(image='image', code='code', analysis='analysis', quick='simple')  # the small mark at the end of a reply
 AUTO_LONG = 1500
 _AUTO_CODE = re.compile(r'```|`[^`\n]+`|程式|代碼|除錯|函式|腳本|報錯|重構|編譯|正則|(?<![a-z])(?:bug|debug|python|javascript|typescript|swift|sql|html|css|api|json|regex|script|git|commit|refactor|traceback|function)(?![a-z])', re.I)
@@ -38,6 +38,16 @@ def auto_task(content, names=()):
     if _AUTO_CODE.search(text): return 'code'
     if suffixes or len(text) >= AUTO_LONG or _AUTO_ANALYSIS.search(text): return 'analysis'
     return 'quick'
+
+
+QUICK_NOTE = '；簡短問題用較快的思考強度'
+
+
+def auto_quick_effort(store, bot, content, names=(), given=None):
+    """'fast' when 自動選擇 sees a short question and neither the user, the Bot nor the settings asked for a thinking level."""
+    if given or bot.get('effort') or (store.data['settings'].get('effort') or 'standard') != 'standard': return None
+    if auto_task(content, names) != 'quick' or auto_role(bot): return None
+    return 'fast'
 
 
 def auto_status(provider):

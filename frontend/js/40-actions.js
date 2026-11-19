@@ -295,7 +295,7 @@
           break;
         case 'run-plan': {
           const b = activeBot();
-          const sent = await post('chat', {botId: b.id, content: '請照上面的計畫執行。', effort: currentEffort()});
+          const sent = await post('chat', {botId: b.id, content: '請照上面的計畫執行。', effort: pickedEffort()});
           await refresh(); poll(sent.jobId, b.id);
           break;
         }

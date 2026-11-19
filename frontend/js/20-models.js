@@ -74,6 +74,7 @@
     if (state.effort[key]) return state.effort[key];
     return activeGroup() ? 'standard' : (activeBot()?.effort || state.data.settings.effort || 'standard');
   }
+  const pickedEffort = () => state.effort[effortKey()] || '';  // sent with a message; empty lets Zook use the Bot's own level
   function effortSupported() {
     if (activeGroup()) return true;  // each member uses it when its CLI can
     const b = activeBot(), id = b?.provider || state.data.settings.provider || 'codex';

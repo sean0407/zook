@@ -43,8 +43,8 @@ class AutoRoleTest(unittest.TestCase):
 
     def test_plain_question_follows_the_bots_role(self):
         ask = '公司開張第一天，大家說說自己的看法'
-        self.assertEqual(self.pick(ask)[0], 'grok')  # no Bot given: as before
-        self.assertEqual(self.pick(ask, bot=dict(name='香氛品牌設計'))[0], 'grok')
+        self.assertEqual(self.pick(ask)[0], 'claude')  # no Bot given: a short question goes to the fastest model
+        self.assertEqual(self.pick(ask, bot=dict(name='香氛品牌設計'))[0], 'claude')
         model, mark = self.pick(ask, bot=dict(name='香氛法規品質'))
         self.assertEqual((model, mark['auto']), ('claude', 'Claude analysis')); self.assertIn('角色偏向長篇分析', mark['autoWhy'])
         self.assertEqual(self.pick(ask, bot=dict(name='工程師'))[0], 'codex')

@@ -152,7 +152,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, ThreadingHTTPServer
         use=(provider, model) answers this one message with another model without changing the Bot."""
         store = self.store
         chat_id = chat_id or ensure_chats(bot) and bot['chatId']
-        effort = pick_effort(effort, bot_effort(bot))
+        asked_effort = effort; effort = pick_effort(effort, bot_effort(bot))
         if not isinstance(plan, bool): raise ValueError('先規劃設定無效。')
         if not isinstance(long, bool): raise ValueError('長任務設定無效。')
         messages = chat_messages(bot, chat_id)
@@ -162,6 +162,8 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, ThreadingHTTPServer
         if any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs']): raise Busy('此機器人已有執行中的工作。')
         auto_chain, auto_mark = pick_auto(store, content, [a.get('name') for a in attachments or []], plan, bot=bot) if not use and bot.get('provider') == AUTO else (None, {})
         provider, model = use or (auto_chain[0] if auto_chain else bot_model(store, bot))
+        if auto_chain and not plan and auto_quick_effort(store, bot, content, [a.get('name') for a in attachments or []], asked_effort):
+            effort = 'fast'; auto_mark = dict(auto_mark, autoWhy=auto_mark.get('autoWhy', '') + QUICK_NOTE)
         if not P.spec(store.data, provider) or not isinstance(model, str) or len(model) > 100: raise ValueError('模型設定無效。')
         if plan and (provider_kind(provider) not in PLAN_KINDS or not ability_on(store, provider, 'plan')): raise ValueError('這個模型不支援先規劃。')
         knowledge = [x for x in store.data['knowledge'] if not x.get('botId') or x.get('botId') == bot['id']][-10:]

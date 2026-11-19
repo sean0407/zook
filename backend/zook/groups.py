@@ -200,12 +200,12 @@ def group_round_models(store, group, bot_id):
 class GroupRuns:
     def post_group_message(self, group, content, author=None, attachments=None, effort=None, mode=None):
         # Caller holds the store lock.
-        effort = pick_effort(effort, '')
+        picked = effort not in (None, ''); effort = pick_effort(effort, '')
         if mode is not None and mode not in GROUP_MODES: raise ValueError('討論方式無效。')
         if attachments and isinstance(content, str) and not content.strip(): content = '（請看附件）'
         if not isinstance(content, str) or not content.strip() or len(content) > 30000: raise ValueError('訊息內容無效。')
         if group['status'] == 'running': raise RuntimeError('群組討論進行中，請等待或先停止。')
-        group['runEffort'] = effort
+        group['runEffort'] = effort; group['runEffortPicked'] = picked  # a level chosen for this message is kept even when it is 標準
         members = [b for b in (self.store.find('bots', x) for x in group['botIds']) if b]
         if not members: raise RuntimeError('群組沒有可用的 Bot。')
         targets = group_mentions(content, members)
@@ -281,6 +281,8 @@ class GroupRuns:
             msg = dict(id=ID(), role='assistant', botId=bot_id, content='', createdAt=NOW(), status='running')
             job = dict(id=ID(), botId=bot_id, groupId=group_id, messageId=msg['id'], status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[],
                        effort=group.get('runEffort') if group.get('runEffort') not in (None, '', 'standard') else pick_effort(bot_effort(bot)))
+            if auto_mark and not readonly and not step.get('use') and auto_quick_effort(store, bot, asked.get('content'), [a.get('name') for a in asked.get('attachments') or []], group.get('runEffortPicked')):
+                job['effort'] = 'fast'; auto_mark = dict(auto_mark, autoWhy=auto_mark.get('autoWhy', '') + QUICK_NOTE)
             if job['effort'] != 'standard': msg['effort'] = job['effort']
             if readonly: job['plan'] = True
             if step.get('targetId'): msg['checkOf'] = step['targetId']

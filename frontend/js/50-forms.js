@@ -243,7 +243,7 @@
         state.sendIds[sendFor] = {content, id: clientId};
         const g = activeGroup();
         if (g) {
-          await post('groups/' + encodeURIComponent(g.id) + '/messages', {content, attachments, effort: currentEffort(), mode: currentGroupMode(g), clientId});
+          await post('groups/' + encodeURIComponent(g.id) + '/messages', {content, attachments, effort: pickedEffort(), mode: currentGroupMode(g), clientId});
           delete state.sendIds[sendFor];
           input.value = ''; updateInputMirror(); pendingList().length = 0; delete state.groupMode[g.id]; state.groupEstimate = null;
           await refresh();
@@ -255,7 +255,7 @@
           botId,
           content,
           attachments,
-          effort: currentEffort(),
+          effort: pickedEffort(),
           plan: !!state.plan[botId],
           long: !!state.long[botId],
           clientId
