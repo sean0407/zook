@@ -98,7 +98,7 @@ class UpkeepTest(unittest.TestCase):
         folder = self.root / 'data/backups'; folder.mkdir(exist_ok=True)
         for day in range(1, 29): (folder / ('zook-manual-202001%02d-000000.json' % day)).write_text('{}')
         self.req('POST', '/api/backups', {})
-        names = sorted(p.name for p in folder.glob('zook-manual-*.json'))
+        names = sorted(p.name for p in folder.glob('zook-manual-*.json*'))
         self.assertEqual(len(names), 20); self.assertNotIn('zook-manual-20200101-000000.json', names)
 
     def test_activity_records_changes_not_messages(self):
@@ -248,7 +248,7 @@ class UpkeepTest(unittest.TestCase):
             time.sleep(1.1)  # the kept files are named by the second
         # A damaged backup is passed over; with none left, Zook starts fresh rather than not at all.
         self.stop()
-        for p in (self.root / 'data/backups').glob('*.json'): p.write_text('{broken')
+        for p in (self.root / 'data/backups').glob('*.json*'): p.write_text('{broken')
         path.write_text('nope'); self.start()
         state = self.req('GET', '/api/state')[1]
         self.assertEqual(state['settings']['recovered']['backup'], ''); self.assertEqual(len(state['bots']), 3)

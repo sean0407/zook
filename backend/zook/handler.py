@@ -293,6 +293,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         parts = [unquote(p) for p in path.strip('/').split('/')]
         store = self.server.store
+        if self.command != 'GET' and len(parts) >= 3 and parts[1] in ('bots', 'groups', 'mobile'): store.chat_touch(parts[3] if parts[1] == 'mobile' and len(parts) >= 4 else parts[2])  # its conversations are looked at when this request saves
         self.device = None
         self.hint = activity_hint(store, parts) if self.command in ('PATCH', 'DELETE', 'POST') else ''
         try:
@@ -951,7 +952,7 @@ def main():
                 if job['status'] == 'running':
                     job.update(status='failed', error='服務關閉，工作已中斷。', finishedAt=NOW())
                     app.store.finish_message(job, '', 'failed')
-            app.store.save()
+            app.store.save(everything=True)
         app.stop_remote()
         for flow in list(app.logins.values()) + list(app.installs.values()): flow.cancel()
         for worker in workers:

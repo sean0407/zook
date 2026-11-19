@@ -302,7 +302,9 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
             try: self.sync_tick()
             except Exception: pass
             try:
-                with self.store.lock: backup_daily(self.store)
+                with self.store.lock:
+                    backup_daily(self.store)
+                    if time.monotonic() - self.store.__dict__.get('_chat_swept', 0) >= CHAT_SWEEP_EVERY: self.store.save_chats()  # the once-a-minute look happens even when nothing else saves
             except Exception: pass
 
     def note_skipped(self, job, session):

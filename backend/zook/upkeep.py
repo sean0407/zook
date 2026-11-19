@@ -4,7 +4,7 @@
 # ---- Backups: one copy a day kept for two weeks, copies made by hand, and one before every restore.
 BACKUP_KEEP = {'auto': 14, 'manual': 20, 'safety': 5, 'file': 5}
 BACKUP_KINDS = {'auto': '每日自動', 'manual': '手動', 'safety': '還原前', 'file': '從檔案加入'}
-BACKUP_NAME = re.compile(r'zook-(auto|manual|safety|file)-\d{8}-\d{6}\.json')
+BACKUP_NAME = re.compile(r'zook-(auto|manual|safety|file)-\d{8}-\d{6}\.json(?:\.gz)?')  # one file with everything in it; compressed since conversations moved to their own files
 MAX_BACKUP_FILE = 50 * 1024 * 1024
 
 
@@ -16,28 +16,30 @@ def backup_dir(store):
 
 def backup_list(store):
     out = []
-    for path in backup_dir(store).glob('zook-*.json'):
+    for path in backup_dir(store).glob('zook-*.json*'):
         match = BACKUP_NAME.fullmatch(path.name)
         if not match: continue
         try: stat = path.stat()
         except OSError: continue
         out.append(dict(name=path.name, kind=match.group(1), kindName=BACKUP_KINDS[match.group(1)], size=stat.st_size,
                         at=datetime.datetime.fromtimestamp(stat.st_mtime, datetime.timezone.utc).isoformat()))
-    return sorted(out, key=lambda x: x['name'][-20:], reverse=True)
+    return sorted(out, key=lambda x: re.search(r'\d{8}-\d{6}', x['name']).group(0), reverse=True)
 
 
 def backup_write(store, kind, data):
     """Save one copy and drop the oldest ones of its kind. Passwords and keys are in the Keychain and are never part of a copy."""
     folder = backup_dir(store)
-    name = 'zook-%s-%s.json' % (kind, datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
+    name = 'zook-%s-%s.json.gz' % (kind, datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
     fd, temp = tempfile.mkstemp(prefix='.backup-', dir=str(folder))
     try:
         os.fchmod(fd, 0o600)
-        with os.fdopen(fd, 'w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False)
+        with os.fdopen(fd, 'wb') as raw:
+            with gzip.GzipFile(fileobj=raw, mode='wb', compresslevel=6, mtime=0) as packed: packed.write(json.dumps(data, ensure_ascii=False).encode('utf-8', 'surrogatepass'))
+            raw.flush(); os.fsync(raw.fileno())
         os.replace(temp, folder / name)
     finally:
         if os.path.exists(temp): os.unlink(temp)
-    same = sorted(p.name for p in folder.glob('zook-%s-*.json' % kind) if BACKUP_NAME.fullmatch(p.name))
+    same = sorted((p.name for p in folder.glob('zook-%s-*.json*' % kind) if BACKUP_NAME.fullmatch(p.name)), key=lambda n: re.search(r'\d{8}-\d{6}', n).group(0))
     for old in same[:-BACKUP_KEEP[kind]]:
         try: (folder / old).unlink()
         except OSError: pass
@@ -47,7 +49,7 @@ def backup_write(store, kind, data):
 def backup_daily(store):
     """Lock held. Makes today's copy if there is none yet."""
     today = datetime.datetime.now().strftime('%Y%m%d')
-    if any(p.name.startswith('zook-auto-' + today) for p in backup_dir(store).glob('zook-auto-*.json')): return None
+    if any(p.name.startswith('zook-auto-' + today) for p in backup_dir(store).glob('zook-auto-*.json*')): return None
     return backup_write(store, 'auto', store.data)
 
 
@@ -57,6 +59,10 @@ def backup_check(data):
     for key in ('bots', 'groups', 'knowledge', 'memories', 'schedules', 'jobs', 'skills', 'connectors', 'accounts'):
         if not isinstance(data.get(key, []), list) or any(not isinstance(x, dict) or not isinstance(x.get('id'), str) for x in data.get(key, [])): raise ValueError('備份檔的內容不完整。')
     if any(not isinstance(b.get('name'), str) for b in data['bots']): raise ValueError('備份檔的內容不完整。')
+    # The main file of a Zook that keeps conversations in their own files has no conversation in it. Putting it back as if it were whole would empty them all.
+    if data.get('layout') is not None: raise ValueError('這個檔案是 Zook 的主檔，裡面沒有對話內容，不能當成備份。請改用「備份與還原」建立的備份檔。')
+    for key, rel, messages, _ in chat_conversations(data):
+        if any(not isinstance(m, dict) or any(not isinstance(m.get(k), (str, type(None))) for k in ('id', 'role', 'status', 'content', 'note')) for m in messages): raise ValueError('備份檔的內容不完整。')
     return data
 
 
@@ -69,7 +75,8 @@ def backup_restore(app, name):
     if any(j['status'] == 'running' for j in store.data['jobs']) or any(g.get('status') == 'running' for g in store.data['groups']):
         raise Busy('有 Bot 正在回覆，等它結束再還原。')
     if path.stat().st_size > MAX_BACKUP_FILE: raise ValueError('備份檔太大。')
-    with path.open(encoding='utf-8') as f: data = backup_check(json.load(f))
+    try: data = backup_check(backup_read(path))
+    except (OSError, EOFError, UnicodeError, RecursionError): raise ValueError('這份備份無法讀取，資料沒有變動。')
     for bot in data['bots']: bot.pop('queue', None)  # messages that were waiting when the copy was made have been sent since
     safety = backup_write(store, 'safety', store.data)
     # This Mac's own pairing, sign-ins and sync stay as they are: they belong to the machine, not to the copy.
@@ -80,16 +87,27 @@ def backup_restore(app, name):
     for item in data.get('schedules') or []:
         now_at = store.find('schedules', item['id'])
         if now_at and (now_at.get('trigger'), now_at.get('watchFolder'), now_at.get('mailFrom'), now_at.get('mailSubject')) == (item.get('trigger'), item.get('watchFolder'), item.get('mailFrom'), item.get('mailSubject')): item.update(progress[item['id']])
-    previous = store.path.read_bytes()
+    previous = store.path.read_bytes(); root, aside = store.chat_root(), store.dir / (CHAT_FOLDER + '.old')
     try:
         data.update(keep)
         if keep_remote is not None: data['settings']['remote'] = keep_remote
         with store.path.open('w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False)
-        fresh = Store(store.dir, recover=False)  # runs the same upgrades an old data file gets at startup
+        Store.keep_aside = True  # the conversations that are there now stay in chats.old until the copy is known to be in place
+        try: fresh = Store(store.dir, recover=False)  # runs the same upgrades an old data file gets at startup
+        finally: Store.keep_aside = False
     except Exception:
+        # Back to exactly what was there: the main file, and the conversation files if they had already been swapped.
         store.path.write_bytes(previous); _active['data'] = store.data
+        if aside.is_dir():
+            shutil.rmtree(str(root), ignore_errors=True); os.replace(str(aside), str(root))
+        store.chat_forget()
+        try: store.save(everything=True)
+        except OSError: pass
         raise ValueError('這份備份無法讀取，資料沒有變動。')
+    shutil.rmtree(str(aside), ignore_errors=True)
     store.data = fresh.data; _active['data'] = store.data
+    store.chat_forget()  # the files on disk are the copy's now
+    store.save(everything=True)
     # Older data must not be sent to the other Macs as if it were new, nor its gaps as deletions: syncing stops until it is switched on again.
     return safety, sync_halt(store)
 
@@ -113,8 +131,8 @@ def recover_data(store):
     for backup in backup_list(store):
         if backup['kind'] == 'file' or backup['size'] > MAX_BACKUP_FILE: continue  # a file brought in from elsewhere was never this Mac's data
         try:
-            with (backup_dir(store) / backup['name']).open(encoding='utf-8') as f: store.data = backup_check(json.load(f))
-        except (OSError, ValueError, UnicodeError, RecursionError): continue
+            store.data = backup_check(backup_read(backup_dir(store) / backup['name']))
+        except (OSError, ValueError, UnicodeError, RecursionError, EOFError): continue
         for bot in store.data['bots']: bot.pop('queue', None)
         log_activity(store, 'backup', '資料檔無法讀取，改用備份 %s（損壞的檔案留存為 %s）' % (backup['name'], kept or '無法留存'), by='Zook')
         return dict(at=NOW(), backup=backup['name'], backupAt=backup['at'], kept=kept)
@@ -487,7 +505,7 @@ def recover_deleted_bots(store):
     alive = {b['id'] for b in store.data['bots']} | {b.get('id') for b in store.data.get('deletedBots') or []}
     wanted = ({j['botId'] for j in store.data['jobs']} | set(store.data.get('usageArchive') or {})) - alive
     if not wanted: return True
-    files = [p for p in list(store.dir.glob('swarmr*.json')) + list(backup_dir(store).glob('zook-*.json')) if p != store.path]
+    files = [p for p in list(store.dir.glob('swarmr*.json')) + list(backup_dir(store).glob('zook-*.json*')) if p != store.path]
     def age(path):
         try: return path.stat().st_mtime
         except OSError: return 0
@@ -495,8 +513,8 @@ def recover_deleted_bots(store):
         if not wanted: break
         try:
             if path.is_symlink() or path.stat().st_size > MAX_BACKUP_FILE: continue
-            with path.open(encoding='utf-8') as f: old = json.load(f)
-        except (OSError, ValueError, UnicodeError, RecursionError): continue
+            old = backup_read(path)
+        except (OSError, ValueError, UnicodeError, RecursionError, EOFError): continue
         for bot in (old.get('bots') if isinstance(old, dict) and isinstance(old.get('bots'), list) else []):
             if isinstance(bot, dict) and bot.get('id') in wanted and isinstance(bot.get('name'), str) and bot['name'].strip():
                 wanted.discard(bot['id'])

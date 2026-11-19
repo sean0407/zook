@@ -10,7 +10,7 @@
   function backupSection() {
     const list = state.backups;
     const rows = !list ? loadingBlock('正在讀取備份…') : list.length ? `<div class="plain-rows">${list.map(b => `<div class="plain-row"><div class="plain-copy"><strong>${esc(formatDate(b.at))}</strong><span>${esc(b.kindName)} · ${fmtSize(b.size)}</span></div><div class="plain-actions"><button class="link" data-up="backup-restore" data-id="${esc(b.name)}">還原</button><button class="link danger" data-up="backup-delete" data-id="${esc(b.name)}">刪除</button></div></div>`).join('')}</div>` : '<div class="blank">還沒有備份。</div>';
-    return `<h2 class="settings-h">備份與還原</h2><p class="muted small settings-note">每天自動備份一次，保留 14 天。內容包含 Bot、對話、知識、排程與設定；密碼和金鑰留在鑰匙圈，不會放進備份。</p><div class="setting-actions backup-actions"><button class="primary" data-up="backup-now">立即備份</button><button class="secondary" data-action="export">匯出成檔案</button><button class="secondary" data-up="backup-pick">從檔案加入</button><input type="file" id="backup-file" accept=".json,application/json" hidden></div>${rows}`;
+    return `<h2 class="settings-h">備份與還原</h2><p class="muted small settings-note">每天自動備份一次，保留 14 天。內容包含 Bot、對話、知識、排程與設定；密碼和金鑰留在鑰匙圈，不會放進備份。</p><div class="setting-actions backup-actions"><button class="primary" data-up="backup-now">立即備份</button><button class="secondary" data-action="export">匯出成檔案</button><button class="secondary" data-up="backup-pick">從檔案加入</button><input type="file" id="backup-file" accept=".json,.gz,application/json,application/gzip" hidden></div>${rows}`;
   }
 
   const BUDGET_OVER = [{id: 'warn', name: '只提醒', hint: '繼續回覆'}, {id: 'switch', name: '改用備用模型', hint: '沒有備用模型時照常回覆'}, {id: 'stop', name: '停止回覆', hint: '到下個月或調高上限為止'}];
@@ -67,7 +67,7 @@
       if (t.id === 'backup-file' && t.files[0]) {
         const file = t.files[0]; t.value = '';
         let data;
-        try { data = JSON.parse(await file.text()); } catch (_) { throw new Error('這不是 Zook 的備份檔。'); }
+        try { data = JSON.parse(await backupText(file)); } catch (_) { throw new Error('這不是 Zook 的備份檔。'); }
         state.backups = (await post('backups/file', {data})).items; render(true); toast('已加入，按「還原」才會套用');
       } else if (t.dataset.budget !== undefined) {
         state.data.settings = await post('settings', {budgets: {[t.dataset.budget]: Number(t.value)}}, 'PATCH'); await loadUpkeep('usage'); toast('已更新預算');
@@ -212,13 +212,25 @@
     catch (err) { toast(err.message); }
   });
 
+  // A backup is one compressed file; older ones are plain text.
+  async function backupText(file) {
+    const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
+    if (head[0] !== 0x1f || head[1] !== 0x8b) return file.text();
+    return new Response(file.stream().pipeThrough(new DecompressionStream('gzip'))).text();
+  }
+
   // The data file could not be read at startup: say once what Zook did about it.
   function recoveryNotice() {
     const r = state.data?.settings?.recovered;
     if (!r || state.recoveryShown || document.querySelector('.modal')) return;
     state.recoveryShown = true;
-    const what = r.backup ? `已改用 ${esc(formatDate(r.backupAt))} 的備份，那之後的變動沒有保留。` : '找不到可用的備份，所以從全新的狀態開始。';
-    modal('資料檔無法讀取', `<div class="modal-body"><p>Zook 的資料檔損壞了。${what}</p>${r.kept ? `<p class="muted">損壞的檔案沒有刪除，改名為 <code>${esc(r.kept)}</code>，留在 Zook 的資料夾裡。</p>` : ''}${r.backup ? '<p class="muted">多台 Mac 同步如果原本開著，已經先停止，確認資料後再到設定重新開啟。</p>' : ''}</div>`, '<div class="modal-foot"><button class="primary" data-up="recovery-ok">知道了</button></div>');
+    const chats = (r.chats || []).map(c => `<li>${esc(c.name)}：${c.backup ? `已改用 ${esc(formatDate(c.backupAt))} 的備份` : '沒有備份可用，目前是空的'}</li>`).join('');
+    const lost = chats ? `<p>下面的對話檔案無法讀取，其他對話不受影響：</p><ul class="steps">${chats}</ul><p class="muted">損壞的檔案沒有刪除，留在 Zook 資料夾的 chats 裡，檔名結尾是 .damaged。</p>` : '';
+    const done = '<div class="modal-foot"><button class="primary" data-up="recovery-ok">知道了</button></div>';
+    if (r.chatsOnly) return modal('有對話無法讀取', `<div class="modal-body">${lost}</div>`, done);
+    const kept = r.chatsKept ? '對話內容各自存在自己的檔案裡，沒有受影響；' : '';
+    const what = r.backup ? `${kept}Bot 清單、設定、排程等已改用 ${esc(formatDate(r.backupAt))} 的備份，那之後對它們的變動沒有保留。` : r.chatsKept ? '找不到可用的備份，所以 Bot 清單與設定從全新的狀態開始。原本的對話檔案沒有刪除，留在 Zook 的資料夾裡。' : '找不到可用的備份，所以從全新的狀態開始。';
+    modal('資料檔無法讀取', `<div class="modal-body"><p>Zook 的資料檔損壞了。${what}</p>${r.adopted ? `<p class="muted">有 ${r.adopted} 個備份之後才開始的對話，已經放回原本的 Bot。</p>` : ''}${lost}${r.kept ? `<p class="muted">損壞的檔案沒有刪除，改名為 <code>${esc(r.kept)}</code>，留在 Zook 的資料夾裡。</p>` : ''}${r.backup ? '<p class="muted">多台 Mac 同步如果原本開著，已經先停止，確認資料後再到設定重新開啟。</p>' : ''}</div>`, done);
   }
   document.addEventListener('click', async e => {
     if (!e.target.closest?.('[data-up="recovery-ok"]')) return;

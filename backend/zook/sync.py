@@ -156,6 +156,7 @@ def sync_put(store, key, value, gone=()):
         if not bot:
             bot = dict(id=parts[1], messages=[], chats=[], chatId=None, enabledSkills=[], enabledMcp=[], allowCommands=True, webSearch=False)
             store.data['bots'].append(bot)
+            if store.data.get('deletedBots'): store.data['deletedBots'] = [b for b in store.data['deletedBots'] if b.get('id') != parts[1]]  # back from another Mac: it is no longer a Bot kept aside
         if not value['provider'] and bot.get('provider') and bot['provider'] not in SYNC_PROVIDERS: value = dict(value, provider=bot['provider'], model=bot.get('model') or '')  # this Mac's own model for it stays
         bot.setdefault('isAdmin', False)  # who the 管理員 is, is decided on each Mac, never by a file
         bot.update(value)
@@ -322,7 +323,7 @@ def sync_pass(app):
             if changed: sync_marks_save(store)
             names = [d for d, _, _ in others]
             if took or conflicts or state.get('lastError') or names != state.get('others'):
-                state.update(lastAt=NOW(), lastError='', others=names); store.save()
+                state.update(lastAt=NOW(), lastError='', others=names); store._chat_swept = 0; store.save()  # another Mac's changes can be in any conversation: look at all of them now
             else: state['lastAt'] = NOW()  # nothing to write down: the time is only shown
         target = os.path.join(folder, 'zook-sync-%s.json' % own)
         if changed or took or folder in _sync_unwritten or not os.path.exists(target):

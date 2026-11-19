@@ -155,23 +155,28 @@ def schedule_chat(bot):
     return chat['id']
 
 
-class Store:
+class StoreBase:
     def __init__(self, directory, recover=True):
         self.dir = pathlib.Path(directory).resolve()
         self.dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.path = self.dir / 'swarmr.json'
         self.lock = threading.RLock()
-        recovered = None
-        if self.path.exists():
+        recovered, layout, existed = None, None, self.path.exists()
+        if existed:
             try:
                 with self.path.open(encoding='utf-8') as f: self.data = json.load(f)
                 if not isinstance(self.data, dict) or not isinstance(self.data.get('bots'), list): raise ValueError('not Zook data')
+                layout = self.data.pop('layout', None)
             except (ValueError, UnicodeError, RecursionError):
                 # A file cut short by a power loss or a full disk must not keep Zook from opening.
                 if not recover: raise
                 recovered = recover_data(self)
+        elif recover and chats_on_disk(self.dir):
+            # The main file is gone but the conversations are still there: the same as a main file that cannot be read.
+            recovered = recover_data(self)
         else:
             self.data = seeds()
+        self.load_conversations(existed, layout, recovered)
         for bot in self.data.get('bots', []):
             bot.setdefault('enabledSkills', []); bot.setdefault('enabledMcp', []); bot.setdefault('allowCommands', True)
             ensure_chats(bot)
@@ -219,22 +224,17 @@ class Store:
                 job.update(status='failed', error='服務重新啟動，工作已中斷。')
                 self.finish_message(job, '', 'failed')
         if recovered: self.data['settings']['recovered'] = recovered; sync_halt(self)
-        self.save()
+        self.note_damaged()
+        if self.__dict__.pop('_split_due', False): self.chats_split(self.__dict__.pop('_split_first', False))  # older data: every conversation becomes a file, then the main file changes form
+        else: self.save(everything=True)
 
     rev = int(time.time() * 1000)  # differs for every start, and goes up with every save, so a window can ask whether anything changed since it last looked
 
-    def save(self):
+    def save(self, everything=False):
+        """Conversations that changed go to their own files first, then the main file. everything=True looks at all of them."""
         Store.rev += 1
-        fd, name = tempfile.mkstemp(prefix='.swarmr-', dir=str(self.dir))
-        try:
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                json.dump(self.data, f, ensure_ascii=False)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(name, self.path)
-        finally:
-            if os.path.exists(name): os.unlink(name)
+        self.save_chats(everything)
+        self.save_main()
 
     def find(self, collection, item_id):
         return next((x for x in self.data[collection] if x['id'] == item_id), None)

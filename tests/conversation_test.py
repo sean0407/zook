@@ -115,8 +115,11 @@ class ConversationTest(unittest.TestCase):
         self.say('legacy question')
         self.stop()
         path = self.root / 'data/swarmr.json'; data = json.loads(path.read_text())
-        for b in data['bots']: b.pop('chats', None); b.pop('chatId', None)
-        path.write_text(json.dumps(data)); self.start()
+        for b in data['bots']:  # the oldest form of the data: one message list inside the Bot, and nothing else
+            file = self.root / 'data/chats' / b['id'] / (b['chatId'] + '.json')
+            b['messages'] = json.loads(file.read_text())['messages'] if file.exists() else []
+            b.pop('chats', None); b.pop('chatId', None)
+        data.pop('layout'); path.write_text(json.dumps(data)); self.start()
         bot = self.state_bot()
         self.assertEqual(len(bot['chats']), 1)
         self.assertEqual((bot['chatId'], bot['chats'][0]['title']), (bot['chats'][0]['id'], 'legacy question'))
