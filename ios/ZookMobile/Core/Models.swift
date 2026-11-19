@@ -2,7 +2,7 @@
 import Foundation
 
 struct BotSummary: Codable, Identifiable, Equatable {
-    var id: String, name: String, color: String?, shape: String?, section: String, pinned: Bool, model: String, preview: String, lastAt: String?, running: Bool, pending: Int
+    var id: String, name: String, color: String?, shape: String?, section: String, pinned: Bool, model: String, preview: String, lastAt: String?, running: Bool, pending: Int, jobTitle: String?
 }
 
 struct GroupSummary: Codable, Identifiable, Equatable {

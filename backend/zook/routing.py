@@ -12,7 +12,7 @@ _AUTO_CODE = re.compile(r'```|`[^`\n]+`|程式|代碼|除錯|函式|腳本|報�
 _AUTO_ANALYSIS = re.compile(r'分析|比較|評估|研究|報告|策略|總結|摘要|規劃|企劃|優缺點|深入|(?<![a-z])(?:analy[sz]e|analysis|compare|research|report|summari[sz]e)(?![a-z])', re.I)
 
 
-# What a Bot is for, read from its name first, then its persona. It decides the model when the message itself does not say what
+# What a Bot is for, read from its job title first, then its name, then its persona. It decides the model when the message itself does not say what
 # kind of work it is. Work instructions are not read: a team often shares one text, which would make every member look alike.
 _ROLE_CODE = re.compile(r'工程師|程式|軟體|前端|後端|開發者|資料庫|(?<![a-z])(?:engineer|developer|coder|devops|programmer)(?![a-z])', re.I)
 _ROLE_ANALYSIS = re.compile(r'法規|法務|合規|品質|品管|財務|會計|稽核|營運|研發|研究|分析|策略|風險|審查|查核|數據|顧問|規劃|企劃|採購|供應鏈|(?<![a-z])(?:legal|compliance|quality|finance|accounting|audit|research|analyst|strategy|risk|planning)(?![a-z])', re.I)
@@ -20,7 +20,7 @@ _ROLE_ANALYSIS = re.compile(r'法規|法務|合規|品質|品管|財務|會計|�
 
 def auto_role(bot):
     """'code', 'analysis' or None for a Bot whose role does not lean either way (design, marketing, sales, general help)."""
-    for text in (bot.get('name'), (bot.get('persona') or '')[:300]):
+    for text in (bot.get('jobTitle'), bot.get('name'), (bot.get('persona') or '')[:300]):
         text = str(text or '')
         if _ROLE_CODE.search(text): return 'code'
         if _ROLE_ANALYSIS.search(text): return 'analysis'

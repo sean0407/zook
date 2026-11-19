@@ -83,7 +83,7 @@ struct HomeView: View {
                 section(name, count: list.count) {
                     ForEach(list) { bot in
                         NavigationLink(value: Route.bot(bot.id, bot.name)) {
-                            ConversationRow(name: bot.name, preview: bot.preview.isEmpty ? "開始新的對話" : bot.preview, time: bot.lastAt, running: bot.running,
+                            ConversationRow(name: (bot.jobTitle ?? "").isEmpty ? bot.name : bot.name + " · " + (bot.jobTitle ?? ""), preview: bot.preview.isEmpty ? "開始新的對話" : bot.preview, time: bot.lastAt, running: bot.running,
                                             pending: bot.pending, unread: model.unread(bot.id, bot.lastAt)) { BotAvatar(color: bot.color, shape: bot.shape, size: 52) }
                         }.buttonStyle(.plain)
                     }

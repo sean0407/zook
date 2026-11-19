@@ -164,7 +164,7 @@
   }
 
   function botRow(b) {
-    return `<button class="side-row ${state.page==='chat'&&!state.groupId&&b.id===state.selected?'active':''}" data-action="select-bot" data-id="${esc(b.id)}" ${state.query ? '' : `draggable="true" data-drag-bot="${esc(b.id)}"`}>${avatar(b)}<span class="side-copy"><span class="side-name">${esc(b.name)}${pendingForBot(b.id).length ? ' <span class="approval-badge">待核准</span>' : ''}</span><span class="side-preview">${esc(messagePreview(b))}</span></span></button>`
+    return `<button class="side-row ${state.page==='chat'&&!state.groupId&&b.id===state.selected?'active':''}" data-action="select-bot" data-id="${esc(b.id)}" ${state.query ? '' : `draggable="true" data-drag-bot="${esc(b.id)}"`}>${avatar(b)}<span class="side-copy"><span class="side-name">${esc(b.name)}${jobTitle(b)}${pendingForBot(b.id).length ? ' <span class="approval-badge">待核准</span>' : ''}</span><span class="side-preview">${esc(messagePreview(b))}</span></span></button>`
   }
 
   function sectionNames() {
@@ -200,6 +200,7 @@
 
   function jobsForBot(botId) { return Object.values(state.jobDetails).filter(j => j.botId === botId && !j.groupId); }
   function jobsForGroup(groupId) { return Object.values(state.jobDetails).filter(j => j.groupId === groupId); }
+  const jobTitle = b => b.jobTitle ? ` <span class="job-title">${esc(b.jobTitle)}</span>` : '';
   function pendingIn(jobs) { return jobs.flatMap(j => (j.approvals || []).filter(a => a.status === 'pending').map(a => ({...a, job: j}))); }
   function pendingForBot(botId) { return pendingIn(jobsForBot(botId)); }
   function argsView(args) { try { return JSON.stringify(args, null, 2) || '{}'; } catch (_) { return String(args); } }
@@ -341,7 +342,7 @@
     const activeIds = g.activeJobIds?.length ? g.activeJobIds : g.activeJobId ? [g.activeJobId] : [];
     const activeNames = running ? activeIds.map(id => state.data.bots.find(b => b.id === state.jobDetails[id]?.botId)?.name).filter(Boolean) : [];
     const active = activeNames.length ? {name: activeNames.join('、')} : null;
-    return `<aside class="detail"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatarStack(g,'big')}<h2>${esc(g.name)}</h2><p>${members.length} 位成員${running ? ' · 討論中' + (active ? '（' + esc(active.name) + ' 發言中）' : '') : ''}</p><button class="secondary detail-edit" data-action="edit-group">編輯群組</button></div><div class="tabs"><button data-action="group-tab" data-id="members" class="${state.groupTab==='files'?'':'active'}">成員</button><button data-action="group-tab" data-id="files" class="${state.groupTab==='files'?'active':''}">檔案</button></div>${state.groupTab==='files'?groupFilesTab(g):`${members.map(b => `<button class="member-row" data-action="select-bot" data-id="${esc(b.id)}">${avatar(b)}<span><strong>${esc(b.name)}</strong><small>${esc([(b.provider||state.data.settings.provider||'') + (b.model ? ' ' + b.model : ''), '主動性：' + permissionName(b.permissionMode || state.data.settings.permissionMode)].filter(Boolean).join(' · '))}</small></span></button>`).join('')}<div class="detail-empty">點成員可以查看他在討論中查了什麼、用了哪些 Skill。</div>`}</aside>`;
+    return `<aside class="detail"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatarStack(g,'big')}<h2>${esc(g.name)}</h2><p>${members.length} 位成員${running ? ' · 討論中' + (active ? '（' + esc(active.name) + ' 發言中）' : '') : ''}</p><button class="secondary detail-edit" data-action="edit-group">編輯群組</button></div><div class="tabs"><button data-action="group-tab" data-id="members" class="${state.groupTab==='files'?'':'active'}">成員</button><button data-action="group-tab" data-id="files" class="${state.groupTab==='files'?'active':''}">檔案</button></div>${state.groupTab==='files'?groupFilesTab(g):`${members.map(b => `<button class="member-row" data-action="select-bot" data-id="${esc(b.id)}">${avatar(b)}<span><strong>${esc(b.name)}${jobTitle(b)}</strong><small>${esc([(b.provider||state.data.settings.provider||'') + (b.model ? ' ' + b.model : ''), '主動性：' + permissionName(b.permissionMode || state.data.settings.permissionMode)].filter(Boolean).join(' · '))}</small></span></button>`).join('')}<div class="detail-empty">點成員可以查看他在討論中查了什麼、用了哪些 Skill。</div>`}</aside>`;
   }
   function groupModal(g = {}) {
     const editing = !!g.id, chosen = new Set(g.botIds || (state.selected && !state.groupId ? [state.selected] : []));

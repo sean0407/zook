@@ -231,7 +231,7 @@ def bot_usage(store):
     for job in store.data['jobs']:
         u = job.get('usage')
         if not isinstance(u, dict): continue
-        row = rows.setdefault(job['botId'], dict(botId=job['botId'], name=names.get(job['botId'], {}).get('name', '已刪除的 Bot'),
+        row = rows.setdefault(job['botId'], dict(botId=job['botId'], name=names.get(job['botId'], {}).get('name', '已刪除的 Bot'), jobTitle=names.get(job['botId'], {}).get('jobTitle') or '',
                               color=names.get(job['botId'], {}).get('color', '#959595'), shape=names.get(job['botId'], {}).get('shape', 0),
                               replies=0, groupReplies=0, input=0, cachedInput=0, output=0, costUsd=0.0, hasCost=False, models={}, daily={d: 0 for d in days}))
         row['replies'] += 1; row['groupReplies'] += 1 if job.get('groupId') else 0
@@ -243,7 +243,7 @@ def bot_usage(store):
         except ValueError: day = ''
         if day in row['daily']: row['daily'][day] += _int(u.get('input')) + _int(u.get('output'))
     for bot_id, old in (store.data.get('usageArchive') or {}).items():  # replies older than the job list keeps
-        row = rows.setdefault(bot_id, dict(botId=bot_id, name=names.get(bot_id, {}).get('name', '已刪除的 Bot'), color=names.get(bot_id, {}).get('color', '#959595'), shape=names.get(bot_id, {}).get('shape', 0),
+        row = rows.setdefault(bot_id, dict(botId=bot_id, name=names.get(bot_id, {}).get('name', '已刪除的 Bot'), jobTitle=names.get(bot_id, {}).get('jobTitle') or '', color=names.get(bot_id, {}).get('color', '#959595'), shape=names.get(bot_id, {}).get('shape', 0),
                               replies=0, groupReplies=0, input=0, cachedInput=0, output=0, costUsd=0.0, hasCost=False, models={}, daily={d: 0 for d in days}))
         for k in ('replies', 'groupReplies', 'input', 'cachedInput', 'output'): row[k] += _int(old.get(k))
         if old.get('hasCost'): row['costUsd'] += old.get('costUsd') or 0; row['hasCost'] = True

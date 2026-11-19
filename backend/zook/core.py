@@ -477,7 +477,7 @@ def web_enabled():
 def identity_block(bot):
     """Who the Bot is: its own persona file, then its work instructions. Personal instruction files are not used."""
     now = datetime.datetime.now().astimezone()
-    parts = ['你是 %s。' % bot['name'], '現在時間：%s（%s）。' % (now.strftime('%Y-%m-%d %H:%M'), now.tzname() or 'local'), ISOLATION_NOTE, NATURAL_REPLY_NOTE]
+    parts = ['你是 %s%s。' % (bot['name'], '，職稱是「%s」' % bot['jobTitle'] if bot.get('jobTitle') else ''), '現在時間：%s（%s）。' % (now.strftime('%Y-%m-%d %H:%M'), now.tzname() or 'local'), ISOLATION_NOTE, NATURAL_REPLY_NOTE]
     if web_enabled():
         parts.append('你可以上網搜尋與讀取網頁來取得最新資訊。涉及價格、新聞、日期等會變動的事實時，先查證再回答，並註明來源網站與資料時間。')
     else:
@@ -624,7 +624,7 @@ def mobile_home(store):
     bots = []
     for b in data['bots']:
         preview, at = last(b.get('messages'))
-        bots.append(dict(id=b['id'], name=b['name'], color=b.get('color'), shape=b.get('shape'), section=b.get('section') or '我的 Bots', pinned=bool(b.get('pinned')),
+        bots.append(dict(id=b['id'], name=b['name'], jobTitle=b.get('jobTitle') or '', color=b.get('color'), shape=b.get('shape'), section=b.get('section') or '我的 Bots', pinned=bool(b.get('pinned')),
                          model=bot_model_text(store, b), preview=preview, lastAt=at, running=b['id'] in running,
                          pending=sum(1 for a in pending if a['botId'] == b['id'] and not job_group.get(a['jobId']))))
     groups = []
@@ -669,7 +669,7 @@ def mobile_bot(store, bot):
     own = [j for j in data['jobs'] if j['botId'] == bot['id']]
     direct = [j for j in own if not j.get('groupId')]
     active = next((j['id'] for j in direct if j.get('status') == 'running'), None)
-    return dict(bot=dict(id=bot['id'], name=bot['name'], color=bot.get('color'), shape=bot.get('shape'), model=bot_model_text(store, bot)),
+    return dict(bot=dict(id=bot['id'], name=bot['name'], jobTitle=bot.get('jobTitle') or '', color=bot.get('color'), shape=bot.get('shape'), model=bot_model_text(store, bot)),
                 messages=[mobile_message(m, names) for m in (bot.get('messages') or [])[-80:]]
                          + [dict(id=e['id'], role='user', content=e['content'], status='queued', createdAt=e.get('createdAt'), note='排隊中，Bot 回覆完就會送出') for e in bot.get('queue') or [] if e.get('chatId') == bot.get('chatId')],
                 running=bool(active), activeJobId=active,

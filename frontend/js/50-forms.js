@@ -269,6 +269,7 @@
           id = form.dataset.id;
         let data = {
           name: d.get('name').trim(),
+          jobTitle: (d.get('jobTitle') || '').trim(),
           shape: d.get('shape'),
           color: d.get('color'),
           instructions: d.get('instructions'),

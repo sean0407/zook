@@ -762,7 +762,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, ThreadingHTTPServer
             with store.lock:
                 if any(b['name'].strip().lower() == name.lower() for b in store.data['bots']): raise RuntimeError('已經有名為「%s」的 Bot。' % name)
                 new = dict(id=ID(), name=name, color=args.get('color') or colors_for(len(store.data['bots'])), shape=str(len(store.data['bots']) % 13), instructions='', persona='', provider=AUTO, model='', pinned=False, section='團隊', messages=[], enabledSkills=[], enabledMcp=[], allowCommands=True, isAdmin=False)
-                update(new, {k: args[k] for k in ('name', 'persona', 'instructions', 'provider', 'model', 'color') if args.get(k)}, 'bot')
+                update(new, {k: args[k] for k in ('name', 'jobTitle', 'persona', 'instructions', 'provider', 'model', 'color') if args.get(k)}, 'bot')
                 ensure_chats(new); store.data['bots'].append(new); store.save(); watch_auto_status(store, new)
             return {'created': new['name'], 'id': new['id']}
         def create_group(args):
@@ -782,7 +782,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, ThreadingHTTPServer
         return tools + [
             (runtime._schema('zook_list_team', 'List all Zook Bots (name, role, model) and groups.', {}), list_team, False),
             (runtime._schema('zook_create_bot', 'Create a new Zook Bot after user approval.',
-                             {'name': S('Bot name'), 'persona': S('Persona: personality, tone, values and how it talks (Traditional Chinese)'), 'instructions': S('Work instructions: role and responsibilities'), 'provider': S('Provider id; empty = pick automatically for each message'), 'model': S('Model ID; empty = default'), 'color': S('Hex color like #2585f6, optional')}, ['name', 'persona', 'instructions'], False), create_bot, True),
+                             {'name': S('Bot name'), 'jobTitle': S('Job title, at most 12 characters, e.g. 行銷企劃'), 'persona': S('Persona: personality, tone, values and how it talks (Traditional Chinese)'), 'instructions': S('Work instructions: role and responsibilities'), 'provider': S('Provider id; empty = pick automatically for each message'), 'model': S('Model ID; empty = default'), 'color': S('Hex color like #2585f6, optional')}, ['name', 'persona', 'instructions'], False), create_bot, True),
             (runtime._schema('zook_create_group', 'Create a group chat of 2–10 existing Bots (by name) after user approval.',
                              {'name': S('Group name, optional'), 'bot_names': A('Exact Bot names, 2–10')}, ['bot_names'], False), create_group, True),
             (runtime._schema('zook_start_group_discussion', 'Post a kickoff message into a group so its Bots start working, after user approval. Use @Bot names to assign owners.',

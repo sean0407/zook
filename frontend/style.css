@@ -1758,3 +1758,8 @@ body[data-voice="on"] [data-action="voice"] { color: #c0564f; background: #fdece
 .overview-totals div { display:flex; flex-direction:column; gap:4px; }
 .overview-totals span { color:var(--muted); font-size:12px; }
 .overview-totals b { font-size:18px; font-weight:650; }
+
+/* Job title beside a Bot's name */
+.job-title { margin-left:6px; padding:1px 7px; border-radius:99px; background:#ececec; color:#666; font-size:11px; font-weight:500; white-space:nowrap; }
+.bot-names { display:flex; flex-direction:column; gap:6px; flex:1; min-width:0; }
+.bot-names input[name="jobTitle"] { font-size:13px; }

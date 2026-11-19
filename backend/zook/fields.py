@@ -29,7 +29,7 @@ def set_group_fields(store, group, body, creating=False):
 
 
 def update(target, body, kind):
-    fields = {'bot': {'name': 100, 'color': 30, 'shape': 30, 'instructions': 10000, 'persona': 20000, 'provider': 20, 'model': 100, 'section': 100},
+    fields = {'bot': {'name': 100, 'color': 30, 'shape': 30, 'instructions': 10000, 'persona': 20000, 'provider': 20, 'model': 100, 'section': 100, 'jobTitle': 12},
               'settings': {'provider': 20, 'model': 100}, 'knowledge': {'title': 300, 'content': 100000, 'botId': 100}}[kind]
     changes = {}
     for key, limit in fields.items():
@@ -37,7 +37,7 @@ def update(target, body, kind):
             value = body[key]
             if not isinstance(value, str) or len(value) > limit or (key == 'name' and not value.strip()): raise ValueError('欄位 %s 無效。' % key)
             if key == 'provider' and not ((kind == 'bot' and value in ('', AUTO)) or P.spec(_active['data'], value)): raise ValueError('供應商無效。')
-            changes[key] = value
+            changes[key] = value.strip() if key == 'jobTitle' else value
     if kind == 'settings' and 'autoModels' in body:
         value = body['autoModels']
         if not isinstance(value, list) or any(x not in AUTO_MODELS for x in value): raise ValueError('自動選擇的模型無效。')
