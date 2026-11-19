@@ -325,3 +325,57 @@ def upkeep_route(handler, store, parts, path):
         (backup_dir(store) / parts[2]).unlink(); log_activity(store, 'backup', '刪除備份 ' + parts[2])
         return handler.respond(200, dict(items=backup_list(store)))
     return handler.error(404, '找不到資源。')
+
+
+# ---- Old jobs: a finished reply keeps its details only while it is recent, so the data file and the window stay small.
+JOBS_FULL_PER_BOT = 10   # the newest finished replies of each Bot keep what it did and its approvals
+JOBS_WITH_ANSWER = 3     # only the very newest also keep a second copy of the answer; the conversation always has it
+JOBS_SLIM_DAYS = 30      # after that only what usage figures and the files list need; older than this is added to the totals
+JOB_SLIM_KEEP = ('id', 'botId', 'groupId', 'chatId', 'messageId', 'status', 'createdAt', 'finishedAt', 'usage', 'fallback', 'effort', 'plan', 'long')
+
+
+def _job_time(job):
+    try: return datetime.datetime.fromisoformat(str(job.get('finishedAt') or job.get('createdAt'))).timestamp()
+    except ValueError: return 0
+
+
+def trim_jobs(store):
+    """Lock held. Returns True when something was made smaller. A running reply, and one a schedule is still waiting on, are left alone."""
+    jobs, changed, seen = store.data['jobs'], False, {}
+    waiting = {run.get('jobId') for item in store.data.get('schedules') or [] for run in item.get('runs') or [] if run.get('status') == 'running'}
+    talking = {g['id'] for g in store.data.get('groups') or [] if g.get('status') == 'running'}  # a discussion still reads its own earlier replies
+    alive = {b['id'] for b in store.data['bots']}
+    for job in reversed(jobs):
+        if job.get('status') == 'running' or job.get('slim') or job['id'] in waiting or job.get('groupId') in talking: continue
+        seen[job['botId']] = seen.get(job['botId'], 0) + 1
+        if seen[job['botId']] > JOBS_WITH_ANSWER and job.pop('content', None): changed = True
+        if seen[job['botId']] <= JOBS_FULL_PER_BOT and job['botId'] in alive: continue  # a deleted Bot's replies keep only their usage figures
+        wrote = [str((c.get('arguments') or {}).get('path') or '')[:300] for c in job.get('toolCalls') or [] if c.get('name') == 'native_write']
+        small = {k: job[k] for k in JOB_SLIM_KEEP if k in job}
+        if job.get('error'): small['error'] = str(job['error'])[:300]
+        if wrote: small['wrote'] = [p for p in dict.fromkeys(wrote) if p][:50]
+        job.clear(); job.update(small, slim=True, toolCalls=[], approvals=[]); changed = True
+    cutoff = time.time() - JOBS_SLIM_DAYS * 86400
+    old = [j for j in jobs if j.get('slim') and _job_time(j) < cutoff]
+    if old:
+        archive = store.data.setdefault('usageArchive', {})
+        for job in old:
+            u = job.get('usage')
+            if not isinstance(u, dict): continue
+            row = archive.setdefault(job['botId'], dict(replies=0, groupReplies=0, input=0, cachedInput=0, output=0, costUsd=0.0, hasCost=False, models={}))
+            row['replies'] += 1; row['groupReplies'] += 1 if job.get('groupId') else 0
+            for k in ('input', 'cachedInput', 'output'): row[k] += _int(u.get(k))
+            if isinstance(u.get('costUsd'), (int, float)) and not isinstance(u.get('costUsd'), bool): row['costUsd'] += u['costUsd']; row['hasCost'] = True
+            label = '%s · %s' % (u.get('provider', ''), u.get('model') or '預設模型')
+            row['models'][label] = row['models'].get(label, 0) + _int(u.get('input')) + _int(u.get('output'))
+        gone = {id(j) for j in old}
+        jobs[:] = [j for j in jobs if id(j) not in gone]; changed = True
+    return changed
+
+
+def state_view(store):
+    """Lock held. What the window and the phone load: everything except the trimmed jobs and the usage totals, which only the usage page needs."""
+    view = dict(store.data, rev=store.rev)
+    view['jobs'] = [j for j in store.data['jobs'] if not j.get('slim')]
+    view.pop('usageArchive', None)
+    return view

@@ -167,8 +167,8 @@
     state.syncing = true;
     const loads = state.loads;
     try {
-      const data = await api('state');
-      if (loads !== state.loads || syncKey(data) === syncKey(state.data)) return;  // this window reloaded meanwhile, or nothing new
+      const data = await api('state' + (state.data.rev ? '?since=' + state.data.rev : ''));  // nothing saved since last time: a few bytes come back, not the whole state
+      if (data.unchanged || loads !== state.loads || syncKey(data) === syncKey(state.data)) { if (!data.unchanged && loads === state.loads) state.data.rev = data.rev; return; }  // this window reloaded meanwhile, or nothing new
       if (state.page !== 'chat' || document.querySelector('.modal') || document.querySelector('.dd.open')) return;
       applyState(data); startPollers();
     } catch (_) {} finally { state.syncing = false; }

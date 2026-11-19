@@ -399,6 +399,7 @@ class App(GroupRuns, Triggers, Syncing, ThreadingHTTPServer):
                 if job and job.get('long') and job['status'] != 'running':  # nobody is expected to be watching a long task
                     body = '長任務完成：' + (first_sentence(job.get('content') or '') or '已完成。') if job['status'] == 'completed' else '長任務已停止。' if job['status'] == 'cancelled' else '長任務失敗：' + (job.get('error') or '')
                     self.notify(self.target_name('bot', job['botId']), body, 'bot', job['botId'], job.get('messageId'), always=True)
+                if trim_jobs(self.store): self.store.save()
 
     def _run_job(self, job_id, prompt, provider, model, bot=None, inventory=None):
         """Run one reply. When the Bot's model cannot answer (used up, not signed in, not installed, failed),

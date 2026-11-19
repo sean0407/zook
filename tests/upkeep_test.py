@@ -199,6 +199,39 @@ class UpkeepTest(unittest.TestCase):
         self.start()
         self.assertIs(self.req('GET', '/api/state')[1]['settings']['onboarded'], True)  # a workspace already in use never sees the guide
 
+    def test_old_jobs_are_trimmed_but_usage_totals_stay(self):
+        for i in range(13): self.assertEqual(self.ask('第 %d 題' % i)['status'], 'completed')
+        state = self.req('GET', '/api/state')[1]
+        self.assertEqual(len(state['jobs']), 10)  # the window only loads the recent ones
+        self.assertNotIn('usageArchive', state)
+        everything = self.req('POST', '/api/export', {})[1]['jobs']
+        slim = [j for j in everything if j.get('slim')]
+        self.assertEqual((len(everything), len(slim)), (13, 3))
+        self.assertTrue(all('content' not in j and j['toolCalls'] == [] and j['usage']['input'] == 600000 for j in slim))
+        self.assertEqual(sum(1 for j in everything if 'content' in j), 3)  # only the newest keep a second copy of the answer
+        rev = state['rev']
+        self.assertEqual(self.req('GET', '/api/state?since=%d' % rev)[1], {'unchanged': True, 'rev': rev})
+        self.req('PATCH', '/api/settings', {'rules': 'x'})
+        self.assertNotIn('unchanged', self.req('GET', '/api/state?since=%d' % rev)[1])
+        self.assertEqual(self.req('GET', '/api/jobs/' + slim[0]['id'])[0], 200)
+        usage = self.req('GET', '/api/usage/bots')[1]['bots'][0]
+        self.assertEqual((usage['replies'], usage['input']), (13, 13 * 600000))
+        self.assertEqual([m['content'] for m in state['bots'][-1]['messages']][:2], ['第 0 題', 'ok from codex'])  # the conversation itself is untouched
+        # A month later the trimmed ones leave the list; their figures are kept in the totals.
+        self.stop()
+        path = self.root / 'data/swarmr.json'; data = json.loads(path.read_text())
+        for j in data['jobs']:
+            if j.get('slim'): j['finishedAt'] = j['createdAt'] = '2020-01-01T00:00:00+00:00'
+        path.write_text(json.dumps(data)); self.start()
+        everything = self.req('POST', '/api/export', {})[1]
+        self.assertEqual(len(everything['jobs']), 10); self.assertEqual(everything['usageArchive'][self.bot['id']]['replies'], 3)
+        # A deleted Bot's replies keep only their figures.
+        self.req('DELETE', '/api/bots/' + self.bot['id']); other = self.req('POST', '/api/bots', {'name': '另一個', 'provider': 'codex'})[1]; self.ask(bot=other)
+        left = [j for j in self.req('POST', '/api/export', {})[1]['jobs'] if j['botId'] == self.bot['id']]
+        self.assertTrue(left and all(j.get('slim') for j in left))
+        usage = self.req('GET', '/api/usage/bots')[1]['bots'][0]
+        self.assertEqual((usage['replies'], usage['input'], usage['output']), (13, 13 * 600000, 13 * 300000))
+
 
 if __name__ == '__main__':
     unittest.main()

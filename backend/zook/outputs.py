@@ -41,7 +41,8 @@ def bot_outputs(store, bot):
                 if depth < 3 and entry.name not in _OUTPUT_SKIP: pending.append((entry.path, depth + 1))
             elif entry.is_file(follow_symlinks=False): add(entry.path)
     with store.lock:
-        wrote = [(str((c.get('arguments') or {}).get('path') or ''), j.get('createdAt'), j.get('finishedAt')) for j in store.data['jobs'] if j.get('botId') == bot['id'] for c in j.get('toolCalls') or [] if c.get('name') == 'native_write']
+        wrote = [(str((c.get('arguments') or {}).get('path') or ''), j.get('createdAt'), j.get('finishedAt')) for j in store.data['jobs'] if j.get('botId') == bot['id']
+                 for c in (j.get('toolCalls') or []) + [dict(name='native_write', arguments={'path': p}) for p in j.get('wrote') or []] if c.get('name') == 'native_write']
         scope, chosen = bot_scope(bot)
         folder = os.path.realpath(chosen) if scope == 'folder' and chosen else ''
     for path, started, finished in wrote[-400:]:

@@ -241,6 +241,12 @@ def bot_usage(store):
         try: day = datetime.datetime.fromisoformat(str(job.get('finishedAt') or job.get('createdAt'))).astimezone().date().isoformat()
         except ValueError: day = ''
         if day in row['daily']: row['daily'][day] += _int(u.get('input')) + _int(u.get('output'))
+    for bot_id, old in (store.data.get('usageArchive') or {}).items():  # replies older than the job list keeps
+        row = rows.setdefault(bot_id, dict(botId=bot_id, name=names.get(bot_id, {}).get('name', '已刪除的 Bot'), color=names.get(bot_id, {}).get('color', '#959595'), shape=names.get(bot_id, {}).get('shape', 0),
+                              replies=0, groupReplies=0, input=0, cachedInput=0, output=0, costUsd=0.0, hasCost=False, models={}, daily={d: 0 for d in days}))
+        for k in ('replies', 'groupReplies', 'input', 'cachedInput', 'output'): row[k] += _int(old.get(k))
+        if old.get('hasCost'): row['costUsd'] += old.get('costUsd') or 0; row['hasCost'] = True
+        for label, tokens in (old.get('models') or {}).items(): row['models'][label] = row['models'].get(label, 0) + _int(tokens)
     result = sorted(rows.values(), key=lambda r: r['input'] + r['output'], reverse=True)
     for r in result: r['costUsd'] = round(r['costUsd'], 4) if r['hasCost'] else None
     return dict(bots=result, days=days, untracked=sum(1 for j in store.data['jobs'] if j.get('status') == 'completed' and not j.get('usage')))

@@ -202,7 +202,10 @@ class Store:
                 self.finish_message(job, '', 'failed')
         self.save()
 
+    rev = int(time.time() * 1000)  # differs for every start, and goes up with every save, so a window can ask whether anything changed since it last looked
+
     def save(self):
+        Store.rev += 1
         fd, name = tempfile.mkstemp(prefix='.swarmr-', dir=str(self.dir))
         try:
             os.fchmod(fd, 0o600)

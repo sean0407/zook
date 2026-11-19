@@ -636,7 +636,8 @@ class Handler(BaseHTTPRequestHandler):
             with store.lock:
                 if self.command == 'GET' and path == '/api/state':
                     for b in store.data['bots']: ensure_chats(b)  # Bots added by an import, too
-                    return self.respond(200, store.data)
+                    if (parse_qs(urlsplit(self.path).query).get('since') or [''])[0] == str(store.rev): return self.respond(200, {'unchanged': True, 'rev': store.rev})
+                    return self.respond(200, state_view(store))
                 if self.command == 'GET' and path == '/api/notifications':
                     try: after = int((parse_qs(urlsplit(self.path).query).get('after') or ['0'])[0])
                     except ValueError: after = 0
@@ -886,6 +887,7 @@ def main():
     for job in app.store.data['jobs']:  # activity saved by earlier versions
         for call in job.get('toolCalls') or []:
             if call.get('name') == 'native_command' and isinstance((call.get('arguments') or {}).get('command'), str): call['arguments']['command'] = hide_command_secrets(call['arguments']['command'])
+    trim_jobs(app.store)
     app.store.save()
     app.auto_refreshed = time.time()
     if any(b.get('provider') == AUTO for b in app.store.data['bots']): threading.Thread(target=refresh_auto_status, args=(app.store,), daemon=True).start()
