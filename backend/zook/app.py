@@ -62,11 +62,13 @@ class App(GroupRuns, Triggers, Syncing, Waiting, ThreadingHTTPServer):
         with self.store.lock:
             if not want or (self.remote_proc is not None and self.remote_proc.poll() is None): return
             self.bridge_token = secrets.token_urlsafe(32); self.remote_relay = relay
-            env = dict(os.environ, ZOOK_BRIDGE_TOKEN=self.bridge_token)
             try:
+                # The token goes down a pipe. In the environment any program of this user could read it (ps shows it), and with it
+                # pass for a paired phone: send messages and approve actions.
                 self.remote_proc = subprocess.Popen([str(remote_tool()), 'host', '--state-dir', str(self.store.dir), '--relay', relay,
-                                                     '--backend', 'http://127.0.0.1:%d' % self.server_address[1]],
-                                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+                                                     '--backend', 'http://127.0.0.1:%d' % self.server_address[1], '--token-stdin'],
+                                                    stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                self.remote_proc.stdin.write((self.bridge_token + '\n').encode()); self.remote_proc.stdin.close()
             except OSError: self.remote_proc = None; self.bridge_token = None
 
     def stop_remote(self):
@@ -145,7 +147,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, ThreadingHTTPServer):
                 return handler.respond(200, {'id': device_id, 'name': name})
         return handler.error(404, '找不到資源。')
 
-    def send_to_bot(self, bot, content, inventory, author=None, chat_id=None, use=None, attachments=None, effort=None, plan=False, replaces=None, long=False):
+    def send_to_bot(self, bot, content, inventory, author=None, chat_id=None, use=None, attachments=None, effort=None, plan=False, replaces=None, long=False, origin='user'):
         """Send one message to a Bot and start its reply, in the open conversation or the one given. Lock held.
         use=(provider, model) answers this one message with another model without changing the Bot."""
         store = self.store
@@ -189,6 +191,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, ThreadingHTTPServer):
         if auto_chain: job['autoChain'] = auto_chain; refresh_auto(self)
         if plan: job['plan'] = True
         if long: job['long'] = True; msg['long'] = True
+        if origin != 'user': job['origin'] = origin  # who started this turn decides what its tools may change
         if use or replaces: job['noResume'] = True  # another model, or a rewritten history: start a new CLI conversation
         self.__dict__.setdefault('short_prompts', {})[job['id']] = short
         self.__dict__.setdefault('latest_asks', {})[job['id']] = content
@@ -210,7 +213,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, ThreadingHTTPServer):
                 bot = self.store.find('bots', item.get('botId'))
                 if not bot: raise RuntimeError('找不到這個 Bot。')
                 run['chatId'] = schedule_chat(bot)
-                run['jobId'] = self.send_to_bot(bot, item['content'] + extra + (QUIET_NOTE if item.get('quiet') else ''), inventory, author='排程', chat_id=run['chatId'])['id']
+                run['jobId'] = self.send_to_bot(bot, item['content'] + extra + (QUIET_NOTE if item.get('quiet') else ''), inventory, author='排程', chat_id=run['chatId'], origin='trigger' if extra else 'schedule')['id']
                 run['messageId'] = next(m['id'] for m in reversed(chat_messages(bot, run['chatId'])) if m['role'] == 'user')
         except Busy: raise
         except (ValueError, RuntimeError) as exc:
@@ -493,7 +496,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, ThreadingHTTPServer):
                 with store.lock: skill_ids = shared_skill_ids(store, inventory); mcp_ids = shared_mcp_ids(store, inventory)
                 session = runtime.RuntimeSession(skill_ids, mcp_ids, bot['allowCommands'], root if scope == 'folder' else workspace,
                     lambda *a: self.approve(job_id, *a), lambda event: self.record_event(job_id, event), inventory=inventory,
-                    extra_tools=(plan_safe if planning else list)(self.app_tools(bot, runtime, job.get('groupId'))), permission_mode=lambda bot_id=bot['id']: self.live_permission(bot_id, job_id))
+                    extra_tools=(plan_safe if planning else list)(self.app_tools(bot, runtime, job.get('groupId'), job.get('origin') or 'user')), permission_mode=lambda bot_id=bot['id']: self.live_permission(bot_id, job_id))
                 token = secrets.token_urlsafe(32)
                 with store.lock:
                     job = store.find('jobs', job_id)
@@ -691,7 +694,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, ThreadingHTTPServer):
             for leftover in (store.dir / 'workspaces').glob('*/.grok/.zook-prompt-%s.txt' % job_id):
                 shutil.rmtree(str(leftover.parent), ignore_errors=True)  # per-job .grok dir: prompt, MCP config, adapter copy
 
-    def app_tools(self, bot, runtime, group_id=None):
+    def app_tools(self, bot, runtime, group_id=None, origin='user'):
         """Tools backed by Zook's own data, offered through the runtime broker.
         The third item says whether a call needs approval: False (never), True (depends on 主動性), 'always'."""
         store, bot_id = self.store, bot['id']
@@ -700,15 +703,17 @@ class App(GroupRuns, Triggers, Syncing, Waiting, ThreadingHTTPServer):
             content, scope = args['content'].strip(), args.get('scope') or 'bot'
             if not content or len(content) > 2000: raise RuntimeError('記憶內容需為 1–2000 字。')
             if scope not in ('bot', 'shared'): raise RuntimeError('scope 只能是 bot 或 shared。')
+            if scope == 'shared' and origin != 'user': raise RuntimeError('這個回合是由%s啟動的，不能寫入所有 Bot 共用的記憶。只記在自己這裡（scope 用 bot）。' % ORIGIN_NAMES.get(origin, '其他來源'))
             with store.lock:
                 mems = store.data['memories']
                 if any(m['content'] == content and m.get('botId', '') == ('' if scope == 'shared' else bot_id) for m in mems): return {'saved': False, 'reason': '已經記過了'}
                 item = dict(id=ID(), botId='' if scope == 'shared' else bot_id, content=content, createdBy=bot_id, createdAt=NOW())
+                if origin != 'user': item['origin'] = origin  # written while nobody was watching: shown as such, and told apart in the prompt
                 mems.append(item); del mems[:-500]; store.save()
             return {'saved': True, 'scope': scope}
         tools = [(runtime._schema('zook_remember', 'Save a long-term memory for future conversations (user preferences, facts, decisions). Never store secrets.',
                                   {'content': S('What to remember, one concise statement'), 'scope': S('bot (only you) or shared (all Bots); default bot')}, ['content'], False), remember, False)]
-        tools += self.schedule_tools(bot, runtime, group_id)
+        tools += self.schedule_tools(bot, runtime, group_id, origin)
         if group_id: tools.append(group_file_tool(store, group_id, runtime))
         if not bot.get('isAdmin'): return tools
         def find_bot(name):
@@ -750,9 +755,13 @@ class App(GroupRuns, Triggers, Syncing, Waiting, ThreadingHTTPServer):
             (runtime._schema('zook_start_group_discussion', 'Post a kickoff message into a group so its Bots start working, after user approval. Use @Bot names to assign owners.',
                              {'group_name': S('Exact group name'), 'message': S('Kickoff message')}, ['group_name', 'message'], False), start_group, True)]
 
-    def schedule_tools(self, bot, runtime, group_id):
-        """Every Bot can list, create, change and delete schedules. Changes always wait for the user's approval."""
+    def schedule_tools(self, bot, runtime, group_id, origin='user'):
+        """Every Bot can list, create, change and delete schedules. Changes always wait for the user's approval, and are only
+        possible in a turn the user started: a schedule, a trigger, another Bot or a script cannot set up more unattended work."""
         store = self.store
+        def refuse(args):
+            raise RuntimeError('這個回合是由%s啟動的，不是使用者親自送出的，所以不能建立、修改或刪除排程。請告訴使用者要做什麼，讓他自己在對話裡提出。' % ORIGIN_NAMES.get(origin, '其他來源'))
+        own = origin == 'user'
         S = lambda d: {'type': 'string', 'description': d}
         def find(args):
             item = store.find('schedules', args.get('schedule_id'))
@@ -791,10 +800,10 @@ class App(GroupRuns, Triggers, Syncing, Waiting, ThreadingHTTPServer):
         return [
             (runtime._schema('zook_list_schedules', 'List all Zook schedules: id, target, what they do, when, enabled, last result.', {}), listing, False),
             (runtime._schema('zook_create_schedule', 'Create a schedule so a Bot or group does something at a set time (once or repeating). The user is always asked to approve.',
-                             fields, ['content', 'repeat', 'time'], False), create, 'always'),
+                             fields, ['content', 'repeat', 'time'], False), create if own else refuse, 'always' if own else False),
             (runtime._schema('zook_update_schedule', 'Change a schedule (only the fields given). The user is always asked to approve.',
-                             dict(fields, schedule_id=S('Schedule id from zook_list_schedules'), enabled=S('on or off')), ['schedule_id'], False), change, 'always'),
-            (runtime._schema('zook_delete_schedule', 'Delete a schedule. The user is always asked to approve.', {'schedule_id': S('Schedule id from zook_list_schedules')}, ['schedule_id'], False), delete, 'always')]
+                             dict(fields, schedule_id=S('Schedule id from zook_list_schedules'), enabled=S('on or off')), ['schedule_id'], False), change if own else refuse, 'always' if own else False),
+            (runtime._schema('zook_delete_schedule', 'Delete a schedule. The user is always asked to approve.', {'schedule_id': S('Schedule id from zook_list_schedules')}, ['schedule_id'], False), delete if own else refuse, 'always' if own else False)]
 
     CLAUDE_QUOTA_STALE = 15 * 60   # refresh when the snapshot is older than this
     CLAUDE_PROBE_MIN_GAP = 10 * 60  # never probe more often than this

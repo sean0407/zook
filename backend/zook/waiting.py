@@ -57,21 +57,25 @@ class Waiting:
             if not bot or not bot.get('queue'): return
             if self.__dict__.get('closing'): return
             if any(j['botId'] == bot_id and j['status'] == 'running' for j in store.data['jobs']): return  # still busy: the end of that reply comes back here
-            entry = bot['queue'][0]
-            chat_id = entry.get('chatId') if any(c['id'] == entry.get('chatId') for c in ensure_chats(bot)) else bot['chatId']
-            try:
-                self.send_to_bot(bot, entry['content'], inventory, chat_id=chat_id, attachments=attachments_for(store, entry.get('attachments')) or None,
-                                 effort=entry.get('effort'), plan=bool(entry.get('plan')), long=bool(entry.get('long')))
-            except Busy: return
-            except (ValueError, RuntimeError) as exc:
-                # It cannot be sent after all (the model was removed meanwhile, for example). It is shown as a failed message, not dropped silently.
-                messages = chat_messages(bot, chat_id)
-                messages.extend([dict(id=ID(), role='user', content=entry['content'], createdAt=NOW()),
-                                 dict(id=ID(), role='assistant', content='', createdAt=NOW(), status='failed', note='這則排隊的訊息沒有送出：%s' % str(exc)[:200])])
-                bot['queue'].pop(0); store.save()
-                threading.Thread(target=self.queue_drain, args=(bot_id,), daemon=True).start()  # the next one in line
-                return
-            bot['queue'].pop(0); store.save()
+            entry = bot['queue'].pop(0)  # taken out before it is sent, so the save that records the reply also records that it left the line
+            if not any(c['id'] == entry.get('chatId') for c in ensure_chats(bot)):
+                store.save(); again = True  # its conversation is gone, and it is not put into another one
+            else:
+                again = False
+                try:
+                    self.send_to_bot(bot, entry['content'], inventory, chat_id=entry['chatId'], attachments=attachments_for(store, entry.get('attachments')) or None,
+                                     effort=entry.get('effort'), plan=bool(entry.get('plan')), long=bool(entry.get('long')))
+                except Busy:
+                    bot['queue'].insert(0, entry); return
+                except Exception as exc:
+                    # It cannot be sent after all (the model was removed meanwhile, a file is gone). Shown as a failed message, never dropped
+                    # silently, and never left to block the ones behind it.
+                    reason = str(exc)[:200] if isinstance(exc, (ValueError, RuntimeError)) else '送出時發生錯誤。'
+                    messages = chat_messages(bot, entry['chatId'])
+                    messages.extend([dict(id=ID(), role='user', content=entry['content'], createdAt=NOW()),
+                                     dict(id=ID(), role='assistant', content='', createdAt=NOW(), status='failed', note='這則排隊的訊息沒有送出：' + reason)])
+                    store.save(); again = True
+        if again: self.queue_drain(bot_id)  # the next one in line
 
     def queue_drain_all(self):
         with self.store.lock: waiting = [b['id'] for b in self.store.data['bots'] if b.get('queue')]

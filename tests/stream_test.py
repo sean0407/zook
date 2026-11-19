@@ -135,6 +135,8 @@ class EndToEndTest(unittest.TestCase):
         time.sleep(1.1)  # codex has failed; claude is answering and has shown nothing yet
         self.assertNotIn('partial', self.req('GET', '/api/jobs/' + job_id)[1])
         job = self.wait(job_id)
+        end = time.time() + 3
+        while 'fallback' not in job and time.time() < end: time.sleep(0.05); job = self.req('GET', '/api/jobs/' + job_id)[1]  # the note is written a moment after the reply
         self.assertEqual((job['content'], job['fallback']['provider']), ('備用模型的回覆', 'claude'))
         self.assertIn('--include-partial-messages', (self.root / 'bin/claude.args').read_text())
 

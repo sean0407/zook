@@ -285,6 +285,8 @@ class GroupRuns:
             if readonly: job['plan'] = True
             if step.get('targetId'): msg['checkOf'] = step['targetId']
             job['groupFiles'] = True
+            starter = next((m for m in reversed(group['messages']) if m.get('role') == 'user'), {})
+            if starter.get('author'): job['origin'] = 'schedule' if starter['author'] == '排程' else 'bot'  # a discussion nobody typed: started by a schedule or by a Bot
             if auto_chain: job['autoChain'] = auto_chain; msg.update(auto_mark)
             if auto_mark: refresh_auto(self)
             try: files = place_attachments(store, bot_id, recent_attachments(store, group['messages'][-20:]))

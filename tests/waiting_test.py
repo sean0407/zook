@@ -100,12 +100,40 @@ class WaitingTest(unittest.TestCase):
         self.assertEqual(self.say('關掉之後')[0], 409)
 
     def test_deleted_conversation_takes_its_line_with_it(self):
-        (self.root / 'bin/delay').write_text('1.5')
-        self.say('舊對話裡的'); self.say('排在舊對話')
-        chat = self.me()['chatId']
+        self.say('先有一則'); self.settle(1); self.stop()
+        path = self.root / 'data/swarmr.json'; data = json.loads(path.read_text())
+        bot = next(b for b in data['bots'] if b['id'] == self.bot['id'])
+        bot['chats'].append(dict(id='old-chat', title='舊對話', createdAt='2020-01-01T00:00:00+00:00', updatedAt='2020-01-01T00:00:00+00:00', messages=[dict(id='m0', role='user', content='舊的')]))
+        bot['queue'] = [dict(id='q1', chatId='old-chat', content='排在舊對話的', createdAt='now')]
+        path.write_text(json.dumps(data)); self.start()
+        self.assertEqual(self.req('DELETE', '/api/bots/%s/chats/old-chat' % self.bot['id'])[0], 200)  # before the line starts moving again
+        self.assertFalse(self.me().get('queue'))
+        time.sleep(3)
+        self.assertNotIn('排在舊對話的', self.asked())
+
+    def test_restored_backup_does_not_resend_what_was_waiting(self):
+        (self.root / 'bin/delay').write_text('1.2')
+        self.say('第一則'); self.say('排隊的')
+        made = self.req('POST', '/api/backups', {})[1]['name']  # taken while one message is still in line
+        self.settle(2)
+        self.assertEqual(self.req('POST', '/api/backups/%s/restore' % made, {})[0], 200)
+        self.assertFalse(self.me().get('queue'))
+        self.say('新的一則'); time.sleep(3)
+        self.assertEqual(self.asked().count('排隊的'), 1)
+
+    def test_no_jumping_the_line_and_a_stuck_entry_does_not_block(self):
+        self.say('甲'); self.say('乙')
+        # 乙 is waiting. Something makes it impossible to send (its conversation is gone): it must not hold up what comes after.
+        self.stop()
+        path = self.root / 'data/swarmr.json'; data = json.loads(path.read_text())
+        bot = next(b for b in data['bots'] if b['id'] == self.bot['id'])
+        bot['queue'] = [dict(id='x1', chatId='no-such-chat', content='對話已不存在', createdAt='now'), dict(id='x2', chatId=bot['chatId'], content='丙', createdAt='now')]
+        path.write_text(json.dumps(data)); (self.root / 'bin/delay').write_text('0.3'); self.start()
         end = time.time() + 10
-        while time.time() < end and any(j['status'] == 'running' for j in self.req('GET', '/api/state')[1]['jobs']) and len(self.me().get('queue') or []) == 1: time.sleep(0.05)
-        self.assertEqual(self.req('DELETE', '/api/bots/%s/chats/%s' % (self.bot['id'], chat))[0], 409)  # the queued one has started in it by now
+        while time.time() < end and self.me().get('queue'): time.sleep(0.1)
+        me = self.me()
+        self.assertFalse(me.get('queue')); self.assertNotIn('對話已不存在', self.asked())
+        self.assertIn('丙', [m['content'] for m in me['messages'] if m['role'] == 'user'])
 
 
 if __name__ == '__main__':

@@ -205,6 +205,7 @@ def sync_remove(store, key):
         bot = store.find('bots', parts[1])
         if not bot: return True
         if bot['id'] in busy: return False
+        queue_forget_chat(bot, parts[2])
         if bot.get('chatId') == parts[2]: bot['messages'] = []
         bot['chats'] = [c for c in bot.get('chats') or [] if c['id'] != parts[2]]
         if not any(c['id'] == bot.get('chatId') for c in bot['chats']):

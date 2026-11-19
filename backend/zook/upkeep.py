@@ -70,6 +70,7 @@ def backup_restore(app, name):
         raise Busy('有 Bot 正在回覆，等它結束再還原。')
     if path.stat().st_size > MAX_BACKUP_FILE: raise ValueError('備份檔太大。')
     with path.open(encoding='utf-8') as f: data = backup_check(json.load(f))
+    for bot in data['bots']: bot.pop('queue', None)  # messages that were waiting when the copy was made have been sent since
     safety = backup_write(store, 'safety', store.data)
     # This Mac's own pairing, sign-ins and sync stay as they are: they belong to the machine, not to the copy.
     keep = {key: copy.deepcopy(store.data.get(key)) for key in ('remoteDevices', 'sync') if key in store.data}
@@ -114,6 +115,7 @@ def recover_data(store):
         try:
             with (backup_dir(store) / backup['name']).open(encoding='utf-8') as f: store.data = backup_check(json.load(f))
         except (OSError, ValueError, UnicodeError, RecursionError): continue
+        for bot in store.data['bots']: bot.pop('queue', None)
         log_activity(store, 'backup', '資料檔無法讀取，改用備份 %s（損壞的檔案留存為 %s）' % (backup['name'], kept or '無法留存'), by='Zook')
         return dict(at=NOW(), backup=backup['name'], backupAt=backup['at'], kept=kept)
     log_activity(store, 'backup', '資料檔無法讀取，也沒有可用的備份，從全新狀態開始（損壞的檔案留存為 %s）' % (kept or '無法留存'), by='Zook')

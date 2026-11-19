@@ -2,7 +2,7 @@
 //
 //   zook-remote info --state-dir DIR                     create (once) and print this Mac's room id and public key
 //   zook-remote qr TEXT OUT.png                          draw a QR code
-//   zook-remote host --state-dir DIR --relay URL --backend URL      (ZOOK_BRIDGE_TOKEN in the environment)
+//   zook-remote host --state-dir DIR --relay URL --backend URL      (the bridge token on standard input with --token-stdin)
 //   zook-remote device-pair --state FILE --payload zook://pair?d=... --name NAME
 //   zook-remote device-request --state FILE --method GET --path /api/state [--body JSON] [--timeout 20]
 //
@@ -349,7 +349,7 @@ case "qr":
 
 case "host":
     guard let dir = option("--state-dir"), let relay = option("--relay"), let backend = option("--backend"),
-          let token = ProcessInfo.processInfo.environment["ZOOK_BRIDGE_TOKEN"], !token.isEmpty else { fail("host needs --state-dir, --relay, --backend and ZOOK_BRIDGE_TOKEN") }
+          let token = (CommandLine.arguments.contains("--token-stdin") ? readLine(strippingNewline: true) : ProcessInfo.processInfo.environment["ZOOK_BRIDGE_TOKEN"]), !token.isEmpty else { fail("host needs --state-dir, --relay, --backend and ZOOK_BRIDGE_TOKEN") }
     let host = Host(identity: HostIdentity.load(stateDir: dir), relay: relay, backend: backend, token: token)
     withExtendedLifetime(host) { host.run() }
 

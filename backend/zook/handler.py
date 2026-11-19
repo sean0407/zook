@@ -683,6 +683,11 @@ class Handler(BaseHTTPRequestHandler):
                     if self.device and isinstance(body.get('attachments'), list) and len(body['attachments']) > MOBILE_PHOTOS: return self.error(400, '手機每則訊息最多 %d 張照片。' % MOBILE_PHOTOS)
                     once = send_key('bot:' + bot['id'], body); sent = send_seen(self.server, once)
                     if sent: return self.respond(202, dict(sent, duplicate=True))  # the same message again: its answer was lost on the way
+                    if queue_on(store) and bot.get('queue'):  # others are already waiting: this one goes behind them, even in the moment between two replies
+                        waiting = {'queued': True, 'queueId': queue_add(store, bot, body)['id']}
+                        send_remember(self.server, once, waiting)
+                        threading.Thread(target=self.server.queue_drain, args=(bot['id'],), daemon=True).start()
+                        return self.respond(202, waiting)
                     try: job = self.server.send_to_bot(bot, body.get('content'), inventory, attachments=attachments_for(store, body.get('attachments')), effort=body.get('effort'),
                                                          plan=body.get('plan', False), long=body.get('long', False))
                     except Busy as exc:
@@ -713,7 +718,9 @@ class Handler(BaseHTTPRequestHandler):
                     reply = messages[last + 1] if len(messages) > last + 1 else {}
                     effort, plan = body.get('effort') or reply.get('effort') or 'standard', bool(messages[last].get('plan'))
                     removed = messages[last:]; del messages[last:]
-                    try: job = self.server.send_to_bot(bot, content, inventory, author=author, use=use, attachments=kept, effort=effort, plan=plan, replaces=removed)
+                    # Answering again does not make it the user's own request: what a schedule or a trigger asked stays what it was.
+                    began = next((j.get('origin') for j in reversed(store.data['jobs']) if j.get('messageId') == reply.get('id')), None) or ('schedule' if author else 'user')
+                    try: job = self.server.send_to_bot(bot, content, inventory, author=author, use=use, attachments=kept, effort=effort, plan=plan, replaces=removed, origin=began)
                     except (ValueError, RuntimeError):
                         messages.extend(removed); raise
                     return self.respond(202, {'jobId': job['id']})
