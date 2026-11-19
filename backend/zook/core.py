@@ -59,7 +59,7 @@ APPROVAL_TIMEOUT = 600
 # notification), then counts as declined. The CLI and its tool calls are kept alive meanwhile.
 SCHEDULE_APPROVAL_WAIT = 24 * 3600
 SEND_TOOLS = ('send_email', 'send_message', 'sendmessage', 'send_mail', 'sendmail', 'send', 'gmail_send')
-GROUP_MIN_BOTS, GROUP_MAX_BOTS = 2, 6
+GROUP_MIN_BOTS, GROUP_MAX_BOTS = 2, 10  # every member answers each round, so a bigger group is slower and uses more
 GROUP_MAX_TURNS = 8  # Bot replies per user message, including handoffs.
 GROUP_MAX_TURNS_MODERATED = 16  # With 管理員 hosting: kickoff, assignments, cross-discussion rounds and a summary.
 GROUP_MODERATION_ROUNDS = 2  # Times 管理員 steps in between rounds before it must wrap up.

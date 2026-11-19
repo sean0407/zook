@@ -12,6 +12,21 @@ _AUTO_CODE = re.compile(r'```|`[^`\n]+`|程式|代碼|除錯|函式|腳本|報�
 _AUTO_ANALYSIS = re.compile(r'分析|比較|評估|研究|報告|策略|總結|摘要|規劃|企劃|優缺點|深入|(?<![a-z])(?:analy[sz]e|analysis|compare|research|report|summari[sz]e)(?![a-z])', re.I)
 
 
+# What a Bot is for, read from its name first, then its persona. It decides the model when the message itself does not say what
+# kind of work it is. Work instructions are not read: a team often shares one text, which would make every member look alike.
+_ROLE_CODE = re.compile(r'工程師|程式|軟體|前端|後端|開發者|資料庫|(?<![a-z])(?:engineer|developer|coder|devops|programmer)(?![a-z])', re.I)
+_ROLE_ANALYSIS = re.compile(r'法規|法務|合規|品質|品管|財務|會計|稽核|營運|研發|研究|分析|策略|風險|審查|查核|數據|顧問|規劃|企劃|採購|供應鏈|(?<![a-z])(?:legal|compliance|quality|finance|accounting|audit|research|analyst|strategy|risk|planning)(?![a-z])', re.I)
+
+
+def auto_role(bot):
+    """'code', 'analysis' or None for a Bot whose role does not lean either way (design, marketing, sales, general help)."""
+    for text in (bot.get('name'), (bot.get('persona') or '')[:300]):
+        text = str(text or '')
+        if _ROLE_CODE.search(text): return 'code'
+        if _ROLE_ANALYSIS.search(text): return 'analysis'
+    return None
+
+
 _auto_checking = threading.Lock()
 
 
@@ -112,9 +127,15 @@ def auto_quota_low(store, provider):
     return any(isinstance(w.get('usedPercent'), (int, float)) and w['usedPercent'] > 100 - AUTO_MIN_LEFT and _window_open(w, snap, now) for w in windows)
 
 
-def pick_auto(store, content, names=(), plan=False):
-    """(models to try in order, the fields that mark the reply). Raises ValueError when nothing can answer."""
-    task = auto_task(content, names); label, order = AUTO_TASKS[task]
+def pick_auto(store, content, names=(), plan=False, bot=None, taken=None, keep=None):
+    """(models to try in order, the fields that mark the reply). Raises ValueError when nothing can answer.
+
+    The message decides when it is plainly an image, code or analysis task. Otherwise the Bot's own role does.
+    In a group, taken lists the models the other members are already using this round, so the members are spread over
+    different models; keep is the model this Bot already answered with in this round, which it stays on."""
+    task = auto_task(content, names); by_role = False
+    if task == 'quick' and bot and auto_role(bot): task, by_role = auto_role(bot), True
+    label, order = AUTO_TASKS[task]
     if 'autoStatus' not in store.data:  # billing is not known yet, so nothing can be picked safely
         threading.Thread(target=refresh_auto_status, args=(store,), daemon=True).start()
         raise ValueError('正在確認各模型的登入狀態，請幾秒後再送一次。')
@@ -127,7 +148,14 @@ def pick_auto(store, content, names=(), plan=False):
     usable = [p for p in allowed if not auto_quota_low(store, p)]
     if not usable: raise ValueError('可自動選用的模型額度都低於 10%%：%s。Zook 不會自動改用付費方式，請等額度重置，或指定其他模型。' % '、'.join(short(p) for p in allowed))
     settings = store.data['settings']
+    best, spread = usable[0], False
+    if keep in usable: usable = [keep] + [p for p in usable if p != keep]
+    elif taken is not None:
+        rank, used = {p: i for i, p in enumerate(usable)}, {p: list(taken).count(p) for p in usable}
+        usable = sorted(usable, key=lambda p: (used[p], rank[p])); spread = usable[0] != best
     chain = [[p, settings.get('model', '') if p == settings.get('provider', 'codex') else ''] for p in usable]
-    why = 'Zook 判斷這是%s，所以用 %s' % (label, short(usable[0]))
-    if usable[0] != allowed[0]: why += '（%s 額度不足）' % short(allowed[0])
+    why = ('這個 Bot 的角色偏向%s，所以用 %s' if by_role else 'Zook 判斷這是%s，所以用 %s') % (label, short(best))
+    if spread: why = '%s原本會用 %s；群組裡讓成員分散使用不同模型，這次用 %s' % ('依角色' if by_role else '', short(best), short(usable[0]))
+    elif usable[0] != best: why = '這一輪討論沿用一開始的 %s' % short(usable[0])
+    elif best != allowed[0]: why += '（%s 額度不足）' % short(allowed[0])
     return chain, dict(auto='%s %s' % (short(usable[0]), AUTO_MARKS[task]), autoWhy=why)

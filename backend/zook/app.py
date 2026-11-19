@@ -158,7 +158,7 @@ class App(GroupRuns, Triggers, Syncing, ThreadingHTTPServer):
         if attachments and isinstance(content, str) and not content.strip(): content = '（請看附件）'
         if not isinstance(content, str) or not content.strip() or len(content) > 30000: raise ValueError('訊息內容無效。')
         if any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs']): raise Busy('此機器人已有執行中的工作。')
-        auto_chain, auto_mark = pick_auto(store, content, [a.get('name') for a in attachments or []], plan) if not use and bot.get('provider') == AUTO else (None, {})
+        auto_chain, auto_mark = pick_auto(store, content, [a.get('name') for a in attachments or []], plan, bot=bot) if not use and bot.get('provider') == AUTO else (None, {})
         provider, model = use or (auto_chain[0] if auto_chain else bot_model(store, bot))
         if not P.spec(store.data, provider) or not isinstance(model, str) or len(model) > 100: raise ValueError('模型設定無效。')
         if plan and (provider_kind(provider) not in PLAN_KINDS or not ability_on(store, provider, 'plan')): raise ValueError('這個模型不支援先規劃。')
@@ -751,8 +751,8 @@ class App(GroupRuns, Triggers, Syncing, ThreadingHTTPServer):
             (runtime._schema('zook_list_team', 'List all Zook Bots (name, role, model) and groups.', {}), list_team, False),
             (runtime._schema('zook_create_bot', 'Create a new Zook Bot after user approval.',
                              {'name': S('Bot name'), 'persona': S('Persona: personality, tone, values and how it talks (Traditional Chinese)'), 'instructions': S('Work instructions: role and responsibilities'), 'provider': S('Provider id; empty = pick automatically for each message'), 'model': S('Model ID; empty = default'), 'color': S('Hex color like #2585f6, optional')}, ['name', 'persona', 'instructions'], False), create_bot, True),
-            (runtime._schema('zook_create_group', 'Create a group chat of 2–6 existing Bots (by name) after user approval.',
-                             {'name': S('Group name, optional'), 'bot_names': A('Exact Bot names, 2–6')}, ['bot_names'], False), create_group, True),
+            (runtime._schema('zook_create_group', 'Create a group chat of 2–10 existing Bots (by name) after user approval.',
+                             {'name': S('Group name, optional'), 'bot_names': A('Exact Bot names, 2–10')}, ['bot_names'], False), create_group, True),
             (runtime._schema('zook_start_group_discussion', 'Post a kickoff message into a group so its Bots start working, after user approval. Use @Bot names to assign owners.',
                              {'group_name': S('Exact group name'), 'message': S('Kickoff message')}, ['group_name', 'message'], False), start_group, True)]
 

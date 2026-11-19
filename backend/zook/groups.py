@@ -179,6 +179,24 @@ def current_paused(store, group, paused):
     return dict(paused, pending=[x for x in paused.get('pending') or [] if x[0] in present and (host or x[2] not in ('final', 'moderate'))], moderated=bool(paused.get('moderated') and host))
 
 
+def group_round_models(store, group, bot_id):
+    """(models the other members have used since the last question, the model this Bot used). Lock held."""
+    messages = group['messages']
+    since = next((i for i in range(len(messages) - 1, -1, -1) if messages[i].get('role') == 'user'), 0)
+    replies = {m['id']: m.get('botId') for m in messages[since:] if m.get('role') == 'assistant'}
+    taken, mine = {}, None
+    for job in store.data['jobs']:
+        if job.get('messageId') not in replies or job.get('status') in ('failed', 'cancelled'): continue
+        model = (job.get('fallback') or {}).get('provider') or (job.get('usage') or {}).get('provider') or ((job.get('autoChain') or [[None]])[0][0])
+        if not model:
+            member = store.find('bots', job.get('botId'))
+            model = bot_model(store, member)[0] if member else None
+        if not model: continue
+        if job.get('botId') == bot_id: mine = model
+        else: taken[job['botId']] = model  # each member counts once, with the model it last used
+    return list(taken.values()), mine
+
+
 class GroupRuns:
     def post_group_message(self, group, content, author=None, attachments=None, effort=None, mode=None):
         # Caller holds the store lock.
@@ -248,7 +266,8 @@ class GroupRuns:
             if step.get('use'): auto_chain = [list(step['use'])]  # a check stays on the model that was chosen for it
             elif bot.get('provider') == AUTO:
                 asked = next((m for m in reversed(group['messages']) if m.get('role') == 'user'), {})
-                try: auto_chain, auto_mark = pick_auto(store, asked.get('content'), [a.get('name') for a in asked.get('attachments') or []], readonly)
+                taken, mine = group_round_models(store, group, bot_id)
+                try: auto_chain, auto_mark = pick_auto(store, asked.get('content'), [a.get('name') for a in asked.get('attachments') or []], readonly, bot=bot, taken=taken, keep=mine)
                 except ValueError as exc:
                     group['messages'].append(dict(id=ID(), role='system', content='%s 這次略過：%s' % (bot['name'], exc), createdAt=NOW()))
                     store.save(); return None
