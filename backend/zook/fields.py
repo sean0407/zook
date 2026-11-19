@@ -115,6 +115,9 @@ def update(target, body, kind):
     if kind in ('bot', 'settings') and 'effort' in body:
         if body['effort'] not in tuple(EFFORTS) + (('',) if kind == 'bot' else ()): raise ValueError('思考強度無效。')
         changes['effort'] = body['effort']
+    if kind == 'bot' and 'scripts' in body:
+        if not isinstance(body['scripts'], bool): raise ValueError('scripts 無效。')
+        changes['scripts'] = body['scripts']
     if kind == 'bot' and 'pinned' in body:
         if not isinstance(body['pinned'], bool): raise ValueError('pinned 無效。')
         changes['pinned'] = body['pinned']

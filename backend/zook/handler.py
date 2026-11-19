@@ -919,6 +919,8 @@ def main():
             if call.get('name') == 'native_command' and isinstance((call.get('arguments') or {}).get('command'), str): call['arguments']['command'] = hide_command_secrets(call['arguments']['command'])
     trim_jobs(app.store); recover_deleted_bots(app.store)
     app.store.save()
+    try: app.script_api = ScriptApi(app)  # for scripts on this Mac; every Bot starts with it switched off
+    except OSError: app.script_api = None
     later = threading.Timer(2.0, app.queue_drain_all); later.daemon = True; later.start()  # messages that were waiting when Zook was closed
     app.auto_refreshed = time.time()
     if any(b.get('provider') == AUTO for b in app.store.data['bots']): threading.Thread(target=refresh_auto_status, args=(app.store,), daemon=True).start()
@@ -926,6 +928,9 @@ def main():
     except KeyboardInterrupt: pass
     finally:
         app.closing = True  # replies end now because Zook is closing: what is waiting in line stays there for next time
+        if app.__dict__.get('script_api'):
+            try: app.script_api.close()
+            except Exception: pass
         with app.store.lock:
             processes = list(app.processes.values())
             workers = [app.expire_job(job_id) for job_id in list(app.workers)]

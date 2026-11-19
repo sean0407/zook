@@ -277,6 +277,7 @@
           model: d.get('model'),
           section: d.get('section'),
           pinned: d.has('pinned'),
+          scripts: d.has('scripts'),
           fallbacks: d.get('fallbackChoice') === '__none' ? [] : !d.get('fallbackChoice') || d.get('fallbackChoice') === '__default' ? null : [d.get('fallbackChoice')], permissionMode: d.get('permissionMode') || '', effort: d.get('effort') || '', features: Object.fromEntries([['multi', d.get('featureMulti')], ['image', d.get('featureImage')]].filter(x => x[1]).map(x => [x[0], x[1] === 'on'])),
           account: d.get('account') || '',
           access: d.get('access') || '', accessFolder: d.get('access') === 'folder' ? d.get('accessFolder') || '' : ''

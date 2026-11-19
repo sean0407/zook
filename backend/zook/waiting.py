@@ -9,7 +9,7 @@ MAX_WAITING = 20
 def queue_on(store): return store.data['settings'].get('queueWhenBusy') is not False
 
 
-def queue_add(store, bot, body):
+def queue_add(store, bot, body, origin='user', chat_id=None):
     """Lock held. Put a message in line. Raises ValueError when it could not be sent anyway, so the user hears about it now."""
     content, attachments = body.get('content'), body.get('attachments')
     if attachments is not None and (not isinstance(attachments, list) or any(not isinstance(x, str) for x in attachments)): raise ValueError('附件無效。')
@@ -19,11 +19,12 @@ def queue_add(store, bot, body):
     if not isinstance(body.get('plan', False), bool) or not isinstance(body.get('long', False), bool): raise ValueError('設定無效。')
     line = bot.setdefault('queue', [])
     if len(line) >= MAX_WAITING: raise ValueError('排隊的訊息已有 %d 則，請等 Bot 回覆一些再傳。' % MAX_WAITING)
-    entry = dict(id=ID(), chatId=bot.get('chatId'), content=content, createdAt=NOW())
+    entry = dict(id=ID(), chatId=chat_id or bot.get('chatId'), content=content, createdAt=NOW())
     if kept: entry['attachments'] = [a['id'] for a in kept]
     if body.get('effort'): entry['effort'] = pick_effort(body.get('effort'), bot_effort(bot))
     for key in ('plan', 'long'):
         if body.get(key): entry[key] = True
+    if origin != 'user': entry['origin'] = origin  # who put it in line is who started the turn it becomes
     line.append(entry); store.save()
     return entry
 
@@ -64,7 +65,8 @@ class Waiting:
                 again = False
                 try:
                     self.send_to_bot(bot, entry['content'], inventory, chat_id=entry['chatId'], attachments=attachments_for(store, entry.get('attachments')) or None,
-                                     effort=entry.get('effort'), plan=bool(entry.get('plan')), long=bool(entry.get('long')))
+                                     effort=entry.get('effort'), plan=bool(entry.get('plan')), long=bool(entry.get('long')), origin=entry.get('origin') or 'user',
+                                     author='本機腳本' if entry.get('origin') == 'script' else None, queue_id=entry['id'])
                 except Busy:
                     bot['queue'].insert(0, entry); return
                 except Exception as exc:
@@ -72,7 +74,7 @@ class Waiting:
                     # silently, and never left to block the ones behind it.
                     reason = str(exc)[:200] if isinstance(exc, (ValueError, RuntimeError)) else '送出時發生錯誤。'
                     messages = chat_messages(bot, entry['chatId'])
-                    messages.extend([dict(id=ID(), role='user', content=entry['content'], createdAt=NOW()),
+                    messages.extend([dict(dict(id=ID(), role='user', content=entry['content'], createdAt=NOW()), **({'author': '本機腳本'} if entry.get('origin') == 'script' else {})),
                                      dict(id=ID(), role='assistant', content='', createdAt=NOW(), status='failed', note='這則排隊的訊息沒有送出：' + reason)])
                     store.save(); again = True
         if again: self.queue_drain(bot_id)  # the next one in line

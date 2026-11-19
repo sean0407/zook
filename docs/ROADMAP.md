@@ -336,6 +336,6 @@ Bot 與分組、群聊（管理員主持、互相交接）、多帳號、備用�
 | E5 | Skill 範本 | ⬜ |
 | F3 | 多台 Mac 自動同步 | ⬜ |
 | B7 | 語音輸入 | ⬜ |
-| E6 | Gemini 接上 Zook 工具（排程、記憶、Skill） | ⬜ |
+| E6 | Gemini 接上 Zook 工具（排程、記憶、Skill） | ⬜ 卡住：Google 已不讓個人帳號用 Gemini CLI，需要 API 金鑰才能開發驗證 |
 | E8 | Antigravity（官方 agy CLI）：對話、Zook 工具、先規劃、思考強度、剩餘額度 | ✅ |
-| E7 | Grok「指定資料夾」範圍（新版 Grok 不接受額外資料夾） | ⬜ |
+| E7 | Grok「指定資料夾」範圍（新版 Grok 不接受額外資料夾） | ✅ 0.13.3：改成從該資料夾啟動，靠 Grok 的嚴格沙盒限制 |

@@ -319,6 +319,15 @@ class UpkeepTest(unittest.TestCase):
         back = self.req('POST', '/api/bots/%s/restore' % self.bot['id'], {})[1]
         self.assertEqual([m['content'] for m in back['messages']], ['以前的對話', 'ok from codex'])
 
+    def test_stop_also_holds_for_a_backup_model_over_budget(self):
+        cli = self.root / 'bin/claude'; cli.write_text('#!/usr/bin/env python3\nimport json\nprint(json.dumps({"type": "result", "result": "ok from claude", "is_error": False, "usage": {"input_tokens": 700000, "output_tokens": 400000}}))\n'); cli.chmod(0o755)
+        self.req('PATCH', '/api/settings', {'budgets': {'codex': 1000000, 'claude': 1000000}, 'budgetOver': 'stop', 'fallbacks': ['claude']})
+        self.ask(); self.ask()  # codex is over its budget now
+        job = self.ask()
+        self.assertEqual((job['status'], job['fallback']['provider']), ('completed', 'claude'))  # the backup still has budget: it answers
+        job = self.ask()  # and now claude is over as well
+        self.assertEqual(job['status'], 'failed'); self.assertIn('用量預算已用完', job['error'])
+
 
 if __name__ == '__main__':
     unittest.main()

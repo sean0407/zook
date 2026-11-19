@@ -71,7 +71,7 @@
     await refresh(); poll(sent.jobId, b.id);
   }
   // Conversations of a Bot: the open one is b.messages, the others carry their own messages.
-  const chatName = (b, c) => { c = c || (b.chats || []).find(x => x.id === b.chatId) || {}; return c.title || (c.kind === 'schedule' ? '排程' : '新對話'); };
+  const chatName = (b, c) => { c = c || (b.chats || []).find(x => x.id === b.chatId) || {}; return c.title || (c.kind === 'schedule' ? '排程' : c.kind === 'script' ? '本機腳本' : '新對話'); };
   const chatMessages = (b, c) => c.id === b.chatId ? (b.messages || []) : (c.messages || []);
   function chatsModal(b, query = '') {
     const q = query.trim().toLowerCase();

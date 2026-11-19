@@ -162,7 +162,7 @@ SETTING_NAMES = {'permissionMode': '主動性', 'webSearch': '上網搜尋', 'pr
                  'features': '功能開關', 'effort': '思考強度', 'remote': '手機連線', 'autoUpdateCheck': '自動檢查更新', 'scheduleNotify': '通知', 'sharedMcp': '共用連接器', 'disabledSkills': 'Skills 開關',
                  'disabledPlugins': '插件開關', 'autoModels': '自動選擇的模型', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步', 'voiceLang': '語音輸入語言', 'streamReplies': '回覆逐字顯示', 'queueWhenBusy': 'Bot 忙碌時排隊', 'autoCompact': '對話過長時自動整理'}
 BOT_FIELD_NAMES = {'name': '名稱', 'persona': '人格檔案', 'instructions': '工作指示', 'provider': '模型', 'model': '模型', 'account': '帳號', 'permissionMode': '主動性', 'access': '存取範圍', 'accessFolder': '存取範圍',
-                   'fallbacks': '備用模型', 'features': '功能開關', 'effort': '思考強度', 'isAdmin': '管理員身分', 'enabledMcp': '連接器'}
+                   'fallbacks': '備用模型', 'features': '功能開關', 'effort': '思考強度', 'isAdmin': '管理員身分', 'enabledMcp': '連接器', 'scripts': '允許本機腳本'}
 
 
 def activity_hint(store, parts):
@@ -368,7 +368,7 @@ def upkeep_route(handler, store, parts, path):
 JOBS_FULL_PER_BOT = 10   # the newest finished replies of each Bot keep what it did and its approvals
 JOBS_WITH_ANSWER = 3     # only the very newest also keep a second copy of the answer; the conversation always has it
 JOBS_SLIM_DAYS = 30      # after that only what usage figures and the files list need; older than this is added to the totals
-JOB_SLIM_KEEP = ('id', 'botId', 'groupId', 'chatId', 'messageId', 'status', 'createdAt', 'finishedAt', 'usage', 'fallback', 'effort', 'plan', 'long')
+JOB_SLIM_KEEP = ('id', 'botId', 'groupId', 'chatId', 'messageId', 'status', 'createdAt', 'finishedAt', 'usage', 'fallback', 'effort', 'plan', 'long', 'origin', 'queueId')
 
 
 def _job_time(job):

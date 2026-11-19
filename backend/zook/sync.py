@@ -96,7 +96,7 @@ def sync_clean(key, value):
         return out
     if parts[0] == 'chats' and len(parts) == 3:
         messages = value.get('messages')
-        if not isinstance(messages, list) or len(messages) > 5000 or not _text(value.get('title', ''), 200) or value.get('kind', '') not in ('', 'schedule'): return None
+        if not isinstance(messages, list) or len(messages) > 5000 or not _text(value.get('title', ''), 200) or value.get('kind', '') not in ('', 'schedule', 'script'): return None
         kept = []
         for m in messages:
             if not isinstance(m, dict) or not SYNC_ID.fullmatch(str(m.get('id') or '')) or m.get('role') not in ('user', 'assistant') or not _text(m.get('content'), 400000): return None

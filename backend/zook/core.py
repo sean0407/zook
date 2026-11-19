@@ -135,6 +135,16 @@ def open_chat(bot, chat_id):
     bot['chatId'] = chat_id
 
 
+def script_chat(bot):
+    """The conversation local scripts write into: kept apart from the ones the user types in."""
+    ensure_chats(bot)
+    chat = next((c for c in bot['chats'] if c.get('kind') == 'script'), None)
+    if not chat:
+        chat = dict(id=ID(), title='本機腳本', kind='script', createdAt=NOW(), updatedAt=NOW(), messages=[])
+        bot['chats'].append(chat)
+    return chat['id']
+
+
 def schedule_chat(bot):
     """The conversation schedules write into, made on first use, so they never interrupt the open one."""
     ensure_chats(bot)
@@ -446,7 +456,8 @@ def access_note(scope, root, commands, grok=False):
         return ('你的檔案工具只能用在目前的工作資料夾；要讀寫這台 Mac 上其他地方的檔案，用終端機指令（例如 ls、cat、cp）。使用者的個人資料夾是 %s，'
                 '桌面是 %s/Desktop。刪除或覆寫既有檔案前，先向使用者確認。' % (root, root))
     if grok and scope == 'folder':
-        return '你只能在目前的工作資料夾內讀寫檔案，碰不到使用者指定的資料夾（%s）；需要那裡的檔案時，請使用者把檔案放進對話或改用其他 Bot。' % root
+        return ('你目前就在使用者指定的資料夾（%s）裡，可以讀寫這個資料夾內的檔案；資料夾以外的檔案讀不到也改不了。'
+                '對話裡附上的檔案如果讀不到，請使用者把它放進這個資料夾。不要動資料夾裡的 .grok。' % root)
     if scope == 'full':
         return ('你可以用內建工具讀寫這台 Mac 上使用者可以存取的任何檔案與資料夾，並執行指令。目前所在位置是使用者的個人資料夾（%s），'
                 '桌面是 %s/Desktop。刪除或覆寫既有檔案前，先向使用者確認。' % (root, root))
