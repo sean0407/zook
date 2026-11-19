@@ -239,7 +239,7 @@
   });
 
   // Conversation settings.
-  const chatSection = () => `<h2 class="settings-h">對話</h2><div class="setting-list">${settingRow('回覆逐字顯示', '回覆時文字逐步出現；關閉後等整段完成才顯示', toggle('data-stream-replies', state.data.settings.streamReplies !== false, '回覆逐字顯示'))}${settingRow('Bot 忙碌時排隊', 'Bot 還在回覆時送出的訊息會排在後面；關閉後要等它回覆完才能再傳', toggle('data-queue-busy', state.data.settings.queueWhenBusy !== false, 'Bot 忙碌時排隊'))}</div>`;
+  const chatSection = () => `<h2 class="settings-h">對話</h2><div class="setting-list">${settingRow('回覆逐字顯示', '回覆時文字逐步出現；關閉後等整段完成才顯示', toggle('data-stream-replies', state.data.settings.streamReplies !== false, '回覆逐字顯示'))}${settingRow('Bot 忙碌時排隊', 'Bot 還在回覆時送出的訊息會排在後面；關閉後要等它回覆完才能再傳', toggle('data-queue-busy', state.data.settings.queueWhenBusy !== false, 'Bot 忙碌時排隊'))}${settingRow('對話過長時自動整理', '對話長到模型讀不完時，把前面整理成摘要再接續；訊息本身都還在', toggle('data-auto-compact', state.data.settings.autoCompact !== false, '對話過長時自動整理'))}</div>`;
   document.addEventListener('change', async e => {
     if (e.target.dataset.streamReplies === undefined) return;
     try { state.data.settings = await post('settings', {streamReplies: e.target.checked}, 'PATCH'); toast(e.target.checked ? '回覆會逐字顯示' : '回覆會整段顯示'); }
@@ -249,5 +249,11 @@
   document.addEventListener('change', async e => {
     if (e.target.dataset.queueBusy === undefined) return;
     try { state.data.settings = await post('settings', {queueWhenBusy: e.target.checked}, 'PATCH'); toast(e.target.checked ? '忙碌時送出的訊息會排隊' : '已關閉排隊'); }
+    catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
+  });
+
+  document.addEventListener('change', async e => {
+    if (e.target.dataset.autoCompact === undefined) return;
+    try { state.data.settings = await post('settings', {autoCompact: e.target.checked}, 'PATCH'); toast(e.target.checked ? '對話過長時會自動整理' : '已關閉自動整理'); }
     catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
   });

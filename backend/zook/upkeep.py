@@ -160,7 +160,7 @@ def activity_list(store, kind=''):
 
 SETTING_NAMES = {'permissionMode': '主動性', 'webSearch': '上網搜尋', 'provider': '預設提供者', 'model': '預設模型', 'fallbacks': '備用模型', 'access': '存取範圍', 'accessFolder': '存取範圍',
                  'features': '功能開關', 'effort': '思考強度', 'remote': '手機連線', 'autoUpdateCheck': '自動檢查更新', 'scheduleNotify': '通知', 'sharedMcp': '共用連接器', 'disabledSkills': 'Skills 開關',
-                 'disabledPlugins': '插件開關', 'autoModels': '自動選擇的模型', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步', 'voiceLang': '語音輸入語言', 'streamReplies': '回覆逐字顯示', 'queueWhenBusy': 'Bot 忙碌時排隊'}
+                 'disabledPlugins': '插件開關', 'autoModels': '自動選擇的模型', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步', 'voiceLang': '語音輸入語言', 'streamReplies': '回覆逐字顯示', 'queueWhenBusy': 'Bot 忙碌時排隊', 'autoCompact': '對話過長時自動整理'}
 BOT_FIELD_NAMES = {'name': '名稱', 'persona': '人格檔案', 'instructions': '工作指示', 'provider': '模型', 'model': '模型', 'account': '帳號', 'permissionMode': '主動性', 'access': '存取範圍', 'accessFolder': '存取範圍',
                    'fallbacks': '備用模型', 'features': '功能開關', 'effort': '思考強度', 'isAdmin': '管理員身分', 'enabledMcp': '連接器'}
 
@@ -314,6 +314,9 @@ def upkeep_fields(data, body, changes):
     if 'queueWhenBusy' in body:
         if not isinstance(body['queueWhenBusy'], bool): raise ValueError('queueWhenBusy 無效。')
         changes['queueWhenBusy'] = body['queueWhenBusy']
+    if 'autoCompact' in body:
+        if not isinstance(body['autoCompact'], bool): raise ValueError('autoCompact 無效。')
+        changes['autoCompact'] = body['autoCompact']
     if 'streamReplies' in body:
         if not isinstance(body['streamReplies'], bool): raise ValueError('streamReplies 無效。')
         changes['streamReplies'] = body['streamReplies']
@@ -410,7 +413,7 @@ def trim_jobs(store):
 def state_view(store, whole=False):
     """Lock held. What the window and the phone load: everything except the trimmed jobs and the usage totals, which only the usage page needs."""
     view = dict(store.data, rev=store.rev)
-    view['jobs'] = [j for j in store.data['jobs'] if not j.get('slim')]
+    view['jobs'] = [j for j in store.data['jobs'] if not j.get('slim') and not j.get('internal')]
     if not whole: view['bots'] = [page_bot(b) for b in store.data['bots']]  # the newest part of each open conversation; older parts are asked for
     view.pop('usageArchive', None)
     view['deletedBots'] = [{k: b.get(k) for k in ('id', 'name', 'color', 'shape', 'deletedAt')} for b in store.data.get('deletedBots') or []]  # their conversations stay on disk

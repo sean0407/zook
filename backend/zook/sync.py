@@ -106,7 +106,7 @@ def sync_clean(key, value):
                 if k in m and m[k] is not None:
                     if not _text(m[k], limit): return None
                     one[k] = m[k]
-            for k in ('plan', 'long'):
+            for k in ('plan', 'long', 'compacted'):
                 if m.get(k) is True: one[k] = True
             if m.get('attachments'):
                 files = m['attachments']
