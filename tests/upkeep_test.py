@@ -254,6 +254,33 @@ class UpkeepTest(unittest.TestCase):
         self.assertEqual(state['settings']['recovered']['backup'], ''); self.assertEqual(len(state['bots']), 3)
         self.assertIs(state['settings']['onboarded'], False)
 
+    def test_a_message_sent_twice_is_answered_once(self):
+        def wait(job_id):
+            end = time.time() + 15
+            while time.time() < end and self.req('GET', '/api/jobs/' + job_id)[1]['status'] == 'running': time.sleep(0.1)
+        body = {'botId': self.bot['id'], 'content': '只問一次', 'clientId': 'msg-0001-abcdef'}
+        status, first = self.req('POST', '/api/chat', body)
+        self.assertEqual(status, 202)
+        status, again = self.req('POST', '/api/chat', body)  # the phone did not hear back and sends the same message again
+        self.assertEqual((status, again), (202, {'jobId': first['jobId'], 'duplicate': True}))
+        wait(first['jobId'])
+        self.assertEqual(self.req('POST', '/api/chat', body)[1]['jobId'], first['jobId'])  # also after the reply has come in
+        messages = self.req('GET', '/api/state')[1]['bots'][-1]['messages']
+        self.assertEqual([m['content'] for m in messages], ['只問一次', 'ok from codex'])
+        # Another text with the same id is another message; so is the same text without an id, or with an unusable one.
+        for extra in ({'content': '這是另一句', 'clientId': 'msg-0001-abcdef'}, {'content': '只問一次'}, {'content': '只問一次', 'clientId': 'x'}, {'content': '只問一次', 'clientId': 5}):
+            status, out = self.req('POST', '/api/chat', dict({'botId': self.bot['id']}, **extra))
+            self.assertEqual(status, 202, out); self.assertNotIn('duplicate', out); self.assertNotEqual(out['jobId'], first['jobId']); wait(out['jobId'])
+        self.assertEqual(len(self.req('GET', '/api/state')[1]['bots'][-1]['messages']), 10)
+        # A send that was refused is not remembered: the same message can be tried again.
+        (self.root / 'bin/codex').write_text(CLI.replace("print(json.dumps({'type': 'item.completed'", "import time; time.sleep(1.2)\nprint(json.dumps({'type': 'item.completed'"))
+        slow = self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': '慢的'})[1]['jobId']
+        retry = {'botId': self.bot['id'], 'content': 'Bot 在忙時送的', 'clientId': 'msg-0002-abcdef'}
+        self.assertEqual(self.req('POST', '/api/chat', retry)[0], 409)
+        wait(slow)
+        status, out = self.req('POST', '/api/chat', retry)
+        self.assertEqual(status, 202); self.assertNotIn('duplicate', out)
+
 
 if __name__ == '__main__':
     unittest.main()

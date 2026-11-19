@@ -231,9 +231,14 @@
         if (pendingList().some(f => f.uploading)) { toast('檔案還在上傳，請稍等'); return; }
         const attachments = pendingList().map(f => f.id);
         if (!content && !attachments.length) return;
+        // One id per message. Sending the same text again after a failed attempt reuses it, so a send whose answer was lost is not answered twice.
+        const sendFor = effortKey(), last = (state.sendIds = state.sendIds || {})[sendFor];
+        const clientId = last && last.content === content ? last.id : (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2, 12));
+        state.sendIds[sendFor] = {content, id: clientId};
         const g = activeGroup();
         if (g) {
-          await post('groups/' + encodeURIComponent(g.id) + '/messages', {content, attachments, effort: currentEffort(), mode: currentGroupMode(g)});
+          await post('groups/' + encodeURIComponent(g.id) + '/messages', {content, attachments, effort: currentEffort(), mode: currentGroupMode(g), clientId});
+          delete state.sendIds[sendFor];
           input.value = ''; updateInputMirror(); pendingList().length = 0; delete state.groupMode[g.id]; state.groupEstimate = null;
           await refresh();
           pollGroup(g.id);
@@ -246,8 +251,10 @@
           attachments,
           effort: currentEffort(),
           plan: !!state.plan[botId],
-          long: !!state.long[botId]
+          long: !!state.long[botId],
+          clientId
         });
+        delete state.sendIds[sendFor];
         input.value = ''; updateInputMirror(); pendingList().length = 0; state.plan[botId] = false; state.long[botId] = false;
         await refresh();
         poll(result.jobId, botId)

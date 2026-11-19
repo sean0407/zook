@@ -86,7 +86,7 @@ struct ZookAPI {
     func bot(_ id: String) async throws -> BotConversation { try await get("/api/mobile/bots/" + id) }
     func group(_ id: String) async throws -> GroupConversation { try await get("/api/mobile/groups/" + id) }
     func quota() async throws -> QuotaView { try await get("/api/quota") }
-    func send(toBot id: String, _ text: String, photos: [String] = []) async throws { try await post("/api/chat", ["botId": id, "content": text, "attachments": photos]) }
+    func send(toBot id: String, _ text: String, photos: [String] = [], clientId: String = UUID().uuidString) async throws { try await post("/api/chat", ["botId": id, "content": text, "attachments": photos, "clientId": clientId]) }
     /// Sends one photo (already made small) to the Mac and returns its id, to attach to the next message.
     func upload(photo: Data) async throws -> String {
         let (status, data) = try await link.request("POST", "/api/mobile/photos", body: try JSONSerialization.data(withJSONObject: ["data": photo.base64EncodedString()]), timeout: 90)
@@ -99,7 +99,7 @@ struct ZookAPI {
     func openChat(bot id: String, chat: String) async throws { try await post("/api/mobile/bots/" + id + "/chats", ["chatId": chat]) }
     func newChat(bot id: String) async throws { try await post("/api/mobile/bots/" + id + "/chats", ["new": true]) }
     func notices(after seq: Int) async throws -> NoticeList { try await get("/api/notifications?after=\(seq)") }
-    func send(toGroup id: String, _ text: String) async throws { try await post("/api/groups/" + id + "/messages", ["content": text]) }
+    func send(toGroup id: String, _ text: String, clientId: String = UUID().uuidString) async throws { try await post("/api/groups/" + id + "/messages", ["content": text, "clientId": clientId]) }
     func decide(_ approval: String, approve: Bool) async throws { try await post("/api/approvals/" + approval, ["decision": approve ? "approve" : "deny"]) }
     func providers() async throws -> [ProviderOption] { let list: ProviderList = try await get("/api/providers"); return list.providers }
     /// `provider` empty means the Mac's default model.

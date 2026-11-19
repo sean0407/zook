@@ -404,3 +404,28 @@ def state_view(store):
     view['jobs'] = [j for j in store.data['jobs'] if not j.get('slim')]
     view.pop('usageArchive', None)
     return view
+
+
+# ---- Sending once: a message carries an id made by the window or the phone. If the answer to a send is lost on the way and the
+# same message is sent again, the first send's result comes back instead of a second reply being started.
+SEND_ONCE_SECONDS = 600
+SEND_ID = re.compile(r'[A-Za-z0-9_-]{8,64}')
+
+
+def send_key(target, body):
+    """The key for one message to one Bot or group, or None when the sender gave no usable id (older apps)."""
+    client = body.get('clientId')
+    if not isinstance(client, str) or not SEND_ID.fullmatch(client): return None
+    return (target, client, hashlib.sha256(str(body.get('content')).encode('utf-8', 'replace')).hexdigest())
+
+
+def send_seen(app, key):
+    """Lock held. What the first send of this message returned, if it was accepted within the last ten minutes."""
+    sends, now = app.__dict__.setdefault('recent_sends', {}), time.monotonic()
+    for old in [k for k, (until, _) in sends.items() if until < now]: sends.pop(old)
+    return sends[key][1] if key and key in sends else None
+
+
+def send_remember(app, key, result):
+    """Lock held. Only an accepted send is remembered: one that was refused can simply be tried again."""
+    if key: app.__dict__.setdefault('recent_sends', {})[key] = (time.monotonic() + SEND_ONCE_SECONDS, result)

@@ -14,6 +14,7 @@ struct ChatView: View {
     @State private var speaking: [String] = []
     @State private var draft = ""
     @State private var sending = false
+    @State private var sendId = UUID().uuidString  // stays the same while one message is being retried
     @State private var deciding: Set<String> = []
     @State private var problem: String?
     @State private var showActivity = false
@@ -148,8 +149,9 @@ struct ChatView: View {
                 if kind == .bot {
                     var ids: [String] = []
                     for photo in photos { ids.append(try await api.upload(photo: photo)) }
-                    try await api.send(toBot: id, text, photos: ids)
-                } else { try await api.send(toGroup: id, text) }
+                    try await api.send(toBot: id, text, photos: ids, clientId: sendId)
+                } else { try await api.send(toGroup: id, text, clientId: sendId) }
+                sendId = UUID().uuidString  // the next message is a new one
                 draft = ""; photos = []; await refresh()
             } catch { problem = error.localizedDescription }
             sending = false

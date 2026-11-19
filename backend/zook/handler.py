@@ -671,9 +671,12 @@ class Handler(BaseHTTPRequestHandler):
                     body = self.body(); bot = store.find('bots', body.get('botId'))
                     if not bot: return self.error(404, '找不到機器人。')
                     if self.device and isinstance(body.get('attachments'), list) and len(body['attachments']) > MOBILE_PHOTOS: return self.error(400, '手機每則訊息最多 %d 張照片。' % MOBILE_PHOTOS)
+                    once = send_key('bot:' + bot['id'], body); sent = send_seen(self.server, once)
+                    if sent: return self.respond(202, dict(sent, duplicate=True))  # the same message again: its answer was lost on the way
                     try: job = self.server.send_to_bot(bot, body.get('content'), inventory, attachments=attachments_for(store, body.get('attachments')), effort=body.get('effort'),
                                                          plan=body.get('plan', False), long=body.get('long', False))
                     except Busy as exc: return self.error(409, str(exc))
+                    send_remember(self.server, once, {'jobId': job['id']})
                     return self.respond(202, {'jobId': job['id']})
                 if path == '/api/chat/redo' and self.command == 'POST':
                     # Answer the last question again, send an edited version of it, or answer it with another model.
@@ -745,8 +748,11 @@ class Handler(BaseHTTPRequestHandler):
                     if len(parts) == 4 and parts[3] == 'messages' and self.command == 'POST':
                         body = self.body()
                         if self.device and isinstance(body.get('attachments'), list) and len(body['attachments']) > MOBILE_PHOTOS: return self.error(400, '手機每則訊息最多 %d 張照片。' % MOBILE_PHOTOS)
+                        once = send_key('group:' + group['id'], body); sent = send_seen(self.server, once)
+                        if sent: return self.respond(202, dict(sent, duplicate=True))
                         try: run_id = self.server.post_group_message(group, body.get('content'), attachments=attachments_for(store, body.get('attachments')), effort=body.get('effort'), mode=body.get('mode'))
                         except RuntimeError as exc: return self.error(409, str(exc))
+                        send_remember(self.server, once, {'runId': run_id})
                         store.save(); return self.respond(202, {'runId': run_id})
                     if len(parts) == 4 and parts[3] == 'continue' and self.command == 'POST':
                         body = self.body()
