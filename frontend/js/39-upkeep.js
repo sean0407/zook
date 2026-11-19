@@ -237,3 +237,11 @@
       toast('已喚回「' + bot.name + '」，對話都還在');
     } catch (err) { el.disabled = false; toast(err.message); }
   });
+
+  // Conversation settings.
+  const chatSection = () => `<h2 class="settings-h">對話</h2><div class="setting-list">${settingRow('回覆逐字顯示', '回覆時文字逐步出現；關閉後等整段完成才顯示', toggle('data-stream-replies', state.data.settings.streamReplies !== false, '回覆逐字顯示'))}</div>`;
+  document.addEventListener('change', async e => {
+    if (e.target.dataset.streamReplies === undefined) return;
+    try { state.data.settings = await post('settings', {streamReplies: e.target.checked}, 'PATCH'); toast(e.target.checked ? '回覆會逐字顯示' : '回覆會整段顯示'); }
+    catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
+  });

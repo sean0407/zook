@@ -1675,3 +1675,7 @@ body[data-voice="on"] [data-action="voice"] { color: #c0564f; background: #fdece
 /* Deleted Bots on the usage page */
 .gone-tag { margin-left: 6px; font-style: normal; font-weight: 400; font-size: 11px; color: #999; }
 .bot-usage .restore-bot { margin-left: 8px; font-size: 12px; font-weight: 500; }
+
+/* A reply being written */
+.bubble.streaming > :last-child::after { content: "▍"; margin-left: 2px; color: #b8b8b8; animation: stream-caret 1s steps(2, start) infinite; }
+@keyframes stream-caret { to { visibility: hidden; } }

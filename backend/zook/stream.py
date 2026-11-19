@@ -94,12 +94,12 @@ def stream_route(handler, job_id):
     def emit(obj): handler.wfile.write(('data: ' + json.dumps(obj, ensure_ascii=False) + '\n\n').encode('utf-8')); handler.wfile.flush()
     try:
         while time.monotonic() < until:
+            with store.lock:
+                job = store.find('jobs', job_id); running = bool(job) and job['status'] == 'running'
+            if not running: emit(dict(done=True)); return  # checked first: the words are cleared as the reply finishes, and that must not blank the screen
             text = partial_text(job_id)
             if text != sent:
                 emit(dict(add=text[len(sent):]) if text.startswith(sent) and sent else dict(text=text)); sent, quiet = text, 0.0
-            with store.lock:
-                job = store.find('jobs', job_id); running = bool(job) and job['status'] == 'running'
-            if not running: emit(dict(done=True)); return
             time.sleep(0.06); quiet += 0.06
             if quiet >= 15: handler.wfile.write(b': waiting\n\n'); handler.wfile.flush(); quiet = 0.0  # keeps the connection from being dropped as idle
     except (OSError, ValueError): pass  # the window went away

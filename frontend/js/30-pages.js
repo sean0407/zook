@@ -247,6 +247,8 @@
     try {
       let j = await api('jobs/' + encodeURIComponent(jobId));
       j.botId = botId;
+      if (j.status === 'running') streamJob(j);
+      delete j.partial;  // painted by the stream; leaving it here would redraw the whole page for every few words
       const changed = JSON.stringify(state.jobDetails[jobId]) !== JSON.stringify(j);
       state.jobDetails[jobId] = j;
       if (changed) render(true);

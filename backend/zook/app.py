@@ -625,7 +625,7 @@ class App(GroupRuns, Triggers, Syncing, ThreadingHTTPServer):
                     pipes.wait(2)
                 with store.lock: job['mayHaveActed'] = bool(native)  # stopped midway, so what its tools already did is unknown
                 raise RuntimeError('執行逾時：' + stopped_for)
-            finally: self.__dict__.get('job_activity', {}).pop(job_id, None); partial_end(job_id)
+            finally: self.__dict__.get('job_activity', {}).pop(job_id, None)
             if len(output) > MAX_CLI_OUTPUT:
                 with store.lock: job['mayHaveActed'] = bool(native)
                 raise RuntimeError('回覆超過大小限制。')
@@ -677,6 +677,7 @@ class App(GroupRuns, Triggers, Syncing, ThreadingHTTPServer):
                     job.update(status='failed', error=message, finishedAt=NOW())
                     store.finish_message(job, '', 'failed'); store.save()
         finally:
+            partial_end(job_id)  # only now: the words stay on screen until the reply is marked finished, or another model starts
             with store.lock:
                 self.processes.pop(job_id, None)
                 self.expire_job(job_id); store.save()

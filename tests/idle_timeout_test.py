@@ -17,11 +17,11 @@ BIG = '#!/usr/bin/env python3\nimport sys\nsys.stdin.read(); sys.stdout.write("x
 
 
 class IdleTimeoutTest(unittest.TestCase):
-    def run_one(self, script, quiet, hard, long=False):
+    def run_one(self, script, quiet, hard, long=False, provider='codex'):
         spec = importlib.util.spec_from_file_location('zook_idle_timeout', SERVER)
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory); cli = root / 'codex'; cli.write_text(script); cli.chmod(0o755)
+            root = Path(directory); cli = root / provider; cli.write_text(script); cli.chmod(0o755)
             store = module.Store(root / 'data'); bot = store.data['bots'][0]
             bot['messages'].append({'id': 'msg', 'role': 'assistant', 'content': '', 'status': 'running', 'createdAt': 'now'})
             job = {'id': 'job', 'botId': bot['id'], 'messageId': 'msg', 'status': 'running'}
@@ -32,7 +32,7 @@ class IdleTimeoutTest(unittest.TestCase):
                 with mock.patch.object(module, 'JOB_TIMEOUT', quiet), mock.patch.object(module, 'JOB_HARD_TIMEOUT', hard), mock.patch.object(module, 'LONG_JOB_TIMEOUT', hard), \
                      mock.patch.object(module, 'find_cli', return_value=str(cli)):
                     started = time.time()
-                    thread = threading.Thread(target=app.run_job, args=('job', 'test', 'codex', ''))
+                    thread = threading.Thread(target=app.run_job, args=('job', 'test', provider, ''))
                     thread.start(); thread.join(timeout=15)
                     self.assertFalse(thread.is_alive(), 'the job was left running')
                 return dict(job), time.time() - started
@@ -60,6 +60,20 @@ class IdleTimeoutTest(unittest.TestCase):
     def test_large_output_on_both_pipes_is_read_whole(self):
         job, _ = self.run_one(BIG, quiet=5, hard=20)  # more than a pipe holds, on both pipes at once
         self.assertEqual((job['status'], job.get('content')), ('completed', 'big ok'), job.get('error'))
+
+    def test_claude_writing_slowly_is_not_silent(self):
+        # Claude now reports each few words as it writes. A reply that takes longer than the quiet limit, but keeps writing, goes on.
+        script = """#!/usr/bin/env python3
+import json, sys, time
+sys.stdin.read()
+assert '--include-partial-messages' in sys.argv
+for i in range(8):
+    print(json.dumps({'type': 'stream_event', 'event': {'type': 'content_block_delta', 'delta': {'type': 'text_delta', 'text': 'word '}}}), flush=True); time.sleep(0.3)
+print(json.dumps({'type': 'result', 'result': 'a long careful answer', 'is_error': False}), flush=True)
+"""
+        job, took = self.run_one(script, quiet=0.8, hard=30, provider='claude')
+        self.assertEqual((job['status'], job.get('content')), ('completed', 'a long careful answer'), job.get('error'))
+        self.assertGreater(took, 2)
 
 
 if __name__ == '__main__':
