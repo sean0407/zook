@@ -1,5 +1,5 @@
 # What each CLI can do in Zook, and whether the installed version still has what Zook relies on. Loaded by backend/server.py into one shared namespace.
-ABILITIES = (('chat', '對話'), ('tools', 'Zook 工具'), ('images', '看圖'), ('plan', '先規劃'), ('effort', '思考強度'), ('resume', '原生對話'), ('quota', '額度讀取'))
+ABILITIES = (('chat', '對話'), ('tools', 'Zook 工具'), ('images', '看圖'), ('plan', '先規劃'), ('effort', '思考強度'), ('resume', '原生對話'), ('quota', '額度讀取'), ('live', '保持開啟'))
 
 # For each kind of CLI: ability -> the help screens and the option each must still list. An ability that is not listed is not offered.
 _HELP = ('--help',)
@@ -8,7 +8,8 @@ ABILITY_CHECKS = {
     'codex': dict(chat=[(_EXEC, '--json'), (_EXEC, '--skip-git-repo-check')], tools=[(_EXEC, '--config')], images=[(_EXEC, '--image')], plan=[(_EXEC, '--sandbox')],
                   effort=[(_EXEC, '--config')], resume=[(('exec', 'resume', '--help'), 'SESSION_ID')], quota=[(('app-server', '--help'), '--listen')]),
     'claude': dict(chat=[(_HELP, '--print'), (_HELP, '--output-format')], tools=[(_HELP, '--mcp-config'), (_HELP, '--allowedTools')], images=[(_HELP, '--tools')], plan=[(_HELP, '--tools')],
-                   effort=[(_HELP, '--effort')], resume=[(_HELP, '--resume'), (_HELP, '--session-id')], quota=[(_HELP, '--output-format')]),
+                   effort=[(_HELP, '--effort')], resume=[(_HELP, '--resume'), (_HELP, '--session-id')], quota=[(_HELP, '--output-format')],
+                   live=[(_HELP, '--input-format'), (_HELP, '--replay-user-messages')]),
     'grok': dict(chat=[(_HELP, '--prompt-file'), (_HELP, '--output-format')], tools=[(_HELP, '--allow')], images=[(_HELP, '--prompt-file')], plan=[(_HELP, '--deny')],
                  effort=[(_HELP, '--reasoning-effort')], resume=[(_HELP, '--resume')]),
     'antigravity': dict(chat=[(_HELP, '--input-format'), (_HELP, '--output-format')], tools=[(_HELP, '--settings')], images=[(_HELP, '--settings')], plan=[(_HELP, '--mode')],

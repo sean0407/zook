@@ -341,6 +341,9 @@ def upkeep_fields(data, body, changes):
     if 'textSize' in body:
         if body['textSize'] not in ('small', 'normal', 'large', 'xlarge'): raise ValueError('字體大小設定無效。')
         changes['textSize'] = body['textSize']
+    if 'keepCli' in body:
+        if not isinstance(body['keepCli'], bool): raise ValueError('keepCli 無效。')
+        changes['keepCli'] = body['keepCli']
     if 'choiceButtons' in body:
         if not isinstance(body['choiceButtons'], bool): raise ValueError('choiceButtons 無效。')
         changes['choiceButtons'] = body['choiceButtons']

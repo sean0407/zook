@@ -65,6 +65,7 @@ print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 10, 'outpu
 CLAUDE = '''#!/usr/bin/env python3
 import json, os, sys, time
 if 'auth' in sys.argv: print(json.dumps({'loggedIn': True})); sys.exit(0)
+if '--help' in sys.argv or '--version' in sys.argv: sys.exit(0)  # Zook asking what this CLI can do
 sys.stdin.read()
 open(os.path.join(os.path.dirname(sys.argv[0]), 'claude.args'), 'w').write(' '.join(sys.argv[1:]))
 time.sleep(0.8)

@@ -59,3 +59,9 @@
     try { state.data.settings = await post('settings', {choiceButtons: e.target.checked}, 'PATCH'); toast(e.target.checked ? 'Bot 可以用按鈕讓你選擇' : '已關閉選項按鈕'); }
     catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
   });
+
+  document.addEventListener('change', async e => {
+    if (e.target.dataset.keepCli === undefined) return;
+    try { state.data.settings = await post('settings', {keepCli: e.target.checked}, 'PATCH'); toast(e.target.checked ? '同一個對話會保持 CLI 開啟' : '每則回覆都重新啟動 CLI'); }
+    catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
+  });

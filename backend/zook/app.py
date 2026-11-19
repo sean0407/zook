@@ -301,6 +301,8 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
             except Exception: pass
             try: self.sync_tick()
             except Exception: pass
+            try: live_tidy(self)
+            except Exception: pass
             try:
                 with self.store.lock:
                     backup_daily(self.store)
@@ -479,7 +481,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
                     store.finish_message(job, '', 'failed'); store.save(); return
 
     def _run_attempt(self, job_id, prompt, provider, model, bot, inventory, final):
-        store = self.store; session = None
+        store = self.store; session = None; first_prompt, first_bot, again = prompt, copy.deepcopy(bot), False
         try:
             binary = find_cli(provider)
             if not binary: raise RuntimeError('找不到所選 CLI，請先安裝並登入。')
@@ -632,14 +634,16 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
                 if not job or job['status'] != 'running': return
                 started_at = time.time()
                 if streaming: partial_start(job)
-                proc = subprocess.Popen(args, stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=str(cli_cwd), env=env)
+                # A conversation's CLI may be kept open between messages (live.py); otherwise it is started for this one reply.
+                kept = live_turn(self, job, provider, kind, args, cli_cwd, env, resume, prompt, partial_feeder(kind, job_id) if streaming else None)
+                proc = kept or subprocess.Popen(args, stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=str(cli_cwd), env=env)
                 self.processes[job_id] = proc
             try:
                 # A reply may take as long as it keeps working. It is stopped when nothing has happened for a while (no output from the
                 # CLI, no tool use), or at the overall limit. A 長任務 is given its whole time even when its CLI stays silent.
                 quiet_limit = LONG_JOB_TIMEOUT if job.get('long') else JOB_TIMEOUT
                 deadline = time.monotonic() + (LONG_JOB_TIMEOUT if job.get('long') else max(JOB_HARD_TIMEOUT, JOB_TIMEOUT))
-                pipes = Pipes(proc, prompt.encode('utf-8') if stdin_prompt else None, MAX_CLI_OUTPUT, on_output=partial_feeder(kind, job_id) if streaming else None)
+                pipes = kept or Pipes(proc, prompt.encode('utf-8') if stdin_prompt else None, MAX_CLI_OUTPUT, on_output=partial_feeder(kind, job_id) if streaming else None)
                 active = self.__dict__.setdefault('job_activity', {}); active[job_id] = time.monotonic()
                 stopped_for = ''
                 while True:
@@ -653,6 +657,9 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
                     elif now >= deadline: stopped_for = '已超過時間上限。'
                     if stopped_for: raise subprocess.TimeoutExpired(args, quiet_limit)
                 output, stderr = pipes.result()
+                with store.lock: now_job = store.find('jobs', job_id) or {}; untouched = now_job.get('status') == 'running' and not now_job.get('toolCalls')
+                if kept and kept.lost() and untouched and not self.__dict__.get('closing'): raise LiveLost()
+                if kept and kept.finished: self.live_fails = 0
             except subprocess.TimeoutExpired:
                 terminate_tree(proc)
                 if not pipes.wait(5):
@@ -700,6 +707,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
             with store.lock:
                 job = store.find('jobs', job_id)
                 if parsed['usage'] and kind == 'codex' and not model: parsed['usage']['model'] = codex_default_model(env) or parsed['usage'].get('model')  # so the reply can be priced
+                if parsed['usage']: parsed['usage'] = live_usage(kept, parsed['usage'])
                 if parsed['usage']: job['usage'] = dict(parsed['usage'], provider=provider, account=account['id'] if account else ''); budget_add(self, provider, parsed['usage']); compact_note_usage(store, job, kind, parsed['usage'])
                 if job['status'] == 'running':
                     content, options = split_choices(content) if choices_for(store, job) else (content, None)
@@ -708,6 +716,9 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
                     store.finish_message(job, content, 'completed')
                     if options: (find_message(store.find('bots', job['botId']), job['messageId']) or {})['options'] = options
                     store.save()
+        except LiveLost:
+            self.live_fails = self.__dict__.get('live_fails', 0) + 1
+            with store.lock: (store.find('jobs', job_id) or {})['liveOff'] = True; again = True  # nothing was written or done: this one message goes the usual way
         except (OSError, RuntimeError, ValueError) as exc:
             with store.lock:
                 job = store.find('jobs', job_id)
@@ -728,6 +739,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
             if mine and (mine / '.zook-owned').is_file(): shutil.rmtree(str(mine), ignore_errors=True)
             for leftover in (store.dir / 'workspaces').glob('*/.grok/.zook-prompt-%s.txt' % job_id):
                 shutil.rmtree(str(leftover.parent), ignore_errors=True)  # per-job .grok dir: prompt, MCP config, adapter copy
+        if again: self._run_attempt(job_id, first_prompt, provider, model, first_bot, inventory, final)
 
     def app_tools(self, bot, runtime, group_id=None, origin='user'):
         """Tools backed by Zook's own data, offered through the runtime broker.

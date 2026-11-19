@@ -265,8 +265,11 @@ class Handler(BaseHTTPRequestHandler):
             port = self.server.server_address[1]
             if self.command != 'POST' or self.headers.get('Host', '').lower() not in ('127.0.0.1:%d' % port, 'localhost:%d' % port): return self.error(403, '禁止存取。')
             with self.server.store.lock:
-                worker = self.server.workers.get(parts[2]); job = self.server.store.find('jobs', parts[2])
-                authorized = worker and job and job['status'] == 'running' and secrets.compare_digest(self.headers.get('Authorization', ''), 'Bearer '+worker['token'])
+                if parts[2].startswith('live-'):  # a CLI kept open between messages: the reply it is answering right now
+                    worker, job = live_worker(self.server, parts[2], self.headers.get('Authorization', '')); authorized = bool(worker and job and job['status'] == 'running')
+                else:
+                    worker = self.server.workers.get(parts[2]); job = self.server.store.find('jobs', parts[2])
+                    authorized = worker and job and job['status'] == 'running' and secrets.compare_digest(self.headers.get('Authorization', ''), 'Bearer '+worker['token'])
             if not authorized: return self.error(403, '禁止存取。')
             try:
                 body = self.body(); method = body.get('method'); params = body.get('params', {})
@@ -937,6 +940,7 @@ def main():
     except OSError: app.script_api = None
     later = threading.Timer(2.0, app.queue_drain_all); later.daemon = True; later.start()  # messages that were waiting when Zook was closed
     app.auto_refreshed = time.time()
+    live_learn(app)
     if any(b.get('provider') == AUTO for b in app.store.data['bots']): threading.Thread(target=refresh_auto_status, args=(app.store,), daemon=True).start()
     try: app.serve_forever()
     except KeyboardInterrupt: pass
@@ -953,6 +957,7 @@ def main():
                     job.update(status='failed', error='服務關閉，工作已中斷。', finishedAt=NOW())
                     app.store.finish_message(job, '', 'failed')
             app.store.save(everything=True)
+        live_tidy(app, everything=True)  # after the replies are marked as interrupted, so none of them is sent again on the way out
         app.stop_remote()
         for flow in list(app.logins.values()) + list(app.installs.values()): flow.cancel()
         for worker in workers:
