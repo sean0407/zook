@@ -38,8 +38,9 @@
   function groupRunBar(g) {
     if (g.status === 'running') return '';
     if (g.paused) return `<div class="group-bar"><span>已達回合上限，討論還沒結束。</span><button type="button" class="secondary small-btn" data-action="group-discard">結束</button><button type="button" class="primary small-btn" data-action="group-continue">繼續</button></div>`;
-    const messages = g.messages || [], lastAsk = messages.map(m => m.role).lastIndexOf('user'), since = messages.slice(lastAsk + 1).filter(m => m.role === 'assistant' && m.content && !m.checkOf);
-    return since.length >= 2 && !since.some(m => m.card) ? `<div class="group-bar"><span></span><button type="button" class="secondary small-btn" data-action="group-summarize">整理結論（多用一次模型請求）</button></div>` : '';
+    let after = g.afterAsk;  // worked out over the whole discussion by the Mac, since the page may hold only its newest part
+    if (!after) { const messages = groupMsgs(g), lastAsk = messages.map(m => m.role).lastIndexOf('user'), since = messages.slice(lastAsk + 1).filter(m => m.role === 'assistant' && m.content && !m.checkOf); after = {replies: since.length, card: since.some(m => m.card)}; }
+    return after.replies >= 2 && !after.card ? `<div class="group-bar"><span></span><button type="button" class="secondary small-btn" data-action="group-summarize">整理結論（多用一次模型請求）</button></div>` : '';
   }
 
   const CARD_PARTS = [['conclusion', '結論'], ['decisions', '需要你決定'], ['actions', '待辦'], ['questions', '仍有疑問']];
@@ -48,7 +49,7 @@
     return `<div class="group-card">${m.card.body ? `<section><div class="md">${markdown(m.card.body)}</div></section>` : ''}${CARD_PARTS.filter(([k]) => m.card[k]).map(([k, name]) => `<section><h4>${name}</h4><div class="md">${markdown(m.card[k])}</div></section>`).join('')}<div class="group-card-actions"><button type="button" class="link" data-action="card-copy" data-id="${esc(m.id)}">複製</button><button type="button" class="link" data-action="card-save" data-id="${esc(m.id)}">存到知識庫</button></div></div>`;
   }
   function groupChecks(g, m) {
-    const checks = (g.messages || []).filter(x => x.checkOf === m.id);
+    const checks = groupMsgs(g).filter(x => x.checkOf === m.id);
     if (!checks.length) return '';
     const cls = {'同意': 'ok', '有疑慮': 'warn', '有錯誤': 'bad'};
     return `<div class="group-checks">${checks.map(c => {
@@ -90,17 +91,35 @@
 
   // A member's own window on a group discussion: for each time it spoke, what it looked up and which Skills it used on the way,
   // and then the conclusion it put into the group. The group itself only shows the conclusions.
+  // Every time the member spoke comes from the Mac (the page may hold only the newest part of the discussion); it is asked for
+  // again whenever the discussion has moved on.
+  state.memberTurns = state.memberTurns || {};
+  async function loadMemberTurns(g, b, older) {
+    const key = g.id + ':' + b.id, had = state.memberTurns[key], busy = state.memberLoading = state.memberLoading || {};
+    if (busy[key]) return;
+    busy[key] = true;
+    try {
+      const first = older && had?.turns[0];
+      const out = await api(`groups/${encodeURIComponent(g.id)}/messages?member=${encodeURIComponent(b.id)}${first ? '&before=' + encodeURIComponent(first.id) : ''}`);
+      state.memberTurns[key] = first ? {turns: out.turns.concat(had.turns), more: out.more, mark: had.mark} : {turns: out.turns, more: out.more, mark: memberMark(g)};
+    } catch (err) { toast(err.message); state.memberTurns[key] = Object.assign(had || {turns: [], more: false}, {mark: memberMark(g)}); }  // not asked again until the discussion moves on
+    delete busy[key];
+    render(true);
+  }
+  const memberMark = g => { const last = (g.messages || []).slice(-1)[0]; return [g.status, last?.id, last?.status, (g.messages || []).length + (g.olderCount || 0)].join('|'); };
+  document.addEventListener('click', e => { const el = e.target.closest?.('[data-member-older]'); if (el && state.memberWork) { const g = state.data.groups.find(x => x.id === state.memberWork.group), b = state.data.bots.find(x => x.id === state.memberWork.bot); if (g && b) loadMemberTurns(g, b, true); } });
   function memberWork(b, g) {
     const jobs = {}; for (const j of Object.values(state.jobDetails)) if (j.groupId === g.id && j.botId === b.id) jobs[j.messageId] = j;
-    const said = (g.messages || []).filter(m => m.botId === b.id && m.role === 'assistant');
-    const asked = m => { const all = g.messages || [], at = all.indexOf(m); for (let i = at - 1; i >= 0; i--) if (all[i].role === 'user') return all[i]; return null; };
+    const got = state.memberTurns[g.id + ':' + b.id];
+    if (!got || got.mark !== memberMark(g)) setTimeout(() => loadMemberTurns(g, b), 0);
+    const said = got?.turns || [];
     const turns = said.map(m => {
-      const job = jobs[m.id], calls = job?.toolCalls || [], q = asked(m);
+      const job = jobs[m.id], calls = job?.toolCalls || [], q = m.asked;
       const steps = calls.length ? `<div class="work-steps">${toolTimeline(b.id, [job])}</div>` : `<div class="work-none">${job && !job.slim ? '這次沒有查資料或使用 Skill，直接回覆。' : '這次的過程紀錄已經整理掉了（只保留最近的回覆）。'}</div>`;
       const end = m.status === 'running' ? '<div class="bubble">正在進行…</div>' : m.content ? `<div class="bubble md">${markdown(m.content)}</div>` : `<div class="bubble">${esc(m.status === 'cancelled' ? '已停止' : '沒有回覆')}</div>`;
       return `<div class="date">${esc(formatDate(m.createdAt))}</div>${q ? `<div class="work-ask"><span>${esc(q.author || '你')} 在群組說</span>${esc(String(q.content || '').slice(0, 300))}</div>` : ''}<div class="work-turn"><div class="work-label">過程</div>${steps}<div class="work-label">丟回群組的結論</div><div class="message assistant">${avatar(b)}${end}</div></div>`;
     }).join('');
-    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-bot">${avatar(b)}${esc(b.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn" data-member-work="" data-back="group" data-group="${esc(g.id)}">‹ 回到群組</button><button class="text-btn" data-member-work="">和 ${esc(b.name)} 的對話</button>${!state.detailOpen ? '<button class="text-btn" data-action="toggle-detail">顯示詳情</button>' : ''}</div></header><div class="conversation" id="conversation"><div class="conversation-inner"><div class="work-head">${esc(b.name)} 在「${esc(g.name)}」的工作過程<small>這裡看得到他每次發言前做了什麼；群組裡只會出現結論。</small></div>${turns || '<div class="detail-empty">他還沒有在這個討論中發言。</div>'}</div></div></main>${state.detailOpen ? detail(b) : ''}`;
+    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-bot">${avatar(b)}${esc(b.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn" data-member-work="" data-back="group" data-group="${esc(g.id)}">‹ 回到群組</button><button class="text-btn" data-member-work="">和 ${esc(b.name)} 的對話</button>${!state.detailOpen ? '<button class="text-btn" data-action="toggle-detail">顯示詳情</button>' : ''}</div></header><div class="conversation" id="conversation"><div class="conversation-inner"><div class="work-head">${esc(b.name)} 在「${esc(g.name)}」的工作過程<small>這裡看得到他每次發言前做了什麼；群組裡只會出現結論。</small></div>${got?.more ? '<div class="older-bar"><button class="link" data-member-older="1">載入更早的發言</button></div>' : ''}${turns || `<div class="detail-empty">${got ? '他還沒有在這個討論中發言。' : '正在讀取…'}</div>`}</div></div></main>${state.detailOpen ? detail(b) : ''}`;
   }
   document.addEventListener('click', e => {
     const row = e.target.closest('[data-member-work]');

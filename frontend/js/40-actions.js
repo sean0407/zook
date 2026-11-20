@@ -171,8 +171,8 @@
         case 'group-discard': { const g = activeGroup(); await post('groups/' + encodeURIComponent(g.id) + '/continue', {discard: true}); await refresh(); break; }
         case 'group-summarize': { const g = activeGroup(); await post('groups/' + encodeURIComponent(g.id) + '/summarize'); await refresh(); pollGroup(g.id); break; }
         case 'group-verify': await verifyGroupMessage(activeGroup(), id); break;
-        case 'card-copy': { const m = activeGroup().messages.find(x => x.id === id); await navigator.clipboard.writeText(cardText(m.card)); toast('已複製結論'); break; }
-        case 'card-save': { const g = activeGroup(), m = g.messages.find(x => x.id === id); await post('knowledge', {title: g.name + ' 討論結論', content: cardText(m.card)}); toast('已存到知識庫'); break; }
+        case 'card-copy': { const m = groupMsgs(activeGroup()).find(x => x.id === id); await navigator.clipboard.writeText(cardText(m.card)); toast('已複製結論'); break; }
+        case 'card-save': { const g = activeGroup(), m = groupMsgs(g).find(x => x.id === id); await post('knowledge', {title: g.name + ' 討論結論', content: cardText(m.card)}); toast('已存到知識庫'); break; }
         case 'group-tab': state.groupTab = id; if (activeGroup()) delete state.groupFiles[activeGroup().id]; render(true); break;
         case 'group-file-pick': $('#group-file-input').click(); break;
         case 'group-file-delete': { const g = activeGroup(); if (!confirm(`刪除「${id}」？刪除後無法復原。`)) break; await api('groups/' + encodeURIComponent(g.id) + '/files/' + encodeURIComponent(id), {method: 'DELETE'}); await loadGroupFiles(g); toast('已刪除檔案'); break; }
@@ -550,7 +550,8 @@
           const g = activeGroup();
           if (g) {
             const name = id => state.data.bots.find(b => b.id === id)?.name || 'Bot';
-            download(`# ${g.name}\n\n${(g.messages||[]).filter(m=>m.content).map(m=>m.role==='system'?`> ${m.content}`:`## ${m.role==='user'?'我':name(m.botId)}\n\n${m.content}`).join('\n\n')}`, `${g.name.replace(/[\\/:*?"<>|]/g,'_')}-群組對話.md`, 'text/markdown;charset=utf-8');
+            const all = (await api('groups/' + encodeURIComponent(g.id) + '/messages?all=1')).messages;  // the whole discussion, not only the part on the page
+            download(`# ${g.name}\n\n${all.filter(m=>m.content).map(m=>m.role==='system'?`> ${m.content}`:`## ${m.role==='user'?'我':name(m.botId)}\n\n${m.content}`).join('\n\n')}`, `${g.name.replace(/[\\/:*?"<>|]/g,'_')}-群組對話.md`, 'text/markdown;charset=utf-8');
             break
           }
           let b = activeBot();
