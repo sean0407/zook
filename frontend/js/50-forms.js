@@ -258,8 +258,11 @@
           effort: pickedEffort(),
           plan: !!state.plan[botId],
           long: !!state.long[botId],
+          interject: interjectNow(botId),
           clientId
         });
+        if (result.notice) toast(result.notice);
+        else if (result.interjected) toast('已告訴它，它會在下一步調整');
         delete state.sendIds[sendFor];
         input.value = ''; updateInputMirror(); pendingList().length = 0; state.plan[botId] = false; state.long[botId] = false;
         await refresh();

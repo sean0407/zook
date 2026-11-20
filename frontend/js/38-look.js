@@ -71,3 +71,21 @@
     state[c.key][state.selected] = true; input.value = input.value.slice(match[0].length);
     if (!input.value.trim()) { e.preventDefault(); e.stopImmediatePropagation(); hideSlash(); render(true); $('#chat-input')?.focus(); }
   }, true);
+
+// Sending while a Bot is still answering: wait in line, or tell it now (only a CLI that can take a message mid-reply; the others fall back to the line).
+(() => {
+  const BUSY_SENDS = [{id: 'queue', name: '排在後面', hint: '等它回覆完再送出'}, {id: 'now', name: '現在就告訴它', hint: '插進正在跑的回覆；做不到的模型會改成排隊'}];
+  state.interject = state.interject || {};
+  window.interjectNow = botId => botId in state.interject ? !!state.interject[botId] : state.data?.settings?.busySend === 'now';
+  window.busySendBar = b => {
+    const now = interjectNow(b.id), queue = state.data.settings.queueWhenBusy !== false;
+    return `<label class="interject-pick" title="Bot 還在回覆時，這則要現在告訴它還是排在後面">${toggle('data-interject', now, '現在就告訴它')}<span>${now ? '插話' : '排隊'}</span></label>${now || queue ? `<button class="send" type="submit" aria-label="${now ? '現在告訴它' : '排在後面傳送'}" title="${now ? '插進正在跑的回覆' : 'Bot 還在回覆，這則會排在後面'}">↑</button>` : ''}`;
+  };
+  window.busySendSection = () => settingRow('回覆中送出的訊息', 'Bot 還在回覆時送出的訊息預設怎麼處理；送出時也能在輸入框旁臨時切換', dropdown('busySend', state.data.settings.busySend || 'queue', BUSY_SENDS, 'data-busy-send'));
+  document.addEventListener('change', async e => {
+    if (e.target.dataset.interject !== undefined) { state.interject[state.selected] = e.target.checked; render(true); return; }
+    if (e.target.dataset.busySend === undefined) return;
+    try { state.data.settings = await post('settings', {busySend: e.target.value}, 'PATCH'); state.interject = {}; toast(e.target.value === 'now' ? '回覆中送出的訊息會現在告訴它' : '回覆中送出的訊息會排在後面'); }
+    catch (err) { toast(err.message); }
+  });
+})();

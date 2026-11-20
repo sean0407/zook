@@ -701,8 +701,18 @@ class Handler(BaseHTTPRequestHandler):
                     if self.device and isinstance(body.get('attachments'), list) and len(body['attachments']) > MOBILE_PHOTOS: return self.error(400, '手機每則訊息最多 %d 張照片。' % MOBILE_PHOTOS)
                     once = send_key('bot:' + bot['id'], body); sent = send_seen(self.server, once)
                     if sent: return self.respond(202, dict(sent, duplicate=True))  # the same message again: its answer was lost on the way
-                    if queue_on(store) and bot.get('queue'):  # others are already waiting: this one goes behind them, even in the moment between two replies
+                    notice = ''
+                    if body.get('interject') is True:  # 現在就告訴它: into the reply that is running, when its CLI can take it
+                        joined, why = interject_send(self.server, bot, body, by=('手機：' + str(self.device.get('name') or '已配對裝置')) if self.device else '')
+                        if joined:
+                            sent = {'jobId': joined['id'], 'interjected': True}; send_remember(self.server, once, sent)
+                            return self.respond(202, sent)
+                        if why:
+                            if not queue_on(store): return self.error(409, why + '，請等它回覆完再傳。')
+                            notice = why + '，已改成排在後面。'
+                    if queue_on(store) and (bot.get('queue') or notice):  # others are already waiting: this one goes behind them, even in the moment between two replies
                         waiting = {'queued': True, 'queueId': queue_add(store, bot, body)['id']}
+                        if notice: waiting['notice'] = notice
                         send_remember(self.server, once, waiting)
                         threading.Thread(target=self.server.queue_drain, args=(bot['id'],), daemon=True).start()
                         return self.respond(202, waiting)
