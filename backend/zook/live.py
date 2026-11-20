@@ -14,6 +14,7 @@ except ValueError: LIVE_IDLE = 600.0
 LIVE_MAX = 4      # kept CLIs at one time; the one unused longest makes room
 LIVE_KINDS = ('claude', 'antigravity')
 INTERJECT_KINDS = ('claude',)  # can take a message in the middle of a reply (at its next step); Antigravity only reads it once the reply is over
+LIVE_UNCLAIMED = 10.0  # seconds after an answer that came without this message being repeated, before the message is sent again the usual way
 LIVE_UNREAD = 30.0  # seconds a CLI that has answered may stay quiet before an added message counts as not read
 INTERJECT_MAX = 10  # messages added to one reply
 INTERJECT_NOTE = '（使用者在你回覆途中補充，請依此調整接下來的做法）\n'
@@ -136,7 +137,7 @@ class LiveTurn:
     """One message to a kept CLI. To the code that waits for a reply it looks like the process and its pipes in one."""
     def __init__(self, cli, limit, on_output, prompt=''):
         self.cli, self.limit, self.on_output, self.out, self.done, self.finished, self.last = cli, limit, on_output, bytearray(), threading.Event(), False, time.monotonic()
-        self.pid = cli.proc.pid; self.echoed = False; self.prompt = prompt
+        self.pid = cli.proc.pid; self.echoed = False; self.prompt = prompt; self.unclaimed = False  # an answer came that cannot be told to be this one's
         self.added, self.pending, self.answers, self.kept_bytes = 0, [], [], 0  # messages added during the reply; those the CLI has not read yet; each answer
 
     def heard(self, said, sent):
@@ -154,7 +155,9 @@ class LiveTurn:
         # older (it cannot be told apart otherwise) and must not be taken for this reply.
         if not self.echoed:
             if kind == 'user' and self.heard(said, self.prompt): self.echoed = True
-            elif kind not in ('system', 'init'): self.cli.spoil('上一則結束後還有輸出')
+            elif kind not in ('system', 'init'):
+                self.cli.spoil('上一則結束後還有輸出')
+                if kind == 'result': self.unclaimed = True
             return
         if kind == 'user':
             with self.cli.lock:
@@ -186,6 +189,11 @@ class LiveTurn:
 
     def wait(self, timeout=None):
         if not self.done.wait(timeout):
+            if self.unclaimed and not self.echoed and time.monotonic() - self.last > LIVE_UNCLAIMED:
+                # It answered without repeating this message first, then went quiet: the message was not seen being read. Nothing of
+                # it is taken; the CLI is closed and the message is sent again the usual way (a reply with no output counts as lost).
+                threading.Thread(target=self.cli.close, daemon=True).start(); self.done.set(); self.cli.end(self)
+                return True
             with self.cli.lock: stuck = bool(self.answers and self.pending) and time.monotonic() - self.last > LIVE_UNREAD
             if not stuck: return False
             # It answered, then went quiet without reading what was added: the reply keeps that answer, and the CLI (which may

@@ -245,6 +245,16 @@ class Units(unittest.TestCase):
         while time.time() < end and cli.alive(): time.sleep(0.05)
         self.assertFalse(cli.alive())
 
+    def test_an_answer_without_the_message_repeated_sends_it_again(self):
+        cli = self.cli(['sleep', '30']); turn = cli.begin('job', 'go', 10 ** 6, None)
+        turn.take(self.line(type='system', subtype='init'))
+        turn.take(self.line(type='user', message={'role': 'user', 'content': 'something else entirely'}))
+        turn.take(self.line(type='result', result='an answer to who knows what'))
+        self.assertFalse(turn.wait(0.1))
+        turn.last -= self.z.LIVE_UNCLAIMED + 1
+        self.assertTrue(turn.wait(0.1)); self.assertTrue(turn.lost()); self.assertNotEqual(turn.returncode, 0)  # lost: Zook starts the CLI the usual way
+        self.assertTrue(cli.spoiled)
+
     def test_messages_arrive_in_order_and_are_capped(self):
         turn = self.cli(['cat']).begin('job', 'first', 10 ** 6, None)  # cat repeats every line it is given, in the order it got them
         reasons = [turn.add('more %d' % i) for i in range(self.z.INTERJECT_MAX + 1)]
