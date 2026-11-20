@@ -730,7 +730,7 @@ class App(GroupRuns, TaskRuns, Triggers, Syncing, Waiting, Compacting, Teams, Th
             content = parsed['content']
             if not content and kind == 'antigravity' and 'auto-denied' in (stderr or b'').decode('utf-8', errors='replace'):
                 raise RuntimeError('Antigravity 想讀取目前權限不允許的檔案，所以沒有回覆。請再傳一次，或到 Bot 設定放寬存取範圍。')
-            if not content: raise RuntimeError('CLI 沒有回傳內容。')
+            if not content and not job.get('taskReported'): raise RuntimeError('CLI 沒有回傳內容。')  # a task reply may end in silence after its report (taskrun.py fills it in)  # a task reply may end in silence after its report (taskrun.py fills it in)
             if not account and (store.data.get('providerIssues') or {}).get(provider, {}).get('issue'): self.note_provider_issue(provider, '')
             with store.lock:
                 job = store.find('jobs', job_id)

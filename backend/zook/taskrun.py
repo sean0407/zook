@@ -30,11 +30,11 @@ class TaskRuns:
                 group['messages'].append(dict(id=ID(), role='system', taskBoard=run['id'], content=task_board_text(store, run), createdAt=NOW()))
                 store.save()
         if problem: return self._run_steps(group_id, run_id, group_steps(store, group, 'split'), group_limit(store, group))
-        threads, ended = {}, 'done'
+        threads, ended, pause = {}, 'done', 1.0
         threads['host'] = self._task_thread(self._task_host, group_id, run_id, 'plan')
         try:
             while True:
-                event.wait(1.0); event.clear()
+                event.wait(pause); event.clear()
                 with store.lock:
                     group = store.find('groups', group_id)
                     if not group or group.get('runId') != run_id: ended = 'stopped'; break
@@ -48,6 +48,7 @@ class TaskRuns:
                         break
                     store.save()
                 for task_id in plan['start']: threads[task_id] = self._task_thread(self._task_worker, group_id, run_id, task_id)
+                pause = 0.3 if plan.get('soon') else 1.0
                 if plan['wake']: threads['host'] = self._task_thread(self._task_host, group_id, run_id, 'wake')
         finally:
             with store.lock:
@@ -65,35 +66,74 @@ class TaskRuns:
         return th
 
     def _task_next(self, store, group, run, host_busy):
-        """Lock held. What the loop does now: which tasks start, whether the host is woken, whether the run is over."""
+        """Lock held. What the loop does now: which tasks start, whether the host is woken, whether the run is over.
+        Tasks are chosen first and only committed when the run goes on, so a stop never counts attempts that did not start."""
         out = dict(start=[], wake=False, finish=False, stop='')
         if run.get('hostMissed', 0) >= 2:
             out['stop'] = '主持人連續兩次沒有完成，任務先停在這裡。'
             return out
+        task_resolve_deps(run)
         running = [t for t in run['tasks'] if t['status'] == 'running']
         ready = [t for t in run['tasks'] if t['status'] == 'ready']
         if ready and run['attempts'] >= TASK_ATTEMPTS:
             for t in ready: t['status'] = 'failed'; t.setdefault('note', '這個目標的嘗試次數已到上限 %d 次。' % TASK_ATTEMPTS)
             ready = []
-        room = min(TASK_PARALLEL - len(running), TASK_ATTEMPTS - run['attempts'])
-        if ready and room > 0:
-            if not running: run['batches'] += 1  # a new wave of work
-            for t in ready[:room]: t['status'] = 'running'; run['attempts'] += 1; out['start'].append(t['id'])
         delivered = set(run.get('delivered') or [])
+        if not host_busy and not running and not ready:
+            # Nothing else can happen: a question or block the host was told about and left unanswered ends that task here,
+            # and the host hears about it (and about what waited for it) at one last wake.
+            for t in run['tasks']:
+                if t['status'] in ('asked', 'blocked') and task_key(t) in delivered: t['status'] = 'failed'; t.setdefault('note', '主持人沒有回答，這項工作停在這裡。')
+            task_resolve_deps(run)
+        chosen = self._task_choose(store, run, running, ready)
         news = [t for t in run['tasks'] if t['status'] in TASK_SETTLED + ('asked', 'blocked') and task_key(t) not in delivered]
-        busy = running or out['start']
+        busy = running or chosen
         if not host_busy and news and (any(t['status'] in ('asked', 'blocked') for t in news) or not busy):
             if run['wakes'] >= TASK_WAKES:
                 out['stop'] = '主持人已經被叫醒 %d 次，任務先停在這裡，避免一直派工下去。' % TASK_WAKES
                 return out
             run['wakes'] += 1; run['wakeFor'] = [t['id'] for t in news]; run['delivered'] = sorted(delivered | {task_key(t) for t in news})
             out['wake'] = True
-        if not out['wake'] and not host_busy and not busy and not ready:
+        if chosen:
+            if not running and not news: run['batches'] += 1  # a new wave: nothing is running and the host has heard about everything before it
+            for t, lane, use in chosen:
+                t['status'] = 'running'; run['attempts'] += 1; out['start'].append(t['id'])
+                run.setdefault('lanes', {})[t['id']] = list(lane)
+                if use: run.setdefault('use', {})[t['id']] = list(use)
+                else: run.get('use', {}).pop(t['id'], None)
+            out['soon'] = any(t['status'] == 'ready' for t in run['tasks'])  # more could start: look again shortly, not all in one go
+        if not out['wake'] and not host_busy and not running and not chosen and not [t for t in run['tasks'] if t['status'] == 'ready']:
             for t in run['tasks']:
-                if t['status'] in ('asked', 'blocked'): t['status'] = 'failed'; t.setdefault('note', '主持人沒有回答，這項工作停在這裡。')
+                if t['status'] == 'pending': t['status'] = 'failed'; t.setdefault('note', '前面的工作沒有完成，這項沒有開始。')
             out['finish'] = True
         task_board_update(store, group)
         return out
+
+    def _task_choose(self, store, run, running, ready):
+        """Lock held. [(task, (CLI, account), model to use or None)] that may start now: within the group's limit and each CLI's
+        (counted by the model each running task really uses, backups included), a few at a time, one task per member at a time."""
+        most, per_cli = task_limits(store)
+        lanes = {}
+        for t in running:
+            lane = task_running_lane(store, run, t)
+            lanes[lane] = lanes.get(lane, 0) + 1
+        working = {j['botId'] for j in store.data['jobs'] if j.get('status') == 'running'}
+        room = min(most - len(running), TASK_ATTEMPTS - run['attempts'], TASK_START_EVERY)
+        chosen = []
+        for t in ready:
+            if len(chosen) >= room: break
+            if t['assignee'] in working: continue  # it waits for its member instead of holding a place another task could use
+            bot = store.find('bots', t['assignee']) or {}
+            lane, use = task_lane(store, bot), None
+            if lane[0] == AUTO:  # 自動選擇: pick its model now, among the CLIs that still have room
+                try: options = pick_auto(store, t['spec'], bot=bot)[0]
+                except ValueError as exc: t['status'] = 'failed'; t['note'] = str(exc)[:200]; continue
+                fit = next(((p, m) for p, m in options if lanes.get((p, ''), 0) < per_cli.get(p, TASK_PER_CLI)), None)
+                if not fit: continue
+                lane, use = (fit[0], ''), fit
+            elif lanes.get(lane, 0) >= per_cli.get(lane[0], TASK_PER_CLI): continue  # this CLI (this account of it) is full
+            lanes[lane] = lanes.get(lane, 0) + 1; working.add(t['assignee']); chosen.append((t, lane, use))
+        return chosen
 
     def _task_turn(self, group_id, run_id, bot_id, step):
         """A turn that waits while the Bot is busy in another conversation. Returns the turn, None when skipped, False when the run ended."""
@@ -144,7 +184,8 @@ class TaskRuns:
             assignee, label = task['assignee'], '%d. %s' % (task['n'], task['title'])
             store.save()
         # A task is the host's instructions, not the user's: the member's reply counts as started by a Bot (or by whatever started the run).
-        step = dict(waitBusy=True, job=dict(taskRole='worker', taskRunId=run['id'], taskId=task_id, taskTitle=label, origin=run['origin'] if run['origin'] != 'user' else 'bot'),
+        use = (run.get('use') or {}).get(task_id)
+        step = dict(waitBusy=True, **({'use': use} if use else {}), job=dict(taskRole='worker', taskRunId=run['id'], taskId=task_id, taskTitle=label, origin=run['origin'] if run['origin'] != 'user' else 'bot'),
                     msg=dict(taskId=task_id), attachIds=[run.get('goalId')],
                     promptFor=lambda bot, writable: task_worker_prompt(store, store.find('groups', group_id), store.find('groups', group_id)['taskRun'], task, bot, writable))
         turn = self._task_turn(group_id, run_id, assignee, step)
@@ -161,6 +202,12 @@ class TaskRuns:
             if group:
                 group['activeJobIds'] = [x for x in group.get('activeJobIds') or [] if x != turn['job']['id']]; group['activeJobId'] = (group['activeJobIds'] or [None])[0]
             job = turn['job']
+            said = attempt.get('summary') if attempt['state'] == 'reported' else task.get('question') if attempt['state'] == 'asked' else attempt.get('reason') if attempt['state'] == 'blocked' else ''
+            if said and job['status'] == 'completed' and not (job.get('content') or '').strip():
+                store.finish_message(job, said, 'completed')  # it reported and ended without words, as it was told to: its report is the reply
+            if attempt['state'] == 'reported' and job['status'] == 'failed':
+                # The CLI failed after the report: its files may not have reached the group. The task did not finish.
+                attempt.update(state='failed', outcome='failed', summary=('回報後 CLI 出錯：%s。原本的回報：%s' % ((job.get('error') or '')[:150], attempt.get('summary') or ''))[:600])
             if attempt['state'] == 'running':  # the reply ended without a report
                 why = job.get('error') or ('回覆被停止' if job['status'] == 'cancelled' else '沒有用 zook_task_done 回報就結束了')
                 attempt.update(state='failed', outcome='failed', summary=why[:300], endedAt=NOW())

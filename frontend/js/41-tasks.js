@@ -13,18 +13,35 @@
     const head = run.tasks.length ? `已完成 ${done}／${run.tasks.length}` : (run.status === 'running' ? `${esc(name(run.hostId))} 正在規劃工作…` : '主持人直接回答，沒有建立工作');
     const rows = run.tasks.map(t => {
       const attempts = Array.isArray(t.attempts) ? t.attempts : [], last = attempts[attempts.length - 1] || {};
-      const detail = [last.summary, t.status === 'asked' && t.question ? '問主持人：' + t.question : '', last.reason, t.note, Array.isArray(last.files) && last.files.length ? '產出：' + last.files.join('、') : '', attempts.length > 1 ? `第 ${attempts.length} 次` : ''].filter(x => typeof x === 'string' && x);
+      const detail = [last.summary, t.status === 'asked' && t.question ? '問主持人：' + t.question : '', last.reason, t.note, t.why,
+        Array.isArray(t.deps) && t.deps.length && ['pending', 'ready'].includes(t.status) ? '等工作 ' + t.deps.join('、') + ' 完成' : '', Array.isArray(last.files) && last.files.length ? '產出：' + last.files.join('、') : '', attempts.length > 1 ? `第 ${attempts.length} 次` : ''].filter(x => typeof x === 'string' && x);
       return `<li class="task-row"><span class="pill ${TASK_TONE[t.status] || ''}">${esc(TASK_STATE[t.status] || t.status)}</span><span class="task-title"><strong>${esc(String(t.n))}. ${esc(String(t.title))}</strong> <span class="muted">${esc(name(t.assignee))}</span>${detail.length ? `<span class="task-detail">${esc(detail.join(' · '))}</span>` : ''}</span></li>`;
     }).join('');
     const live = run.status === 'running' ? '<span class="browsing-dot" aria-hidden="true"></span>' : '';
     return `<details class="task-board" data-task-board="${esc(run.id)}" ${state.taskOpen?.[run.id] ? 'open' : ''}><summary>${live}<strong>任務板</strong> <span class="muted">${head}${run.status === 'stopped' ? ' · 已停止' : ''}</span></summary>${rows ? `<ol class="task-list">${rows}</ol>` : ''}</details>`;
   }
 
-  const taskSection = () => `<h2 class="settings-h">任務引擎</h2><div class="setting-list">${settingRow('任務引擎', '群組多一種討論方式「自動（主持人決定）」：主持人拆工作、派給成員同時進行，成員回報後再整理結果', toggle('data-task-engine', taskEngineOn(), '任務引擎'))}</div>`;
+  const TASK_COUNTS = n => Array.from({length: n}, (_, i) => ({id: String(i + 1), name: (i + 1) + ' 項'}));
+  function taskSection() {
+    const s = state.data.settings, rows = [settingRow('任務引擎', '群組多一種討論方式「自動（主持人決定）」：主持人拆工作、派給成員同時進行，成員回報後再整理結果', toggle('data-task-engine', taskEngineOn(), '任務引擎'))];
+    if (taskEngineOn()) {
+      rows.push(settingRow('同時進行的工作', '一個群組同時最多幾項', dropdown('taskMax', String(s.taskMax || 4), TASK_COUNTS(6), 'data-task-max')));
+      for (const p of (state.providers || []).filter(p => p.installed && p.tools)) {
+        rows.push(settingRow(esc(p.name), '這個 CLI 同時最多幾項（每個帳號各自計算）', dropdown('taskCli-' + p.id, String((s.taskCliLimits || {})[p.id] || 3), TASK_COUNTS(4), `data-task-cli="${esc(p.id)}"`)));
+      }
+    }
+    return `<h2 class="settings-h">任務引擎</h2><div class="setting-list">${rows.join('')}</div>`;
+  }
 
   // The board stays open or closed as the reader left it, while the page redraws it.
   document.addEventListener('toggle', e => { const id = e.target.dataset?.taskBoard; if (id) (state.taskOpen = state.taskOpen || {})[id] = e.target.open; }, true);
   document.addEventListener('change', async e => {
+    const max = e.target.dataset?.taskMax !== undefined, cli = e.target.dataset?.taskCli;
+    if (max || cli) {
+      const body = max ? {taskMax: Number(e.target.value)} : {taskCliLimits: {...(state.data.settings.taskCliLimits || {}), [cli]: Number(e.target.value)}};
+      try { state.data.settings = await post('settings', body, 'PATCH'); toast('已更新同時進行的上限'); } catch (error) { toast(error.message); }
+      render(true); return;
+    }
     if (e.target.dataset?.taskEngine === undefined) return;
     try { state.data.settings = await post('settings', {taskEngine: e.target.checked}, 'PATCH'); toast(e.target.checked ? '群組可以選「自動（主持人決定）」了' : '已關閉任務引擎'); }
     catch (error) { e.target.checked = !e.target.checked; toast(error.message); }

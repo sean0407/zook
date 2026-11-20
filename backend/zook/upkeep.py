@@ -61,6 +61,7 @@ def backup_check(data):
     if any(not isinstance(b.get('name'), str) for b in data['bots']): raise ValueError('備份檔的內容不完整。')
     for g in data.get('groups') or []:
         if 'taskRun' in g and not task_run_ok(g['taskRun']): g.pop('taskRun')  # 任務引擎's books, only in the shape Zook writes
+    task_settings_clean(data['settings'])
     # The main file of a Zook that keeps conversations in their own files has no conversation in it. Putting it back as if it were whole would empty them all.
     if data.get('layout') is not None: raise ValueError('這個檔案是 Zook 的主檔，裡面沒有對話內容，不能當成備份。請改用「備份與還原」建立的備份檔。')
     for key, rel, messages, _ in chat_conversations(data):

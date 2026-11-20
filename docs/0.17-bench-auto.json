@@ -1,0 +1,24 @@
+{
+ "mode": "auto",
+ "seconds": 48.2,
+ "requests": 5,
+ "tokens": 301508,
+ "failed": 0,
+ "errors": [],
+ "wakes": 1,
+ "batches": 1,
+ "tasks": [
+  [
+   "台北雨天室內景點 3 個",
+   "done"
+  ],
+  [
+   "週末出遊邀請文案（50字內）",
+   "done"
+  ],
+  [
+   "4 人一天捷運交通費估算",
+   "done"
+  ]
+ ]
+}

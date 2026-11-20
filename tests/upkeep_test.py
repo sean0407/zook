@@ -151,7 +151,7 @@ class UpkeepTest(unittest.TestCase):
     def test_budget_switches_to_backup_model(self):
         cli = self.root / 'bin/claude'; cli.write_text('#!/usr/bin/env python3\nimport json, sys\nif "--help" in sys.argv or "--version" in sys.argv: sys.exit(0)\nprint(json.dumps({"result": "ok from claude", "usage": {"input_tokens": 5, "output_tokens": 5}}))\n'); cli.chmod(0o755)
         self.req('PATCH', '/api/settings', {'budgets': {'codex': 1000000}, 'budgetOver': 'switch', 'fallbacks': ['claude']})
-        self.ask(); self.ask()
+        for job in (self.ask(), self.ask()): self.assertEqual(job['status'], 'completed', job)  # both are needed to use up the budget
         job = self.ask()
         self.assertEqual(job['status'], 'completed', job)
         self.assertEqual((job.get('fallback') or {}).get('reason'), '用量預算已用完')
@@ -322,7 +322,7 @@ class UpkeepTest(unittest.TestCase):
     def test_stop_also_holds_for_a_backup_model_over_budget(self):
         cli = self.root / 'bin/claude'; cli.write_text('#!/usr/bin/env python3\nimport json, sys\nif "--help" in sys.argv or "--version" in sys.argv: sys.exit(0)\nprint(json.dumps({"type": "result", "result": "ok from claude", "is_error": False, "usage": {"input_tokens": 700000, "output_tokens": 400000}}))\n'); cli.chmod(0o755)
         self.req('PATCH', '/api/settings', {'budgets': {'codex': 1000000, 'claude': 1000000}, 'budgetOver': 'stop', 'fallbacks': ['claude']})
-        self.ask(); self.ask()  # codex is over its budget now
+        for job in (self.ask(), self.ask()): self.assertEqual(job['status'], 'completed', job)  # codex is over its budget now
         job = self.ask()
         self.assertEqual((job['status'], job['fallback']['provider']), ('completed', 'claude'))  # the backup still has budget: it answers
         job = self.ask()  # and now claude is over as well

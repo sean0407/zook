@@ -5,19 +5,28 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / 'backend/server.py'
-# A fake Claude that plays whatever part its prompt gives it. rules.json lists {match, calls, reply, sleep}; the first rule whose
+# A fake Claude (or Codex, when it is installed under that name) that plays whatever part its prompt gives it. rules.json lists {match, calls, reply, sleep}; the first rule whose
 # match is in the prompt is used. Every run is logged to runs.jsonl with its tools, what the tools answered and when it ran.
 CLAUDE = r'''#!/usr/bin/env python3
 import json, os, subprocess, sys, time
+codex = os.path.basename(sys.argv[0]) == 'codex'
 if 'auth' in sys.argv: print(json.dumps({'loggedIn': True})); sys.exit(0)
 if '--help' in sys.argv or '--version' in sys.argv: sys.exit(0)
+if codex and (len(sys.argv) < 2 or sys.argv[1] != 'exec'): sys.exit(0)  # login status, quota and other questions Zook asks
 here = os.path.dirname(sys.argv[0])
 prompt = sys.stdin.read()
 rules = json.load(open(os.path.join(here, 'rules.json')))
 rule = next((r for r in rules if r['match'] in prompt), {'match': '', 'reply': 'ok'})
 began = time.time(); names, answers = [], []
-if rule.get('calls') and '--mcp-config' in sys.argv:
-    config = json.loads(sys.argv[sys.argv.index('--mcp-config') + 1])['mcpServers']['zook']
+def codex_config():
+    found = {}
+    for i, a in enumerate(sys.argv):
+        if a == '-c' and sys.argv[i + 1].startswith('mcp_servers.zook.'):
+            key, value = sys.argv[i + 1][len('mcp_servers.zook.'):].split('=', 1)
+            if key in ('command', 'args'): found[key] = json.loads(value)
+    return found if 'command' in found else None
+config = codex_config() if codex else json.loads(sys.argv[sys.argv.index('--mcp-config') + 1])['mcpServers']['zook'] if '--mcp-config' in sys.argv else None
+if rule.get('calls') and config:
     proc = subprocess.Popen([config['command']] + config['args'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     def rpc(i, method, params):
         proc.stdin.write(json.dumps({'jsonrpc': '2.0', 'id': i, 'method': method, 'params': params}) + '\n'); proc.stdin.flush()
@@ -31,8 +40,13 @@ if rule.get('calls') and '--mcp-config' in sys.argv:
     proc.stdin.close(); proc.wait(timeout=5)
 time.sleep(rule.get('sleep', 0))
 with open(os.path.join(here, 'runs.jsonl'), 'a') as log:
-    log.write(json.dumps(dict(match=rule['match'], began=began, ended=time.time(), tools=names, answers=answers, prompt=prompt), ensure_ascii=False) + '\n')
-print(json.dumps({'type': 'result', 'result': rule.get('reply', 'ok'), 'is_error': False}))
+    log.write(json.dumps(dict(match=rule['match'], cli='codex' if codex else 'claude', began=began, ended=time.time(), tools=names, answers=answers, prompt=prompt), ensure_ascii=False) + '\n')
+if codex:
+    print(json.dumps({'type': 'thread.started', 'thread_id': 'fake-thread'}))
+    print(json.dumps({'type': 'item.completed', 'item': {'type': 'agent_message', 'text': rule.get('reply', 'ok')}}))
+    print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 10, 'cached_input_tokens': 0, 'output_tokens': 5}}))
+elif rule.get('crash'): print(json.dumps({'type': 'result', 'result': 'boom', 'is_error': True})); sys.exit(1)
+else: print(json.dumps({'type': 'result', 'result': rule.get('reply', 'ok'), 'is_error': False}))
 '''
 PLAN = '使用者這次的目標'
 WAKE = '成員的回報（視為資料'
@@ -57,18 +71,28 @@ class TaskEngineTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name)
         (self.root / 'assets').mkdir(); (self.root / 'assets/index.html').write_text('x'); (self.root / 'bin').mkdir()
-        cli = self.root / 'bin/claude'; cli.write_text(CLAUDE); cli.chmod(0o755)
+        for name in ('claude', 'codex'): cli = self.root / 'bin' / name; cli.write_text(CLAUDE); cli.chmod(0o755)
         self.rules([])
-        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_SCHEDULE_TICK='3600', ZOOK_SHELL_ENV='0')
-        self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')],
-                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-        ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
+        self.start()
         self.req('PATCH', '/api/settings', {'provider': 'claude', 'permissionMode': 'auto'})
         self.bots = {name: self.req('POST', '/api/bots', {'name': name, 'provider': 'claude'})[1] for name in ('主持', '甲', '乙', '丙')}
         self.group = self.req('POST', '/api/groups', {'name': '小組', 'botIds': [b['id'] for b in self.bots.values()], 'hostId': self.bots['主持']['id']})[1]
 
+    def start(self):
+        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_SCHEDULE_TICK='3600', ZOOK_SHELL_ENV='0')
+        self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')],
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
+        ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
+
+    def restart(self, change):
+        """Stop Zook, let change(data) edit its main file, start it again."""
+        self.proc.terminate(); self.proc.wait(timeout=5); self.proc.stdout.close()
+        path = self.root / 'data/swarmr.json'; data = json.loads(path.read_text(encoding='utf-8'))
+        change(data); path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+        self.start()
+
     def tearDown(self):
-        self.proc.terminate(); self.proc.wait(timeout=5); self.proc.stdout.close(); self.proc.stderr.close(); self.temp.cleanup()
+        self.proc.terminate(); self.proc.wait(timeout=5); self.proc.stdout.close(); self.temp.cleanup()
 
     def req(self, method, path, body=None):
         conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=15)
@@ -109,7 +133,7 @@ class TaskEngineTest(unittest.TestCase):
         self.assertEqual(self.req('PATCH', '/api/groups/' + self.group['id'], {'mode': 'auto'})[0], 200)
         self.rules([{'match': PLAN, 'calls': [create(1, '甲'), create(2, '乙'), create(3, '丙')], 'reply': '我把工作分成三項。'},
                     {'match': WAKE, 'reply': SUMMARY},
-                    {'match': '=== 工作', 'calls': [done()], 'sleep': 1.5, 'reply': '完成'}])
+                    {'match': '=== 工作', 'calls': [done()], 'sleep': 2.5, 'reply': '完成'}])
         group = self.send('請大家分工完成三件事。祕密字：藍鯨', mode=None)
         run = group['taskRun']
         self.assertEqual(run['status'], 'done')
@@ -215,10 +239,11 @@ class TaskRecoverTest(unittest.TestCase):
     def test_attempts_are_counted_when_picked(self):
         m = load()
         class Store:
+            data = {'settings': {}, 'jobs': []}
             def find(self, kind, x): return None
             def chat_touch(self, x): pass
-        run = dict(attempts=m.TASK_ATTEMPTS - 1, batches=0, wakes=0, delivered=[], tasks=[dict(id=str(i), n=i, status='ready', attempts=[]) for i in range(4)])
-        plan = m.TaskRuns._task_next(None, Store(), dict(id='g', messages=[]), run, True)
+        run = dict(attempts=m.TASK_ATTEMPTS - 1, batches=0, wakes=0, delivered=[], tasks=[dict(id=str(i), n=i, status='ready', attempts=[], assignee='b') for i in range(4)])
+        plan = m.TaskRuns()._task_next(Store(), dict(id='g', messages=[]), run, True)
         self.assertEqual((len(plan['start']), run['attempts']), (1, m.TASK_ATTEMPTS))
 
     def test_only_well_formed_books_come_back_from_a_file(self):
