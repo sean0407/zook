@@ -4,7 +4,7 @@
 
 ## 產品
 
-Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone App「ZookMobile」。它把使用者已安裝的 Codex、Claude、Grok、Gemini 或自訂 CLI 放進同一個介面，可以多 Bot 群聊。
+Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone App「ZookMobile」。它把使用者已安裝的 Codex、Claude、Grok、Antigravity、OpenCode、Cursor、Gemini 或自訂 CLI 放進同一個介面，可以多 Bot 群聊。
 
 分層：模型 → 各家 CLI → Zook 的工具層與記憶層 → 簡易介面。目標是 Grok Bot 的簡單介面，加上 ChatGPT 的對話習慣和 Claude Code 的工具與自動化，同時充分發揮每家 CLI 的原生能力。
 
@@ -31,21 +31,23 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 |---|---|
 | `native/Zook.swift` | macOS 視窗、啟動與關閉後端、檔案選取與下載、通知 |
 | `native/Voice.swift` | 語音輸入（Mac 內建語音辨識）。建置時 `Zook.swift` 會複製成 `main.swift` 一起編譯 |
+| `native/Browser.swift` | Bot 的內建瀏覽器（`Zook --zook-browser`，同一個執行檔）：不保存資料的 WKWebView，可瀏覽與在搜尋框輸入 |
 | `native/remote/` | `zook-remote`，與中繼伺服器的加密連線 |
 | `backend/server.py` | 啟動入口：依序載入 `backend/zook/` 的檔案，全部共用同一個命名空間 |
-| `backend/zook/` | 依 `server.py` 裡的順序載入，共用同一個命名空間。`core` 資料儲存、`accounts` 帳號與更新、`library` 設定包與排程規則、`oauth` 連接器與 Google 登入、`catalog` 連接器目錄、`outputs` 產出、`mobile` 手機、`groupfiles` 群組共用檔案、`groups` 群組討論、`triggers` 資料夾與信件觸發、`sync` 多台 Mac 同步、`errors` CLI 失敗原因分類、`stream` 回覆逐字顯示、`waiting` 忙碌時排隊、`paging` 長對話分頁與搜尋、`compact` 對話過長自動整理、`automation` 本機腳本介面、`app` 回覆、`parsing` 解讀 CLI 輸出、`abilities` 各家能力對照、`sessions` 接續 CLI 原生對話與即時讀取輸出、`routing` 自動選擇模型、`fields` 欄位檢查、`upkeep` 備份、活動紀錄、用量預算、固定規則、舊工作瘦身、已刪除的 Bot、`templates` Skill 範本、`handler` HTTP 路由 |
+| `backend/zook/` | 依 `server.py` 裡的順序載入，共用同一個命名空間。`core` 資料儲存、`accounts` 帳號與更新、`library` 設定包與排程規則、`oauth` 連接器與 Google 登入、`catalog` 連接器目錄、`outputs` 產出、`mobile` 手機、`groupfiles` 群組共用檔案、`groups` 群組討論、`triggers` 資料夾與信件觸發、`sync` 多台 Mac 同步、`errors` CLI 失敗原因分類、`stream` 回覆逐字顯示、`waiting` 忙碌時排隊、`paging` 長對話分頁與搜尋、`compact` 對話過長自動整理、`automation` 本機腳本介面、`choices` 選項按鈕與 Bot 提問、`teams` 一句話建立團隊、`live` 保持 CLI 開啟、`opencode` OpenCode、`cursor` Cursor、`browser` 內建瀏覽器（擋私有位址的轉送層、工具、誰能用）、`app` 回覆、`parsing` 解讀 CLI 輸出、`abilities` 各家能力對照、`sessions` 接續 CLI 原生對話與即時讀取輸出、`routing` 自動選擇模型、`fields` 欄位檢查、`upkeep` 備份、活動紀錄、用量預算、固定規則、舊工作瘦身、已刪除的 Bot、`templates` Skill 範本、`usageview` 用量頁、`handler` HTTP 路由 |
 | `backend/runtime.py` | MCP 客戶端、工具執行、核准分級；連接器的工具用到才載入 |
 | `backend/discovery.py` | 掃描這台 Mac 上 Codex、Claude 與共用庫的 Skills、連接器、插件（由 `runtime.py` 以路徑載入） |
 | `backend/zook_cli.py` | 本機腳本介面的指令工具，說明在 [docs/automation.md](docs/automation.md) |
 | `backend/providers.py` | 各家 CLI 的定義 |
 | `backend/tool_server.py` | 提供給 CLI 的 Zook 工具（MCP） |
+| `backend/cursor_guard.py` | Cursor 的 preToolUse 檢查：內建工具只能用在 Bot 允許的資料夾（fail-closed） |
 | `backend/gmail_mcp.py` | 內建 Gmail |
-| `backend/cli_installer.py` | 把 npm 類 CLI（Gemini）連同 Node.js 裝進 Zook 自己的 tools 資料夾 |
+| `backend/cli_installer.py` | 把 npm 類 CLI（Gemini、OpenCode、Copilot、Kimi）連同 Node.js 裝進 Zook 自己的 tools 資料夾 |
 | `frontend/` | `index.html`、`style.css`、`js/`。`js/` 的檔案依檔名順序接成 `/app.js`（第一個檔案開頭和最後一個檔案結尾是同一個函式），無框架、無建置步驟 |
 | `ios/` | iPhone App |
 | `relay/` | Cloudflare Worker 中繼 |
 | `tests/` | `*_test.py`，unittest |
-| `scripts/` | 建置、圖示、[App 檢查](scripts/check_app.py)、[用真實 CLI 的驗收腳本](scripts/acceptance.py) |
+| `scripts/` | 建置、圖示、[App 檢查](scripts/check_app.py)、[用真實 CLI 的驗收腳本](scripts/acceptance.py)、[Codex 審查](scripts/codex_review.py) |
 
 資料存在 `~/Library/Application Support/swarmr/swarmr.json`；Preview 版（`bash scripts/build.sh --preview`）用 `swarmr-preview`，可以和使用者正在用的 Zook 同時開。
 
@@ -68,8 +70,9 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 | `ZOOK_COMPACT_AT=<Token>` | 自動整理對話的門檻（預設 15 萬） |
 | `ZOOK_AUTOMATION=<資料夾>` | `zook_cli.py` 去哪裡找本機腳本介面的位址與權杖 |
 | `ZOOK_UPDATE_URL`、`ZOOK_UPDATE_NO_RELAUNCH` | 更新測試 |
+| `ZOOK_BROWSER_HELPER` | 內建瀏覽器要啟動的程式（從原始碼執行時沒有 App，例如指到 `build/Zook.app/Contents/MacOS/Zook --zook-browser`） |
 
-測試時自己開的臨時伺服器不要用連接埠 8799（手機連線測試會誤認成中繼伺服器）和 8788（驗收腳本在用）。
+測試時自己開的臨時伺服器不要用連接埠 8799（手機連線測試會誤認成中繼伺服器）、8788（驗收腳本在用）和 8787。
 
 ## 驗證
 
@@ -83,7 +86,7 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
    第一行輸出有 `token`；在瀏覽器執行 `document.cookie='swarmr_session=<token>; path=/'` 後重新整理。內建瀏覽器的點擊有時會逾時，改用 `javascript_tool` 操作頁面。用完關掉伺服器、刪掉暫存資料夾。
 3. **真實 App**：`bash scripts/build.sh` 後執行 `python3 scripts/check_app.py`（檢查建置好的 App 內的後端）；要連真實 CLI 加 `--live`（會用到少量額度）。要看視窗就建 Preview 版開起來截圖。
 
-改到回覆流程（CLI 的呼叫、輸出解讀、排隊、來源、壓縮）時，另外跑 `python3 scripts/acceptance.py --compare docs/0.13-baseline.json`：它用真實 CLI 檢查 20 項，結束碼 0 表示沒有比基準差。某家額度用完時該家會標成「略過」。
+改到回覆流程（CLI 的呼叫、輸出解讀、排隊、來源、壓縮）時，另外跑 `python3 scripts/acceptance.py --speed --compare docs/0.14-baseline.json`：它用真實 CLI 檢查約 20 項並量四家的速度，結束碼 0 表示沒有比基準差。某家額度用完時該家會標成「略過」。
 
 做不到、需要使用者驗收的：另一台 Mac、公司帳號的連接器、手機實機、App 內的更新按鈕。
 
@@ -94,7 +97,19 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 3. 先寫測試，確認它失敗。
 4. 實作。
 5. 三層驗證。
-6. 請一個沒看過實作過程的 AI 審查 diff；改到核准、金鑰、權限的一定要審。
+6. 用 Codex 審查（和開發者不同家的模型），在 repo 根目錄執行：
+   `python3 scripts/codex_review.py --family sol|astra --brief <審查說明> --out <結果檔>`。
+   它在這台 Mac 的 Codex 帳號之間輪流（Codex 預設帳號與 Zook 裡的 Codex 登入；輪到誰記在 `~/.config/zook-dev/codex-review.json`），一個額度用完就換下一個，全部用完時結束碼 3、不執行；不會改用付費點數。它自動取最新模型，用 `codex exec --ignore-user-config --ephemeral -s read-only`。進度檔要記下它印出的帳號、模型和 token。
+   - 每一版的例行審查用 sol 系列：找錯誤、漏掉的測試、和這份規則衝突的地方。
+   - 交辦標「找獨立審查」的版本用 astra 系列：冒名回報、繞過核准、派工失控、權限與金鑰這類安全問題。
+   - 一律用該系列最新的模型（2026-11-20 是 `gpt-6.2-sol`、`gpt-6.2-astra`），腳本會從 Codex 的模型清單自動挑。
+   - 審查說明只寫範圍、需求和重點，不寫自己的判斷，不放金鑰或個資。`--ignore-user-config` 讓它不載入使用者自己的 Codex 連接器與指示。
+   - 省額度（使用者 2026-11-20 同意）：
+     - 審查範圍只限這一版的改動（diff），不讓它讀整個專案。
+     - sol 例行審查用 medium 思考強度；astra 用 high，而且只用在交辦標「找獨立審查」的版本（腳本預設就是這樣）。
+     - 只改文字或文件的小版本，併到下一版一起審。
+     - Zook 用量頁上 Codex 額度低於 20% 時先不跑審查，告訴使用者。
+   - 另外請 Claude 子代理審查時，兩邊互相看不到結果；兩邊都找到的先修，只有一邊找到的先重現再決定，理由寫進進度檔，報告分開列出。
 7. 驗收報告：每條驗收條件寫「通過／未通過／未驗證」和證據。全部通過才併入 `main` 並發佈。
 8. 更新 ROADMAP 的狀態。
 
@@ -123,7 +138,7 @@ GitHub Actions（`.github/workflows/test.yml`）會在每次推送跑測試和�
 - 群組討論每次重新帶入最近的對話，不接續 CLI 原生對話。
 - 自動選擇：Grok 沒有額度資料，無法套用「剩餘低於 10% 不選」；API 計費帳號一律不選。
 - Antigravity 走官方 `agy` CLI。Google 條款限制第三方工具使用，帳號有被暫停的風險，卡片上有寫明；AI 點數一律關閉。
-- Gemini CLI 沒有接 Zook 工具（ROADMAP E6）。Google 已不讓個人帳號使用這個 CLI（`IneligibleTierError`），要有 Gemini API 金鑰才能用，所以沒辦法開發與驗證。技術上可行的做法：工作資料夾裡的 `.gemini/settings.json` 設 `mcpServers`，加上 `--allowed-mcp-server-names` 與 `--approval-mode`。
+- Gemini CLI 沒有接 Zook 工具（ROADMAP E6）。到 0.16.2 為止使用者還沒在 Zook 加 Gemini API 金鑰帳號。Google 已不讓個人帳號使用這個 CLI（`IneligibleTierError`），要有 Gemini API 金鑰才能用，所以沒辦法開發與驗證。技術上可行的做法：工作資料夾裡的 `.gemini/settings.json` 設 `mcpServers`，加上 `--allowed-mcp-server-names` 與 `--approval-mode`。
 - Grok 在「指定資料夾」時從那個資料夾啟動，靠它自己的嚴格沙盒限制在資料夾內；Zook 的設定放在該資料夾的 `.grok`（有 `.zook-owned` 標記），回覆結束就刪。資料夾裡原本就有 `.grok` 時不執行。這個模式下 Grok 讀不到對話附件。新版 Grok 仍不接受 `--add-dir`。它的嚴格沙盒不限制系統暫存區，所以這類測試不要在 `/tmp` 做。
 - 回覆逐字顯示：Codex 的 CLI 只在整則訊息完成時輸出，所以是整段出現；Grok 會先思考幾十秒才出字；手機是輪詢，一兩秒跳一段。
 - 群組討論沒有分頁，也不套用自動整理。
@@ -131,3 +146,6 @@ GitHub Actions（`.github/workflows/test.yml`）會在每次推送跑測試和�
 - 來源規則擋的是 Zook 自己的工具。CLI 的原生工具仍可直接改 Mac 上的檔案，包含 Zook 的資料檔。
 - 本機腳本介面：同一個使用者的任何程式都讀得到權杖檔，包含 Bot 自己的 CLI。它能用已開啟的 Bot 的身分做事，但不能核准、不能改設定。
 - Grok 的 Zook 工具伺服器必須用 `/usr/bin/python3` 啟動，嚴格沙箱擋得住 Xcode 內的 Python。
+- 內建瀏覽器（`browser.py`、`native/Browser.swift`）：需要 macOS 14（用 WKWebView 的轉送設定）。每則回覆第一次用到時才啟動，回覆結束就關掉。所有連線經過 Zook 自己的轉送層，名稱由它解析、任何一個答案是私有位址就整個拒絕，並連到它檢查過的位址；WebKit 的內容規則另外先擋字面上的私有位址。只開放 http(s) 的 GET 換頁（包含用 GET 送出的搜尋表單）；POST 表單、下載、上傳、新視窗、登入對話框、WebRTC 都關掉。Bot 只能在搜尋欄位（不在 POST 表單裡）輸入，不能在密碼、信箱、電話、驗證碼欄位或任何和密碼欄同一區塊的欄位輸入。網頁自己的程式可以在文字打進去的當下就送走，Zook 擋不到，所以每次輸入不論主動性都先問使用者，卡片寫出網站、欄位和文字，核准後網頁或欄位變了就不輸入；Bot 自己組出、帶資料（查詢參數、片段或很長的路徑）的網址也一樣先問。macOS 會讓結尾有點的名稱（`localhost.`）不經轉送層，所以這種網址一律拒絕。群組討論的回合算非使用者的回合。活動紀錄只留動作與網址，不留網頁內容。因為沒有使用者的登入，Bot 無法以使用者身分發文或下單。網頁內容只放在回覆的 `page` 裡，內文用每次不同的標記包住。轉送層也擋這台 Mac 所在、有公開位址的網段（用介面的實際網段；讀不到時一律不連），每則回覆最多同時 24 條連線、全部回覆合計 96 條。路由器的對外 IPv4 位址沒有擋（要查外部服務才知道）。Bot 能把資料放進網址開啟，這和上網搜尋一樣，靠「上網搜尋」開關與每個 Bot 的開關控制。
+- Cursor：用 `--force` 跑，靠工作資料夾 `.cursor/hooks.json` 的 preToolUse 檢查（`cursor_guard.py`）限制範圍；它的網頁搜尋不經過這個檢查，「上網搜尋」關閉時用 `CURSOR_FORCED_SHELL_EGRESS=1` 關掉。
+- GitHub Copilot、Kimi：能安裝和登入，但還不能在 Zook 回覆（Copilot 要在 GitHub 打開 Copilot CLI 權限；Kimi CLI 要 Kimi Code 付費方案）。
