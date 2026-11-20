@@ -30,6 +30,14 @@ class Units(unittest.TestCase):
         self.assertEqual((out['content'], out['usage']['input'], out['usage']['cachedInput'], out['usage']['output']), ('OK', 10, 4, 2))
         self.assertTrue(server.parse_cli_output('antigravity', json.dumps(dict(event='result', result=dict(status='ERROR', error='boom'))))['isError'])
         self.assertTrue(server.parse_cli_output('antigravity', 'not json')['unparsable'])
+        # A later message in a conversation: the result counts every earlier one too, the finished steps only this one.
+        lines = [dict(event='step_update', step_update=dict(step_index=6, state='ACTIVE', step_type='agent_response', text_delta='O')),
+                 dict(event='step_update', step_update=dict(step_index=6, state='DONE', step_type='agent_response', usage=dict(input_tokens=309, output_tokens=13, cache_read_tokens=11406))),
+                 dict(event='step_update', step_update=dict(step_index=7, state='DONE', step_type='tool')),
+                 dict(event='step_update', step_update=dict(step_index=8, state='DONE', step_type='agent_response', usage=dict(input_tokens=10, output_tokens=2, cache_read_tokens=5))),
+                 dict(event='result', result=dict(status='SUCCESS', response='OK', usage=dict(input_tokens=12296, output_tokens=196, cache_read_tokens=22154)))]
+        u = server.parse_cli_output('antigravity', '\n'.join(json.dumps(l) for l in lines))['usage']
+        self.assertEqual((u['input'], u['output'], u['cachedInput']), (319, 15, 11411))
         self.assertEqual(server.antigravity_error('the MCP server is unavailable'), '')
 
     def test_careful_runs_cannot_change_anything_and_credits_stay_off(self):

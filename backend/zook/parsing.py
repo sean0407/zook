@@ -56,7 +56,13 @@ def parse_cli_output(provider, text, model=''):
         if d is None: out['unparsable'] = True; return out
         out['content'] = str(d.get('response') or '').strip()
         if d.get('status') != 'SUCCESS': out['isError'] = True; out['error'] = str(d.get('error') or out['content'])[:2000]
+        # The result's figures are the whole conversation's so far (every earlier message too); each finished step's are its own.
+        steps = {}
+        for o in objs:
+            step = o.get('step_update') if o.get('event') == 'step_update' and isinstance(o.get('step_update'), dict) else {}
+            if step.get('state') == 'DONE' and isinstance(step.get('usage'), dict): steps[('step', step['step_index']) if 'step_index' in step else ('line', len(steps))] = step['usage']
         u = d.get('usage') if isinstance(d.get('usage'), dict) else None
+        if steps: u = {k: sum(_int(s.get(k)) for s in steps.values()) for k in ('input_tokens', 'cache_read_tokens', 'output_tokens')}
         if u: out['usage'] = dict(input=_int(u.get('input_tokens')), cachedInput=_int(u.get('cache_read_tokens')), output=_int(u.get('output_tokens')), model=model or '預設模型', costUsd=None)
         return out
     if provider == 'grok':
