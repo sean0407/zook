@@ -37,6 +37,12 @@ class UnverifiedCliTest(unittest.TestCase):
         self.assertIn('agent', found['cursor']['loginNote'])  # its installer takes over the agent command
         self.assertTrue(picker['codex']['chat'])
 
+    def test_one_zook_installed_in_its_own_tools_folder_is_shown(self):
+        tools = self.root / 'data/tools/bin'; tools.mkdir(parents=True)
+        (self.root / 'bin/copilot').rename(tools / 'copilot')  # not on PATH any more, only in Zook's tools folder
+        found = {p['id'] for p in self.req('GET', '/api/accounts')[1]['providers']}
+        self.assertIn('copilot', found)
+
     def test_a_bot_on_one_cannot_reply(self):
         bot = self.req('POST', '/api/bots', {'name': 'K', 'provider': 'kimi'})[1]
         sent = self.req('POST', '/api/chat', {'botId': bot['id'], 'content': 'hi'})[1]

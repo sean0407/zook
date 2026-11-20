@@ -184,7 +184,7 @@ class StoreBase:
         self.data['knowledge'] = [k for k in self.data.get('knowledge') or [] if not (k.get('title') == 'swarmr 使用指南' and str(k.get('content') or '').startswith('swarmr 是本機 AI 工作空間'))]
         self.data.setdefault('groups', []); self.data.setdefault('memories', []); self.data.setdefault('quota', {})
         self.data.setdefault('customProviders', [])
-        _active['data'] = self.data; _active['dir'] = self.dir
+        _active['data'] = self.data; _active['dir'] = self.dir; P.PRIVATE_BIN[:] = [str(self.dir / 'tools/bin')]
         self.data.setdefault('accounts', []); self.data.setdefault('connectors', []); self.data.setdefault('skills', []); self.data.setdefault('schedules', [])
         self.data.setdefault('settings', {}).setdefault('disabledSkills', [])
         self.data['settings'].setdefault('disabledPlugins', [])

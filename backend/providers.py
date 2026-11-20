@@ -45,7 +45,7 @@ CATALOG = {
                    login_note='還沒驗證能不能在 Zook 回覆，目前只能安裝和登入；登入後告訴 Claude，就能接著實測。安裝時，Cursor 會把終端機的 agent 指令改成它自己的（原本指向 Grok 的 agent 會被取代；Zook 用 grok 指令，不受影響）。'),
     'copilot': dict(name='GitHub Copilot', vendor='GitHub', binary='copilot', kind='unverified', tools=False, npm_package='@github/copilot', terminal_login=True,
                     install='Zook 會從 https://nodejs.org 下載 Node.js，再安裝 @github/copilot', latest_url='https://registry.npmjs.org/@github/copilot/latest',
-                    docs='https://docs.github.com/copilot/how-tos/copilot-cli', login_note='還沒驗證能不能在 Zook 回覆，目前只能安裝和登入；登入後告訴 Claude，就能接著實測。登入：在打開的終端機輸入 /login。需要 GitHub Copilot 訂閱。'),
+                    docs='https://docs.github.com/copilot/how-tos/copilot-cli', login_note='還沒驗證能不能在 Zook 回覆，目前只能安裝和登入；登入後告訴 Claude，就能接著實測。登入：在打開的終端機輸入 /login。GitHub 免費帳號（Copilot Free）也能登入。'),
     'kimi': dict(name='Kimi（Moonshot）', vendor='Moonshot AI', binary='kimi', kind='unverified', tools=False, npm_package='@moonshot-ai/kimi-code', terminal_login=True,
                  install='Zook 會從 https://nodejs.org 下載 Node.js，再安裝 @moonshot-ai/kimi-code', latest_url='https://registry.npmjs.org/@moonshot-ai/kimi-code/latest',
                  docs='https://github.com/MoonshotAI/kimi-code', login_note='還沒驗證能不能在 Zook 回覆，目前只能安裝和登入；登入後告訴 Claude，就能接著實測。登入：在打開的終端機輸入 /login。'),
@@ -95,10 +95,15 @@ def spec(data, provider_id):
     return None
 
 
+# Zook's own tools folder (set by the store): CLIs Zook installed there count as installed too.
+PRIVATE_BIN = []
+
+
 def binary_for(data, provider_id):
     s = spec(data, provider_id)
     if not s: return None
-    return find_binary(s.get('command') or s.get('binary'), s.get('extra_paths', ()))
+    private = tuple(d + '/' + str(s['binary']) for d in PRIVATE_BIN) if s.get('npm_package') and s.get('binary') else ()
+    return find_binary(s.get('command') or s.get('binary'), (*s.get('extra_paths', ()), *private))
 
 
 def active_ids(data):
