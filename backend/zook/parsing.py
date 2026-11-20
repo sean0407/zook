@@ -65,6 +65,37 @@ def parse_cli_output(provider, text, model=''):
         if steps: u = {k: sum(_int(s.get(k)) for s in steps.values()) for k in ('input_tokens', 'cache_read_tokens', 'output_tokens')}
         if u: out['usage'] = dict(input=_int(u.get('input_tokens')), cachedInput=_int(u.get('cache_read_tokens')), output=_int(u.get('output_tokens')), model=model or '預設模型', costUsd=None)
         return out
+    if provider == 'opencode':
+        # opencode run --format json: text parts, tool parts, and step_finish with each step's tokens and cost.
+        chunks, steps, seen = [], [], False
+        for o in objs:
+            part = o.get('part') if isinstance(o.get('part'), dict) else {}
+            kind = o.get('type')
+            if kind == 'text' and isinstance(part.get('text'), str): chunks.append(part['text']); seen = True
+            elif kind in ('tool_use', 'tool') or part.get('type') == 'tool':
+                chunks = []; seen = True  # only what it says after its last action is the reply
+                tool = str(part.get('tool') or part.get('name') or '').lower()
+                state = part.get('state') if isinstance(part.get('state'), dict) else {}
+                raw = state.get('input') if isinstance(state.get('input'), dict) else {}
+                if tool in ('edit', 'write', 'patch', 'multiedit'): out['web'].append(native_action('write', raw.get('filePath') or raw.get('file_path') or raw.get('path') or ''))
+                elif tool in ('shell', 'bash'): out['web'].append(native_action('command', raw.get('command') or ''))
+                elif tool == 'webfetch': out['web'].append(dict(name='web_fetch', arguments={'url': str(raw.get('url') or '')[:300]}))
+                elif tool == 'websearch': out['web'].append(dict(name='web_search', arguments={'query': str(raw.get('query') or '')[:200]}))
+            elif kind == 'step_finish' and isinstance(part.get('tokens'), dict): steps.append(part); seen = True
+            elif kind == 'error':
+                err = o.get('error') if isinstance(o.get('error'), dict) else {}
+                out['isError'] = True; out['error'] += (str(err.get('type') or '') + ' ' + str(err.get('message') or '')).strip()[:2000] + '\n'; seen = True
+        if not seen: out['unparsable'] = True; return out
+        out['content'] = ''.join(chunks).strip()
+        if out['content']: out['isError'] = False if not out['error'] else out['isError']
+        if steps:
+            total = lambda f: sum(_int(f(s['tokens'])) for s in steps)
+            cache = lambda s: s.get('cache') if isinstance(s.get('cache'), dict) else {}
+            read, write = total(lambda t: cache(t).get('read')), total(lambda t: cache(t).get('write'))
+            costs = [s.get('cost') for s in steps if isinstance(s.get('cost'), (int, float)) and not isinstance(s.get('cost'), bool)]
+            out['usage'] = dict(input=total(lambda t: t.get('input')) + read + write, cachedInput=read, cacheWrite=write, output=total(lambda t: t.get('output')) + total(lambda t: t.get('reasoning')),
+                                model=model or '預設模型', costUsd=round(sum(costs), 6) if costs else None)
+        return out
     if provider == 'grok':
         # grok --output-format json: {text, usage{input_tokens, cache_read_input_tokens, ...}, total_cost_usd, modelUsage}
         end = next((o for o in reversed(objs) if o.get('type') == 'end'), None)

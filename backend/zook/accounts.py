@@ -181,7 +181,7 @@ LOGIN_TIMEOUT = 600
 
 # Extra accounts. Each CLI keeps a whole account in one folder, and reads an API key from its own environment variable.
 ACCOUNT_HOME = {'codex': 'CODEX_HOME', 'claude': 'CLAUDE_CONFIG_DIR', 'grok': 'GROK_HOME', 'gemini': 'GEMINI_CLI_HOME'}
-ACCOUNT_KEYS = {'codex': ('CODEX_API_KEY', 'OPENAI_API_KEY'), 'claude': ('ANTHROPIC_API_KEY',), 'grok': ('XAI_API_KEY',), 'gemini': ('GEMINI_API_KEY',)}
+ACCOUNT_KEYS = {'codex': ('CODEX_API_KEY', 'OPENAI_API_KEY'), 'claude': ('ANTHROPIC_API_KEY',), 'grok': ('XAI_API_KEY',), 'gemini': ('GEMINI_API_KEY',), 'opencode': ('OPENROUTER_API_KEY',)}
 ACCOUNT_ID = re.compile(r'[0-9a-f]{32}')
 KEYCHAIN_SERVICE = 'Zook account API key'
 
@@ -315,6 +315,9 @@ def account_status(provider, account=None):
                 hit = _agy_status[path] = (time.time(), state)
             item['status'] = hit[1]
             if item['status'] == 'logged_in': item['method'] = 'Google 帳號'
+        elif s.get('kind') == 'unverified': item['status'] = 'installed'  # whether it is signed in is not known yet
+        elif s.get('kind') == 'opencode':  # its free models need no sign-in
+            item.update(status='logged_in', method='免費模型')
         elif s.get('kind') == 'generic':
             if s.get('signed_in_file'):  # only whether the CLI has signed in; the file is never opened
                 signed_in = os.path.exists(os.path.expanduser(s['signed_in_file'])) or bool(env.get('GEMINI_API_KEY'))

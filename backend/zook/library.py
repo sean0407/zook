@@ -437,6 +437,15 @@ def model_list(provider):
             except (OSError, subprocess.SubprocessError): pass
         return dict(provider=provider, models=models, source='cli' if models else 'none', status='available' if models else 'unavailable',
                     note='由 agy models 取得。' if models else '無法取得 Antigravity 模型清單，請確認已登入。', detectedAt=NOW())
+    if s.get('kind') == 'opencode':
+        if binary:
+            try: models = [m for m in opencode_models(binary, _active['dir']) if not m['id'].startswith('openrouter/')]
+            except (OSError, subprocess.SubprocessError, KeyError): pass
+        if opencode_has_openrouter(_active['data']):  # with the user's own OpenRouter key: its catalog, free models first
+            try: models = models[:len([m for m in models if m.get('free')])] + openrouter_models() + [m for m in models if not m.get('free')]
+            except (OSError, ValueError): pass
+        return dict(provider=provider, models=models, source='cli' if models else 'none', status='available' if models else 'unavailable',
+                    note='由 opencode models 取得。免費模型額度很少，用完約一天後恢復。' if models else '無法取得 OpenCode 模型清單，請確認已安裝。', detectedAt=NOW())
     if s.get('kind') == 'generic':
         models = [dict(id=m, name=m, source='config') for m in s.get('models', []) if clean_model(m)]
         note = '來自這個提供者的設定；也可以輸入自訂模型 ID。' if models else '沒有設定模型清單，請輸入模型 ID，或留空使用 CLI 預設。'

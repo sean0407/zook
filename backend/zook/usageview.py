@@ -1,6 +1,6 @@
 # What is left of each model's limits, in the form the sidebar rings and the bars on the usage page show it.
 # Loaded by backend/server.py into one shared namespace.
-RING_ORDER = ('codex', 'claude', 'grok', 'antigravity', 'gemini')
+RING_ORDER = ('codex', 'claude', 'grok', 'antigravity', 'opencode', 'gemini')
 
 
 def _left(window, snap, now):
@@ -17,6 +17,7 @@ def usage_rings(store):
     used = {(j.get('usage') or {}).get('provider') for j in data['jobs'] if isinstance(j.get('usage'), dict)}
     out = []
     for provider in P.active_ids(data):
+        if provider_kind(provider) == 'unverified': continue  # not usable for replies yet, so no usage to show
         snap = quota.get(provider) if isinstance(quota.get(provider), dict) else {}
         windows = [w for w in snap.get('windows') or [] if isinstance(w, dict)]
         rows = [dict(label=str(w.get('label') or ''), left=_left(w, snap, now), resetsAt=w.get('resetsAt')) for w in windows]
