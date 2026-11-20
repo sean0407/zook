@@ -1,5 +1,5 @@
 # Group discussions: who hosts, how a discussion runs, and when it stops. Loaded by backend/server.py into one shared namespace.
-GROUP_MODES = dict(free='自由', turns='輪流', debate='辯論', split='分工', compare='比較')
+GROUP_MODES = dict(free='自由', turns='輪流', debate='辯論', split='分工', compare='比較', auto='自動（主持人決定）')  # auto: 任務引擎 (taskrun.py), only while it is on
 GROUP_LIMITS = (4, 8, 12, 16)
 GROUP_KEEP = 20  # the most recent messages every member is given word for word
 try: GROUP_COMPACT_AT = max(GROUP_KEEP + 2, int(os.environ.get('ZOOK_GROUP_COMPACT_AT') or 40))  # past this many since the last summary, the older part is summarised
@@ -161,11 +161,13 @@ def group_estimate(store, group, content, mode):
     targets = group_mentions(content or '', members)
     everyone = not targets or group_everyone(content, members)
     limit = group_limit(store, group); open_ended = False
+    if mode == 'auto' and not task_on(store): mode = 'free'  # 任務引擎 is off: it runs as 自由
     if not everyone: count = len(targets)
+    elif mode == 'auto' and len(members) > 1: count, open_ended = len(members) + 1, True  # the host plans, each member works, the host sums up
     elif mode != 'free' and len(members) > 1: count = sum(len(s['bots']) for s in group_steps(store, group, mode))
     elif group_host(store, group) and len(members) > 1: count, open_ended = limit, True
     else: count = len(members)
-    count = min(count, limit)
+    count = min(count, limit) if mode != 'auto' else count
     used = {}
     for job in reversed(store.data['jobs']):
         usage = job.get('usage') if job.get('status') == 'completed' else None
@@ -225,6 +227,7 @@ class GroupRuns:
         if attachments: message['attachments'] = attachments  # each member receives the files on its turn
         group['messages'].append(message)
         group['runMode'] = mode or group.get('mode') or 'free'
+        if group['runMode'] == 'auto' and not task_on(self.store): group['runMode'] = 'free'  # 任務引擎 is off: as before it existed
         group.pop('paused', None)
         return self.start_group(group, targets, broadcast)
 
@@ -269,6 +272,7 @@ class GroupRuns:
             bot = store.find('bots', bot_id)
             if not bot or bot_id not in group['botIds']: return None
             if any(j['botId'] == bot_id and j['status'] == 'running' for j in store.data['jobs']):
+                if (step or {}).get('waitBusy'): return 'busy'  # a task waits for its member instead of skipping it
                 group['messages'].append(dict(id=ID(), role='system', content=bot['name'] + ' 正在其他對話中工作，這次略過。', createdAt=NOW()))
                 store.save(); return None
             step = step or {}; readonly = bool(step.get('readonly')); auto_chain, auto_mark = None, {}
@@ -286,7 +290,7 @@ class GroupRuns:
                 store.save(); return None
             writable = not readonly and permission_mode(store, bot) in ('auto', 'bypass')
             target = find_message(group, step['targetId']) if step.get('targetId') else None
-            prompt = group_prompt(store, group, bot, may_pass, moderator=role, moderated=moderated, blind=blind, target=target, writable=writable, hidden=set(step.get('hide') or ()), hidden_files=set(step.get('hideFiles') or ()))
+            prompt = step['promptFor'](bot, writable) if step.get('promptFor') else group_prompt(store, group, bot, may_pass, moderator=role, moderated=moderated, blind=blind, target=target, writable=writable, hidden=set(step.get('hide') or ()), hidden_files=set(step.get('hideFiles') or ()))
             msg = dict(id=ID(), role='assistant', botId=bot_id, content='', createdAt=NOW(), status='running')
             job = dict(id=ID(), botId=bot_id, groupId=group_id, messageId=msg['id'], status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[],
                        effort=group.get('runEffort') if group.get('runEffort') not in (None, '', 'standard') else pick_effort(bot_effort(bot)))
@@ -294,13 +298,15 @@ class GroupRuns:
                 job['effort'] = 'fast'; auto_mark = dict(auto_mark, autoWhy=auto_mark.get('autoWhy', '') + QUICK_NOTE)
             if job['effort'] != 'standard': msg['effort'] = job['effort']
             if readonly: job['plan'] = True
+            job.update(step.get('job') or {}); msg.update(step.get('msg') or {})  # 任務引擎: whose task this is
             if step.get('targetId'): msg['checkOf'] = step['targetId']
             job['groupFiles'] = True
             starter = next((m for m in reversed(group['messages']) if m.get('role') == 'user'), {})
             if starter.get('author'): job['origin'] = 'schedule' if starter['author'] == '排程' else 'bot'  # a discussion nobody typed: started by a schedule or by a Bot
             if auto_chain: job['autoChain'] = auto_chain; msg.update(auto_mark)
             if auto_mark: refresh_auto(self)
-            try: files = place_attachments(store, bot_id, recent_attachments(store, group['messages'][-20:]))
+            source = [m for m in group['messages'] if m['id'] in step['attachIds']] if step.get('attachIds') is not None else group['messages'][-20:]  # 任務引擎: the goal's files only
+            try: files = place_attachments(store, bot_id, recent_attachments(store, source))
             except OSError: files = []
             if provider_kind(provider) == 'codex' and not writable:  # without its shell, Codex can still be shown the group's pictures
                 files = files + [group_copy_folder(store, bot_id) / e.name for e in _plain_files(group_files_dir(store, group_id)) if pathlib.Path(e.name).suffix.lower() in IMAGE_TYPES][:5]
@@ -430,7 +436,8 @@ class GroupRuns:
             host = group_host(store, group) if group.get('botIds') else None
             limit = group_limit(store, group) if group.get('botIds') else GROUP_MAX_TURNS
             mode = group.get('runMode') or 'free'
-            planned = (resume or {}).get('steps') if (resume or {}).get('kind') == 'steps' else group_steps(store, group, mode) if not resume and broadcast and mode != 'free' and len(members) > 1 else None
+            planned = (resume or {}).get('steps') if (resume or {}).get('kind') == 'steps' else group_steps(store, group, mode) if not resume and broadcast and mode not in ('free', 'auto') and len(members) > 1 else None
+            engine = mode == 'auto' and not resume and broadcast and len(members) > 1 and task_on(store)
         # With a host in the group and no specific Bot named, the host states the goal and assigns work,
         # members answer independently and at the same time, then respond to each other when the host asks,
         # and the host closes with conclusions, decisions for the user, action items and open questions.
@@ -440,6 +447,7 @@ class GroupRuns:
         else: pending = [(t, broadcast, None) for t in targets]
         rounds = (resume or {}).get('rounds', 0); blind_next = (resume or {}).get('blind', False); hidden = list((resume or {}).get('hide') or []); hidden_files = list((resume or {}).get('hideFiles') or [])
         try:
+            if engine: return self.run_task_engine(group_id, run_id)
             if planned is not None: return self._run_steps(group_id, run_id, planned, limit)
             while turns < limit:
                 if not pending:

@@ -7,6 +7,7 @@
 - Accounts: Codex's own sign-in (~/.codex) and every Codex sign-in added in Zook (its accounts folder). Reviews take turns; the
   turn is kept in ~/.config/zook-dev/codex-review.json. When one account is out of quota, the same review runs on the next one.
   When all are out, it stops and says so (exit code 3); it never switches to paid credits.
+- An account with under 20% left in any window on Zook's usage page is skipped, so reviews never use up the last of it.
 - Model: the newest of the family listed by Codex (gpt-*-sol or gpt-*-astra). sol runs at medium reasoning, astra at high,
   unless --effort says otherwise.
 - Always read-only, not saved, and without the user's own Codex settings (connectors, instructions). Nothing from the sign-in
@@ -31,6 +32,32 @@ def accounts():
         if a.get('provider') == 'codex' and a.get('type') == 'login' and re.fullmatch(r'[0-9a-f]{32}', str(a.get('id') or '')) and (folder / 'auth.json').exists():
             found.append(('Zook 帳號「%s」' % (a.get('name') or a['id'][:6]), str(folder)))
     return found
+
+
+def low_quota(home):
+    """The reason to leave this account alone, when Zook's usage page shows under 20% left in any of its windows; '' otherwise."""
+    try: quota = json.loads((ZOOK / 'swarmr.json').read_text(encoding='utf-8')).get('quota') or {}
+    except (OSError, ValueError): return ''
+    entry = quota.get('codex' if not home else 'codex@' + pathlib.Path(home).name) or {}
+    now = time.time()
+    for w in entry.get('windows') or []:
+        try: used = float(w.get('usedPercent') or 0)
+        except (TypeError, ValueError): continue
+        if used > 80 and window_open(w, entry, now): return '%s只剩 %d%%' % (w.get('label') or '', round(100 - used))
+    return ''
+
+
+def window_open(window, snap, now):
+    """Read like Zook's usage page (routing.py _window_open): seconds, milliseconds or a date; no date means five hours from the snapshot."""
+    import datetime
+    reset = window.get('resetsAt')
+    try:
+        if isinstance(reset, (int, float)): at = reset / 1000 if reset > 1e12 else reset
+        else: at = datetime.datetime.fromisoformat(str(reset).replace('Z', '+00:00')).timestamp()
+    except (ValueError, TypeError):
+        try: at = datetime.datetime.fromisoformat(snap['updatedAt']).timestamp() + 5 * 3600
+        except (KeyError, ValueError, TypeError): return False
+    return at > now
 
 
 def newest(family, home):
@@ -59,6 +86,10 @@ def main():
     order = found[start:] + found[:start]
     env_path = os.environ.get('PATH', '') if shutil.which('codex') else os.pathsep.join([str(HOME / '.local/bin'), '/opt/homebrew/bin', '/usr/local/bin', os.environ.get('PATH', '')])
     for i, (name, home) in enumerate(order):
+        low = low_quota(home)
+        if low:  # under 20% left: keep it for the user's own work
+            print('%s 的額度%s，不用它審查。' % (name, low), flush=True)
+            continue
         model = newest(args.family, home)
         env = dict(os.environ, PATH=env_path)
         env.pop('CODEX_HOME', None)
@@ -81,7 +112,7 @@ def main():
             continue
         print('審查失敗（不是額度問題），沒有換帳號重跑。最後的輸出：\n' + log[-1500:], file=sys.stderr)
         return 1
-    print('所有 Codex 帳號的額度都用完了，這次審查沒有執行。等額度恢復再跑。', file=sys.stderr)
+    print('所有 Codex 帳號的額度都用完或剩不到 20%，這次審查沒有執行。等額度恢復再跑。', file=sys.stderr)
     return 3
 
 

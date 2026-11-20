@@ -15,7 +15,7 @@ def set_group_fields(store, group, body, creating=False):
         group['hostId'] = body['hostId']
     if old_host and old_host not in group['botIds'] and not (body.get('hostId') in group['botIds']): drop_group_host(store, group)
     if 'mode' in body:
-        if body['mode'] not in GROUP_MODES: raise ValueError('討論方式無效。')
+        if body['mode'] not in GROUP_MODES or (body['mode'] == 'auto' and not task_on(store)): raise ValueError('討論方式無效。')
         group['mode'] = body['mode']
     if 'turnLimit' in body:
         if body['turnLimit'] not in GROUP_LIMITS: raise ValueError('回合上限無效。')

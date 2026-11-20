@@ -228,7 +228,10 @@ private struct Bubble: View {
     let message: ChatMessage, showName: Bool
 
     var body: some View {
-        if message.role == "system" {
+        if message.role == "system" && message.content.hasPrefix("任務板") {  // 任務引擎's board, one line per task
+            Text(message.content).font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(10)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+        } else if message.role == "system" {
             Text(message.content).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
         } else if message.role == "user" {
             VStack(alignment: .trailing, spacing: 3) {

@@ -275,7 +275,7 @@
     return (jobs ? pendingIn(jobs) : pendingForBot(botId)).map(a => {
       const call = (a.job.toolCalls || []).find(c => c.id === a.toolCallId) || {name: a.name, label: a.label, sourceLabel: a.sourceLabel, arguments: a.arguments};
       const who = state.data.bots.find(x => x.id === a.job.botId)?.name || 'Bot';
-      return `<section class="approval-card" aria-label="需要你的核准"><strong>${esc(who)} 想要${esc(a.text || describeCall({...call, arguments: a.arguments}))}</strong>${approvalReason(a) ? `<small class="approval-reason">${esc(approvalReason(a))}</small>` : ''}<details data-approval-details="${esc(a.id)}"><summary>查看詳細內容</summary>${argsList(a.arguments)}</details><div class="actions"><button class="primary" data-action="approve" data-id="${esc(a.id)}" ${state.deciding[a.id]?'disabled':''}>允許這次</button><button class="secondary" data-action="deny" data-id="${esc(a.id)}" ${state.deciding[a.id]?'disabled':''}>不要</button></div></section>`;
+      return `<section class="approval-card" aria-label="需要你的核准"><strong>${esc(who)}${a.job.taskTitle ? `（任務 ${esc(a.job.taskTitle)}）` : ''} 想要${esc(a.text || describeCall({...call, arguments: a.arguments}))}</strong>${approvalReason(a) ? `<small class="approval-reason">${esc(approvalReason(a))}</small>` : ''}<details data-approval-details="${esc(a.id)}"><summary>查看詳細內容</summary>${argsList(a.arguments)}</details><div class="actions"><button class="primary" data-action="approve" data-id="${esc(a.id)}" ${state.deciding[a.id]?'disabled':''}>允許這次</button><button class="secondary" data-action="deny" data-id="${esc(a.id)}" ${state.deciding[a.id]?'disabled':''}>不要</button></div></section>`;
     }).join('');
   }
   // Everything a Bot did (Skills, connectors, web) shows in that Bot's own panel, including work done inside groups.
@@ -343,12 +343,13 @@
   function groupMessage(g, m) {
     if (m.compacted && !m.checkOf) return '<div class="compact-line"><span>前面的討論已整理成摘要，成員從這裡接續</span></div>' + groupMessage(g, Object.assign({}, m, {compacted: false}));
     if (m.checkOf) return '';
+    if (m.taskBoard) return taskBoardView(g, m);
     if (m.role === 'system') return `<div class="system-note">${esc(m.content)}</div>`;
     const tag = html => highlightMentions(html, groupMembers(g));
     if (m.role === 'user') return `<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message user" data-mid="${esc(m.id)}">${m.author ? `<div class="speaker-wrap user-author"><div class="speaker">由 ${esc(m.author)} 發起</div><div class="bubble">${tag(esc(m.content))}</div></div>` : `<div class="bubble">${tag(esc(m.content))}</div>`}${attachmentsView(m)}</div>`;
     const b = state.data.bots.find(x => x.id === m.botId) || {name: '已刪除的 Bot', color: '#959595'};
     const text = m.status==='running' ? '正在思考…' : m.status==='cancelled'&&!m.content ? '已停止回覆' : m.status==='failed'&&!m.content ? (Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。') : m.content;
-    return `<div class="message assistant" data-mid="${esc(m.id)}">${avatar(b)}<div class="speaker-wrap"><div class="speaker">${esc(b.name)}</div>${m.card&&m.status==='completed'?groupCardView(m):partialFor(m)?`<div class="bubble md streaming">${tag(markdown(partialFor(m)))}</div>`:m.content&&m.status!=='running'?`<div class="bubble md">${withAutoMark(tag(markdown(m.content)), m)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(text)}</div>`}${groupChecks(g, m)}</div>${groupVerifyButton(g, m)}</div>`;
+    return `<div class="message assistant" data-mid="${esc(m.id)}">${avatar(b)}<div class="speaker-wrap"><div class="speaker">${esc(b.name)}${m.taskId ? ` <span class="muted">· 任務 ${esc(String((g.taskRun?.tasks || []).find(t => t.id === m.taskId)?.n || ''))}</span>` : ''}</div>${m.card&&m.status==='completed'?groupCardView(m):partialFor(m)?`<div class="bubble md streaming">${tag(markdown(partialFor(m)))}</div>`:m.content&&m.status!=='running'?`<div class="bubble md">${withAutoMark(tag(markdown(m.content)), m)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(text)}</div>`}${groupChecks(g, m)}</div>${groupVerifyButton(g, m)}</div>`;
   }
   function groupChat() {
     const g = activeGroup(), members = groupMembers(g), running = g.status === 'running';

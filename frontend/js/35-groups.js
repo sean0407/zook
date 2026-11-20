@@ -2,18 +2,18 @@
   const GROUP_MODE_OPTIONS = [{id: 'free', name: '自由', hint: '相關成員回覆，可以互相 @'}, {id: 'turns', name: '輪流', hint: '依序各發言一次'}, {id: 'debate', name: '辯論', hint: '正反交鋒，最後裁定'}, {id: 'split', name: '分工', hint: '拆開工作，最後彙整'}, {id: 'compare', name: '比較', hint: '各自獨立回答，列出異同'}];
   if (!state.groupMode) state.groupMode = {};
   if (!state.groupFiles) state.groupFiles = {};
-  const currentGroupMode = g => state.groupMode[g.id] || g.mode || 'free';
+  const currentGroupMode = g => { const mode = state.groupMode[g.id] || g.mode || 'free'; return mode === 'auto' && !taskEngineOn() ? 'free' : mode; };
   const groupHostId = g => 'hostId' in g ? g.hostId : (groupMembers(g).find(b => b.isAdmin)?.id || '');
   const hostOptions = ids => [{id: '', name: '不設主持人'}, ...ids.map(id => state.data.bots.find(b => b.id === id)).filter(Boolean).map(b => ({id: b.id, name: b.name}))];
   function groupSettingRows(g, chosen) {
     const host = g.id ? groupHostId(g) : '', limit = g.turnLimit || (host ? 16 : 8);
-    return `<div class="setting-list in-form"><div data-host-field>${settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', host, hostOptions([...chosen])))}</div>${settingRow('討論方式', '對話框旁可以只改一則訊息', dropdown('mode', g.mode || 'free', GROUP_MODE_OPTIONS))}${settingRow('回合上限', '每則訊息最多幾次發言，到了就先停下', dropdown('turnLimit', String(limit), [4, 8, 12, 16].map(n => ({id: String(n), name: n + ' 次'}))))}</div>`;
+    return `<div class="setting-list in-form"><div data-host-field>${settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', host, hostOptions([...chosen])))}</div>${settingRow('討論方式', '對話框旁可以只改一則訊息', dropdown('mode', g.mode === 'auto' && !taskEngineOn() ? 'free' : g.mode || 'free', groupModeOptions()))}${settingRow('回合上限', '每則訊息最多幾次發言，到了就先停下', dropdown('turnLimit', String(limit), [4, 8, 12, 16].map(n => ({id: String(n), name: n + ' 次'}))))}</div>`;
   }
   function syncGroupHost(form) {
     const ids = new FormData(form).getAll('botIds'), slot = form.querySelector('[data-host-field]'), now = form.elements.hostId.value;
     slot.innerHTML = settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', ids.includes(now) ? now : '', hostOptions(ids)));
   }
-  const groupModeControl = g => `<div class="effort-pick group-mode" title="討論方式">${dropdown('groupMode', currentGroupMode(g), GROUP_MODE_OPTIONS)}</div>`;
+  const groupModeControl = g => `<div class="effort-pick group-mode" title="討論方式">${dropdown('groupMode', currentGroupMode(g), groupModeOptions())}</div>`;
 
   // 預計用量: updated while typing, and never uses a model.
   function groupEstimateLine(g) {

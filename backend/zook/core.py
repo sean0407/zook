@@ -214,7 +214,7 @@ class StoreBase:
             for b in bots: b['isAdmin'] = b.get('name') == '管理員'
         for b in bots: b.setdefault('isAdmin', False); b.setdefault('persona', ''); b.setdefault('webSearch', False)
         for group in self.data['groups']:
-            group.pop('compacting', None)
+            group.pop('compacting', None); task_recover(group, self)
             if group.get('status') == 'running':
                 group.update(status='idle', activeJobId=None, activeJobIds=[], runId=None)
         for job in self.data.get('jobs', []):

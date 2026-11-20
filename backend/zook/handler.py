@@ -837,7 +837,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self.respond(200, group_estimate(store, group, body.get('content', ''), mode))
                     if len(parts) == 4 and parts[3] == 'stop' and self.command == 'POST':
                         ids = group.get('activeJobIds') or ([group['activeJobId']] if group.get('activeJobId') else [])
-                        group.update(status='idle', runId=None, activeJobId=None, activeJobIds=[])
+                        group.update(status='idle', runId=None, activeJobId=None, activeJobIds=[]); task_stop(store, group)
                         for job in [j for j in (store.find('jobs', x) for x in ids) if j]: self.server.cancel_job(job)
                         store.save(); return self.respond(200, group)
                     return self.error(404, '找不到資源。')
