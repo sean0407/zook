@@ -782,12 +782,14 @@ class Handler(BaseHTTPRequestHandler):
                     if not group: return self.error(404, '找不到群組。')
                     if len(parts) == 3 and self.command == 'GET':
                         ids = group.get('activeJobIds') or ([group['activeJobId']] if group.get('activeJobId') else [])
-                        return self.respond(200, {'group': group, 'jobs': [job_view(j) for j in (store.find('jobs', x) for x in ids) if j]})
+                        return self.respond(200, {'group': page_group(group), 'jobs': [job_view(j) for j in (store.find('jobs', x) for x in ids) if j]})
+                    if len(parts) == 4 and parts[3] == 'messages' and self.command == 'GET':
+                        return self.respond(200, page_group_messages(group, parse_qs(urlsplit(self.path).query)))
                     if len(parts) == 3 and self.command == 'PATCH':
                         candidate = copy.deepcopy(group); set_group_fields(store, candidate, self.body())
                         added = candidate['messages'][len(group['messages']):]  # the discussion may still be running, so its messages stay as they are
                         group.update({k: candidate[k] for k in ('name', 'botIds', 'hostId', 'mode', 'turnLimit') if k in candidate}); group['messages'].extend(added)
-                        store.save(); return self.respond(200, group)
+                        store.save(); return self.respond(200, page_group(group))
                     if len(parts) == 3 and self.command == 'DELETE':
                         if group['status'] == 'running': return self.error(409, '群組討論進行中，請先停止。')
                         store.data['groups'].remove(group)

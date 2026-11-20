@@ -15,15 +15,27 @@ def page_bot(bot):
     return out
 
 
-def page_messages(bot, chat_id, query):
-    """Older messages of one conversation. before=<message id>: the page before it. from=<message id>: from a little before
-    it up to the newest (to jump to a search hit). all=1: everything (to export). Lock held."""
+def group_counts(group):
+    """What the window shows about a whole discussion without loading it: how many times each member has spoken, and the replies
+    since the user last wrote (to offer 整理結論). Lock held."""
+    messages = group.get('messages') or []; counts = {}
+    for m in messages:
+        if m.get('role') == 'assistant' and m.get('content') and not m.get('checkOf') and m.get('status') == 'completed': counts[m.get('botId')] = counts.get(m.get('botId'), 0) + 1
+    ask = next((i for i in range(len(messages) - 1, -1, -1) if messages[i].get('role') == 'user'), -1)
+    since = [m for m in messages[ask + 1:] if m.get('role') == 'assistant' and m.get('content') and not m.get('checkOf')]
+    return counts, dict(replies=len(since), card=any(m.get('card') for m in since))
+
+
+def page_group(group):
+    """A group as the window gets it: the newest part of its discussion. Lock held."""
+    messages = group.get('messages') or []
+    counts, after = group_counts(group)
+    return dict(group, messages=messages[-PAGE:], olderCount=max(0, len(messages) - PAGE), memberCounts=counts, afterAsk=after)
+
+
+def page_list(messages, query):
+    """before=<id>: the page before it. from=<id>: from a little before it to the newest. all=1: everything."""
     one = lambda key: (query.get(key) or [''])[0]
-    if one('find'):  # which conversation a message is in
-        for chat in ensure_chats(bot):
-            if any(m.get('id') == one('find') for m in (bot['messages'] if chat['id'] == bot['chatId'] else chat.get('messages') or [])): return dict(chatId=chat['id'])
-        return dict(chatId='')
-    messages = chat_messages(bot, chat_id or bot.get('chatId'))
     index = lambda mid: next((i for i, m in enumerate(messages) if m.get('id') == mid), None)
     if one('all'): return dict(messages=messages, more=False)
     if one('from'):
@@ -35,6 +47,33 @@ def page_messages(bot, chat_id, query):
     if end is None: raise ValueError('找不到這則訊息。')
     start = max(0, end - PAGE)
     return dict(messages=messages[start:end], more=start > 0)
+
+
+def page_group_messages(group, query):
+    """Older parts of a discussion, or (member=<Bot id>) every time one member spoke, newest last, each with what it was answering. Lock held."""
+    messages = group.get('messages') or []
+    member = (query.get('member') or [''])[0]
+    if not member: return page_list(messages, query)
+    turns, asked = [], None
+    for m in messages:
+        if m.get('role') == 'user': asked = dict(author=m.get('author') or '', content=str(m.get('content') or '')[:300])
+        elif m.get('role') == 'assistant' and m.get('botId') == member and not m.get('checkOf'): turns.append(dict(m, asked=asked))
+    before = (query.get('before') or [''])[0]
+    end = next((i for i, t in enumerate(turns) if t['id'] == before), None) if before else len(turns)
+    if end is None: raise ValueError('找不到這則訊息。')
+    start = max(0, end - PAGE)
+    return dict(turns=turns[start:end], more=start > 0, total=len(turns))
+
+
+def page_messages(bot, chat_id, query):
+    """Older messages of one conversation. before=<message id>: the page before it. from=<message id>: from a little before
+    it up to the newest (to jump to a search hit). all=1: everything (to export). Lock held."""
+    one = lambda key: (query.get(key) or [''])[0]
+    if one('find'):  # which conversation a message is in
+        for chat in ensure_chats(bot):
+            if any(m.get('id') == one('find') for m in (bot['messages'] if chat['id'] == bot['chatId'] else chat.get('messages') or [])): return dict(chatId=chat['id'])
+        return dict(chatId='')
+    return page_list(chat_messages(bot, chat_id or bot.get('chatId')), query)
 
 
 def search_messages(store, text, bot_id=''):

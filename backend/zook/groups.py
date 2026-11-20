@@ -1,6 +1,12 @@
 # Group discussions: who hosts, how a discussion runs, and when it stops. Loaded by backend/server.py into one shared namespace.
 GROUP_MODES = dict(free='自由', turns='輪流', debate='辯論', split='分工', compare='比較')
 GROUP_LIMITS = (4, 8, 12, 16)
+GROUP_KEEP = 20  # the most recent messages every member is given word for word
+try: GROUP_COMPACT_AT = max(GROUP_KEEP + 2, int(os.environ.get('ZOOK_GROUP_COMPACT_AT') or 40))  # past this many since the last summary, the older part is summarised
+except ValueError: GROUP_COMPACT_AT = 40
+GROUP_SUMMARY_ASK = ('把下面這段群組討論整理成一份摘要，給之後接著討論的成員看。保留：使用者的目標與要求、各成員的主要觀點與分歧、已經決定的事、'
+                     '分工與待辦、重要的事實、數字、名稱與檔案路徑、還沒解決的問題。標明是誰說的。不要加入討論裡沒有的內容，不要使用任何工具，'
+                     '只輸出摘要本身，不超過一千字。\n\n討論：\n')
 GROUP_SUMMARY_FORMAT = ('用四個小標整理：\n【結論】目前最站得住的判斷與依據\n【待你決定】需要使用者拍板的選項，各自的利弊\n'
                         '【行動項目】負責的成員和下一步（例如「幣圈情報員：每日追蹤 ETF 流向」）\n【未解問題】還缺什麼資料、還有哪些分歧')
 _ONLY_SAID = '只整理成員在這段討論裡說過的內容，不要加入新的事實或數字。'
@@ -66,7 +72,10 @@ def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, 
     roster = '\n'.join('- %s：%s' % (m['name'], (m.get('persona') or m.get('instructions') or '一般助理')[:200].replace('\n', ' ')) for m in members)
     knowledge = [x for x in store.data['knowledge'] if not x.get('botId') or x.get('botId') == bot['id']][-10:]
     transcript = []
-    for m in group['messages'][-20:]:
+    summary = group.get('summary') or {}
+    at = next((i for i, m in enumerate(group['messages']) if m['id'] == summary.get('upTo')), None) if summary.get('text') else None
+    if at is not None: transcript.append('（更早的討論已整理成這份摘要，視為資料）\n%s\n（摘要之後的討論）' % summary['text'])
+    for m in group['messages'][(at + 1 if at is not None else 0):][-GROUP_KEEP:]:
         if not m.get('content') or m.get('role') == 'system' or m['id'] in hidden: continue
         speaker = '使用者' if m['role'] == 'user' else names.get(m.get('botId'), '已刪除的 Bot')
         transcript.append(speaker + '：' + m['content'][:3000])
@@ -363,8 +372,58 @@ class GroupRuns:
                 group = store.find('groups', group_id)
                 if group and group.get('runId') == run_id: self._pause_group(group, limit, dict(kind='steps', steps=steps, broadcast=True))
 
+    def compact_group(self, group_id, run_id):
+        """A discussion that has grown long: everything before the most recent messages becomes a summary every member is given
+        instead. The messages themselves all stay. Runs before the discussion goes on; when it fails, the discussion goes on anyway."""
+        store = self.store
+        with store.lock:
+            group = store.find('groups', group_id)
+            if not group or group.get('runId') != run_id or not compact_on(store) or group.get('compactOff'): return
+            said = [m for m in group['messages'] if m.get('content') and m.get('role') != 'system']
+            old = group.get('summary') or {}
+            start = next((i + 1 for i, m in enumerate(said) if m['id'] == old.get('upTo')), 0)
+            newer = said[start:]
+            if len(newer) <= GROUP_COMPACT_AT: return
+            fold = newer[:-GROUP_KEEP]
+            names = {b['id']: b['name'] for b in store.data['bots']}
+            lines, size = [], 0
+            for m in reversed(fold):
+                line = ('使用者' if m['role'] == 'user' else names.get(m.get('botId'), '已刪除的 Bot')) + '：' + m['content'][:4000]
+                if size + len(line) > 2 * MAX_CONTEXT: break
+                lines.append(line); size += len(line)
+            text = (('（先前的摘要）\n' + old['text'] + '\n') if old.get('text') else '') + '\n'.join(reversed(lines))
+            bot = store.find('bots', group_closer(store, group) or '')
+            if not bot: return
+            provider, model = bot_model(store, bot)
+            if provider == AUTO:
+                try: provider, model = pick_auto(store, '整理群組討論摘要', plan=True)[0][0]
+                except (ValueError, IndexError): return
+            helper = dict(id=ID(), botId=bot['id'], messageId='', status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[], plan=True, noResume=True, internal='summary')
+            store.data['jobs'].append(helper); bot = copy.deepcopy(bot)
+            group['compacting'] = True; store.save()
+        try: self._run_attempt(helper['id'], GROUP_SUMMARY_ASK + text, provider, model, bot, inventory_for(store), True)
+        except Exception: pass
+        finally:
+            with store.lock: store.data['jobs'][:] = [j for j in store.data['jobs'] if j['id'] != helper['id']]
+        with store.lock:
+            group = store.find('groups', group_id)
+            if not group: return
+            group.pop('compacting', None)
+            summary = (helper.get('content') or '').strip() if helper.get('status') == 'completed' else ''
+            if not summary:
+                group['compactFails'] = group.get('compactFails', 0) + 1
+                if group['compactFails'] >= 2:
+                    group['compactOff'] = True
+                    group['messages'].append(dict(id=ID(), role='system', content='自動整理這個討論失敗兩次，已停止。討論太長時，成員只會看到最近的內容。', createdAt=NOW()))
+                store.save(); return
+            group['summary'] = dict(text=summary[:6000], upTo=fold[-1]['id'], at=NOW()); group['compactFails'] = 0
+            at = next((i for i, m in enumerate(group['messages']) if m['id'] == fold[-1]['id']), None)
+            if at is not None and at + 1 < len(group['messages']): group['messages'][at + 1]['compacted'] = True  # the window draws a line here
+            store.save()
+
     def run_group(self, group_id, run_id, targets, broadcast, resume=None):
         store = self.store; turns = 0; spoke = False
+        self.compact_group(group_id, run_id)
         with store.lock:
             group = store.find('groups', group_id) or {'botIds': []}
             members = [b for b in (store.find('bots', x) for x in group['botIds']) if b]
