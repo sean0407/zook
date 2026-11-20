@@ -13,7 +13,8 @@ ABILITY_CHECKS = {
     'grok': dict(chat=[(_HELP, '--prompt-file'), (_HELP, '--output-format')], tools=[(_HELP, '--allow')], images=[(_HELP, '--prompt-file')], plan=[(_HELP, '--deny')],
                  effort=[(_HELP, '--reasoning-effort')], resume=[(_HELP, '--resume')]),
     'antigravity': dict(chat=[(_HELP, '--input-format'), (_HELP, '--output-format')], tools=[(_HELP, '--settings')], images=[(_HELP, '--settings')], plan=[(_HELP, '--mode')],
-                        effort=[(_HELP, '--effort')], resume=[(_HELP, '--conversation')], quota=[(_HELP, '--print')]),
+                        effort=[(_HELP, '--effort')], resume=[(_HELP, '--conversation')], quota=[(_HELP, '--print')],
+                        live=[(_HELP, '--input-format')]),
 }
 _ability_lock = threading.Lock()
 

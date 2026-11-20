@@ -489,6 +489,9 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
                 job = store.find('jobs', job_id)
                 if not job or job['status'] != 'running': return
                 if bot is None: bot = copy.deepcopy(store.find('bots', job['botId']))
+                added = list(job.get('addedText') or [])
+            # Messages the user added while an earlier attempt was answering: a new attempt is told them too.
+            if added: prompt += '\n\n使用者在回覆途中補充了以下訊息，請一併照做：\n' + '\n'.join('- ' + x for x in added)
             kind = provider_kind(provider)
             effort = job.get('effort') if ability_on(store, provider, 'effort') else 'standard'  # a CLI version without the option just uses its default
             if not kind: raise RuntimeError('找不到這個提供者，請到「各模型使用量」頁確認。')
@@ -673,6 +676,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
                 with store.lock: job['mayHaveActed'] = bool(native)
                 raise RuntimeError('回覆超過大小限制。')
             parsed = parse_cli_output(kind if kind in PLAN_KINDS else 'plain', output.decode('utf-8', errors='replace'), model)
+            parsed = live_answers(kept, parsed)
             if parsed['quota']: self.record_quota(provider, parsed['quota'], account['id'] if account else '')
             self.note_skipped(job, session)
             if resume and proc.returncode != 0 and session_lost((stderr or b'').decode('utf-8', 'replace')):
@@ -715,6 +719,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
                     self.remember_session(job, provider, model, account, cli_cwd, cli_session(kind, output.decode('utf-8', errors='replace')))
                     store.finish_message(job, content, 'completed')
                     if options: (find_message(store.find('bots', job['botId']), job['messageId']) or {})['options'] = options
+                    if isinstance(kept, LiveTurn) and kept.pending: (find_message(store.find('bots', job['botId']), job['messageId']) or {})['note'] = '回覆途中補充的訊息它沒有讀到，請再傳一次。'
                     store.save()
         except LiveLost:
             self.live_fails = self.__dict__.get('live_fails', 0) + 1
@@ -734,6 +739,8 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
                 self.expire_job(job_id); store.save()
             if session: session.close()
             with store.lock: busy = any(j['botId'] == bot['id'] and j['id'] != job_id and j['status'] == 'running' for j in store.data['jobs'])
+            kept_turn = locals().get('kept')
+            if isinstance(kept_turn, LiveTurn) and kept_turn.cli.kind == 'antigravity' and agy_touched(store.dir / 'workspaces' / bot['id']): kept_turn.cli.spoil('回覆中動到了 Antigravity 的設定資料夾')
             if provider_kind(provider) == 'antigravity' and not busy: shutil.rmtree(str(store.dir / 'workspaces' / bot['id'] / '.agents'), ignore_errors=True)
             mine = self.__dict__.get('grok_dirs', {}).pop(job_id, None)  # the .grok Zook put into the user's chosen folder for this reply
             if mine and (mine / '.zook-owned').is_file(): shutil.rmtree(str(mine), ignore_errors=True)
