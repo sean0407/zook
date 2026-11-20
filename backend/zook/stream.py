@@ -39,7 +39,7 @@ def job_view(job):
 
 def partial_feeder(kind, job_id):
     """feed(bytes) for a CLI's output as it arrives. Returns None for a CLI whose progress cannot be read."""
-    if kind not in ('claude', 'antigravity', 'grok', 'codex', 'opencode'): return None
+    if kind not in ('claude', 'antigravity', 'grok', 'codex', 'opencode', 'cursor'): return None
     pending, state = bytearray(), dict(text='', mark=None, fresh=False)
 
     def put(text):
@@ -71,6 +71,11 @@ def partial_feeder(kind, job_id):
             part = d.get('part') if isinstance(d.get('part'), dict) else {}
             if d.get('type') == 'step_start': state['fresh'] = True
             if d.get('type') == 'text': add(part.get('text'), mark=part.get('messageID'))
+        elif kind == 'cursor':  # small pieces carry timestamp_ms; the whole message follows without it; a tool call starts a new message
+            if d.get('type') == 'tool_call': state['fresh'] = True
+            message = d.get('message') if d.get('type') == 'assistant' and isinstance(d.get('message'), dict) else {}
+            if message and 'timestamp_ms' in d:
+                add(''.join(b.get('text', '') for b in message.get('content') or [] if isinstance(b, dict) and b.get('type') == 'text'))
         elif kind == 'codex':
             item = d.get('item') if d.get('type') == 'item.completed' and isinstance(d.get('item'), dict) else {}
             if item.get('type') == 'agent_message' and isinstance(item.get('text'), str): state['text'] = item['text']; put(state['text'])

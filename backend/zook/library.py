@@ -446,6 +446,12 @@ def model_list(provider):
             except (OSError, ValueError): pass
         return dict(provider=provider, models=models, source='cli' if models else 'none', status='available' if models else 'unavailable',
                     note='由 opencode models 取得。免費模型額度很少，用完約一天後恢復。' if models else '無法取得 OpenCode 模型清單，請確認已安裝。', detectedAt=NOW())
+    if s.get('kind') == 'cursor':
+        if binary:
+            try: models = cursor_models(binary, _active['dir'])
+            except (OSError, subprocess.SubprocessError): pass
+        return dict(provider=provider, models=models, source='cli' if models else 'none', status='available' if models else 'unavailable',
+                    note='由 cursor-agent models 取得，可用的模型依你的 Cursor 方案。' if models else '無法取得 Cursor 模型清單，請確認已登入。', detectedAt=NOW())
     if s.get('kind') == 'generic':
         models = [dict(id=m, name=m, source='config') for m in s.get('models', []) if clean_model(m)]
         note = '來自這個提供者的設定；也可以輸入自訂模型 ID。' if models else '沒有設定模型清單，請輸入模型 ID，或留空使用 CLI 預設。'

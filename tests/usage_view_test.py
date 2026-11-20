@@ -34,8 +34,9 @@ class UsageViewTest(unittest.TestCase):
         self.store.data['autoStatus'] = {'grok': dict(signedIn=True, billed=False), 'gemini': dict(signedIn=False, billed=False)}
         self.store.data['settings']['addedProviders'] = ['codex', 'claude', 'grok', 'antigravity', 'gemini']
         rings = {r['id']: r for r in self.m.usage_rings(self.store)}
-        self.assertEqual([r for r in rings if r != 'opencode'][:5], ['codex', 'claude', 'grok', 'antigravity', 'gemini'])  # every model, signed in or not, in the usage page's order
-        if 'opencode' in rings: self.assertEqual(list(rings).index('opencode'), list(rings).index('antigravity') + 1)  # listed only when it is installed on this Mac
+        self.assertEqual([r for r in rings if r not in ('opencode', 'cursor')][:5], ['codex', 'claude', 'grok', 'antigravity', 'gemini'])  # every model, signed in or not, in the usage page's order
+        order = ['codex', 'claude', 'grok', 'antigravity', 'opencode', 'cursor', 'gemini']
+        self.assertEqual(list(rings)[:len([r for r in order if r in rings])], [r for r in order if r in rings])  # OpenCode and Cursor are listed only when installed on this Mac
         self.assertEqual((rings['codex']['fiveHour'], rings['codex']['week'], rings['codex']['left']), (93, 15, 15)); self.assertEqual([w['left'] for w in rings['codex']['windows']], [93, 15])
         self.assertEqual((rings['claude']['fiveHour'], rings['claude']['week']), (100, None))  # that limit has reset since it was read
         self.assertEqual((rings['grok']['left'], rings['grok']['windows'], rings['grok']['known']), (None, [], True))  # signed in, no limit data

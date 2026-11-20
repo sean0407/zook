@@ -26,6 +26,7 @@ def cli_session(kind, text):
         elif kind == 'claude' and event.get('session_id'): found = event['session_id']
         elif kind == 'grok' and event.get('type') == 'end': found = event.get('sessionId') or found
         elif kind == 'opencode' and event.get('sessionID'): found = event['sessionID']
+        elif kind == 'cursor' and event.get('session_id'): found = event['session_id']
         elif kind == 'antigravity' and event.get('event') == 'result' and isinstance(event.get('result'), dict): found = event['result'].get('conversation_id') or found
     return str(found) if re.fullmatch(r'[A-Za-z0-9_.:-]{1,200}', str(found)) else ''
 
@@ -41,13 +42,17 @@ def session_lost(stderr):
 
 def cli_used_tools(kind, text):
     """Whether Grok or Antigravity started one of its built-in tools in this output."""
-    if kind not in ('grok', 'antigravity', 'opencode'): return False
+    if kind not in ('grok', 'antigravity', 'opencode', 'cursor'): return False
     for line in str(text or '').splitlines():
         if not line.lstrip().startswith('{'): continue
         try: event = json.loads(line)
         except ValueError: continue
         if not isinstance(event, dict): continue
         step = event.get('step_update') if isinstance(event.get('step_update'), dict) else {}
+        if kind == 'cursor':
+            call = event.get('tool_call') if event.get('type') == 'tool_call' and isinstance(event.get('tool_call'), dict) else {}
+            if call and not any(k in call for k in ('mcpToolCall', 'getMcpToolsToolCall')): return True
+            continue
         if event.get('type') == 'tool_call' or step.get('step_type') == 'tool': return True
         part = event.get('part') if isinstance(event.get('part'), dict) else {}
         if kind == 'opencode' and (event.get('type') in ('tool_use', 'tool') or part.get('type') == 'tool') and not str(part.get('tool') or '').startswith('zook_'): return True

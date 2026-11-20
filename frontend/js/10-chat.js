@@ -427,7 +427,7 @@
       const versionLine = !p.installed ? '' : `<div class="version-line">${v?.current ? `<span>版本 ${esc(v.current)}</span>` : '<span>版本未知</span>'}${v?.updateAvailable ? `<span class="pill warn">有新版 ${esc(v.latest)}</span>` : upToDate ? '<span class="pill ok">已是最新版</span>' : v?.error ? `<span class="muted">${esc(v.error)}</span>` : ''}</div>`;
       const installLabel = !p.installed ? '一鍵安裝' : v?.updateAvailable ? `更新到 ${esc(v.latest)}` : p.canUpdate ? '檢查並更新' : '重新安裝';
       const installBtn = p.canInstall && (!p.requires || p.requirementMet || p.installed) && !(upToDate && p.installed) ? `<button class="${!p.installed || v?.updateAvailable ? 'primary' : 'secondary'}" data-action="provider-install" data-id="${esc(p.id)}" data-command="${esc(p.installed && p.canUpdate ? '' : p.installCommand)}">${installLabel}</button>` : '';
-      const notes = [!p.tools ? '這個 CLI 只能純對話，不能使用 Zook 的工具。' : '', p.installed && !p.loginMethods.length && p.loginNote ? p.loginNote : ''].filter(Boolean);
+      const notes = [!p.chat ? '還不能在 Zook 回覆。' : !p.tools ? '這個 CLI 只能純對話，不能使用 Zook 的工具。' : '', p.installed && !p.loginMethods.length && p.loginNote ? p.loginNote : ''].filter(Boolean);
       const shortName = p.name.split('（')[0], parts = p.installed ? usageParts(quotaFor(p.id)) : {body: '<p class="quota-empty">安裝後就能登入和查看用量。</p>', zook: '<div class="zook-usage empty"></div>', when: ''};
       const chips = [p.plan && p.plan.toUpperCase(), p.workspace, p.method !== sub ? p.method : ''].filter(Boolean);
       const addAccount = p.installed && (p.canAddLogin || p.canAddKey) ? `<button class="secondary" data-action="profile-add" data-id="${esc(p.id)}">＋ 新增帳號</button>` : '';

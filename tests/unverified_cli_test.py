@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Cursor, GitHub Copilot and Kimi: installed and signed in to from Zook, but not yet verified for replies, so no Bot can use them."""
+"""GitHub Copilot and Kimi: installed and signed in to from Zook, but not yet verified for replies, so no Bot can use them."""
 import http.client, json, os, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 
@@ -29,12 +29,12 @@ class UnverifiedCliTest(unittest.TestCase):
     def test_shown_for_install_and_sign_in_only(self):
         picker = {p['id']: p for p in self.req('GET', '/api/providers')[1]['providers']}
         found = {p['id']: p for p in self.req('GET', '/api/accounts')[1]['providers']}
-        for pid in ('cursor', 'copilot', 'kimi'):
+        for pid in ('copilot', 'kimi'):
             p = found[pid]
             self.assertTrue(picker[pid]['installed']); self.assertFalse(picker[pid]['chat']); self.assertFalse(p['chat']); self.assertTrue(p['terminalLogin'])
             self.assertEqual(p['status'], 'installed')  # whether it is signed in is not claimed
-            self.assertIn('還沒驗證', p['loginNote'])
-        self.assertIn('agent', found['cursor']['loginNote'])  # its installer takes over the agent command
+            self.assertIn('還沒驗證', p['loginNote']); self.assertEqual(p['abilities'], [])  # no 對話 tick for a CLI that cannot reply
+        self.assertTrue(picker['cursor']['chat']); self.assertIn('agent', found['cursor']['loginNote'])  # its installer takes over the agent command
         self.assertTrue(picker['codex']['chat'])
 
     def test_one_zook_installed_in_its_own_tools_folder_is_shown(self):

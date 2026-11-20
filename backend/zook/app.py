@@ -506,16 +506,17 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
             selected = kind in PLAN_KINDS  # Zook tools need MCP support in the CLI; other CLIs run as plain chat.
             workspace = store.dir / 'workspaces' / bot['id']; workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
             # The access scope applies to every CLI. Grok and plain CLIs cannot ask before each action, so with 主動性 謹慎 they stay in the workspace.
-            scope, root = bot_access(bot, workspace) if native or kind in ('codex', 'claude') else ('workspace', workspace)
+            scope, root = bot_access(bot, workspace) if native or kind in ('codex', 'claude') or (kind == 'cursor' and planning) else ('workspace', workspace)
             # Grok reads Zook's tool settings from the folder it starts in, and its sandbox keeps it inside that folder. So for a chosen
             # folder it starts there (Zook's settings go into a .grok folder that is removed afterwards); otherwise in the workspace.
-            cli_cwd = root if kind == 'grok' and scope == 'folder' else workspace if kind in ('grok', 'antigravity') else root
+            cli_cwd = root if kind == 'grok' and scope == 'folder' else workspace if kind in ('grok', 'antigravity', 'cursor') else root
             account = find_account(bot.get('account'), provider)  # an extra account only applies to the provider it belongs to
             env = provider_env(provider, account)
             features = active_features(bot, kind, native, planning, scope)
             with store.lock: job.update(features=features, nativeAccess=[scope, str(root), permission_mode(store, bot), bool(native)])
             resume = self.native_session(job, provider, model, account, cli_cwd)
             if resume and kind == 'opencode' and not opencode_has_session(store.dir, binary, resume, env): resume = None  # it would start an empty one under that id
+            if resume and kind == 'cursor' and not cursor_has_session(store.dir, resume): resume = None  # the same with Cursor
             keep_session = bool(job.get('chatId')) and kind in PLAN_KINDS
             with store.lock: job['resumed'] = bool(resume)
             if resume: prompt = self.__dict__.get('short_prompts', {}).get(job_id, prompt)
@@ -551,7 +552,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
                 if not planning and not resume: prompt += '\n記憶：使用者告訴你值得長期記住的偏好、事實或決定時，用 zook_remember 記下（scope=bot 只給你自己，scope=shared 給所有 Bot）。不要記錄密碼、金鑰或一次性的內容。'
                 if choices_for(store, job): prompt += ASK_NOTE
                 if kind == 'grok': prompt += '\nZook 工具在這裡的完整名稱是 zook__ 加上工具名，例如 zook__zook_create_schedule。'
-                if native: prompt += '\n工具說明：' + access_note(scope, root, kind in ('codex', 'antigravity', 'opencode'), kind == 'grok') + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。'
+                if native: prompt += '\n工具說明：' + access_note(scope, root, kind in ('codex', 'antigravity', 'opencode') or (kind == 'cursor' and scope == 'full'), kind == 'grok') + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。'
                 else: prompt += '\n工具說明：檔案讀寫與其他動作請使用 zook 工具。zook 工具會依使用者設定的主動性決定是否先請使用者核准，與本機 CLI 沙箱是否唯讀無關；需要時直接呼叫，被拒絕再說明即可。'
             if not selected and scope != 'workspace': prompt += '\n工具說明：' + access_note(scope, root, True)
             if choices_for(store, job): prompt += CHOICE_NOTE
@@ -604,6 +605,11 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
                 if not (native and scope == 'full'): prompt += '\n不要讀取工作資料夾以外的檔案，也不要使用你內建的記憶或知識資料夾；這類動作會被擋下。要記住事情就直接回覆，或使用 zook 工具。'
                 args = antigravity_args(binary, model, effort, native, planning, scope, root, web) + (['--conversation', resume] if resume else [])
                 prompt = json.dumps({'event': 'user', 'message': {'content': prompt}}, ensure_ascii=False) + '\n'
+            elif kind == 'cursor':
+                prepare_cursor_folder(workspace, adapter, selected)
+                if scope != 'workspace': prompt += '\n你目前在 Bot 的工作資料夾，要處理的檔案在 %s，請用完整路徑。' % root
+                args = cursor_args(binary, model, planning, scope, root, web, streaming, resume)
+                env = cursor_env(store.dir, env, cursor_rule(native, planning, scope, root, workspace, features), web)
             elif kind == 'opencode':
                 attached = workspace / 'attachments' if job.get('attachments') or job.get('groupFiles') else None
                 args, extra = opencode_args(binary, model, native, planning, scope, root, web, selected, features, adapter, wait if selected else 60, resume, attached)
@@ -701,6 +707,9 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
                 said = (stderr or b'').decode('utf-8', errors='replace')
                 reported = parsed['error'] + '\n' + said[-6000:] + ('' if kind in PLAN_KINDS else '\n' + output.decode('utf-8', errors='replace')[-3000:])
                 if kind == 'antigravity' and antigravity_error(parsed['error'], said): raise RuntimeError(antigravity_error(parsed['error'], said))
+                if kind == 'cursor' and cursor_error(parsed['error'] + '\n' + said[-3000:]):
+                    with store.lock: job['errorKind'] = 'quota' if '額度' in cursor_error(parsed['error'] + '\n' + said[-3000:]) else 'auth'
+                    raise RuntimeError(cursor_error(parsed['error'] + '\n' + said[-3000:]))
                 if kind == 'opencode' and opencode_error(parsed['error']):
                     with store.lock: job['errorKind'] = 'quota' if 'free-limit' in parsed['error'] else 'auth'
                     raise RuntimeError(opencode_error(parsed['error']))

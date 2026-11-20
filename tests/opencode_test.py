@@ -106,7 +106,7 @@ class OpenCodeTest(unittest.TestCase):
         self.assertIn('第一則', third['prompt'])  # started over with the conversation so far, not just the last message
 
     def test_permissions_follow_the_bot(self):
-        self.req('PATCH', '/api/bots/' + self.bot['id'], {'permissionMode': 'careful'})
+        self.req('PATCH', '/api/bots/' + self.bot['id'], {'permissionMode': 'manual'})
         self.ask('謹慎')
         rules = {(r['action'], r['effect']) for r in self.runs()[-1]['config']['permissions']}
         self.assertIn(('zook_*', 'allow'), rules); self.assertNotIn(('edit', 'allow'), rules); self.assertNotIn(('shell', 'allow'), rules)
@@ -120,7 +120,7 @@ class OpenCodeTest(unittest.TestCase):
         self.assertIn(('shell', 'allow'), rules); self.assertIn(('external_directory', 'allow'), rules)
 
     def test_zook_tools_with_approval(self):
-        self.req('PATCH', '/api/bots/' + self.bot['id'], {'permissionMode': 'careful'})
+        self.req('PATCH', '/api/bots/' + self.bot['id'], {'permissionMode': 'manual'})
         job = self.ask('TOOL 記住我喜歡藍色', approve=False)
         self.assertEqual(job['status'], 'completed')
         self.assertTrue(any(a['status'] == 'denied' for a in job['approvals']), (job.get('content'), job.get('approvals'), job.get('toolCalls')))  # Zook asked first; the user said no

@@ -6,7 +6,7 @@ Built-in entries come from each vendor's own install script and CLI help:
 - Grok Build:  https://x.ai/cli/install.sh, `grok update`, `grok login`, `grok models`
 - Antigravity: https://antigravity.google/cli/install.sh, `agy update`, `agy -p`, `agy models`
 - OpenCode:    npm package @opencode/cli, `opencode run --format json`, `opencode models` (Zook installs its own Node.js for it)
-- Cursor:      https://cursor.com/install (binary agent / cursor-agent); Copilot: npm @github/copilot; Kimi Code: npm @moonshot-ai/kimi-code
+- Cursor:      https://cursor.com/install (binary agent / cursor-agent), `cursor-agent -p --output-format stream-json`, `cursor-agent models`; Copilot: npm @github/copilot; Kimi Code: npm @moonshot-ai/kimi-code
 - Gemini CLI:  npm package @google/gemini-cli (Zook installs its own Node.js for it; see cli_installer.py)
 
 Custom providers are any other CLI the user configures: a command, its arguments with
@@ -39,16 +39,16 @@ CATALOG = {
                      install='Zook 會從 https://nodejs.org 下載 Node.js，再安裝 @opencode/cli', npm_package='@opencode/cli',
                      latest_url='https://registry.npmjs.org/@opencode/cli/latest', docs='https://opencode.ai/docs',
                      login_note='免費模型不用登入，但額度很少，用完約一天後恢復。未驗證：工具呼叫與權限限制還沒用真實模型實測。'),
-    # Installed and signed in to from Zook, but not yet tried for replies (nobody here has signed in to them): a Bot cannot use them yet.
-    'cursor': dict(name='Cursor', vendor='Cursor', binary='cursor-agent', kind='unverified', tools=False, extra_paths=['~/.local/bin/cursor-agent'],
-                   install='curl https://cursor.com/install -fsS | bash', terminal_login=True, terminal_args=['login'], docs='https://cursor.com/docs/cli',
-                   login_note='還沒驗證能不能在 Zook 回覆，目前只能安裝和登入；登入後告訴 Claude，就能接著實測。安裝時，Cursor 會把終端機的 agent 指令改成它自己的（原本指向 Grok 的 agent 會被取代；Zook 用 grok 指令，不受影響）。'),
+    'cursor': dict(name='Cursor', vendor='Cursor', binary='cursor-agent', kind='cursor', tools=True, extra_paths=['~/.local/bin/cursor-agent'],
+                   install='curl https://cursor.com/install -fsS | bash', update=['update'], logout=['logout'], terminal_login=True, terminal_args=['login'], docs='https://cursor.com/docs/cli',
+                   login_note='免費（Hobby）和付費方案都能用，額度依 Cursor 帳號。安裝時，Cursor 會把終端機的 agent 指令改成它自己的（Zook 用 grok 指令，不受影響）。'),
+    # Installed and signed in to from Zook, but not yet tried for replies: no account here could answer yet, so no Bot can use them.
     'copilot': dict(name='GitHub Copilot', vendor='GitHub', binary='copilot', kind='unverified', tools=False, npm_package='@github/copilot', terminal_login=True,
                     install='Zook 會從 https://nodejs.org 下載 Node.js，再安裝 @github/copilot', latest_url='https://registry.npmjs.org/@github/copilot/latest',
-                    docs='https://docs.github.com/copilot/how-tos/copilot-cli', login_note='還沒驗證能不能在 Zook 回覆，目前只能安裝和登入；登入後告訴 Claude，就能接著實測。登入：在打開的終端機輸入 /login。GitHub 免費帳號（Copilot Free）也能登入。'),
+                    docs='https://docs.github.com/copilot/how-tos/copilot-cli', login_note='還沒驗證能不能在 Zook 回覆，目前只能安裝和登入。登入：在打開的終端機輸入 /login。如果顯示「Access denied by policy」，要先到 github.com/settings/copilot 開啟 Copilot CLI；帳號屬於組織時，要由組織管理員開啟。'),
     'kimi': dict(name='Kimi（Moonshot）', vendor='Moonshot AI', binary='kimi', kind='unverified', tools=False, npm_package='@moonshot-ai/kimi-code', terminal_login=True,
                  install='Zook 會從 https://nodejs.org 下載 Node.js，再安裝 @moonshot-ai/kimi-code', latest_url='https://registry.npmjs.org/@moonshot-ai/kimi-code/latest',
-                 docs='https://github.com/MoonshotAI/kimi-code', login_note='還沒驗證能不能在 Zook 回覆，目前只能安裝和登入；登入後告訴 Claude，就能接著實測。登入：在打開的終端機輸入 /login。'),
+                 docs='https://github.com/MoonshotAI/kimi-code', login_note='還沒驗證能不能在 Zook 回覆，目前只能安裝和登入。登入：在打開的終端機輸入 /login。Kimi CLI 需要 Kimi Code 付費方案，免費帳號不能回覆；想免費用 Kimi 模型，可以在 OpenCode 新增 OpenRouter 金鑰，再選 Kimi 的免費模型。'),
     'gemini': dict(name='Gemini（Google）', vendor='Google', binary='gemini', kind='generic', tools=False,
                    install='Zook 會從 https://nodejs.org 下載 Node.js，再安裝 @google/gemini-cli', npm_package='@google/gemini-cli', terminal_login=True,
                    signed_in_file='~/.gemini/oauth_creds.json', run_env={'GEMINI_CLI_TRUST_WORKSPACE': 'true'}, args='-p {prompt}', model_args='-m {model}', full_args='--yolo',

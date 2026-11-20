@@ -14,6 +14,8 @@ ABILITY_CHECKS = {
                  effort=[(_HELP, '--reasoning-effort')], resume=[(_HELP, '--resume')]),
     'opencode': dict(chat=[(('run', '--help'), '--format'), (('run', '--help'), '--standalone')], tools=[(_HELP, 'mcp')], images=[(('run', '--help'), '--file')],
                      plan=[(('run', '--help'), '--format')], resume=[(('run', '--help'), '--session'), (('session', '--help'), 'export')]),
+    'cursor': dict(chat=[(_HELP, '--print'), (_HELP, '--output-format')], tools=[(_HELP, '--approve-mcps'), (_HELP, '--force')], plan=[(_HELP, '--mode')],
+                   resume=[(_HELP, '--resume')]),
     'antigravity': dict(chat=[(_HELP, '--input-format'), (_HELP, '--output-format')], tools=[(_HELP, '--settings')], images=[(_HELP, '--settings')], plan=[(_HELP, '--mode')],
                         effort=[(_HELP, '--effort')], resume=[(_HELP, '--conversation')], quota=[(_HELP, '--print')],
                         live=[(_HELP, '--input-format')]),
@@ -68,6 +70,7 @@ def ability_view(store, provider):
     kind = provider_kind(provider); offered = ABILITY_CHECKS.get(kind)
     report = ability_report(store, provider) if offered else None
     missing = (report or {}).get('missing') or {}
+    if kind == 'unverified': return dict(abilities=[], changed=[])  # cannot reply in Zook yet
     if not offered: return dict(abilities=[dict(id='chat', name='對話', state='on')], changed=[])
     items = [dict(id=key, name=name, state='broken' if key in missing else 'on') for key, name in ABILITIES if key in offered]
     return dict(abilities=items, changed=[name for key, name in ABILITIES if key in missing])
@@ -75,7 +78,7 @@ def ability_view(store, provider):
 
 # Special features a Bot can turn on. Each was tried on the real CLI: browser control is not offered because none could complete it,
 # and Antigravity's image generation often ended in a capacity error before it could reply.
-FEATURES = dict(multi=('codex', 'claude', 'grok'), image=('codex', 'grok'))
+FEATURES = dict(multi=('codex', 'claude', 'grok', 'cursor'), image=('codex', 'grok'))
 FEATURE_NAMES = dict(multi='多代理協作', image='圖片生成')
 FEATURE_NEEDS_WHOLE_MAC = dict(image=('grok',))  # these only finish the job with full access
 
@@ -108,7 +111,7 @@ def feature_events(kind, text, features, folder, started):
             except ValueError: continue
             item = event.get('item') if isinstance(event.get('item'), dict) else {}
             blocks = (event.get('message') or {}).get('content') if isinstance(event.get('message'), dict) else None
-            if item.get('type') == 'collab_tool_call' or event.get('toolName') == 'spawn_subagent' or any(isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') in ('Agent', 'Task') for b in blocks or []):
+            if item.get('type') == 'collab_tool_call' or event.get('toolName') == 'spawn_subagent' or (event.get('type') == 'tool_call' and isinstance(event.get('tool_call'), dict) and 'taskToolCall' in event['tool_call']) or any(isinstance(b, dict) and b.get('type') == 'tool_use' and b.get('name') in ('Agent', 'Task') for b in blocks or []):
                 used.append('multi'); break
     if 'image' in features:
         try:

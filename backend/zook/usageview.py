@@ -1,6 +1,6 @@
 # What is left of each model's limits, in the form the sidebar rings and the bars on the usage page show it.
 # Loaded by backend/server.py into one shared namespace.
-RING_ORDER = ('codex', 'claude', 'grok', 'antigravity', 'opencode', 'gemini')
+RING_ORDER = ('codex', 'claude', 'grok', 'antigravity', 'opencode', 'cursor', 'gemini')
 
 
 def _left(window, snap, now):

@@ -96,6 +96,40 @@ def parse_cli_output(provider, text, model=''):
             out['usage'] = dict(input=total(lambda t: t.get('input')) + read + write, cachedInput=read, cacheWrite=write, output=total(lambda t: t.get('output')) + total(lambda t: t.get('reasoning')),
                                 model=model or '預設模型', costUsd=round(sum(costs), 6) if costs else None)
         return out
+    if provider == 'cursor':
+        # cursor-agent -p --output-format stream-json: assistant messages, tool_call started/completed, one result with usage.
+        # Pieces streamed with --stream-partial-output carry timestamp_ms and are followed by the whole message without it.
+        chunks, partial, end = [], [], None
+        for o in objs:
+            kind = o.get('type')
+            if kind == 'assistant' and isinstance(o.get('message'), dict):
+                words = ''.join(b.get('text', '') for b in o['message'].get('content') or [] if isinstance(b, dict) and b.get('type') == 'text' and isinstance(b.get('text'), str))
+                (partial if 'timestamp_ms' in o else chunks).append(words)
+            elif kind == 'tool_call' and o.get('subtype') == 'started':
+                chunks, partial = [], []  # only what it says after its last action is the reply
+                call = o.get('tool_call') if isinstance(o.get('tool_call'), dict) else {}
+                name = next(iter(call), ''); raw = (call.get(name) or {}).get('args') if isinstance(call.get(name), dict) else {}
+                raw = raw if isinstance(raw, dict) else {}
+                if name in ('editToolCall', 'writeToolCall', 'deleteToolCall'): out['web'].append(native_action('write', raw.get('path') or raw.get('file_path') or ''))
+                elif name == 'shellToolCall': out['web'].append(native_action('command', raw.get('command') or ''))
+                elif name == 'webFetchToolCall': out['web'].append(dict(name='web_fetch', arguments={'url': str(raw.get('url') or '')[:300]}))
+                elif name == 'webSearchToolCall': out['web'].append(dict(name='web_search', arguments={'query': str(raw.get('searchTerm') or '')[:200]}))
+            elif kind == 'result': end = o
+        if end is None and not chunks and not partial:
+            out['unparsable'] = True; return out
+        out['content'] = ''.join(chunks or partial).strip()
+        if end is not None:
+            if end.get('is_error') or end.get('subtype') not in (None, 'success'):
+                out['isError'] = True; out['error'] = str(end.get('error') or end.get('result') or end.get('subtype') or '')[:2000]
+            if not out['content'] and not out['isError'] and not any(o.get('type') == 'tool_call' for o in objs): out['content'] = str(end.get('result') or '').strip()
+            u = end.get('usage') if isinstance(end.get('usage'), dict) else None
+            if u:
+                read, write = _int(u.get('cacheReadTokens')), _int(u.get('cacheWriteTokens'))
+                out['usage'] = dict(input=_int(u.get('inputTokens')) + read + write, cachedInput=read, cacheWrite=write, output=_int(u.get('outputTokens')),
+                                    model='cursor/' + (model or 'auto'), costUsd=None)
+        else:
+            out['isError'] = True; out['error'] = '回覆沒有完成。'
+        return out
     if provider == 'grok':
         # grok --output-format json: {text, usage{input_tokens, cache_read_input_tokens, ...}, total_cost_usd, modelUsage}
         end = next((o for o in reversed(objs) if o.get('type') == 'end'), None)
