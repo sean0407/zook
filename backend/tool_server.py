@@ -7,6 +7,7 @@ import urllib.error
 import urllib.request
 
 MAX_LINE = 1024 * 1024
+MAX_RESPONSE = 3 * 1024 * 1024  # the runtime sends up to 2 MiB (a screenshot), plus the JSON around it
 BASE = os.environ.get('ZOOK_WORKER_URL', '')
 TOKEN = os.environ.get('ZOOK_WORKER_TOKEN', '')
 try: WAIT = max(30, int(os.environ.get('ZOOK_TOOL_WAIT') or 660))  # a tool call may wait for the user's approval
@@ -18,7 +19,7 @@ def forward(method, params):
                                  headers={'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json'})
     try:
         with urllib.request.urlopen(req, timeout=WAIT) as response:
-            return json.loads(response.read(MAX_LINE))
+            return json.loads(response.read(MAX_RESPONSE))
     except (urllib.error.URLError, ValueError, OSError):
         raise RuntimeError('Zook 工具連線已中斷，請重新執行工作。')
 

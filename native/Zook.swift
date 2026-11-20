@@ -151,7 +151,7 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
     @objc private func showAbout() {
         let alert = NSAlert()
         alert.messageText = "Zook"
-        alert.informativeText = "0.16.1\n你的本機 AI 工作空間\nBot 對話・知識庫・用量與工具管理"
+        alert.informativeText = "0.16.2\n你的本機 AI 工作空間\nBot 對話・知識庫・用量與工具管理"
         alert.runModal()
     }
 
@@ -339,6 +339,7 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
     }
 }
 
+if CommandLine.arguments.dropFirst().first == "--zook-browser" { runBrowserHelper() }  // a Bot's read-only browser, started by the backend
 let app = NSApplication.shared
 let delegate = ZookApp()
 app.delegate = delegate

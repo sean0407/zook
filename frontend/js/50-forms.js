@@ -161,6 +161,11 @@
       catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
       return;
     }
+    if (e.target.dataset.browserAutomation !== undefined) {
+      try { state.data.settings = await post('settings', {browserAutomation: e.target.checked}, 'PATCH'); render(true); toast(e.target.checked ? '排程與觸發也能用內建瀏覽器' : '只有你送出的訊息能用內建瀏覽器'); }
+      catch (error) { toast(error.message); render(true); }
+      return;
+    }
     if (e.target.dataset.webSearch !== undefined) {
       try { state.data.settings = await post('settings', {webSearch: e.target.checked}, 'PATCH'); render(true); toast(e.target.checked ? '所有 Bot 已可上網搜尋' : '已關閉上網搜尋'); }
       catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
@@ -282,7 +287,7 @@
           section: d.get('section'),
           pinned: d.has('pinned'),
           scripts: d.has('scripts'),
-          fallbacks: d.get('fallbackChoice') === '__none' ? [] : !d.get('fallbackChoice') || d.get('fallbackChoice') === '__default' ? null : [d.get('fallbackChoice')], permissionMode: d.get('permissionMode') || '', effort: d.get('effort') || '', features: Object.fromEntries([['multi', d.get('featureMulti')], ['image', d.get('featureImage')]].filter(x => x[1]).map(x => [x[0], x[1] === 'on'])),
+          fallbacks: d.get('fallbackChoice') === '__none' ? [] : !d.get('fallbackChoice') || d.get('fallbackChoice') === '__default' ? null : [d.get('fallbackChoice')], permissionMode: d.get('permissionMode') || '', effort: d.get('effort') || '', features: Object.fromEntries([['multi', d.get('featureMulti')], ['image', d.get('featureImage')], ['browser', d.get('featureBrowser')]].filter(x => x[1]).map(x => [x[0], x[1] === 'on'])),
           account: d.get('account') || '',
           access: d.get('access') || '', accessFolder: d.get('access') === 'folder' ? d.get('accessFolder') || '' : ''
         };

@@ -625,6 +625,7 @@ class RuntimeSession:
         if name == 'zook_workspace_write': return 'internal'
         if name in self.extras:
             need = self.extras[name][2]
+            if callable(need): need = need(args)  # depends on the arguments (a web address that carries data)
             return 'danger' if need == 'always' else 'internal' if need else 'read'
         return 'read'
 
@@ -716,7 +717,9 @@ class RuntimeSession:
                 ident, original = self.routes[name]
                 result = self.clients[ident].request('tools/call', {'name': original, 'arguments': frozen})
             elif name in self.extras:
-                result = _content(self.extras[name][1](copy.deepcopy(frozen)))
+                value = self.extras[name][1](copy.deepcopy(frozen))
+                # A tool that returns MCP content of its own (a screenshot is an image) marks it, and it is passed on as it is.
+                result = {'content': value['content']} if isinstance(value, dict) and value.get('__zook_raw_result__') is True else _content(value)
             elif name == 'zook_read_skill':
                 instructions = self._read(Path(self.skills[source]['path']))
                 if source.startswith('skill-shared:') or self.skills[source].get('shared'):  # the shared library's rules travel with its Skills
@@ -762,8 +765,12 @@ class RuntimeSession:
                 raise RuntimeError('Tool is unavailable.')
             if len(json.dumps(result).encode()) > MAX_MESSAGE:
                 raise RuntimeError('Tool result exceeds 2 MiB. Ask the tool for fewer results.')
+            # Zook's own screenshot is passed on whole: the text limit would cut it short (it is checked against the 2 MiB limit above).
+            images = {i: c for i, c in enumerate(result.get('content') or []) if name == 'zook_browser_screenshot' and isinstance(c, dict) and c.get('type') == 'image' and isinstance(c.get('data'), str)}
             result = self.redactor.value(result)
+            for i, image in images.items(): result['content'][i] = dict(self.redactor.value({k: v for k, v in image.items() if k != 'data'}), data=image['data'])
             summary = ' '.join(c.get('text', '') for c in result.get('content', []) if isinstance(c, dict) and c.get('type') == 'text')[:1000]
+            if name.startswith('zook_browser_') and not result.get('isError'): summary = ''  # what a page said is not kept in the activity record
             self._event(call_id, name, source, 'error' if result.get('isError') else 'completed', frozen,
                         resultSummary=summary, **({'error': summary} if result.get('isError') else {}))
             return result

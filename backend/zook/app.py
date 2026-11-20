@@ -363,6 +363,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
                     event = self.approval_events.get(approval['id'])
                     if event: event.set()
             expire_questions(self, job)
+        browser_close(self, job_id)  # the reply's browser and everything it saw go with it
         worker = self.workers.pop(job_id, None)
         return worker
 
@@ -393,7 +394,11 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
                                                             sourceLabel=call.get('sourceLabel', source), arguments=copy.deepcopy(call.get('arguments', {})), status='denied', plan=True))
                 self.store.save(); return False
             approval = dict(id=approval_id, toolCallId=call_id, name=name, category=call.get('category', ''), label=call.get('label', name), sourceLabel=call.get('sourceLabel', source), arguments=copy.deepcopy(call.get('arguments', {})), status='pending')
-            if name in SCHEDULE_TOOLS:
+            if name.startswith('zook_browser_'):  # what goes to which site, exactly; refused when the card could not show it
+                approval['text'], askable = browser_approval(self, job_id, name, arguments, approval['arguments'])
+                if not askable:
+                    approval.update(status='denied', **({'text': approval['text']} if approval['text'] else {})); job.setdefault('approvals', []).append(approval); self.store.save(); return False
+            elif name in SCHEDULE_TOOLS:
                 approval['text'] = describe_schedule_call(self.store, self.store.find('bots', job['botId']) or {'id': job['botId']}, job.get('groupId'), name, approval['arguments'])
             elif describe_send(approval['label'], approval['arguments']) or describe_write(approval['label'], approval['arguments']):
                 approval['text'] = describe_send(approval['label'], approval['arguments']) or describe_write(approval['label'], approval['arguments'])
@@ -525,7 +530,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
                 with store.lock: skill_ids = shared_skill_ids(store, inventory); mcp_ids = shared_mcp_ids(store, inventory)
                 session = runtime.RuntimeSession(skill_ids, mcp_ids, bot['allowCommands'], root if scope == 'folder' else workspace,
                     lambda *a: self.approve(job_id, *a), lambda event: self.record_event(job_id, event), inventory=inventory,
-                    extra_tools=(plan_safe if planning else list)(self.app_tools(bot, runtime, job.get('groupId'), job.get('origin') or 'user') + ([] if job.get('groupId') or job.get('internal') else question_tools(self, job_id, runtime, job.get('origin') or 'user'))), permission_mode=lambda bot_id=bot['id']: self.live_permission(bot_id, job_id))
+                    extra_tools=(plan_safe if planning else list)(self.app_tools(bot, runtime, job.get('groupId'), job.get('origin') or 'user') + ([] if job.get('groupId') or job.get('internal') else question_tools(self, job_id, runtime, job.get('origin') or 'user')) + browser_tools(self, job_id, bot, kind, job.get('origin') or 'user', runtime)), permission_mode=lambda bot_id=bot['id']: self.live_permission(bot_id, job_id))
                 token = secrets.token_urlsafe(32)
                 with store.lock:
                     job = store.find('jobs', job_id)
@@ -551,6 +556,7 @@ class App(GroupRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTT
                 if not planning and not resume: prompt += schedule_instructions()
                 if not planning and not resume: prompt += '\n記憶：使用者告訴你值得長期記住的偏好、事實或決定時，用 zook_remember 記下（scope=bot 只給你自己，scope=shared 給所有 Bot）。不要記錄密碼、金鑰或一次性的內容。'
                 if choices_for(store, job): prompt += ASK_NOTE
+                if 'zook_browser_open' in [t.get('name') for t in tools]: prompt += BROWSER_PROMPT
                 if kind == 'grok': prompt += '\nZook 工具在這裡的完整名稱是 zook__ 加上工具名，例如 zook__zook_create_schedule。'
                 if native: prompt += '\n工具說明：' + access_note(scope, root, kind in ('codex', 'antigravity', 'opencode') or (kind == 'cursor' and scope == 'full'), kind == 'grok') + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。'
                 else: prompt += '\n工具說明：檔案讀寫與其他動作請使用 zook 工具。zook 工具會依使用者設定的主動性決定是否先請使用者核准，與本機 CLI 沙箱是否唯讀無關；需要時直接呼叫，被拒絕再說明即可。'

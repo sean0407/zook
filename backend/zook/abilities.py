@@ -76,10 +76,11 @@ def ability_view(store, provider):
     return dict(abilities=items, changed=[name for key, name in ABILITIES if key in missing])
 
 
-# Special features a Bot can turn on. Each was tried on the real CLI: browser control is not offered because none could complete it,
+# Special features a Bot can turn on. Each was tried on the real CLI: a CLI's own browser control is not offered because none could complete it
+# (Zook's built-in browser, browser.py, works through Zook tools instead),
 # and Antigravity's image generation often ended in a capacity error before it could reply.
-FEATURES = dict(multi=('codex', 'claude', 'grok', 'cursor'), image=('codex', 'grok'))
-FEATURE_NAMES = dict(multi='多代理協作', image='圖片生成')
+FEATURES = dict(multi=('codex', 'claude', 'grok', 'cursor'), image=('codex', 'grok'), browser=PLAN_KINDS)  # browser: Zook's own, through Zook tools (browser.py)
+FEATURE_NAMES = dict(multi='多代理協作', image='圖片生成', browser='內建瀏覽器')
 FEATURE_NEEDS_WHOLE_MAC = dict(image=('grok',))  # these only finish the job with full access
 
 
@@ -92,7 +93,7 @@ def active_features(bot, kind, native, planning, scope):
     defaults = (_active['data'].get('settings') or {}).get('features') or {}
     chosen = dict(defaults, **(bot.get('features') if isinstance(bot.get('features'), dict) else {}))  # the Bot's own choice wins over the default in 設定
     if not native or planning: return []
-    return [name for name in feature_support(kind) if chosen.get(name) is True and (kind not in FEATURE_NEEDS_WHOLE_MAC.get(name, ()) or scope == 'full')]
+    return [name for name in feature_support(kind) if name != 'browser' and chosen.get(name) is True and (kind not in FEATURE_NEEDS_WHOLE_MAC.get(name, ()) or scope == 'full')]
 
 
 def feature_note(features, kind):

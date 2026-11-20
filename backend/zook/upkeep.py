@@ -91,6 +91,7 @@ def backup_restore(app, name):
     try:
         data.update(keep)
         if keep_remote is not None: data['settings']['remote'] = keep_remote
+        browser_keep_local(store.data, data)  # a copy never turns the browser on
         with store.path.open('w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False)
         Store.keep_aside = True  # the conversations that are there now stay in chats.old until the copy is known to be in place
         try: fresh = Store(store.dir, recover=False)  # runs the same upgrades an old data file gets at startup
@@ -176,7 +177,7 @@ def activity_list(store, kind=''):
     return dict(items=out, kinds=[dict(id=k, name=v) for k, v in ACTIVITY_KINDS.items()])
 
 
-SETTING_NAMES = {'permissionMode': '主動性', 'webSearch': '上網搜尋', 'provider': '預設提供者', 'model': '預設模型', 'fallbacks': '備用模型', 'access': '存取範圍', 'accessFolder': '存取範圍',
+SETTING_NAMES = {'permissionMode': '主動性', 'webSearch': '上網搜尋', 'browserAutomation': '排程與觸發可用內建瀏覽器', 'provider': '預設提供者', 'model': '預設模型', 'fallbacks': '備用模型', 'access': '存取範圍', 'accessFolder': '存取範圍',
                  'features': '功能開關', 'effort': '思考強度', 'remote': '手機連線', 'autoUpdateCheck': '自動檢查更新', 'scheduleNotify': '通知', 'sharedMcp': '共用連接器', 'disabledSkills': 'Skills 開關',
                  'disabledPlugins': '插件開關', 'autoModels': '自動選擇的模型', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步', 'voiceLang': '語音輸入語言', 'streamReplies': '回覆逐字顯示', 'queueWhenBusy': 'Bot 忙碌時排隊', 'busySend': '回覆中送出的訊息', 'keepCli': '保持 CLI 開啟', 'autoCompact': '對話過長時自動整理'}
 BOT_FIELD_NAMES = {'name': '名稱', 'persona': '人格檔案', 'instructions': '工作指示', 'provider': '模型', 'model': '模型', 'account': '帳號', 'permissionMode': '主動性', 'access': '存取範圍', 'accessFolder': '存取範圍',
@@ -320,6 +321,7 @@ def budget_view(store):
 
 def upkeep_fields(data, body, changes):
     """Checks the settings this file owns. Used by update() for kind 'settings'."""
+    browser_fields(body, changes)
     if 'rules' in body:
         if not isinstance(body['rules'], str) or len(body['rules']) > 10000: raise ValueError('固定規則太長，最多 10000 字。')
         changes['rules'] = body['rules'].strip()
