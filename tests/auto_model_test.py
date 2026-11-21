@@ -23,7 +23,7 @@ class AutoModelTest(unittest.TestCase):
         (self.root / 'assets').mkdir(); (self.root / 'assets/index.html').write_text('x'); (self.root / 'bin').mkdir()
         for name in ('codex', 'claude'):
             cli = self.root / 'bin' / name; cli.write_text(CLI); cli.chmod(0o755)
-        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', AUTO_LOG=str(self.log))
+        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', AUTO_LOG=str(self.log))
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')],
                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
@@ -60,7 +60,7 @@ class AutoModelTest(unittest.TestCase):
         self.proc.terminate(); self.proc.wait(timeout=5); self.proc.stdout.close()
         data = json.loads(path.read_text()); data['quota'] = {provider: {'windows': [{'label': '5 小時', 'usedPercent': used, 'resetsAt': time.time() + 3600}], 'updatedAt': '2026-11-18T00:00:00+00:00'}}
         path.write_text(json.dumps(data))
-        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', AUTO_LOG=str(self.log))
+        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', AUTO_LOG=str(self.log))
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')],
                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
@@ -89,7 +89,7 @@ class AutoModelTest(unittest.TestCase):
         path = self.root / 'data/swarmr.json'
         self.quota('none', 0)
         self.proc.terminate(); self.proc.wait(timeout=5); self.proc.stdout.close()
-        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', AUTO_LOG=str(self.log), CLAUDE_METHOD='api_key')
+        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', AUTO_LOG=str(self.log), CLAUDE_METHOD='api_key')
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
         for _ in range(100):

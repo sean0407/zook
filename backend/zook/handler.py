@@ -472,10 +472,8 @@ class Handler(BaseHTTPRequestHandler):
                     if not bot: return self.error(404, '找不到機器人。')
                     return self.respond(200, {'ok': True}) if queue_cancel(store, bot, parts[4]) else self.error(409, '這則訊息已經送出了。')
             if len(parts) == 4 and parts[:2] == ['api', 'bots'] and parts[3] == 'intro' and self.command == 'POST':  # an older Bot's empty conversation opened
-                self.body()
-                with store.lock: known = bool(store.find('bots', parts[2]))
-                if not known: return self.error(404, '找不到機器人。')
-                self.server.want_intro(parts[2]); return self.respond(202, {'ok': True})
+                self.body(); known = bool(store.find('bots', parts[2]))  # one look, no lock needed for it
+                return self.error(404, '找不到機器人。') if not known else (self.server.want_intro(parts[2]), self.respond(202, {'ok': True}))[1]
             if len(parts) == 4 and parts[:2] == ['api', 'bots'] and parts[3] == 'restore' and self.command == 'POST' and not self.device:
                 self.body()
                 with store.lock: bot = restore_bot(store, parts[2]); store.save()

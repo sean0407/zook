@@ -96,6 +96,7 @@ class Intros:
     """Mixed into App."""
     def want_intro(self, bot_id):
         """Queue a Bot for its greeting. One worker makes them one at a time."""
+        if os.environ.get('ZOOK_NO_INTRO') == '1': return  # tests whose fake CLIs count every call
         with self.store.lock:
             queue = self.__dict__.setdefault('intro_queue', [])
             if bot_id not in queue and len(queue) < INTRO_QUEUE_MOST: queue.append(bot_id)
