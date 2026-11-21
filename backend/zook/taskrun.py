@@ -26,7 +26,7 @@ class TaskRuns:
                     group['messages'].append(dict(id=ID(), role='system', content='任務引擎這次不能用（%s）。要分工的話，把討論方式改成「分工」再送一次。' % problem, createdAt=NOW()))
                     store.save()
                 else:
-                    starter = next((m for m in reversed(group['messages']) if m.get('role') == 'user'), {})
+                    starter = next((m for m in reversed(group['messages']) if m.get('role') == 'user' and not m.get('interjected')), {})  # 插話 is never the goal
                     origin = 'schedule' if starter.get('author') == '排程' else 'bot' if starter.get('author') else 'user'
                     run = task_new_run(starter.get('content'), host, origin); run['groupRunId'] = run_id; run['goalId'] = starter.get('id')
                     group['taskRun'] = run

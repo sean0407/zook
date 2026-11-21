@@ -116,14 +116,15 @@ class GroupTest(unittest.TestCase):
         group = self.group('Alpha', 'Beta')
         self.req('POST', '/api/groups/%s/messages' % group['id'], {'content': '@Alpha SLOW'})
         time.sleep(0.5)
-        self.assertEqual(self.req('POST', '/api/groups/%s/messages' % group['id'], {'content': 'again'})[0], 409)
+        status, joined = self.req('POST', '/api/groups/%s/messages' % group['id'], {'content': 'again'})
+        self.assertEqual((status, joined.get('interjected')), (202, True))  # 插話: the message joins the running discussion
         self.req('PATCH', '/api/settings', {'queueWhenBusy': False})  # with the waiting line off, a busy Bot refuses as it always did
         self.assertEqual(self.req('POST', '/api/chat', {'botId': self.ids['Alpha'], 'content': 'hi'})[0], 409)
         self.assertEqual(self.req('DELETE', '/api/groups/' + group['id'])[0], 409)
         status, stopped = self.req('POST', '/api/groups/%s/stop' % group['id'], {})
         self.assertEqual((status, stopped['status']), (200, 'idle'))
         state = self.req('GET', '/api/state')[1]
-        self.assertEqual(state['groups'][0]['messages'][-1]['status'], 'cancelled')
+        self.assertEqual([m for m in state['groups'][0]['messages'] if m['role'] == 'assistant'][-1]['status'], 'cancelled')
         self.assertEqual(self.req('DELETE', '/api/groups/' + group['id'])[0], 200)
 
     def test_admin_hosts_and_members_discuss(self):
