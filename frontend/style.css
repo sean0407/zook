@@ -1931,3 +1931,13 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 #modal-root { position:fixed; inset:0; z-index:100; pointer-events:none; }
 #modal-root > * { pointer-events:auto; }
 #toast { z-index:110; }  /* a message stays readable above an open window */
+
+/* A narrower window (or the side panel open): the Bot's name and the header buttons share the line instead of covering each other,
+   and the message box keeps its buttons on one line with a one-line hint. */
+@media (max-width: 1250px) {
+  .main-header { justify-content: flex-start; padding: 0 12px; gap: 8px; }
+  .main-header .header-actions { position: static; margin-left: auto; flex: none; }
+  .main-header .bot-pill { min-width: 0; max-width: 45%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+}
+.composer textarea, .composer .input-wrap { min-width: 60px; }
+#chat-input::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
