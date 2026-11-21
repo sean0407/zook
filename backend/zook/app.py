@@ -721,13 +721,21 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             if native and cli_used_tools(kind, output.decode('utf-8', errors='replace')):
                 with store.lock: job['mayHaveActed'] = True  # these CLIs do not always report what their tools did when they fail
             parsed['web'] = (parsed.get('web') or []) + feature_events(kind, output.decode('utf-8', errors='replace'), features, cli_cwd, started_at)
-            if parsed.get('thinking'):
-                with store.lock: (store.find('jobs', job_id) or {})['thinking'] = parsed['thinking']  # shown with the member's work, not sent with every refresh
+            with store.lock:  # for a group turn: shown with the member's work, never sent with every refresh; a later try replaces it
+                job = store.find('jobs', job_id) or {}
+                if job.get('groupId') and parsed.get('thinking'): job['thinking'] = parsed['thinking']
+                else: job.pop('thinking', None)
+            acts = [w for w in parsed.get('web') or [] if w.get('category') not in (None, 'read', 'external_read')]
+            if len(parsed.get('web') or []) > 80:  # keep every change and command; reads fill what room is left
+                room = max(0, 80 - len(acts)); kept = []
+                for w in parsed['web']:
+                    if w in acts or room > 0: kept.append(w); room -= w not in acts
+                parsed['web'] = kept
             if parsed.get('web'):
                 with store.lock:
                     job = store.find('jobs', job_id)
                     if job:
-                        job.setdefault('toolCalls', []).extend(dict(dict(category='external_read'), id=ID(), createdAt=NOW(), status='completed', autoApproved=True, **w) for w in parsed['web'][:80])
+                        job.setdefault('toolCalls', []).extend(dict(dict(category='external_read'), id=ID(), createdAt=NOW(), status='completed', autoApproved=True, **w) for w in parsed['web'][:max(80, len(acts))])
             if proc.returncode != 0 or parsed['isError']:
                 # What the CLI itself reported: its error field and its error output. For a CLI whose output Zook cannot take apart,
                 # the end of that output too. The Bot's own words in a structured reply are never searched for error phrases.

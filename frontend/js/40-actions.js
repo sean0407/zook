@@ -329,14 +329,14 @@
           chatsModal(activeBot());
           break;
         case 'new-chat': {
-          const b = activeBot();
+          const b = activeBot(); state.memberWork = null;  // from a group's work page: back to a conversation with the Bot
           await post(`bots/${encodeURIComponent(b.id)}/chats`, {});
           if (state.modal) closeModal();
           await refresh(); $('#chat-input')?.focus();
           break;
         }
         case 'open-chat': {
-          const b = activeBot();
+          const b = activeBot(); state.memberWork = null;
           if (id !== b.chatId) { await post(`bots/${encodeURIComponent(b.id)}/chats/${encodeURIComponent(id)}/open`, {}); }
           closeModal(); await refresh();
           break;

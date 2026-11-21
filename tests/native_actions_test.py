@@ -21,7 +21,8 @@ class NativeActionsTest(unittest.TestCase):
             {'type': 'assistant', 'message': {'content': [{'type': 'tool_use', 'name': 'Read', 'input': {'file_path': '/w/a.txt'}},
                                                           {'type': 'tool_use', 'name': 'Write', 'input': {'file_path': '/w/b.txt', 'content': 'x'}}]}},
             {'type': 'result', 'result': '完成', 'is_error': False}))
-        self.assertEqual(out['web'], [dict(name='native_write', category='internal', arguments={'path': '/w/b.txt'})])
+        self.assertEqual(out['web'], [dict(name='native_read', category='read', arguments={'path': '/w/a.txt'}), dict(name='native_write', category='internal', arguments={'path': '/w/b.txt'})])
+        self.assertEqual([w for w in out['web'] if w['category'] not in ('read', 'external_read')], [out['web'][1]])  # only the write counts as having acted
 
     def test_grok_streaming_keeps_final_text_and_actions(self):
         out = m.parse_cli_output('grok', L(

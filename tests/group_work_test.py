@@ -53,6 +53,15 @@ class GroupWorkTest(unittest.TestCase):
         self.assertEqual(turn['asked']['content'], '請比較路線')
         self.assertNotIn('thinking', self.m.state_view(store)['jobs'][0])  # it is fetched with the member's work only
         self.assertNotIn('thinking', self.m.job_view(store.data['jobs'][0]))
+        store.data['jobs'][0]['slim'] = True
+        self.assertNotIn('work', self.m.page_group_messages(group, {'member': ['b1']}, store)['turns'][0])  # a trimmed job no longer knows
+
+    def test_keys_in_thinking_and_reads_are_masked(self):
+        blocks = [{'type': 'thinking', 'thinking': '用 Authorization: Bearer sk-abcdefghijklmnopqrstuvwxyz123456 呼叫'},
+                  {'type': 'tool_use', 'name': 'Grep', 'input': {'pattern': 'password=hunter2'}}]
+        out = self.m.parse_cli_output('claude', '\n'.join(json.dumps(x, ensure_ascii=False) for x in [{'type': 'assistant', 'message': {'content': blocks}}, {'type': 'result', 'result': 'ok'}]))
+        self.assertNotIn('sk-abcdefghijklmnopqrstuvwxyz123456', out['thinking'][0])
+        self.assertEqual(out['web'][0]['arguments'], {'path': ''})  # the search phrase is not kept
 
 
 if __name__ == '__main__': unittest.main()

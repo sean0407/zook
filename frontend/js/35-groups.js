@@ -109,8 +109,8 @@
   const memberMark = g => { const last = (g.messages || []).slice(-1)[0]; return [g.status, last?.id, last?.status, (g.messages || []).length + (g.olderCount || 0)].join('|'); };
   document.addEventListener('click', e => { const el = e.target.closest?.('[data-member-older]'); if (el && state.memberWork) { const g = state.data.groups.find(x => x.id === state.memberWork.group), b = state.data.bots.find(x => x.id === state.memberWork.bot); if (g && b) loadMemberTurns(g, b, true); } });
   // Everything one member did for one turn, in order: Skills, connectors, tools, pages and files it looked at.
-  function workSteps(calls) {
-    return `<ol class="work-list">${calls.slice(0, 200).map(c => { const [cls, label] = callStatus(c); return `<li class="tool-event ${cls}" title="${esc(label + (c.name === 'native_command' && c.arguments?.command ? '：' + c.arguments.command : ''))}"><span class="ev-dot ${cls}" role="img" aria-label="${esc(label)}"></span><span class="ev-text">${esc(describeCall(c))}</span></li>`; }).join('')}</ol>`;
+  function workSteps(calls, running) {
+    return `<ol class="work-list">${calls.slice(0, 200).map(c => { let [cls, label] = callStatus(c); if ((cls === 'wait' || cls === 'run') && !running) [cls, label] = ['bad', '已中斷']; return `<li class="tool-event ${cls}" title="${esc(label + (c.name === 'native_command' && c.arguments?.command ? '：' + c.arguments.command : ''))}"><span class="ev-dot ${cls}" role="img" aria-label="${esc(label)}"></span><span class="ev-text">${esc(describeCall(c))}</span></li>`; }).join('')}</ol>`;
   }
   function memberWork(b, g) {
     const jobs = {}; for (const j of Object.values(state.jobDetails)) if (j.groupId === g.id && j.botId === b.id) jobs[j.messageId] = j;
@@ -119,7 +119,7 @@
     const said = got?.turns || [];
     const turns = said.map(m => {
       const job = jobs[m.id], calls = (job?.status === 'running' ? job.toolCalls : m.work?.calls || job?.toolCalls) || [], thinking = m.work?.thinking || [], q = m.asked;
-      const steps = calls.length ? `<div class="work-steps">${workSteps(calls)}</div>` : `<div class="work-none">${m.work || (job && !job.slim) ? '這次沒有使用 Skill、連接器或工具，也沒有查資料，直接回覆。' : '這次的過程紀錄已經整理掉了（只保留最近的回覆）。'}</div>`;
+      const steps = calls.length ? `<div class="work-steps">${workSteps(calls, m.status === 'running')}</div>` : `<div class="work-none">${m.status === 'running' ? '正在進行，用到的工具會陸續出現在這裡。' : m.work || (job && !job.slim) ? '這次沒有使用 Skill、連接器或工具，也沒有查資料，直接回覆。' : '這次的過程紀錄已經整理掉了（只保留最近的回覆）。'}</div>`;
       const thought = thinking.length ? `<details class="work-thinking"><summary>思考過程</summary>${thinking.map(t => `<p>${esc(t)}</p>`).join('')}</details>` : '';
       const end = m.status === 'running' ? '<div class="bubble">正在進行…</div>' : m.content ? `<div class="bubble md">${markdown(m.content)}</div>` : `<div class="bubble">${esc(m.status === 'cancelled' ? '已停止' : '沒有回覆')}</div>`;
       return `<div class="date">${esc(formatDate(m.createdAt))}</div>${q ? `<div class="work-ask"><span>${esc(q.author || '你')} 在群組說</span>${esc(String(q.content || '').slice(0, 300))}</div>` : ''}<div class="work-turn"><div class="work-label">過程（Skill、連接器、工具、查了什麼、做了什麼）</div>${steps}${thought}<div class="work-label">想完後在群組的回應</div><div class="message assistant">${avatar(b)}${end}</div></div>`;

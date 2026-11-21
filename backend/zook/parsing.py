@@ -39,7 +39,7 @@ THINKING_EACH, THINKING_ALL = 2000, 8000  # characters of a CLI's own thinking k
 def add_thinking(out, text):
     """Keep what a CLI says it thought (Codex reasoning summaries, Claude thinking), as plain lines, within the limits."""
     if isinstance(text, list): text = ' '.join(str(x.get('text') if isinstance(x, dict) else x) for x in text)
-    flat = ' '.join(re.sub(r'[*_`#>]+', '', str(text or '')).split())
+    flat = ' '.join(hide_command_secrets(re.sub(r'[*_`#>]+', '', str(text or ''))).split())  # keys and tokens are masked like in commands
     room = THINKING_ALL - sum(len(t) for t in out['thinking'])
     if flat and room > 0: out['thinking'].append(flat[:min(THINKING_EACH, room)])
 
@@ -219,10 +219,11 @@ def parse_cli_output(provider, text, model=''):
             if isinstance(block, dict) and block.get('type') == 'thinking': add_thinking(out, block.get('thinking'))
             elif isinstance(block, dict) and block.get('type') == 'tool_use' and block.get('name') in ('Read', 'Grep', 'Glob', 'LS'):
                 inp = block.get('input') if isinstance(block.get('input'), dict) else {}
-                out['web'].append(dict(name='native_read', category='read', arguments={'path': str(inp.get('file_path') or inp.get('path') or inp.get('pattern') or '')[:300]}))
+                where = inp.get('file_path') or inp.get('path') or (inp.get('pattern') if block.get('name') == 'Glob' else '')  # a search phrase is not kept
+                out['web'].append(dict(name='native_read', category='read', arguments={'path': hide_command_secrets(str(where or ''))[:300]}))
             elif isinstance(block, dict) and block.get('type') == 'tool_use' and block.get('name') == 'Skill':
                 inp = block.get('input') if isinstance(block.get('input'), dict) else {}
-                out['web'].append(dict(name='native_skill', category='read', arguments={'name': str(inp.get('skill') or inp.get('name') or inp.get('command') or '')[:120]}))
+                out['web'].append(dict(name='native_skill', category='read', arguments={'name': hide_command_secrets(str(inp.get('skill') or inp.get('name') or ''))[:120]}))
             elif isinstance(block, dict) and block.get('type') in ('tool_use', 'server_tool_use') and block.get('name') in ('WebSearch', 'web_search', 'WebFetch', 'web_fetch'):
                 inp = block.get('input') if isinstance(block.get('input'), dict) else {}
                 if 'Fetch' in block['name'] or 'fetch' in block['name']: out['web'].append(dict(name='web_fetch', arguments={'url': str(inp.get('url') or '')[:300]}))
