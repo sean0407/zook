@@ -899,7 +899,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not bot: return self.error(404, '找不到機器人。')
                     body = self.body(); candidate = copy.deepcopy(bot); update(candidate, body, 'bot'); validate_selection(candidate, inventory); bot.update(candidate); store.save(); watch_auto_status(store, bot)
                     if 'permissionMode' in body: self.server.release_approvals()
-                    if (bot.get('intro') or {}).get('source') != intro_source(bot): self.server.want_intro(bot['id'])  # what it is changed: a new greeting
+                    if (bot.get('intro') or {}).get('source') != intro_source(bot): bot.pop('intro', None); store.save(); self.server.want_intro(bot['id'])  # what it is changed: a new greeting
                     return self.respond(200, bot)
                 if len(parts) == 3 and parts[:2] == ['api', 'bots'] and self.command == 'DELETE':
                     bot = store.find('bots', parts[2])

@@ -296,10 +296,10 @@
   }
   // An empty conversation opens with the Bot's own greeting and questions you might ask it (made from its persona when it was
   // created). A Bot from before that asks for them once; until they arrive, a plain hello.
-  const introAsked = new Set();
+  const introAsked = {};  // Bot id -> when it was last asked for, so a failed try is asked for again a little later
   function emptyIntro(b) {
-    const intro = b.intro && b.intro.greeting ? b.intro : null;
-    if (!intro && !introAsked.has(b.id)) { introAsked.add(b.id); post(`bots/${encodeURIComponent(b.id)}/intro`, {}).catch(() => {}); }
+    const intro = b.intro && typeof b.intro.greeting === 'string' && Array.isArray(b.intro.questions) ? b.intro : null;
+    if (!intro && Date.now() - (introAsked[b.id] || 0) > 120000) { introAsked[b.id] = Date.now(); post(`bots/${encodeURIComponent(b.id)}/intro`, {}).catch(() => {}); }
     const questions = (intro?.questions || []).map(q => `<button type="button" class="intro-q" data-intro-q="${esc(q)}">${esc(q)}</button>`).join('');
     return `<div class="empty-chat">${avatar(b, 'hero')}<h1>${esc(intro ? intro.greeting : `嗨，我是${b.name}。`)}</h1>${questions ? `<div class="intro-questions" aria-label="你可以問我">${questions}</div>` : '<p class="muted">直接在下面輸入想聊的事。</p>'}</div>`;
   }
@@ -308,6 +308,7 @@
     if (!q) return;
     const input = $('#chat-input'), form = $('#chat-form');
     if (!input || !form) return;
+    if (input.value.trim() || pendingList().length) { input.value = q.dataset.introQ; input.focus(); return; }  // a draft or a file waiting: you decide
     input.value = q.dataset.introQ; form.requestSubmit();  // asked as if typed
   });
   function chat() {

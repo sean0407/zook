@@ -10,6 +10,7 @@ INTRO_ASK = ('你是下面這個 Bot。依它的人格和工作，用它自己�
              '2. questions：使用者最可能想問它的 3 個問題，用使用者的口吻（每題最多 25 字）。\n'
              '只輸出一個 JSON 物件，不要其他文字：{"greeting": "...", "questions": ["...", "...", "..."]}\n\n')
 INTRO_RETRY = 600  # seconds before a failed greeting is tried again
+INTRO_WAIT_STATUS = 30  # 自動選擇 still learning which models are signed in: try again soon
 
 
 def intro_source(bot):
@@ -18,7 +19,9 @@ def intro_source(bot):
 
 
 def _intro_line(value, size):
-    flat = ' '.join(str(value).split()) if isinstance(value, str) else ''
+    flat = ' '.join(value.split()).lstrip('/') if isinstance(value, str) else ''  # never a slash command
+    try: flat.encode('utf-8')
+    except UnicodeEncodeError: return ''  # a broken character could not be saved
     return flat if len(flat) <= size else flat[:size] + '…'
 
 
@@ -40,6 +43,22 @@ def intro_prompt(bot):
     if bot.get('persona'): lines.append('人格：' + str(bot['persona'])[:4000])
     if bot.get('instructions'): lines.append('工作指示：' + str(bot['instructions'])[:3000])
     return INTRO_ASK + '\n'.join(lines)
+
+
+def intro_valid(intro):
+    """A stored greeting that the window can show (also after an import or a restore)."""
+    return isinstance(intro, dict) and isinstance(intro.get('greeting'), str) and isinstance(intro.get('questions'), list) and all(isinstance(q, str) for q in intro['questions'])
+
+
+def intro_blocked(store, bot, provider, account_id):
+    """Lock held. Why a greeting is not made now: it never spends API billing, a used-up budget or a used-up limit, or ''."""
+    account = find_account(account_id, provider) if account_id else None
+    if account and (account.get('type') == 'key' or auto_known_billed((store.data.get('autoStatus') or {}).get(auto_account_key(account)))): return 'API 計費'
+    if not account and auto_known_billed((store.data.get('autoStatus') or {}).get(provider)): return 'API 計費'
+    if budget_blocks(store, provider) == 'stop': return '用量預算已用完'
+    if quota_exhausted(store, provider + '@' + account['id'] if account else provider): return '額度已用完'
+    if not ability_on(store, provider, 'plan'): return '這個版本不能只讀'
+    return ''
 
 
 class Intros:
@@ -69,12 +88,16 @@ class Intros:
             source = intro_source(bot)
             if (bot.get('intro') or {}).get('source') == source: return  # still fits
             if failed.get(bot_id, ('', 0))[0] == source and time.time() - failed[bot_id][1] < INTRO_RETRY: return
-            try: provider, model, account = pick_auto(store, '請打招呼', plan=True, bot=bot)[0][0] if bot.get('provider') == AUTO else bot_model(store, bot) + (None,)
+            if bot.get('provider') == AUTO and 'autoStatus' not in store.data:  # still learning which models are signed in
+                failed[bot_id] = (source, time.time() - INTRO_RETRY + INTRO_WAIT_STATUS); return
+            try: provider, model, account = pick_auto(store, '請打招呼', plan=True, bot=bot)[0][0] if bot.get('provider') == AUTO else bot_model(store, bot) + (bot.get('account') or '',)
             except ValueError: failed[bot_id] = (source, time.time()); return
-            if provider_kind(provider) not in PLAN_KINDS or not find_cli(provider): failed[bot_id] = (source, time.time()); return  # only a CLI Zook can hold to read-only
-            helper = dict(id=ID(), botId=bot_id, messageId='', status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[], plan=True, noResume=True, internal='intro')
-            store.data['jobs'].append(helper); runner = copy.deepcopy(bot)
-            if account is not None: runner['account'] = account
+            if provider_kind(provider) not in PLAN_KINDS or not find_cli(provider) or intro_blocked(store, bot, provider, account or ''):  # only a CLI held to read-only, never billed
+                failed[bot_id] = (source, time.time()); return
+            # Its own job, not the Bot's: a message you send meanwhile is answered at once. Bare: no Zook tools, Skills, connectors or web;
+            # read-only; in a folder of its own, so it shares nothing with the Bot's conversations.
+            helper = dict(id=ID(), botId='intro:' + bot_id, messageId='', status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[], plan=True, noResume=True, bare=True, origin='bot', internal='intro')
+            store.data['jobs'].append(helper); runner = dict(copy.deepcopy(bot), id='intro-' + bot_id, account=account or '')
         try: self._run_attempt(helper['id'], intro_prompt(runner), provider, model, runner, inventory_for(store), True)
         finally:
             with store.lock: store.data['jobs'][:] = [j for j in store.data['jobs'] if j['id'] != helper['id']]
@@ -83,4 +106,8 @@ class Intros:
             bot = store.find('bots', bot_id)
             if not made: failed[bot_id] = (source, time.time()); return
             if bot and intro_source(bot) == source:  # the Bot did not change while it was being made
-                bot['intro'] = dict(made, source=source, madeAt=NOW()); failed.pop(bot_id, None); store.save()
+                old = bot.get('intro'); bot['intro'] = dict(made, source=source, madeAt=NOW()); failed.pop(bot_id, None)
+                try: store.save()
+                except (OSError, ValueError, TypeError):
+                    if old is None: bot.pop('intro', None)
+                    else: bot['intro'] = old
