@@ -83,7 +83,7 @@ class AutoAccountTest(unittest.TestCase):
         reply, job = self.send('幫我修這段 python 的 bug')
         self.assertEqual(reply['auto'], 'Codex code')
         self.assertEqual(self.log.read_text().split(), ['codex', '-'])
-        self.assertEqual(job['autoChain'][:2], [['codex', ''], ['codex', '', EXTRA]])
+        self.assertEqual(job['autoChain'][:2], [['codex', '', ''], ['codex', '', EXTRA]])
         self.assertEqual(job['usage']['account'] if job.get('usage') else '', '')
 
     def test_low_default_account_moves_to_the_other_account(self):
@@ -113,6 +113,24 @@ class AutoAccountTest(unittest.TestCase):
         codex = next(p for p in self.req('GET', '/api/quota')[1]['providers'] if p['id'] == 'codex')
         self.assertFalse(next(a for a in codex['profiles'] if a['id'] == EXTRA)['autoOn'])
 
+    def test_a_bots_leftover_key_account_never_stands_in_for_the_pick(self):
+        self.with_accounts(key=True)
+        def change(data):
+            next(b for b in data['bots'] if b['id'] == self.bot['id'])['account'] = KEY  # kept from before the Bot switched to 自動選擇
+        self.restart(change)
+        for _ in range(150):
+            if 'codex@' + EXTRA in (self.req('GET', '/api/state')[1].get('autoStatus') or {}): break
+            time.sleep(.1)
+        reply, job = self.send('幫我修這段 python 的 bug')
+        self.assertEqual(reply['auto'], 'Codex code'); self.assertEqual(self.log.read_text().split(), ['codex', '-'])  # the CLI's own sign-in
+        self.assertEqual(job['ran'], ['codex', '', ''])
+
+    def test_billed_login_account_cannot_be_switched_on(self):
+        self.with_accounts()
+        def change(data): data['autoStatus']['codex@' + EXTRA] = dict(signedIn=True, billed=True)
+        self.restart(change)
+        self.assertEqual(self.req('PATCH', '/api/settings', {'autoAccounts': {EXTRA: True}})[0], 400)
+
     def test_settings_reject_unknown_accounts_and_values(self):
         self.with_accounts()
         self.assertEqual(self.req('PATCH', '/api/settings', {'autoAccounts': {'c' * 32: True}})[0], 400)
@@ -121,3 +139,25 @@ class AutoAccountTest(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+class AutoChoiceCheckTest(unittest.TestCase):
+    """A pick made earlier is checked again when its reply starts."""
+    def setUp(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('zook_server_for_auto_choice', SERVER)
+        self.m = importlib.util.module_from_spec(spec); sys.path.insert(0, str(SERVER.parent)); spec.loader.exec_module(self.m)
+        self.temp = tempfile.TemporaryDirectory(); self.store = self.m.Store(Path(self.temp.name) / 'data')
+        self.store.data['accounts'] = [dict(id=EXTRA, provider='codex', name='Waifdance', type='login'), dict(id=KEY, provider='codex', name='API', type='key'), dict(id='c' * 32, provider='claude', name='Other', type='login')]
+        self.store.data['settings']['autoModels'] = ['codex', 'claude']
+        self.store.data['autoStatus'] = {'codex': dict(signedIn=True, billed=False), 'claude': dict(signedIn=True, billed=True), 'codex@' + EXTRA: dict(signedIn=True, billed=False)}
+
+    def tearDown(self): self.temp.cleanup()
+
+    def test_problems(self):
+        check = lambda p, a: self.m.auto_choice_problem(self.store, p, a)
+        self.assertEqual(check('codex', ''), ''); self.assertEqual(check('codex', EXTRA), '')
+        self.assertIn('API', check('claude', ''))  # its own sign-in became billed
+        self.assertTrue(check('codex', KEY)); self.assertTrue(check('codex', 'c' * 32)); self.assertTrue(check('codex', 'd' * 32))  # key, other CLI, removed
+        self.store.data['settings']['autoAccounts'] = {EXTRA: False}; self.store.data['settings']['autoModels'] = ['claude']
+        self.assertTrue(check('codex', EXTRA)); self.assertTrue(check('codex', ''))  # switched off after the pick

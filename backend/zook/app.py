@@ -193,7 +193,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
         if placed or earlier: job['attachments'] = [str(x) for x in (earlier + placed)[-MAX_ATTACHMENTS:]]
         if replaces: job.update(redoOf=replaces, askedId=asked['id'])
         job['effort'] = effort
-        if use and bot.get('provider') == AUTO: job['autoChain'] = [[provider, model]]  # 換模型重答 stays on the model the user named
+        if use and bot.get('provider') == AUTO: job.update(autoChain=[[provider, model, '']], autoNamed=True)  # 換模型重答 stays on the model the user named, on its own sign-in
         if auto_chain: job['autoChain'] = auto_chain; refresh_auto(self)
         if plan: job['plan'] = True
         if long: job['long'] = True; msg['long'] = True
@@ -439,9 +439,19 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             if not job or job['status'] != 'running': return
             if bot is None: bot = copy.deepcopy(store.find('bots', job['botId']))
             chain = [tuple(x) for x in job['autoChain']] if job.get('autoChain') else provider_chain(store, bot, provider, model)
-            chain = [(x[0], x[1], x[2] if len(x) > 2 else None) for x in chain]  # 自動選擇 may name an extra account; None keeps the Bot's own
+            auto = bot.get('provider') == AUTO
+            # The third part is the account 自動選擇 picked ('' its CLI's own sign-in). A 自動選擇 Bot never uses an account of its own;
+            # any other Bot keeps its own account (None).
+            chain = [(x[0], x[1], x[2] if len(x) > 2 else '' if auto else None) for x in chain]
             if job.get('plan'): chain = [x for x in chain if provider_kind(x[0]) in PLAN_KINDS] or chain[:1]  # a backup must be held to read-only too
             first, skipped = chain[0], {}
+            if auto and job.get('autoChain') and not job.get('autoNamed'):  # picked earlier: the user may have switched it off or removed it since
+                for x in chain[:]:
+                    problem = auto_choice_problem(store, x[0], x[2] or '')
+                    if problem: skipped[x] = problem; chain.remove(x)
+                if not chain:
+                    job.update(status='failed', error='自動選擇選的模型現在不能用（%s）。請到「各模型使用量」確認。' % '、'.join('%s %s' % (auto_choice_name(x[0], x[2] or ''), r) for x, r in skipped.items()), finishedAt=NOW())
+                    store.finish_message(job, '', 'failed'); store.save(); return
             for x in chain[:]:
                 p, a = x[0], x[2]
                 used_up = quota_exhausted(store, p + '@' + a) if a else quota_exhausted(store, p) and not find_account(bot.get('account'), p)
@@ -451,10 +461,11 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 job.update(status='failed', error='這個月的用量預算已用完。可到「各模型使用量」調整上限。', finishedAt=NOW())
                 store.finish_message(job, '', 'failed'); store.save(); return
         why = skipped.get(first)
-        if job.get('compact'): prompt = self.compact_chat(job_id, prompt, chain[0][:2], bot, inventory)  # two long replies in a row: start this one from a summary
+        if job.get('compact'): prompt = self.compact_chat(job_id, prompt, chain[0][:2], bot if chain[0][2] is None else dict(bot, account=chain[0][2]), inventory)  # two long replies in a row: start this one from a summary
         for index, (p, m, a) in enumerate(chain):
             final = index == len(chain) - 1
             run_bot = bot if a is None else dict(bot, account=a)  # the account 自動選擇 picked for this try
+            with store.lock: (store.find('jobs', job_id) or {})['ran'] = [p, m, run_bot.get('account') or '']  # what really runs, for the task limits
             with store.lock: before = len(store.find('jobs', job_id).get('toolCalls') or [])
             self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)
             with store.lock:
@@ -468,7 +479,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 tidy = job.get('status') == 'running' and job.get('errorKind') == 'context' and not job.get('compactTried') and not acted and can_compact(store, job)
                 if tidy: job.update(compactTried=True); job.pop('errorKind', None); self.attempt_errors.pop(job_id, None)
             if tidy:  # the CLI says the conversation is too long: turn the earlier part into a summary and try this reply once more
-                prompt = self.compact_chat(job_id, prompt, (p, m), bot, inventory)
+                prompt = self.compact_chat(job_id, prompt, (p, m), run_bot, inventory)
                 self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)
             with store.lock:
                 job = store.find('jobs', job_id)

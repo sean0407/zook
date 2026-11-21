@@ -45,7 +45,8 @@ def update(target, body, kind):
     if kind == 'settings' and 'autoAccounts' in body:
         value = body['autoAccounts']; extras = {a['id']: a for a in _active['data'].get('accounts') or [] if a.get('provider') in AUTO_MODELS}
         if not isinstance(value, dict) or any(k not in extras or not isinstance(v, bool) for k, v in value.items()): raise ValueError('自動選擇的帳號無效。')
-        if any(v and extras[k].get('type') == 'key' for k, v in value.items()): raise ValueError('API 計費的帳號不會被自動選用。')
+        known = _active['data'].get('autoStatus') or {}
+        if any(v and (extras[k].get('type') == 'key' or auto_known_billed(known.get(auto_account_key(extras[k])))) for k, v in value.items()): raise ValueError('API 計費的帳號不會被自動選用。')
         changes['autoAccounts'] = dict(target.get('autoAccounts') or {}, **value)
     if kind == 'bot':
         for key in ('enabledSkills', 'enabledMcp'):

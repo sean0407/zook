@@ -90,6 +90,17 @@ def auto_account_on(store, account):
 def auto_account_name(account_id): return (find_account(account_id) or {}).get('name', '')
 
 
+def auto_choice_problem(store, provider, account_id):
+    """Lock held. Why a pick made earlier may no longer run now (the switch was turned off, the account was removed or is billed), or ''."""
+    status = store.data.get('autoStatus') or {}
+    if not account_id:
+        if auto_known_billed(status.get(provider)): return 'API 計費不會被自動選用'
+        return '' if provider in auto_allowed(store) else '已關閉自動選用'
+    account = find_account(account_id, provider)
+    if not account: return '帳號已移除'
+    return '' if auto_account_on(store, account) else '已關閉自動選用或使用 API 計費'
+
+
 def auto_choice_name(provider, account_id=''):
     """'Codex', or 'Codex（Waifdance）' for an extra account."""
     short = provider_label(provider).split('（')[0]
@@ -136,9 +147,11 @@ def refresh_auto(app):
                     live[key] = normalize_quota('codex', codex_rpc(find_cli('codex'), 'account/rateLimits/read', {}, provider_env('codex', account)))
                     if live[key]: live[key].update(updatedAt=NOW(), source='live')
             except (OSError, ValueError, TimeoutError, AttributeError, RuntimeError, TypeError): pass
-        try:
-            if 'grok' in allowed and find_cli('grok'): live['grok'] = grok_live_quota(app)
-        except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError): pass
+        with store.lock: groks = [dict(a) for a in auto_accounts(store, 'grok') if auto_account_on(store, a)]
+        for key, account in ([('grok', None)] if 'grok' in allowed else []) + [(auto_account_key(a), a) for a in groks]:
+            try:
+                if find_cli('grok'): live[key] = grok_live_quota(app, account)
+            except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError): pass
         try:
             if 'antigravity' in allowed and find_cli('antigravity'): live['antigravity'] = antigravity_quota(find_cli('antigravity'))
         except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError): pass
@@ -212,7 +225,7 @@ def pick_auto(store, content, names=(), plan=False, bot=None, taken=None, keep=N
     elif taken is not None:
         rank, used = {c: i for i, c in enumerate(usable)}, {p: list(taken).count(p) for p in {c[0] for c in usable}}
         usable = sorted(usable, key=lambda c: (used[c[0]], rank[c])); spread = usable[0][0] != best[0]
-    chain = [[p, settings.get('model', '') if p == settings.get('provider', 'codex') else ''] + ([a] if a else []) for p, a in usable]
+    chain = [[p, settings.get('model', '') if p == settings.get('provider', 'codex') else '', a] for p, a in usable]  # always the account: '' is the CLI's own sign-in
     why = ('這個 Bot 的角色偏向%s，所以用 %s' if by_role else 'Zook 判斷這是%s，所以用 %s') % (label, name(best))
     if spread: why = '%s原本會用 %s；群組裡讓成員分散使用不同模型，這次用 %s' % ('依角色' if by_role else '', name(best), name(usable[0]))
     elif usable[0] != best: why = '這一輪討論沿用一開始的 %s' % name(usable[0])

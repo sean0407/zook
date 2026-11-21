@@ -106,7 +106,7 @@ class AutoModelTest(unittest.TestCase):
             found = next(j for j in self.req('GET', '/api/state')[1]['jobs'] if j['id'] == job['jobId'])
             if found['status'] != 'running': break
             time.sleep(.1)
-        self.assertEqual(found['autoChain'], [['claude', '']])
+        self.assertEqual(found['autoChain'], [['claude', '', '']]); self.assertTrue(found['autoNamed'])  # its own sign-in, as named
 
     def test_settings_reject_unknown_models_and_auto_as_default(self):
         self.assertEqual(self.req('PATCH', '/api/settings', {'autoModels': ['nope']})[0], 400)

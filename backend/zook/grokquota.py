@@ -14,6 +14,9 @@ GROK_CODES = re.compile(r'\x1b\[[0-9;?<>=!]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x0
 _GROK_LEFT_KEYS = ('remainingPercent', 'remaining_percent', 'percentRemaining', 'percent_remaining', 'leftPercent', 'left_percent', 'percentLeft', 'percent_left')
 _GROK_USED_KEYS = ('usedPercent', 'used_percent', 'percentUsed', 'percent_used')
 _grok_reading = threading.Lock()
+_grok_screen = threading.Lock()
+_grok_keys = {}  # one lock per account, so the usage page and 自動選擇 never read the same account twice at once
+GROK_OTHER_QUESTIONS = ('Help improve', 'Opt in', 'Opt out', 'Privacy', 'Terms')  # never answered: if one shows, nothing is typed
 # Grok reads keys only from its own terminal, so it starts as the leader of a new session with the pseudo-terminal as that terminal.
 # The helper replaces itself with Grok, so Grok keeps its process id and closing its session closes everything it started.
 _GROK_BOOT = 'import fcntl, os, sys, termios; os.setsid(); fcntl.ioctl(0, termios.TIOCSCTTY, 0); os.execv(sys.argv[1], sys.argv[1:])'
@@ -25,10 +28,17 @@ def _grok_percent(value):
 
 def grok_usage_json(path, env):
     """Percent left from `grok usage --json`, or None while that command cannot report it (or reports it in a form Zook does not know)."""
-    try: done = subprocess.run([path, 'usage', '--json'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20, env=env)
-    except (OSError, subprocess.SubprocessError): return None
-    text = done.stdout.decode('utf-8', 'replace').strip()
-    if done.returncode != 0 or not text.startswith('{'): return None
+    try: proc = subprocess.Popen([path, 'usage', '--json'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env, start_new_session=True)
+    except OSError: return None
+    try: out, _ = proc.communicate(timeout=20)
+    except subprocess.TimeoutExpired: out = None
+    finally:
+        try: os.killpg(proc.pid, _signal.SIGKILL)  # whatever it started goes too; its group is still its own until it is reaped
+        except OSError: pass
+        try: proc.wait(5)
+        except subprocess.TimeoutExpired: pass
+    text = (out or b'').decode('utf-8', 'replace').strip()
+    if out is None or proc.returncode != 0 or not text.startswith('{'): return None
     try: data = json.loads(text)
     except ValueError: return None
     found = []
@@ -41,12 +51,15 @@ def grok_usage_json(path, env):
         elif isinstance(node, list):
             for value in node: walk(value)
     walk(data)
-    return min(found) if found else None
+    return found[0] if len(found) == 1 else None  # more than one figure: which one is the weekly limit is not known, so none is used
 
 
 def grok_screen_left(path, env, folder, wait=None):
     """Percent left as Grok's own screen shows it, or None. Grok and everything it started are closed before this returns."""
-    folder = pathlib.Path(folder); folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    folder = pathlib.Path(folder)
+    if folder.is_symlink(): return None
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    empty = not any(folder.iterdir())  # only an empty folder of Zook's own is ever trusted
     master, slave = _pty.openpty()
     try: _fcntl.ioctl(slave, _termios.TIOCSWINSZ, _struct.pack('HHHH', 40, 140, 0, 0))
     except OSError: pass
@@ -57,26 +70,29 @@ def grok_screen_left(path, env, folder, wait=None):
     os.close(slave)
     seen, left, end = b'', None, time.time() + (wait or GROK_SCREEN_WAIT)
     names = {str(folder), os.path.realpath(str(folder))}
-    asked = sent = None; answers = 0; settled = False  # the trust question: when it showed, when 「y」 went out, whether Grok reacted
+    sent, settled, quiet_since = None, False, time.time()  # when 「y」 went out, whether Grok reacted, since when nothing new arrived
     try:
         while time.time() < end and left is None:
             ready, _, _ = _select.select([master], [], [], 0.3)
-            now = time.time()
-            # Grok may still be switching its terminal over when the question shows, which drops early keys: wait a moment, and
-            # only try again while Grok has not reacted at all. Once anything changes on screen, nothing more is ever typed.
-            if asked and not settled and answers < 3 and now - (sent or asked) > (1.5 if sent else 0.8):
-                os.write(master, b'y'); answers += 1; sent = now  # Zook's own empty folder: the only question Zook answers
             if not ready:
                 if proc.poll() is not None: break
+                # Answer only on a still screen whose last question is the trust question for this very folder, never twice
+                # once Grok has reacted, and never when anything else (such as data sharing) shows after it.
+                screen = GROK_CODES.sub('', seen.decode('utf-8', 'replace'))
+                last = screen[screen.rfind(GROK_TRUST):] if GROK_TRUST in screen else ''
+                if (empty and last and not settled and (sent is None or time.time() - sent > 1.5) and time.time() - quiet_since > 0.8 and
+                        any(n in last for n in names) and 'Yes, proceed' in last and not any(q in last for q in GROK_OTHER_QUESTIONS)):
+                    if sent is not None and time.time() - sent > 6: break  # it never took the answer: give up rather than keep typing
+                    os.write(master, b'y'); sent = time.time()
                 continue
             try: chunk = os.read(master, 65536)
             except OSError: break
             if not chunk: break
+            quiet_since = time.time()
             if sent: settled = True
             seen = (seen + chunk)[-200000:]
-            text = GROK_CODES.sub('', seen.decode('utf-8', 'replace')); match = GROK_LEFT.search(text)
-            if match: left = _grok_percent(float(match.group(1)))
-            elif not asked and GROK_TRUST in text and any(n in text for n in names): asked = now
+            found = GROK_LEFT.findall(GROK_CODES.sub('', seen.decode('utf-8', 'replace')))
+            if found: left = _grok_percent(float(found[-1]))  # the newest figure on the screen
     finally:
         try: os.close(master)  # Grok's terminal goes away, which ends its session
         except OSError: pass
@@ -96,7 +112,7 @@ def grok_screen_left(path, env, folder, wait=None):
 def grok_quota(path, env, folder):
     """Grok's plan limit as a quota snapshot, or None when it cannot be read."""
     if not path: return None
-    with _grok_reading:  # one Grok screen at a time
+    with _grok_screen:  # one Grok screen at a time
         left = grok_usage_json(path, env)
         if left is None: left = grok_screen_left(path, env, folder)
     if left is None: return None
@@ -106,11 +122,14 @@ def grok_quota(path, env, folder):
 def grok_live_quota(app, account=None):
     """Grok's limit for the usage page and 自動選擇, at most once a minute per account. Saved like the other CLIs' limits."""
     store = app.store; key = 'grok' + ('@' + account['id'] if account else '')
-    caches = app.__dict__.setdefault('codex_quota_caches', {}); hit = caches.get(key)
-    if hit and time.time() - hit[0] < (60 if hit[1] else 600): return hit[1]  # a failed read waits ten minutes, so the page never keeps waiting on it
-    try: live = grok_quota(find_cli('grok'), provider_env('grok', account), store.dir / 'grok-usage')
-    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError): live = None
-    caches[key] = (time.time(), live)  # a failed read is not retried on every page load either
+    caches = app.__dict__.setdefault('codex_quota_caches', {})
+    with _grok_reading: lock = _grok_keys.setdefault(key, threading.Lock())
+    with lock:  # a second request for the same account waits for the first and takes its answer
+        hit = caches.get(key)
+        if hit and time.time() - hit[0] < (60 if hit[1] else 600): return hit[1]  # a failed read waits ten minutes, so the page never keeps waiting on it
+        try: live = grok_quota(find_cli('grok'), provider_env('grok', account), store.dir / 'grok-usage')
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError): live = None
+        caches[key] = (time.time(), live)
     if live:
         with store.lock: store.data.setdefault('quota', {})[key] = live; store.save()
     return live

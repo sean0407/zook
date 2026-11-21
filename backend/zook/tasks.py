@@ -77,7 +77,8 @@ def task_running_lane(store, run, task):
     attempt = task['attempts'][-1] if task.get('attempts') else {}
     job = store.find('jobs', attempt.get('jobId')) if attempt.get('jobId') else None
     if job:
-        first = (job.get('autoChain') or [[None]])[0]
+        ran, first = job.get('ran'), (job.get('autoChain') or [[None]])[0]
+        if isinstance(ran, list) and len(ran) == 3 and ran[0]: return (ran[0], ran[2] or '')  # what the reply really runs on now
         if (job.get('fallback') or {}).get('provider'): return (job['fallback']['provider'], '')
         if first[0]: return (first[0], first[2] if len(first) > 2 else '')  # 自動選擇 may have picked an extra account
         lane = task_lane(store, store.find('bots', task['assignee']) or {})

@@ -9,11 +9,23 @@ import os, subprocess, sys, time
 log = os.environ['FAKE_LOG']
 if sys.argv[1:] == ['usage', '--json']:
     open(log, 'a').write('json\n')
+    if os.environ.get('FAKE_JSON_HANG'):
+        child = subprocess.Popen(['/bin/sleep', '60']); open(log, 'a').write('jsonchild %d\n' % child.pid); time.sleep(60)
     print(os.environ.get('FAKE_JSON') or "Error: `grok usage` can't show your plan's usage here yet. Run /usage inside grok instead."); sys.exit(0)
 open(log, 'a').write('screen %s %s %s\n' % (os.isatty(0), os.getcwd(), os.environ.get('PWD')))
 child = subprocess.Popen(['/bin/sleep', '60'])
 open(log, 'a').write('child %d\n' % child.pid)
 sys.stdout.write('\x1b[?25l\x1b[2J╭──╮ Grok Build\r\n')
+if sys.argv[1:] == ['usage', '--json'] and os.environ.get('FAKE_JSON_HANG'):
+    pass
+if os.environ.get('FAKE_SWAP'):  # the trust question is replaced by another question before anything could be typed
+    sys.stdout.write('Do you trust the contents of this directory?\r\n  %s\r\n  Yes, proceed  y\r\n' % os.getcwd()); sys.stdout.flush()
+    time.sleep(.2)
+    sys.stdout.write('\x1b[2J\x1b[HHelp improve Grok  [Opt out] [Opt in]\r\n'); sys.stdout.flush()
+    import termios, tty; tty.setraw(0, termios.TCSANOW)
+    import select
+    if select.select([0], [], [], 5)[0]: open(log, 'a').write('typed %r\n' % os.read(0, 10))
+    time.sleep(60)
 if os.environ.get('FAKE_TRUST'):
     sys.stdout.write('Do you trust the contents of this directory?\r\n  %s\r\n  Yes, proceed  y\r\n  No, quit  n\r\n' % os.getcwd()); sys.stdout.flush()
     import termios, tty; tty.setraw(0, termios.TCSANOW); key = os.read(0, 1)
@@ -62,6 +74,33 @@ class GrokQuotaTest(unittest.TestCase):
         self.assertEqual(snap['windows'][0]['usedPercent'], 63.0)
         self.assertIn("typed b'y'", self.lines())
         self.assertEqual(len([x for x in self.lines() if x.startswith('typed')]), 1)
+
+    def test_a_replaced_trust_question_is_not_answered(self):
+        self.env['FAKE_SWAP'] = '1'; self.m.GROK_SCREEN_WAIT = 4
+        self.assertIsNone(self.m.grok_quota(str(self.cli), self.env, self.folder))
+        self.assertFalse([x for x in self.lines() if x.startswith('typed')])
+
+    def test_a_folder_that_is_a_link_or_not_empty_is_not_trusted(self):
+        self.env['FAKE_TRUST'] = '1'; self.m.GROK_SCREEN_WAIT = 4
+        self.folder.mkdir(); (self.folder / 'something').write_text('x')
+        self.assertIsNone(self.m.grok_quota(str(self.cli), self.env, self.folder))
+        self.assertFalse([x for x in self.lines() if x.startswith('typed')])
+        link = self.root / 'link'; link.symlink_to(self.root)
+        self.assertIsNone(self.m.grok_screen_left(str(self.cli), self.env, link, 2))
+
+    def test_a_hanging_usage_json_is_closed_with_what_it_started(self):
+        self.env['FAKE_JSON_HANG'] = '1'; self.m.GROK_SCREEN_WAIT = 2
+        real = self.m.subprocess.Popen.communicate
+        def quick(proc, *a, **k): return real(proc, *a, **dict(k, timeout=1))
+        self.m.subprocess.Popen.communicate = quick
+        try: self.m.grok_usage_json(str(self.cli), self.env)
+        finally: self.m.subprocess.Popen.communicate = real
+        child = int(next(x for x in self.lines() if x.startswith('jsonchild')).split()[1]); time.sleep(.3)
+        self.assertFalse(alive(child))
+
+    def test_two_figures_in_json_are_not_guessed(self):
+        self.env['FAKE_JSON'] = '{"weekly": {"remainingPercent": 81.5}, "daily": {"remainingPercent": 2}}'
+        self.assertIsNone(self.m.grok_usage_json(str(self.cli), self.env))
 
     def test_usage_json_is_used_as_soon_as_it_reports_a_figure(self):
         self.env['FAKE_JSON'] = '{"plan": {"weekly": {"remainingPercent": 81.5}}}'

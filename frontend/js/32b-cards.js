@@ -58,7 +58,7 @@
   function accountCards() {
     const list = state.accounts?.providers;
     if (!list) return `<section class="usage-block"><h2>剩餘額度</h2>${loadingBlock('正在讀取登入狀態…')}</section>`;
-    const shown = list.filter(p => p.installed || (p.install && p.install.state !== 'succeeded'));
+    const shown = list.filter(p => p.installed || p.install?.state === 'running');  // a failed install is retried from ＋ 新增模型
     const waiting = list.length - shown.length;
     return `<section class="usage-block"><h2>剩餘額度</h2>${shown.length ? `<div class="left-grid account-grid">${shown.map(p => accountCard(p) + (p.profiles || []).map(a => accountCard(p, a)).join('')).join('')}</div>` : '<div class="blank">還沒有安裝任何模型，按右上角「＋ 新增模型」。</div>'}${waiting ? `<p class="muted small">另有 ${waiting} 個已加入但尚未安裝的模型，可在「＋ 新增模型」安裝。</p>` : ''}</section>`;
   }

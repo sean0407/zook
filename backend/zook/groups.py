@@ -61,7 +61,7 @@ def group_verifier(store, group, message):
         if any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs']): continue
         try: models = pick_auto(store, '請查核', plan=True)[0] if bot.get('provider') == AUTO else [list(bot_model(store, bot))]
         except ValueError: continue
-        options += [(bot['id'], p, m, provider_kind(p) == provider_kind(origin)) for p, m, *_ in models if provider_kind(p) in PLAN_KINDS and find_cli(p)]
+        options += [(bot['id'], x[0], x[1], provider_kind(x[0]) == provider_kind(origin), x[2] if len(x) > 2 else None) for x in models if provider_kind(x[0]) in PLAN_KINDS and find_cli(x[0])]
     return next((x for x in options if not x[3]), options[0] if options else None)
 
 
@@ -260,7 +260,7 @@ class GroupRuns:
         pick = group_verifier(self.store, group, message)
         if not pick: raise ValueError('目前沒有其他成員可以查核這則回覆。')
         if pick[3] and not confirmed: return dict(needsConfirm=True, message='其他成員都用同一家模型，查核效果有限。仍要查核嗎？')
-        step = dict(role='verify', bots=[pick[0]], readonly=True, use=[pick[1], pick[2]], targetId=message_id)
+        step = dict(role='verify', bots=[pick[0]], readonly=True, use=[pick[1], pick[2]] + ([pick[4]] if pick[4] is not None else []), targetId=message_id)  # with the account 自動選擇 picked
         return dict(runId=self.start_group(group, [], True, dict(kind='steps', broadcast=True, steps=[step])))
 
     def _group_turn(self, group_id, run_id, bot_id, may_pass, role, moderated, blind, step=None):
@@ -402,12 +402,13 @@ class GroupRuns:
             text = (('（先前的摘要）\n' + old['text'] + '\n') if old.get('text') else '') + '\n'.join(reversed(lines))
             bot = store.find('bots', group_closer(store, group) or '')
             if not bot: return
-            provider, model = bot_model(store, bot)
+            provider, model = bot_model(store, bot); account = None
             if provider == AUTO:
-                try: provider, model = pick_auto(store, '整理群組討論摘要', plan=True)[0][0][:2]
+                try: provider, model, account = pick_auto(store, '整理群組討論摘要', plan=True)[0][0]
                 except (ValueError, IndexError): return
             helper = dict(id=ID(), botId=bot['id'], messageId='', status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[], plan=True, noResume=True, internal='summary')
             store.data['jobs'].append(helper); bot = copy.deepcopy(bot)
+            if account is not None: bot['account'] = account  # the account 自動選擇 picked, not one the Bot kept from before
             group['compacting'] = True; store.save()
         try: self._run_attempt(helper['id'], GROUP_SUMMARY_ASK + text, provider, model, bot, inventory_for(store), True)
         except Exception: pass
