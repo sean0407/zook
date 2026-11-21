@@ -8,18 +8,20 @@
   function botFiles(botId, mark) {
     if (!botId) return [];
     if (state.outputs[botId] === undefined || state.fileMarks['bot:' + botId] !== mark) { state.fileMarks['bot:' + botId] = mark; if (state.outputs[botId] === undefined) state.outputs[botId] = null; setTimeout(() => loadOutputs(botId, true), 0); }
-    return (state.outputs[botId] || []).map(o => ({name: o.name, kind: o.kind, size: o.size, url: '/api/bots/' + encodeURIComponent(botId) + '/outputs/' + encodeURIComponent(o.id), open: `data-action="output-open" data-id="${esc(o.id)}" data-bot="${esc(botId)}"`}));
+    return (state.outputs[botId] || []).map(o => ({name: o.name, kind: o.kind, size: o.size, url: '/api/bots/' + encodeURIComponent(botId) + '/outputs/' + encodeURIComponent(o.id) + '?v=' + encodeURIComponent((o.at || '') + o.size), from: '產出', open: `data-action="output-open" data-id="${esc(o.id)}" data-bot="${esc(botId)}"`}));
   }
   function groupSharedFiles(g, mark) {
     if (state.groupFiles[g.id] === undefined || state.fileMarks['group:' + g.id] !== mark) { state.fileMarks['group:' + g.id] = mark; if (state.groupFiles[g.id] === undefined) state.groupFiles[g.id] = null; setTimeout(() => loadGroupFiles(g), 0); }
-    return (state.groupFiles[g.id] || []).map(f => ({name: f.name, kind: f.kind || 'file', size: f.size, url: '/api/groups/' + encodeURIComponent(g.id) + '/files/' + encodeURIComponent(f.name), open: `data-group-file="${esc(f.name)}" data-group="${esc(g.id)}"`}));
+    return (state.groupFiles[g.id] || []).map(f => ({name: f.name, kind: f.kind || 'file', size: f.size, url: '/api/groups/' + encodeURIComponent(g.id) + '/files/' + encodeURIComponent(f.name) + '?v=' + encodeURIComponent((f.at || '') + f.size), from: '群組檔案', open: `data-group-file="${esc(f.name)}" data-group="${esc(g.id)}"`}));
   }
   function messageFiles(text, items) {
     const said = String(text || ''), seen = new Set();
-    const found = items.filter(f => f.name.length >= 4 && said.includes(f.name) && !seen.has(f.name) && seen.add(f.name)).slice(0, 12);
+    const named = name => { for (let at = said.indexOf(name); at >= 0; at = said.indexOf(name, at + 1)) { const before = said[at - 1] || ' ', after = said[at + name.length] || ' '; if (!/[\w.\-]/.test(before) && !/\w/.test(after)) return true; } return false; };
+    const found = items.filter(f => f.name.length >= 3 && named(f.name) && !seen.has(f.url) && seen.add(f.url)).slice(0, 12);
+    const twice = new Set(found.filter((f, i) => found.findIndex(x => x.name === f.name) !== i).map(f => f.name));
     if (!found.length) return '';
     const pics = found.filter(f => f.kind === 'image'), rest = found.filter(f => f.kind !== 'image');
-    return `<div class="msg-files">${pics.length ? `<div class="msg-pics">${pics.map(f => `<button type="button" class="msg-pic" ${f.open} title="${esc(f.name)}"><img src="${esc(f.url)}" alt="${esc(f.name)}" loading="lazy"></button>`).join('')}</div>` : ''}${rest.map(f => `<div class="msg-file"><span class="msg-file-icon" aria-hidden="true">${FILE_ICON[f.kind] || FILE_ICON.file}</span><span class="msg-file-name"><strong>${esc(f.name)}</strong><small>${esc(fileKB(f.size))}</small></span>${f.kind === 'file' ? '' : `<button type="button" class="link" ${f.open}>預覽</button>`}<a class="link" href="${esc(f.url)}" download="${esc(f.name)}">下載</a></div>`).join('')}</div>`;
+    return `<div class="msg-files">${pics.length ? `<div class="msg-pics">${pics.map(f => `<button type="button" class="msg-pic" ${f.open} title="${esc(f.name + (twice.has(f.name) ? '（' + f.from + '）' : ''))}"><img src="${esc(f.url)}" alt="${esc(f.name)}" loading="lazy"></button>`).join('')}</div>` : ''}${rest.map(f => `<div class="msg-file"><span class="msg-file-icon" aria-hidden="true">${FILE_ICON[f.kind] || FILE_ICON.file}</span><span class="msg-file-name"><strong>${esc(f.name)}</strong><small>${esc(fileKB(f.size) + (twice.has(f.name) ? ' · ' + f.from : ''))}</small></span>${f.kind === 'file' ? '' : `<button type="button" class="link" ${f.open}>預覽</button>`}<a class="link" href="${esc(f.url)}" download="${esc(f.name)}">下載</a></div>`).join('')}</div>`;
   }
   // A shared file's preview: the same window as a Bot's outputs.
   async function openGroupFile(groupId, name) {

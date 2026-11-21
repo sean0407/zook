@@ -833,8 +833,9 @@ class Handler(BaseHTTPRequestHandler):
                     if len(parts) == 5 and parts[3] == 'files' and self.command == 'GET' and not self.device:
                         found = group_file_path(store, group, parts[4])
                         if not found: return self.error(404, '找不到這個檔案。')
-                        kind = _output_kind(found.name)  # shown in the conversation: a picture as a picture, a page or SVG only as text
-                        return self.respond(200, found.read_bytes(), IMAGE_TYPES[found.suffix.lower()] if kind == 'image' else 'application/pdf' if kind == 'pdf' else 'text/plain; charset=utf-8' if kind in ('text', 'markdown') else 'application/octet-stream')
+                        kind, data = _output_kind(found.name), read_group_file(found)  # shown in the conversation: a picture as a picture, a page or SVG only as text
+                        if data is None: return self.error(404, '找不到這個檔案。')
+                        return self.respond(200, data, IMAGE_TYPES[found.suffix.lower()] if kind == 'image' else 'application/pdf' if kind == 'pdf' else 'text/plain; charset=utf-8' if kind in ('text', 'markdown') else 'application/octet-stream')
                     if len(parts) == 5 and parts[3] == 'files' and self.command == 'DELETE' and not self.device:
                         found = group_file_path(store, group, parts[4])
                         if not found: return self.error(404, '找不到這個檔案。')

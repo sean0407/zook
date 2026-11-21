@@ -65,6 +65,16 @@ def group_file_path(store, group, name):
     return next((pathlib.Path(e.path) for e in _plain_files(group_files_dir(store, group['id'])) if e.name == name), None)
 
 
+def read_group_file(path):
+    """The bytes of one shared file, or None when it is gone or no longer a plain file of its own."""
+    try: fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError: return None
+    with os.fdopen(fd, 'rb') as f:
+        info = os.fstat(f.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1: return None
+        return f.read()
+
+
 def group_copy_folder(store, bot_id):
     return store.dir / 'workspaces' / bot_id / 'attachments' / GROUP_FILES_FOLDER
 

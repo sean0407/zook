@@ -361,7 +361,7 @@
       return inCode ? part : part.replace(re, '<span class="mention-tag">@$1</span>');
     }).join('');
   }
-  const groupFileMark = g => { const all = g.messages || [], last = all[all.length - 1]; return all.length + ':' + (last?.id || '') + ':' + (last?.status || ''); };
+  const groupFileMark = g => { const all = g.messages || []; return all.length + ':' + all.filter(m => m.status === 'completed' || m.role === 'system').length + ':' + (all[all.length - 1]?.id || ''); };
   function groupMessage(g, m) {
     if (m.compacted && !m.checkOf) return '<div class="compact-line"><span>前面的討論已整理成摘要，成員從這裡接續</span></div>' + groupMessage(g, Object.assign({}, m, {compacted: false}));
     if (m.checkOf) return '';
