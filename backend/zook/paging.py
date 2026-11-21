@@ -73,7 +73,7 @@ def page_list(messages, query):
     return dict(messages=messages[start:end], more=start > 0)
 
 
-def page_group_messages(group, query):
+def page_group_messages(group, query, store=None):
     """Older parts of a discussion, or (member=<Bot id>) every time one member spoke, newest last, each with what it was answering. Lock held."""
     messages = group.get('messages') or []
     member = (query.get('member') or [''])[0]
@@ -82,6 +82,9 @@ def page_group_messages(group, query):
     for m in messages:
         if m.get('role') == 'user': asked = dict(author=m.get('author') or '', content=str(m.get('content') or '')[:300])
         elif m.get('role') == 'assistant' and m.get('botId') == member and not m.get('checkOf'): turns.append(dict(m, asked=asked))
+    if store is not None:  # what the member did for each turn: the tools it used and what it says it thought
+        jobs = {j.get('messageId'): j for j in store.data['jobs'] if j.get('groupId') == group.get('id') and j.get('botId') == member}
+        turns = [dict(t, work=dict(thinking=jobs[t['id']].get('thinking') or [], calls=jobs[t['id']].get('toolCalls') or [])) if t['id'] in jobs else t for t in turns]
     before = (query.get('before') or [''])[0]
     end = next((i for i, t in enumerate(turns) if t['id'] == before), None) if before else len(turns)
     if end is None: raise ValueError('找不到這則訊息。')

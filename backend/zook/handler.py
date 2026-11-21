@@ -789,7 +789,7 @@ class Handler(BaseHTTPRequestHandler):
                         ids = group.get('activeJobIds') or ([group['activeJobId']] if group.get('activeJobId') else [])
                         return self.respond(200, {'group': page_group(group), 'jobs': [job_view(j) for j in (store.find('jobs', x) for x in ids) if j]})
                     if len(parts) == 4 and parts[3] == 'messages' and self.command == 'GET':
-                        return self.respond(200, page_group_messages(group, parse_qs(urlsplit(self.path).query)))
+                        return self.respond(200, page_group_messages(group, parse_qs(urlsplit(self.path).query), store))
                     if len(parts) == 3 and self.command == 'PATCH':
                         candidate = copy.deepcopy(group); set_group_fields(store, candidate, self.body())
                         added = candidate['messages'][len(group['messages']):]  # the discussion may still be running, so its messages stay as they are

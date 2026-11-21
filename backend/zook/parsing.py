@@ -33,6 +33,17 @@ def native_action(kind, value):
     return dict(name='native_write', category='internal', arguments={'path': value[:300]})
 
 
+THINKING_EACH, THINKING_ALL = 2000, 8000  # characters of a CLI's own thinking kept per step and per reply
+
+
+def add_thinking(out, text):
+    """Keep what a CLI says it thought (Codex reasoning summaries, Claude thinking), as plain lines, within the limits."""
+    if isinstance(text, list): text = ' '.join(str(x.get('text') if isinstance(x, dict) else x) for x in text)
+    flat = ' '.join(re.sub(r'[*_`#>]+', '', str(text or '')).split())
+    room = THINKING_ALL - sum(len(t) for t in out['thinking'])
+    if flat and room > 0: out['thinking'].append(flat[:min(THINKING_EACH, room)])
+
+
 def parse_cli_output(provider, text, model=''):
     """Reply text, token usage and quota snapshot from Codex --json / Claude stream-json output."""
     objs = []
@@ -48,7 +59,7 @@ def parse_cli_output(provider, text, model=''):
             whole = json.loads(text)
             if isinstance(whole, dict): objs.append(whole)
         except ValueError: pass
-    out = dict(content='', usage=None, quota=None, error='', isError=False, unparsable=False, web=[])
+    out = dict(content='', usage=None, quota=None, error='', isError=False, unparsable=False, web=[], thinking=[])
     if provider == 'plain':
         out['content'] = ANSI.sub('', text).strip(); return out
     if provider == 'antigravity':
@@ -179,6 +190,7 @@ def parse_cli_output(provider, text, model=''):
             kind = d.get('type')
             item = d.get('item') if isinstance(d.get('item'), dict) else {}
             if kind == 'item.completed' and item.get('type') == 'agent_message' and isinstance(item.get('text'), str): messages.append(item['text'])
+            elif kind == 'item.completed' and item.get('type') == 'reasoning': add_thinking(out, item.get('text') or item.get('summary'))
             elif kind == 'item.completed' and item.get('type') == 'web_search':
                 act = item.get('action') if isinstance(item.get('action'), dict) else {}
                 query = str(item.get('query') or act.get('query') or '')[:300]
@@ -204,7 +216,14 @@ def parse_cli_output(provider, text, model=''):
     for d in objs:
         message = d.get('message') if d.get('type') == 'assistant' and isinstance(d.get('message'), dict) else {}
         for block in message.get('content') or []:
-            if isinstance(block, dict) and block.get('type') in ('tool_use', 'server_tool_use') and block.get('name') in ('WebSearch', 'web_search', 'WebFetch', 'web_fetch'):
+            if isinstance(block, dict) and block.get('type') == 'thinking': add_thinking(out, block.get('thinking'))
+            elif isinstance(block, dict) and block.get('type') == 'tool_use' and block.get('name') in ('Read', 'Grep', 'Glob', 'LS'):
+                inp = block.get('input') if isinstance(block.get('input'), dict) else {}
+                out['web'].append(dict(name='native_read', category='read', arguments={'path': str(inp.get('file_path') or inp.get('path') or inp.get('pattern') or '')[:300]}))
+            elif isinstance(block, dict) and block.get('type') == 'tool_use' and block.get('name') == 'Skill':
+                inp = block.get('input') if isinstance(block.get('input'), dict) else {}
+                out['web'].append(dict(name='native_skill', category='read', arguments={'name': str(inp.get('skill') or inp.get('name') or inp.get('command') or '')[:120]}))
+            elif isinstance(block, dict) and block.get('type') in ('tool_use', 'server_tool_use') and block.get('name') in ('WebSearch', 'web_search', 'WebFetch', 'web_fetch'):
                 inp = block.get('input') if isinstance(block.get('input'), dict) else {}
                 if 'Fetch' in block['name'] or 'fetch' in block['name']: out['web'].append(dict(name='web_fetch', arguments={'url': str(inp.get('url') or '')[:300]}))
                 else: out['web'].append(dict(name='web_search', arguments={'query': str(inp.get('query') or '')[:200]}))

@@ -242,6 +242,8 @@
       case 'web_search': return a.query ? `上網搜尋「${String(a.query).slice(0, 60)}」` : '上網搜尋';
       case 'native_write': return `修改檔案「${fileName(a.path)}」`;
       case 'native_command': return '在工作資料夾執行指令';
+      case 'native_read': return `查看「${fileName(a.path) || '檔案'}」`;
+      case 'native_skill': return `使用 Skill「${String(a.name || 'Skill').slice(0, 60)}」`;
       case 'web_fetch': return `讀取網頁「${(String(a.url || '').match(/^https?:\/\/([^/]+)/) || [, a.url || '網頁'])[1]}」`;
     }
     return `使用「${c.sourceLabel || '外部服務'}」${c.label ? '的' + humanWords(c.label) + '功能' : ''}`;

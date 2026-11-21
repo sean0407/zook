@@ -721,6 +721,8 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             if native and cli_used_tools(kind, output.decode('utf-8', errors='replace')):
                 with store.lock: job['mayHaveActed'] = True  # these CLIs do not always report what their tools did when they fail
             parsed['web'] = (parsed.get('web') or []) + feature_events(kind, output.decode('utf-8', errors='replace'), features, cli_cwd, started_at)
+            if parsed.get('thinking'):
+                with store.lock: (store.find('jobs', job_id) or {})['thinking'] = parsed['thinking']  # shown with the member's work, not sent with every refresh
             if parsed.get('web'):
                 with store.lock:
                     job = store.find('jobs', job_id)

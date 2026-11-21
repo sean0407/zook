@@ -108,23 +108,29 @@
   }
   const memberMark = g => { const last = (g.messages || []).slice(-1)[0]; return [g.status, last?.id, last?.status, (g.messages || []).length + (g.olderCount || 0)].join('|'); };
   document.addEventListener('click', e => { const el = e.target.closest?.('[data-member-older]'); if (el && state.memberWork) { const g = state.data.groups.find(x => x.id === state.memberWork.group), b = state.data.bots.find(x => x.id === state.memberWork.bot); if (g && b) loadMemberTurns(g, b, true); } });
+  // Everything one member did for one turn, in order: Skills, connectors, tools, pages and files it looked at.
+  function workSteps(calls) {
+    return `<ol class="work-list">${calls.slice(0, 200).map(c => { const [cls, label] = callStatus(c); return `<li class="tool-event ${cls}" title="${esc(label + (c.name === 'native_command' && c.arguments?.command ? '：' + c.arguments.command : ''))}"><span class="ev-dot ${cls}" role="img" aria-label="${esc(label)}"></span><span class="ev-text">${esc(describeCall(c))}</span></li>`; }).join('')}</ol>`;
+  }
   function memberWork(b, g) {
     const jobs = {}; for (const j of Object.values(state.jobDetails)) if (j.groupId === g.id && j.botId === b.id) jobs[j.messageId] = j;
     const got = state.memberTurns[g.id + ':' + b.id];
     if (!got || got.mark !== memberMark(g)) setTimeout(() => loadMemberTurns(g, b), 0);
     const said = got?.turns || [];
     const turns = said.map(m => {
-      const job = jobs[m.id], calls = job?.toolCalls || [], q = m.asked;
-      const steps = calls.length ? `<div class="work-steps">${toolTimeline(b.id, [job])}</div>` : `<div class="work-none">${job && !job.slim ? '這次沒有查資料或使用 Skill，直接回覆。' : '這次的過程紀錄已經整理掉了（只保留最近的回覆）。'}</div>`;
+      const job = jobs[m.id], calls = (job?.status === 'running' ? job.toolCalls : m.work?.calls || job?.toolCalls) || [], thinking = m.work?.thinking || [], q = m.asked;
+      const steps = calls.length ? `<div class="work-steps">${workSteps(calls)}</div>` : `<div class="work-none">${m.work || (job && !job.slim) ? '這次沒有使用 Skill、連接器或工具，也沒有查資料，直接回覆。' : '這次的過程紀錄已經整理掉了（只保留最近的回覆）。'}</div>`;
+      const thought = thinking.length ? `<details class="work-thinking"><summary>思考過程</summary>${thinking.map(t => `<p>${esc(t)}</p>`).join('')}</details>` : '';
       const end = m.status === 'running' ? '<div class="bubble">正在進行…</div>' : m.content ? `<div class="bubble md">${markdown(m.content)}</div>` : `<div class="bubble">${esc(m.status === 'cancelled' ? '已停止' : '沒有回覆')}</div>`;
-      return `<div class="date">${esc(formatDate(m.createdAt))}</div>${q ? `<div class="work-ask"><span>${esc(q.author || '你')} 在群組說</span>${esc(String(q.content || '').slice(0, 300))}</div>` : ''}<div class="work-turn"><div class="work-label">過程</div>${steps}<div class="work-label">丟回群組的結論</div><div class="message assistant">${avatar(b)}${end}</div></div>`;
+      return `<div class="date">${esc(formatDate(m.createdAt))}</div>${q ? `<div class="work-ask"><span>${esc(q.author || '你')} 在群組說</span>${esc(String(q.content || '').slice(0, 300))}</div>` : ''}<div class="work-turn"><div class="work-label">過程（Skill、連接器、工具、查了什麼、做了什麼）</div>${steps}${thought}<div class="work-label">想完後在群組的回應</div><div class="message assistant">${avatar(b)}${end}</div></div>`;
     }).join('');
-    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-bot">${avatar(b)}${esc(b.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn" data-member-work="" data-back="group" data-group="${esc(g.id)}">‹ 回到群組</button><button class="text-btn" data-member-work="">和 ${esc(b.name)} 的對話</button>${!state.detailOpen ? '<button class="text-btn" data-action="toggle-detail">顯示詳情</button>' : ''}</div></header><div class="conversation" id="conversation"><div class="conversation-inner"><div class="work-head">${esc(b.name)} 在「${esc(g.name)}」的工作過程<small>這裡看得到他每次發言前做了什麼；群組裡只會出現結論。</small></div>${got?.more ? '<div class="older-bar"><button class="link" data-member-older="1">載入更早的發言</button></div>' : ''}${turns || `<div class="detail-empty">${got ? '他還沒有在這個討論中發言。' : '正在讀取…'}</div>`}</div></div></main>${state.detailOpen ? detail(b) : ''}`;
+    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-bot">${avatar(b)}${esc(b.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn" data-member-work="" data-back="group" data-group="${esc(g.id)}">‹ 回到群組</button><button class="text-btn" data-action="chats" title="所有對話">☰ 群組：${esc(g.name)}</button><button class="text-btn" data-member-work="">和 ${esc(b.name)} 的對話</button>${!state.detailOpen ? '<button class="text-btn" data-action="toggle-detail">顯示詳情</button>' : ''}</div></header><div class="conversation" id="conversation"><div class="conversation-inner"><div class="work-head">${esc(b.name)} 在「${esc(g.name)}」的工作過程<small>每次發言前用了哪些 Skill、連接器和工具，查了什麼、做了什麼、怎麼想的；群組裡只放想完後的回應。</small></div>${got?.more ? '<div class="older-bar"><button class="link" data-member-older="1">載入更早的發言</button></div>' : ''}${turns || `<div class="detail-empty">${got ? '他還沒有在這個討論中發言。' : '正在讀取…'}</div>`}</div></div></main>${state.detailOpen ? detail(b) : ''}`;
   }
   document.addEventListener('click', e => {
     const row = e.target.closest('[data-member-work]');
     if (!row) return;
     const bot = row.dataset.memberWork, group = row.dataset.group;
+    if (row.dataset.closeModal) closeModal();
     if (bot) { state.memberWork = {bot, group}; state.groupId = null; state.selected = bot; state.page = 'chat'; }
     else { state.memberWork = null; if (row.dataset.back === 'group' && group) { state.groupId = group; state.page = 'chat'; } }
     render();
