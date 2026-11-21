@@ -438,20 +438,14 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             job = store.find('jobs', job_id)
             if not job or job['status'] != 'running': return
             if bot is None: bot = copy.deepcopy(store.find('bots', job['botId']))
-            chain = [tuple(x) for x in job['autoChain']] if job.get('autoChain') else provider_chain(store, bot, provider, model)
-            auto = bot.get('provider') == AUTO
-            # The third part is the account 自動選擇 picked ('' its CLI's own sign-in). A 自動選擇 Bot never uses an account of its own;
-            # any other Bot keeps its own account (None).
-            chain = [(x[0], x[1], x[2] if len(x) > 2 else '' if auto else None) for x in chain]
+            raw = [list(x) for x in job['autoChain']] if job.get('autoChain') else [list(x) for x in provider_chain(store, bot, provider, model)]
+            auto, named = bot.get('provider') == AUTO, bool(job.get('autoNamed') and job.get('redoOf'))  # only the user's own 換模型重答 names a model
+            # (CLI, model, account, check). The account is the one 自動選擇 picked ('' its CLI's own sign-in); a 自動選擇 Bot never uses an
+            # account of its own, any other Bot keeps its own (None). A pick is checked again right before it runs: the user may have
+            # switched it off, removed the account, or it may have turned out to be billed since it was made.
+            chain = [(x[0], x[1], x[2] if len(x) > 2 else '' if auto else None, len(x) > 2 and not named) for x in raw]
             if job.get('plan'): chain = [x for x in chain if provider_kind(x[0]) in PLAN_KINDS] or chain[:1]  # a backup must be held to read-only too
             first, skipped = chain[0], {}
-            if auto and job.get('autoChain') and not job.get('autoNamed'):  # picked earlier: the user may have switched it off or removed it since
-                for x in chain[:]:
-                    problem = auto_choice_problem(store, x[0], x[2] or '')
-                    if problem: skipped[x] = problem; chain.remove(x)
-                if not chain:
-                    job.update(status='failed', error='自動選擇選的模型現在不能用（%s）。請到「各模型使用量」確認。' % '、'.join('%s %s' % (auto_choice_name(x[0], x[2] or ''), r) for x, r in skipped.items()), finishedAt=NOW())
-                    store.finish_message(job, '', 'failed'); store.save(); return
             for x in chain[:]:
                 p, a = x[0], x[2]
                 used_up = quota_exhausted(store, p + '@' + a) if a else quota_exhausted(store, p) and not find_account(bot.get('account'), p)
@@ -460,12 +454,20 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             if budget_blocks(store, chain[0][0]) == 'stop':
                 job.update(status='failed', error='這個月的用量預算已用完。可到「各模型使用量」調整上限。', finishedAt=NOW())
                 store.finish_message(job, '', 'failed'); store.save(); return
-        why = skipped.get(first)
-        if job.get('compact'): prompt = self.compact_chat(job_id, prompt, chain[0][:2], bot if chain[0][2] is None else dict(bot, account=chain[0][2]), inventory)  # two long replies in a row: start this one from a summary
-        for index, (p, m, a) in enumerate(chain):
+        why, compacted = skipped.get(first), False
+        for index, (p, m, a, check) in enumerate(chain):
             final = index == len(chain) - 1
             run_bot = bot if a is None else dict(bot, account=a)  # the account 自動選擇 picked for this try
-            with store.lock: (store.find('jobs', job_id) or {})['ran'] = [p, m, run_bot.get('account') or '']  # what really runs, for the task limits
+            with store.lock:
+                problem = auto_choice_problem(store, p, a or '') if check else ''
+                if problem:
+                    if (p, a) == (first[0], first[2]): why = problem
+                    if not final: continue
+                    job = store.find('jobs', job_id) or {}
+                    job.update(status='failed', error='自動選擇選的 %s 現在不能用（%s）。請到「各模型使用量」確認。' % (auto_choice_name(p, a or ''), problem), finishedAt=NOW())
+                    store.finish_message(job, '', 'failed'); store.save(); return
+                (store.find('jobs', job_id) or {})['ran'] = [p, m, run_bot.get('account') or '']  # what really runs, for the task limits
+            if job.get('compact') and not compacted: compacted = True; prompt = self.compact_chat(job_id, prompt, (p, m), run_bot, inventory)  # two long replies in a row: start this one from a summary
             with store.lock: before = len(store.find('jobs', job_id).get('toolCalls') or [])
             self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)
             with store.lock:

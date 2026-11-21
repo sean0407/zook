@@ -53,6 +53,7 @@ class GrokQuotaTest(unittest.TestCase):
         self.m = load(); self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name)
         self.cli = self.root / 'grok'; self.cli.write_text(FAKE); self.cli.chmod(0o755); self.log = self.root / 'log.txt'
         self.env = dict(os.environ, FAKE_LOG=str(self.log)); self.folder = self.root / 'screen'
+        self.m.GROK_ENV_KEEP += ('FAKE_LOG', 'FAKE_JSON', 'FAKE_SCREEN', 'FAKE_TRUST', 'FAKE_SWAP', 'FAKE_JSON_HANG')  # the fake Grok's own settings
 
     def tearDown(self): self.temp.cleanup()
 
@@ -89,14 +90,22 @@ class GrokQuotaTest(unittest.TestCase):
         self.assertIsNone(self.m.grok_screen_left(str(self.cli), self.env, link, 2))
 
     def test_a_hanging_usage_json_is_closed_with_what_it_started(self):
-        self.env['FAKE_JSON_HANG'] = '1'; self.m.GROK_SCREEN_WAIT = 2
-        real = self.m.subprocess.Popen.communicate
-        def quick(proc, *a, **k): return real(proc, *a, **dict(k, timeout=1))
-        self.m.subprocess.Popen.communicate = quick
-        try: self.m.grok_usage_json(str(self.cli), self.env)
-        finally: self.m.subprocess.Popen.communicate = real
+        self.env['FAKE_JSON_HANG'] = '1'; self.m.GROK_JSON_WAIT = 1
+        self.assertIsNone(self.m.grok_usage_json(str(self.cli), self.env))
         child = int(next(x for x in self.lines() if x.startswith('jsonchild')).split()[1]); time.sleep(.3)
         self.assertFalse(alive(child))
+
+    def test_only_what_grok_needs_from_the_environment(self):
+        env = self.m.grok_probe_env(dict(HOME='/h', PATH='/p', LANG='zh_TW.UTF-8', LC_ALL='x', GROK_HOME='/g', OPENAI_API_KEY='secret', ZOOK_WORKER_TOKEN='t', XAI_API_KEY='k'))
+        self.assertEqual(sorted(env), ['GROK_HOME', 'HOME', 'LANG', 'LC_ALL', 'PATH'])
+
+    def test_the_trust_question_alone(self):
+        f = Path('/x/zook/grok-usage'); q = 'Do you trust the contents of this directory?'
+        ok = '%s  /x/zook/grok-usage  Grok Build may run or modify contents in this directory,  posing security risks.  Yes, proceed  y  No, quit  n  Grok Build  1.0.89  /x/z/grok-usage  ⠀⣀⡀ ╭──╮' % q
+        self.assertTrue(self.m.grok_only_trust_question(ok, f))
+        self.assertFalse(self.m.grok_only_trust_question(ok + ' Help improve Grok [Opt out] [Opt in]', f))
+        self.assertFalse(self.m.grok_only_trust_question(ok.replace('/x/zook/grok-usage', '/elsewhere'), f))
+        self.assertFalse(self.m.grok_only_trust_question('Weekly limit left: 3%', f))
 
     def test_two_figures_in_json_are_not_guessed(self):
         self.env['FAKE_JSON'] = '{"weekly": {"remainingPercent": 81.5}, "daily": {"remainingPercent": 2}}'

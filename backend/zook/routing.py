@@ -78,11 +78,18 @@ def auto_account_status(account):
     return auto_state(account['provider'], view['status'], view['method'], account)
 
 
+def auto_ready(store, key):
+    """Lock held. Known to be signed in to a subscription: billing is known to be off, and it is not known to be signed out."""
+    status = (store.data.get('autoStatus') or {}).get(key)
+    return isinstance(status, dict) and status.get('billed') is False and status.get('signedIn') is not False
+
+
 def auto_account_on(store, account):
     """Lock held. Whether 自動選擇 may use this extra account."""
     status = (store.data.get('autoStatus') or {}).get(auto_account_key(account)) or {}
     if account.get('type') == 'key' or auto_known_billed(status): return False  # API billing is never picked automatically
-    chosen = (store.data['settings'].get('autoAccounts') or {}).get(account['id'])
+    switches = store.data['settings'].get('autoAccounts')
+    chosen = switches.get(account['id']) if isinstance(switches, dict) else None  # a malformed value (an old backup) counts as not set
     if isinstance(chosen, bool): return chosen
     return account['provider'] not in AUTO_DEFAULT_OFF and status.get('signedIn') is True and status.get('billed') is False
 
@@ -95,10 +102,12 @@ def auto_choice_problem(store, provider, account_id):
     status = store.data.get('autoStatus') or {}
     if not account_id:
         if auto_known_billed(status.get(provider)): return 'API 計費不會被自動選用'
-        return '' if provider in auto_allowed(store) else '已關閉自動選用'
+        if provider not in auto_allowed(store): return '已關閉自動選用'
+        return '' if auto_ready(store, provider) else '還沒確認是訂閱帳號'
     account = find_account(account_id, provider)
     if not account: return '帳號已移除'
-    return '' if auto_account_on(store, account) else '已關閉自動選用或使用 API 計費'
+    if not auto_account_on(store, account): return '已關閉自動選用或使用 API 計費'
+    return '' if auto_ready(store, auto_account_key(account)) else '還沒確認是訂閱帳號'
 
 
 def auto_choice_name(provider, account_id=''):
@@ -206,7 +215,7 @@ def pick_auto(store, content, names=(), plan=False, bot=None, taken=None, keep=N
         threading.Thread(target=refresh_auto_status, args=(store,), daemon=True).start()
         raise ValueError('正在確認各模型的登入狀態，請幾秒後再送一次。')
     status = store.data['autoStatus']; main = auto_allowed(store)
-    def ready(key): return (status.get(key) or {}).get('billed') is False and (status.get(key) or {}).get('signedIn') is not False
+    ready = lambda key: auto_ready(store, key)
     allowed = []  # (provider, account id); '' is the CLI's own sign-in, which comes before that CLI's extra accounts
     for p in order:
         if not (P.spec(store.data, p) and find_cli(p)): continue

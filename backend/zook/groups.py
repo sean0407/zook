@@ -298,7 +298,7 @@ class GroupRuns:
                 job['effort'] = 'fast'; auto_mark = dict(auto_mark, autoWhy=auto_mark.get('autoWhy', '') + QUICK_NOTE)
             if job['effort'] != 'standard': msg['effort'] = job['effort']
             if readonly: job['plan'] = True
-            job.update(step.get('job') or {}); msg.update(step.get('msg') or {})  # 任務引擎: whose task this is
+            job.update({k: v for k, v in (step.get('job') or {}).items() if k not in ('autoNamed', 'redoOf', 'autoChain', 'ran')}); msg.update(step.get('msg') or {})  # 任務引擎: whose task this is; never a stand-in for the user's own choice
             if step.get('targetId'): msg['checkOf'] = step['targetId']
             job['groupFiles'] = True
             starter = next((m for m in reversed(group['messages']) if m.get('role') == 'user'), {})
