@@ -33,10 +33,33 @@ def page_group(group):
     return dict(group, messages=messages[-PAGE:], olderCount=max(0, len(messages) - PAGE), memberCounts=counts, afterAsk=after)
 
 
+OUTLINE_MARKS = re.compile(r'```[a-zA-Z0-9_-]*|[*_`#>|]+|^\s*[-+]\s+|\[([^\]]*)\]\([^)]*\)', re.M)
+
+
+def outline_text(text, size):
+    """One line of plain text, at most size characters (plus 「…」 when cut)."""
+    flat = ' '.join(OUTLINE_MARKS.sub(lambda m: m.group(1) or '', str(text or '')).split())
+    return flat if len(flat) <= size else flat[:size] + '…'
+
+
+def page_outline(messages):
+    """The conversation beside the messages: every question in order, with the start of the first finished reply to it."""
+    out, last = [], None
+    for m in messages:
+        if m.get('role') == 'user':
+            last = dict(id=m.get('id'), createdAt=m.get('createdAt') or '', author=m.get('author') or '',
+                        title=outline_text(m.get('content'), 60) or ('（附件）' if m.get('attachments') else '（空白訊息）'), reply='', replyBy='')
+            out.append(last)
+        elif last is not None and not last['reply'] and m.get('role') == 'assistant' and m.get('content') and m.get('status') != 'running' and not m.get('checkOf'):
+            last.update(reply=outline_text(m.get('content'), 90), replyBy=m.get('botId') or '')
+    return out
+
+
 def page_list(messages, query):
-    """before=<id>: the page before it. from=<id>: from a little before it to the newest. all=1: everything."""
+    """before=<id>: the page before it. from=<id>: from a little before it to the newest. all=1: everything. outline=1: the outline."""
     one = lambda key: (query.get(key) or [''])[0]
     index = lambda mid: next((i for i, m in enumerate(messages) if m.get('id') == mid), None)
+    if one('outline'): return dict(outline=page_outline(messages))
     if one('all'): return dict(messages=messages, more=False)
     if one('from'):
         at = index(one('from'))

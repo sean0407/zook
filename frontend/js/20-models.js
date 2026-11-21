@@ -436,6 +436,7 @@
     if ($('#conversation')) {
       const c = $('#conversation');
       if (!keepFocus()) c.scrollTo({top: y != null && !nearBottom ? y : c.scrollHeight, behavior: 'instant'});
+      updateChatNav();  // the rail's current question and the 直接到底 button follow where the page now is
     }
     if ($('#settings-form')) {
       const f = $('#settings-form');
