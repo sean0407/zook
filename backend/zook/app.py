@@ -497,7 +497,9 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 if job['status'] != 'running': return
                 # This attempt failed and another model is available.
                 error = self.attempt_errors.pop(job_id, '')
-                if (p, a) == (first[0], first[2]): why = fallback_reason(error)
+                reason = fallback_why(error, job.pop('errorKind', None))  # this try's own kind; the next try starts without it
+                if (p, a) == (first[0], first[2]): why = reason
+                job.setdefault('attempts', []).append(dict(provider=p, reason=reason))  # only a fixed reason: what a CLI said may hold an account name or more
                 acted = job.get('mayHaveActed') or any(c.get('category') not in ('read', 'external_read') for c in (job.get('toolCalls') or [])[before:])
                 if acted:  # It already changed something; repeating the work on another model could do it twice.
                     job.update(status='failed', error=error or 'CLI 執行失敗。', finishedAt=NOW())

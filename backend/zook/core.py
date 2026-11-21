@@ -751,5 +751,17 @@ def fallback_reason(error):
     return '無法回覆'
 
 
+def fallback_why(error, kind=None):
+    """Why a model did not answer, for 「這次改用…（…）」: always one of a few fixed reasons, never words taken from the error itself
+    (it may hold an account name). The kind this try reported comes first; then what the words say."""
+    named = ERROR_REASONS.get(kind or '') if kind and kind != 'unknown' else ''
+    if named: return named
+    text = str(error or '')
+    if '時間上限' in text or '逾時' in text: return '回應逾時'
+    if 'API 金鑰' in text: return '找不到 API 金鑰'
+    why = fallback_reason(text)
+    return why if why != '無法回覆' else ('無法回覆（沒有說明原因）' if not text.strip() else '無法回覆（CLI 回報錯誤）')
+
+
 def is_pass(content):
     return content.strip().strip('。.!！').upper() == 'PASS'
