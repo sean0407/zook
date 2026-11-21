@@ -79,7 +79,8 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 
 每個改動都要過這三層，缺一層就在報告寫「未驗證」：
 
-1. **自動測試**：`python3 -m unittest discover -s tests -p '*test.py'`。新功能先寫會失敗的測試，再實作。
+1. **自動測試**：`/usr/bin/python3 scripts/run_tests.py`（每個測試檔各自一個程序、同時跑幾個，全部約 2–3 分鐘；只跑幾個檔：`scripts/run_tests.py outline_test intro_test`）。開 PR 前一定跑完整一次。失敗的檔會單獨重跑一次，重跑才通過的列為「不穩定」，要找出原因修掉，不能當作沒事。新功能先寫會失敗的測試，再實作。
+   - 每個測試檔都要能單獨跑（不能依賴其他測試先載入的東西）；啟動 Zook 並用假 CLI 的測試要設 `ZOOK_NO_INTRO=1`。
 2. **介面實測**：啟動臨時伺服器，用內建瀏覽器實際操作。
    ```sh
    ZOOK_SKIP_UPDATE_CHECK=1 ZOOK_SECRETS_DIR=<暫存> python3 backend/server.py --port 8791 --data-dir <暫存>/data --assets frontend
@@ -123,7 +124,7 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 7. 驗收報告：每條驗收條件寫「通過／未通過／未驗證」和證據，寫在進度檔。
 8. 更新 ROADMAP 的狀態，推送分支，用 sean0407 開 PR（`gh pr create --repo sean0407/zook --base main`，說明列出驗收結果、審查結果和要發佈的版本號），交給「ZOOK發佈」。
 
-GitHub Actions（`.github/workflows/test.yml`）會在每次推送跑測試和建置，沒過不能併入。
+GitHub Actions（`.github/workflows/test.yml`）在每個 PR 和推送到 `main` 時用同一個 `scripts/run_tests.py` 跑測試，再建置與檢查 App；沒過不能併入。
 
 ## 發佈（由「ZOOK發佈」對話做）
 

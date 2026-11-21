@@ -287,6 +287,7 @@ class UsageTest(unittest.TestCase):
     def test_startup_recovery_and_legacy_mcp(self):
         import builtins
         spec = importlib.util.spec_from_file_location('swarmr_server_legacy', SERVER)
+        if str(SERVER.parent) not in sys.path: sys.path.insert(0, str(SERVER.parent))  # where the vendored TOML reader is, as when Zook runs
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory); (home/'.codex').mkdir()
