@@ -117,9 +117,10 @@ struct ChatView: View {
                 }
             if running {
                 Button { stop() } label: { Image(systemName: "stop.circle.fill").font(.system(size: 32)) }.accessibilityLabel("停止回覆")
-            } else {
+            }
+            if !running || kind == .group {  // a group discussion takes 插話 without stopping
                 Button { send() } label: { Image(systemName: "arrow.up.circle.fill").font(.system(size: 32)) }
-                    .disabled((draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && photos.isEmpty) || sending || model.state != .online).accessibilityLabel("送出")
+                    .disabled((draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && photos.isEmpty) || sending || model.state != .online).accessibilityLabel(running ? "插話" : "送出")
             }
         }
         .padding(.horizontal).padding(.vertical, 8)

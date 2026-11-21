@@ -809,10 +809,10 @@ class Handler(BaseHTTPRequestHandler):
                         if self.device and isinstance(body.get('attachments'), list) and len(body['attachments']) > MOBILE_PHOTOS: return self.error(400, '手機每則訊息最多 %d 張照片。' % MOBILE_PHOTOS)
                         once = send_key('group:' + group['id'], body); sent = send_seen(self.server, once)
                         if sent: return self.respond(202, dict(sent, duplicate=True))
-                        try: run_id = self.server.post_group_message(group, body.get('content'), attachments=attachments_for(store, body.get('attachments')), effort=body.get('effort'), mode=body.get('mode'))
+                        try: sent = self.server.user_group_message(group, body)  # 插話 while it runs
                         except RuntimeError as exc: return self.error(409, str(exc))
-                        send_remember(self.server, once, {'runId': run_id})
-                        store.save(); return self.respond(202, {'runId': run_id})
+                        send_remember(self.server, once, sent)
+                        store.save(); return self.respond(202, sent)
                     if len(parts) == 4 and parts[3] == 'continue' and self.command == 'POST':
                         body = self.body()
                         if body.get('discard') is True: group.pop('paused', None); store.save(); return self.respond(200, group)
@@ -848,7 +848,7 @@ class Handler(BaseHTTPRequestHandler):
                     if len(parts) >= 5 and parts[3] in ('tasks', 'gates'): return task_route(self, store, group, parts)  # 任務引擎 (taskcheck.py)
                     if len(parts) == 4 and parts[3] == 'stop' and self.command == 'POST':
                         ids = group.get('activeJobIds') or ([group['activeJobId']] if group.get('activeJobId') else [])
-                        group.update(status='idle', runId=None, activeJobId=None, activeJobIds=[]); task_stop(store, group)
+                        group.update(status='idle', runId=None, activeJobId=None, activeJobIds=[]); group_stopped(store, group)
                         for job in [j for j in (store.find('jobs', x) for x in ids) if j]: self.server.cancel_job(job)
                         store.save(); return self.respond(200, group)
                     return self.error(404, '找不到資源。')

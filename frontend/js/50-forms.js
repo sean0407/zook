@@ -252,7 +252,9 @@
         state.sendIds[sendFor] = {content, id: clientId};
         const g = activeGroup();
         if (g) {
-          await post('groups/' + encodeURIComponent(g.id) + '/messages', {content, attachments, effort: pickedEffort(), mode: currentGroupMode(g), clientId});
+          if (g.status === 'running' && attachments.length) { toast('討論進行中只能傳文字；附件請等這輪結束或先停止'); return; }
+          const sent = await post('groups/' + encodeURIComponent(g.id) + '/messages', {content, attachments, effort: pickedEffort(), mode: currentGroupMode(g), clientId});
+          if (sent?.interjected) toast(sent.waiting ? '這種討論方式不中途改變，這輪結束後就回覆你這則' : sent.next?.length ? `已加入討論，${sent.next.join('、')} 接著回覆` : '已加入討論，接下來發言的成員都會看到');
           delete state.sendIds[sendFor];
           input.value = ''; updateInputMirror(); pendingList().length = 0; delete state.groupMode[g.id]; state.groupEstimate = null;
           await refresh();

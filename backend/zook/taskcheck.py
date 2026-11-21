@@ -220,7 +220,7 @@ class TaskChecks:
     def task_resume(self, group):
         """Lock held. Start a run's loop again after it ended (the user asked to retry one of its tasks)."""
         run_id = ID(); run = group['taskRun']
-        group.update(status='running', runId=run_id, activeJobId=None, activeJobIds=[])
+        group.update(status='running', runId=run_id, activeJobId=None, activeJobIds=[], runKind='steps')  # 插話 waits for the end of a task run
         run.update(status='running', groupRunId=run_id, hostMissed=0)  # the counts stay as they are; the retry route gave its own room
         threading.Thread(target=self._task_resumed, args=(group['id'], run_id), daemon=True).start()
 
@@ -229,7 +229,11 @@ class TaskChecks:
         finally:
             with self.store.lock:
                 group = self.store.find('groups', group_id)
-                if group and group.get('runId') == run_id: group.update(status='idle', runId=None, activeJobId=None, activeJobIds=[])
+                if group and group.get('runId') == run_id:
+                    group.update(status='idle', runId=None, activeJobId=None, activeJobIds=[])
+                    if not group.get('paused'):
+                        for m in group['messages']: m.pop('waiting', None)
+                        self._answer_interjection(group)
                 self.store.save()
 
     def _task_verify(self, group_id, run_id, task_id):

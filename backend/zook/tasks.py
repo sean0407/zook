@@ -262,7 +262,7 @@ def task_roster(store, group, run):
 def task_transcript(store, group, limit=12):
     """The group's own conversation for the host: the user's messages and replies, without the members' task work."""
     names = {b['id']: b['name'] for b in store.data['bots']}
-    said = [m for m in group['messages'] if m.get('content') and m.get('role') in ('user', 'assistant') and not m.get('taskId')]
+    said = [m for m in group['messages'] if m.get('content') and m.get('role') in ('user', 'assistant') and not m.get('taskId') and not m.get('waiting')]  # 插話 waits for the end of the run
     return '\n'.join(('使用者' if m['role'] == 'user' else names.get(m.get('botId'), '已刪除的 Bot')) + '：' + m['content'][:2000] for m in said[-limit:])
 
 
