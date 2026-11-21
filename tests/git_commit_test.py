@@ -23,17 +23,20 @@ class GitCommit(unittest.TestCase):
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name)
+        self.home = os.environ.get('HOME'); os.environ['HOME'] = str(self.root)  # the author comes from this user's git settings
+        (self.root / '.gitconfig').write_text('[user]\n\tname = Tester\n\temail = t@example.com\n')
         self.repo = self.root / 'proj'; self.repo.mkdir(); git(self.repo, 'init', '-q')
         git(self.repo, 'config', 'user.name', 'Tester'); git(self.repo, 'config', 'user.email', 't@example.com')
         (self.repo / 'a.txt').write_text('one\n'); git(self.repo, 'add', '-A'); git(self.repo, 'commit', '-q', '-m', 'first')
 
-    def tearDown(self): self.temp.cleanup()
+    def tearDown(self):
+        os.environ['HOME'] = self.home; self.temp.cleanup()
 
     def test_changes_are_committed_as_the_user_without_hooks(self):
         hook = self.repo / '.git/hooks/pre-commit'; hook.write_text('#!/bin/sh\ntouch "%s"\nexit 1\n' % (self.root / 'hook-ran')); hook.chmod(0o755)
         (self.repo / 'a.txt').write_text('two\n'); (self.repo / 'b.txt').write_text('new\n')
         result = self.m.git_commit(self.repo, '修好 a 並新增 b')
-        self.assertTrue(result['committed']); self.assertEqual(sorted(result['files']), ['a.txt', 'b.txt']); self.assertEqual(result['author'], 'Tester')
+        self.assertTrue(result['committed']); self.assertEqual(sorted(result['files']), ['a.txt', 'b.txt']); self.assertEqual(git(self.repo, 'log', '-1', '--format=%an'), 'Tester\n'); self.assertNotIn('author', result)
         self.assertIn('修好 a 並新增 b', git(self.repo, 'log', '-1', '--format=%s'))
         self.assertFalse((self.root / 'hook-ran').exists())  # hooks never run
 
@@ -77,20 +80,42 @@ class GitCommit(unittest.TestCase):
     def test_a_nested_repository_is_not_added(self):
         other = self.root / 'other'; other.mkdir(); git(other, 'init', '-q'); (other / 'o.txt').write_text('o'); git(other, 'add', '-A'); git(other, 'commit', '-q', '-m', 'o')
         nested = self.repo / 'peek'; nested.mkdir(); (nested / '.git').write_text('gitdir: %s\n' % (other / '.git'))
+        (other / 'o.txt').write_text('changed')  # git must not even look there: refused before anything is added
         with self.assertRaises(RuntimeError) as caught: self.m.git_commit(self.repo, 'x')
         self.assertIn('另一個 git 專案', str(caught.exception))
         self.assertEqual(git(self.repo, 'diff', '--cached', '--name-only'), '')  # nothing left staged
         self.assertEqual(git(self.repo, 'log', '--format=%s'), 'first\n')
 
+    def test_the_users_own_filters_never_run(self):
+        (self.root / '.gitconfig').write_text('[user]\n\tname = Tester\n\temail = t@example.com\n[filter "x"]\n\tclean = touch %s\n' % (self.root / 'ran'))
+        (self.repo / '.gitattributes').write_text('*.txt filter=x\n'); (self.repo / 'a.txt').write_text('changed')
+        self.assertTrue(self.m.git_commit(self.repo, 'x')['committed']); self.assertFalse((self.root / 'ran').exists())
+
+    def test_the_users_staging_and_ongoing_work_are_left_alone(self):
+        (self.repo / 'a.txt').write_text('mine'); git(self.repo, 'add', 'a.txt'); (self.repo / 'b.txt').write_text('bot')
+        with self.assertRaises(RuntimeError) as caught: self.m.git_commit(self.repo, 'x')
+        self.assertIn('暫存', str(caught.exception)); self.assertEqual(git(self.repo, 'diff', '--cached', '--name-only'), 'a.txt\n')
+        git(self.repo, 'reset', '-q'); (self.repo / '.git/MERGE_HEAD').write_text(git(self.repo, 'rev-parse', 'HEAD'))
+        with self.assertRaises(RuntimeError) as caught: self.m.git_commit(self.repo, 'x')
+        self.assertIn('合併', str(caught.exception))
+
+    def test_unreadable_folder_in_git_is_refused(self):
+        locked = self.repo / '.git' / 'refs' / 'locked'; locked.mkdir(); os.chmod(locked, 0o100)  # can enter, cannot list
+        try:
+            (self.repo / 'a.txt').write_text('x')
+            with self.assertRaises(RuntimeError): self.m.git_commit(self.repo, 'x')
+        finally: os.chmod(locked, 0o700)
+
     def test_offered_only_outside_the_whole_mac(self):
         class R:
             @staticmethod
             def _schema(name, *a, **k): return {'name': name}
-        self.assertEqual(self.m.git_tools(None, {}, 'full', self.repo, R, 'codex'), [])
-        self.assertEqual(self.m.git_tools(None, {}, 'folder', self.root, R, 'codex'), [])  # not a repository
-        self.assertEqual(self.m.git_tools(None, {}, 'folder', self.repo, R, 'claude'), [])  # its own tools can write .git
-        tools = self.m.git_tools(None, {}, 'folder', self.repo, R, 'codex')
-        self.assertEqual((tools[0][0]['name'], tools[0][2]), ('zook_git_commit', True))  # asks first as 主動性 says
+        store = self.m.Store(self.root / 'data'); self.m._active['data'] = store.data
+        bot = dict(id='c' * 32, name='開發', access='folder', accessFolder=str(self.repo)); store.data['bots'].append(bot)
+        self.assertEqual(self.m.git_tools(store, bot, 'full', self.repo, R, 'codex'), [])
+        self.assertEqual(self.m.git_tools(store, bot, 'folder', self.root, R, 'codex'), [])  # not a repository
+        self.assertEqual(self.m.git_tools(store, bot, 'folder', self.repo, R, 'claude'), [])  # its own tools can write .git
+        self.assertEqual(self.m.git_tools(store, bot, 'folder', self.repo, R, 'codex'), [])  # paused for every CLI until git runs in a sandbox
 
     def test_zook_file_tools_cannot_write_git_data(self):
         sys.path.insert(0, str(SERVER.parent)); import runtime
@@ -101,6 +126,9 @@ class GitCommit(unittest.TestCase):
             self.assertTrue(out.get('isError'), path); self.assertIn('.git', out['content'][0]['text'])
         self.assertEqual((self.repo / '.git/config').read_text(), before); self.assertFalse((self.repo / '.git/hooks/pre-commit').exists())
         self.assertFalse(session.call('zook_workspace_write', {'path': 'ok.txt', 'content': 'x'}).get('isError'))  # other files still work
+        outside = self.root / 'outside.txt'; outside.write_text('keep'); os.link(str(outside), str(self.repo / 'linked.txt'))
+        self.assertTrue(session.call('zook_workspace_write', {'path': 'linked.txt', 'content': 'x'}).get('isError'))  # a hard link to a file elsewhere
+        self.assertEqual(outside.read_text(), 'keep')
 
 
 if __name__ == '__main__': unittest.main()
