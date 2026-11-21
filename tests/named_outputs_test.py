@@ -43,6 +43,20 @@ class NamedOutputs(unittest.TestCase):
         names = [o['name'] for o in self.m.bot_outputs(self.store, self.bot)]
         self.assertIn('第三季業績.xlsx', names); self.assertNotIn('舊檔.pdf', names)  # named, but not changed by this reply
 
+    def test_whole_words_only_and_quick_on_odd_text(self):
+        self.assertEqual(self.m.named_paths('存在 /tmp/a/sales.xlsx-old 和 /tmp/a/報表.xlsx。網址 https://a.com/b.html'), ['/tmp/a/報表.xlsx'])
+        start = time.time(); self.m.named_paths('/a' * 20000 + '/'); self.m.named_paths(('/x' * 50 + ' ') * 400)
+        self.assertLess(time.time() - start, 1)  # no backtracking on long runs of slashes
+
+    def test_plans_and_attachments_are_not_outputs(self):
+        start = time.time()
+        made = self.root / 'plan.xlsx'; made.write_bytes(b'x')
+        self.job('規劃：會存到 %s' % made, start, time.time() + 1, plan=True)
+        given = self.store.dir / 'workspaces' / self.bot['id'] / 'attachments' / 'a.csv'; given.parent.mkdir(parents=True); given.write_bytes(b'x')
+        self.job('讀了 %s' % given, start, time.time() + 1)
+        names = [o['name'] for o in self.m.bot_outputs(self.store, self.bot)]
+        self.assertNotIn('plan.xlsx', names); self.assertNotIn('a.csv', names)
+
     def test_named_files_survive_when_old_replies_are_trimmed(self):
         made = self.root / 'r.xlsx'; start = time.time(); made.write_bytes(b'x')
         self.job('存在 %s' % made, start, time.time() + 1)

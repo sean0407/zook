@@ -425,7 +425,7 @@ def trim_jobs(store):
         if job.get('status') == 'running' or job.get('slim') or job['id'] in waiting or job.get('groupId') in talking: continue
         seen[job['botId']] = seen.get(job['botId'], 0) + 1
         if seen[job['botId']] > JOBS_WITH_ANSWER and job.get('content'):
-            named = named_paths(job.pop('content'))  # the files its answer named still count for 產出
+            said = job.pop('content'); named = [] if job.get('plan') else named_paths(said)  # the files its answer named still count for 產出
             if named: job['wrote'] = list(dict.fromkeys((job.get('wrote') or []) + named))[:50]
             changed = True
         if seen[job['botId']] <= JOBS_FULL_PER_BOT and job['botId'] in alive: continue  # a deleted Bot's replies keep only their usage figures
