@@ -25,7 +25,7 @@ class AccountCards(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(); root = Path(self.temp.name)
         (root / 'assets').mkdir(); (root / 'assets/index.html').write_text('x'); (root / 'bin').mkdir()
         cli = root / 'bin/codex'; cli.write_text(CODEX); cli.chmod(0o755)
-        env = dict(os.environ, PATH=str(root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_SECRETS_DIR=str(root / 'secrets'))
+        env = dict(os.environ, PATH=str(root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', ZOOK_SECRETS_DIR=str(root / 'secrets'))
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(root / 'data'), '--assets', str(root / 'assets')], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
 

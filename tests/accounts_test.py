@@ -53,7 +53,7 @@ class AccountsTest(unittest.TestCase):
         for name, body in (('claude', CLAUDE), ('codex', CODEX)):
             f = self.root / 'bin' / name; f.write_text(body); f.chmod(0o755)
         (self.root / 'codex.login').touch()
-        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + os.environ['PATH'], FAKE_HOME=str(self.root), ZOOK_SKIP_UPDATE_CHECK='1', ANTHROPIC_API_KEY='should-be-removed')
+        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + os.environ['PATH'], FAKE_HOME=str(self.root), ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', ANTHROPIC_API_KEY='should-be-removed')
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')],
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']

@@ -35,7 +35,7 @@ class AutoAccountTest(unittest.TestCase):
         self.stop(); self.temp.cleanup()
 
     def start(self):
-        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', AUTO_LOG=str(self.log), ZOOK_SECRETS_DIR=str(self.root / 'secrets'))
+        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', AUTO_LOG=str(self.log), ZOOK_SECRETS_DIR=str(self.root / 'secrets'))
         env.pop('CODEX_HOME', None)
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')],
                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)

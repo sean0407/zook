@@ -20,7 +20,7 @@ class TriggerTest(unittest.TestCase):
         (self.root / 'assets').mkdir(); (self.root / 'assets/index.html').write_text('x'); (self.root / 'bin').mkdir(); (self.root / 'inbox').mkdir(); (self.root / 'secrets').mkdir()
         cli = self.root / 'bin/codex'; cli.write_text(CLI); cli.chmod(0o755)
         self.mail = self.root / 'mail.json'; self.mail.write_text('[]')
-        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_SCHEDULE_TICK='0.2', ZOOK_TRIGGER_EVERY='0.2', ZOOK_SHELL_ENV='0',
+        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', ZOOK_SCHEDULE_TICK='0.2', ZOOK_TRIGGER_EVERY='0.2', ZOOK_SHELL_ENV='0',
                    ZOOK_SECRETS_DIR=str(self.root / 'secrets'), ZOOK_TRIGGER_MAIL_FILE=str(self.mail), ZOOK_GMAIL_SKIP_CHECK='1')
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')],
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)

@@ -31,7 +31,7 @@ class ZookLayerTest(unittest.TestCase):
     """Skills and connectors that live in other tools can be brought into Zook, and moved to another Mac as one file."""
     def start(self, name):
         root = self.root / name; (root / 'home').mkdir(parents=True, exist_ok=True)
-        env = dict(os.environ, HOME=str(root / 'home'), ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_SECRETS_DIR=str(root))
+        env = dict(os.environ, HOME=str(root / 'home'), ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', ZOOK_SECRETS_DIR=str(root))
         proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(root / 'data'), '--assets', str(self.root / 'assets')],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
         ready = json.loads(proc.stdout.readline()); self.procs.append(proc)

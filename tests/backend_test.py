@@ -25,7 +25,7 @@ class BackendTest(unittest.TestCase):
         claude = self.root / 'bin/claude'
         claude.write_text('#!/usr/bin/env python3\nimport json,sys\nif \'--help\' in sys.argv or \'--version\' in sys.argv: sys.exit(0)\nsys.stdin.read()\nprint(json.dumps({"result":"claude response"}))\n')
         claude.chmod(0o755)
-        self.env = dict(os.environ, PATH=str(self.root / 'bin')+os.pathsep+os.environ['PATH'], FAKE_CHILD_PID=str(self.root/'child.pid'))
+        self.env = dict(os.environ, PATH=str(self.root / 'bin')+os.pathsep+os.environ['PATH'], FAKE_CHILD_PID=str(self.root/'child.pid'), ZOOK_NO_INTRO='1')
         self.start_server()
 
     def start_server(self):
