@@ -16,6 +16,22 @@ def _inside(path, folder):
     return path.casefold().startswith(folder.rstrip(os.sep).casefold() + os.sep)
 
 
+NAMED_SPLIT = re.compile(r'[\s`\'"<>()（）\[\]「」『』，、。：；！？*|]+')  # one pass, no backtracking
+NAMED_FILE = re.compile(r'[^/]+\.[A-Za-z0-9]{1,8}')
+
+
+def named_paths(text):
+    """Absolute file paths a reply names, e.g. 「已存到 /tmp/x/報表.xlsx」: whole words only, so 「sales.xlsx-old」 is not read as 「sales.xlsx」.
+    Only a hint: the file still has to have changed during that reply."""
+    found = []
+    for word in NAMED_SPLIT.split(str(text or '')[:20000]):
+        word = word.rstrip('。，.,:：;')
+        if word.startswith('/') and not word.startswith('//') and len(word) < 300 and NAMED_FILE.fullmatch(word.rsplit('/', 1)[-1]) and word not in found:
+            found.append(word)
+            if len(found) >= 30: break
+    return found
+
+
 def bot_outputs(store, bot):
     """Files in the Bot's working folder, plus files elsewhere that one of its replies really changed. Newest first."""
     workspace = os.path.realpath(str(store.dir / 'workspaces' / bot['id'])); data_dir = os.path.realpath(str(store.dir)); found = {}
@@ -40,12 +56,16 @@ def bot_outputs(store, bot):
             if entry.is_dir(follow_symlinks=False):
                 if depth < 3 and entry.name not in _OUTPUT_SKIP: pending.append((entry.path, depth + 1))
             elif entry.is_file(follow_symlinks=False): add(entry.path)
-    with store.lock:
-        wrote = [(str((c.get('arguments') or {}).get('path') or ''), j.get('createdAt'), j.get('finishedAt')) for j in store.data['jobs'] if j.get('botId') == bot['id']
+    with store.lock:  # only copied here; reading the replies' words happens after the lock is let go
+        mine = [j for j in store.data['jobs'] if j.get('botId') == bot['id']]
+        wrote = [(str((c.get('arguments') or {}).get('path') or ''), j.get('createdAt'), j.get('finishedAt')) for j in mine
                  for c in (j.get('toolCalls') or []) + [dict(name='native_write', arguments={'path': p}) for p in j.get('wrote') or []] if c.get('name') == 'native_write']
+        said = [(j.get('content'), j.get('createdAt'), j.get('finishedAt')) for j in mine if j.get('content') and not j.get('plan')][-40:]  # a read-only plan makes nothing
         scope, chosen = bot_scope(bot)
         folder = os.path.realpath(chosen) if scope == 'folder' and chosen else ''
-    for path, started, finished in wrote[-400:]:
+    attached = os.path.join(workspace, 'attachments')
+    named = [(p, a, b) for text, a, b in said for p in named_paths(text) if not _inside(os.path.realpath(p), attached)]  # the user's own files are not outputs
+    for path, started, finished in wrote[-400:] + named[-200:]:  # what a tool reported comes first
         if not path or len(path) >= 300 or not os.path.isabs(path) or '..' in pathlib.PurePosixPath(path).parts: continue  # cut off, relative, or climbing out
         try:
             since = datetime.datetime.fromisoformat(started).timestamp() - 2
