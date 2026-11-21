@@ -42,7 +42,7 @@ class TaskOrderTest(base.TaskEngineTest):
                     {'match': '=== 工作 1', 'calls': [done('做不到。', 'failed')]},
                     {'match': WAKE, 'reply': SUMMARY}])
         run = self.send()['taskRun']
-        self.assertEqual([t['status'] for t in run['tasks']], ['failed', 'failed'])
+        self.assertEqual([t['status'] for t in run['tasks']], ['stuck', 'failed'])
         self.assertIn('前面的工作沒有完成', run['tasks'][1]['note']); self.assertFalse(self.workers(2))
         plan = next(r for r in self.runs() if r['match'] == PLAN)
         self.assertEqual([a['error'] for a in plan['answers']], [False, False, True])  # it can only wait for a task that exists
@@ -94,7 +94,7 @@ class TaskOrderTest(base.TaskEngineTest):
                     {'match': '=== 工作 1', 'calls': [done()], 'crash': True},
                     {'match': WAKE, 'reply': SUMMARY}])
         run = self.send()['taskRun']
-        self.assertEqual([t['status'] for t in run['tasks']], ['failed', 'failed'])
+        self.assertEqual([t['status'] for t in run['tasks']], ['stuck', 'failed'])  # tried three times, then it waits for the user
         self.assertIn('回報後 CLI 出錯', run['tasks'][0]['attempts'][0]['summary'])
         self.assertFalse(self.workers(2))  # what came after it did not start
 
@@ -102,7 +102,7 @@ class TaskOrderTest(base.TaskEngineTest):
         self.engine()
         self.rules([{'match': PLAN, 'calls': [create(1, '甲')], 'reply': '分好了'}, {'match': '=== 工作', 'reply': ''}, {'match': WAKE, 'reply': SUMMARY}])
         group = self.send()
-        self.assertEqual(group['taskRun']['tasks'][0]['status'], 'failed')
+        self.assertEqual(group['taskRun']['tasks'][0]['status'], 'stuck')
         self.assertEqual(next(m for m in group['messages'] if m.get('taskId'))['status'], 'failed')
 
     def test_after_means_a_task_number_even_when_a_title_is_a_number(self):

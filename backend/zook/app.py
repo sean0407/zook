@@ -1,5 +1,5 @@
 # The running service: schedules, replies, group discussions. Loaded by backend/server.py into one shared namespace.
-class App(GroupRuns, TaskRuns, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTTPServer):
+class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTTPServer):
     daemon_threads = True
     def __init__(self, address, store, assets, token):
         super().__init__(address, Handler)
@@ -493,6 +493,7 @@ class App(GroupRuns, TaskRuns, Triggers, Syncing, Waiting, Compacting, Teams, Th
             with store.lock:
                 job = store.find('jobs', job_id)
                 if not job or job['status'] != 'running': return
+                job['ranOn'] = provider  # this attempt's CLI, for 任務引擎's checks (a backup that takes over writes its own)
                 if bot is None: bot = copy.deepcopy(store.find('bots', job['botId']))
                 added = list(job.get('addedText') or [])
             # Messages the user added while an earlier attempt was answering: a new attempt is told them too.
@@ -531,6 +532,7 @@ class App(GroupRuns, TaskRuns, Triggers, Syncing, Waiting, Compacting, Teams, Th
                 session = runtime.RuntimeSession(skill_ids, mcp_ids, bot['allowCommands'], root if scope == 'folder' else workspace,
                     lambda *a: self.approve(job_id, *a), lambda event: self.record_event(job_id, event), inventory=inventory,
                     extra_tools=(plan_safe if planning else list)(self.app_tools(bot, runtime, job.get('groupId'), job.get('origin') or 'user') + ([] if job.get('groupId') or job.get('internal') else question_tools(self, job_id, runtime, job.get('origin') or 'user')) + browser_tools(self, job_id, bot, kind, job.get('origin') or 'user', runtime) + task_tools(self, job_id, runtime)), permission_mode=lambda bot_id=bot['id']: self.live_permission(bot_id, job_id))
+                session.read_only = planning
                 token = secrets.token_urlsafe(32)
                 with store.lock:
                     job = store.find('jobs', job_id)
@@ -657,7 +659,7 @@ class App(GroupRuns, TaskRuns, Triggers, Syncing, Waiting, Compacting, Teams, Th
                 if streaming: partial_start(job)
                 # A conversation's CLI may be kept open between messages (live.py); otherwise it is started for this one reply.
                 kept = live_turn(self, job, provider, kind, args, cli_cwd, env, resume, prompt, partial_feeder(kind, job_id) if streaming else None)
-                proc = kept or subprocess.Popen(args, stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=str(cli_cwd), env=env)
+                proc = kept or subprocess.Popen(args, stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=str(cli_cwd), env=dict(env, PWD=str(cli_cwd)))  # PWD too: OpenCode takes it as its project folder
                 self.processes[job_id] = proc
             try:
                 # A reply may take as long as it keeps working. It is stopped when nothing has happened for a while (no output from the
@@ -913,7 +915,7 @@ class App(GroupRuns, TaskRuns, Triggers, Syncing, Waiting, Compacting, Teams, Th
         with self.store.lock:
             for job in self.store.data['jobs']:
                 if job.get('status') != 'running': continue
-                mode = permission_mode(self.store, self.store.find('bots', job['botId']) or {})
+                mode = 'manual' if job.get('plan') else permission_mode(self.store, self.store.find('bots', job['botId']) or {})  # a read-only reply always asks
                 for approval in job.get('approvals', []):
                     if approval.get('status') != 'pending' or not approval.get('category') or approval['category'] in ask[mode]: continue
                     approval.update(status='approved', autoApproved=True); released += 1

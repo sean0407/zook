@@ -835,6 +835,7 @@ class Handler(BaseHTTPRequestHandler):
                         body = self.body(); mode = body.get('mode') or group.get('mode') or 'free'
                         if mode not in GROUP_MODES or not isinstance(body.get('content', ''), str): raise ValueError('討論方式無效。')
                         return self.respond(200, group_estimate(store, group, body.get('content', ''), mode))
+                    if len(parts) >= 5 and parts[3] in ('tasks', 'gates'): return task_route(self, store, group, parts)  # 任務引擎 (taskcheck.py)
                     if len(parts) == 4 and parts[3] == 'stop' and self.command == 'POST':
                         ids = group.get('activeJobIds') or ([group['activeJobId']] if group.get('activeJobId') else [])
                         group.update(status='idle', runId=None, activeJobId=None, activeJobIds=[]); task_stop(store, group)

@@ -53,7 +53,7 @@ class LiveCli:
         self.session, self.job_id, self.turn, self.used, self.turns, self.spoiled = '', None, None, time.monotonic(), 0, ''
         self.lock = threading.Lock(); self.err = bytearray(); self.cost = 0.0; self.reading = False
         self.writes = queue.Queue()  # one writer, so messages reach the CLI in the order they were sent
-        self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=str(cwd), env=env)
+        self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=str(cwd), env=dict(env, PWD=str(cwd)))  # PWD too: some CLIs take it as their folder
         for target in (self._write, self._read_err): threading.Thread(target=target, daemon=True).start()
 
     def alive(self): return self.proc.poll() is None

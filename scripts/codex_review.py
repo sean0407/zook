@@ -19,7 +19,7 @@ import argparse, json, os, pathlib, re, shutil, subprocess, sys, time
 HOME = pathlib.Path.home()
 ZOOK = HOME / 'Library/Application Support/swarmr'
 STATE = HOME / '.config/zook-dev/codex-review.json'
-OUT_OF_QUOTA = re.compile(r"usage limit|rate limit|quota|too many requests|\b429\b|purchase more credits|limit reached", re.I)
+OUT_OF_QUOTA = re.compile(r"usage limit|rate limit|quota|too many requests|\b429\b|purchase more credits|out of credits|limit reached", re.I)
 
 
 def accounts():

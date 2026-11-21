@@ -23,7 +23,7 @@ prompt = sys.stdin.read()
 session = a[a.index('-s') + 1] if '-s' in a else 'ses_' + uuid.uuid4().hex[:12]
 open(known, 'a').write(session + '\n')
 config = json.loads(os.environ.get('OPENCODE_CONFIG_CONTENT') or '{}')
-with open(os.path.join(here, 'runs.log'), 'a') as f: f.write(json.dumps(dict(args=a, prompt=prompt, config=config, cwd=os.getcwd(), key=os.environ.get('OPENROUTER_API_KEY', ''), env={k: v for k, v in os.environ.items() if k.startswith('OPENCODE_') and k != 'OPENCODE_CONFIG_CONTENT'})) + '\n')
+with open(os.path.join(here, 'runs.log'), 'a') as f: f.write(json.dumps(dict(args=a, prompt=prompt, config=config, cwd=os.getcwd(), pwd=os.environ.get('PWD', ''), key=os.environ.get('OPENROUTER_API_KEY', ''), env={k: v for k, v in os.environ.items() if k.startswith('OPENCODE_') and k != 'OPENCODE_CONFIG_CONTENT'})) + '\n')
 def out(kind, **part): print(json.dumps(dict(type=kind, timestamp=1, sessionID=session, part=dict(part, sessionID=session, messageID='msg_1'))), flush=True)
 if 'LIMIT' in prompt:
     print(json.dumps(dict(type='error', timestamp=1, sessionID=session, error=dict(type='provider.free-limit', message='Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models.', status=429))), flush=True)
@@ -110,10 +110,18 @@ class OpenCodeTest(unittest.TestCase):
         self.ask('謹慎')
         rules = {(r['action'], r['effect']) for r in self.runs()[-1]['config']['permissions']}
         self.assertIn(('zook_*', 'allow'), rules); self.assertNotIn(('edit', 'allow'), rules); self.assertNotIn(('shell', 'allow'), rules)
+        reads = [r['resource'] for r in self.runs()[-1]['config']['permissions'] if r['action'] == 'read' and r['effect'] == 'allow']
+        self.assertEqual(reads, ['/var/empty/zook-reads-nothing/*'])  # the free service needs a read tool; this one reaches nothing
+        self.assertFalse(os.path.exists('/var/empty/zook-reads-nothing'))
+        run = self.runs()[-1]
+        self.assertEqual(os.path.realpath(run['pwd']), os.path.realpath(run['cwd']))  # it is told the folder it really runs in
         self.req('PATCH', '/api/bots/' + self.bot['id'], {'permissionMode': 'auto', 'access': 'workspace'})
         self.ask('自動')
         rules = {(r['action'], r['effect']) for r in self.runs()[-1]['config']['permissions']}
         self.assertIn(('edit', 'allow'), rules); self.assertNotIn(('shell', 'allow'), rules); self.assertNotIn(('external_directory', 'allow'), rules)
+        run = self.runs()[-1]
+        self.assertEqual(os.path.realpath(run['pwd']), os.path.realpath(run['cwd']))
+        self.assertNotIn(('read', 'allow'), {(r['action'], r['effect']) for r in run['config']['permissions'] if r.get('resource') == '/var/empty/zook-reads-nothing/*'})
         self.req('PATCH', '/api/bots/' + self.bot['id'], {'access': 'full'})
         self.ask('整台')
         rules = {(r['action'], r['effect']) for r in self.runs()[-1]['config']['permissions']}

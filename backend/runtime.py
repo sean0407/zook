@@ -704,6 +704,8 @@ class RuntimeSession:
             if name in self.extras:
                 source = 'builtin:zook'
             category = self.classify(name, frozen)
+            if getattr(self, 'read_only', False) and category not in ('read', 'external_read'):  # a reply that may only read (先規劃, 任務引擎's host, checks)
+                raise RuntimeError('這一則只能讀，不能做會改變東西的動作。')
             approval = category in ASK_IN_MODE[self.current_mode()]
             self._event(call_id, name, source, 'waiting_approval' if approval else 'running', frozen, category=category,
                         **({'autoApproved': True} if not approval and category != 'read' else {}))
@@ -717,7 +719,7 @@ class RuntimeSession:
                 ident, original = self.routes[name]
                 result = self.clients[ident].request('tools/call', {'name': original, 'arguments': frozen})
             elif name in self.extras:
-                value = self.extras[name][1](copy.deepcopy(frozen))
+                value = self.extras[name][1](self.redactor.value(copy.deepcopy(frozen)) if name.startswith('zook_task_') else copy.deepcopy(frozen))  # task books keep no secrets
                 # A tool that returns MCP content of its own (a screenshot is an image) marks it, and it is passed on as it is.
                 result = {'content': value['content']} if isinstance(value, dict) and value.get('__zook_raw_result__') is True else _content(value)
             elif name == 'zook_read_skill':

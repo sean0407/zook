@@ -38,7 +38,7 @@ CATALOG = {
     'opencode': dict(name='OpenCode', vendor='OpenCode', binary='opencode', kind='opencode', tools=True,
                      install='Zook 會從 https://nodejs.org 下載 Node.js，再安裝 @opencode/cli', npm_package='@opencode/cli',
                      latest_url='https://registry.npmjs.org/@opencode/cli/latest', docs='https://opencode.ai/docs',
-                     login_note='免費模型不用登入，但額度很少，用完約一天後恢復。未驗證：工具呼叫與權限限制還沒用真實模型實測。'),
+                     login_note='免費模型不用登入，但額度很少，用完約一天後恢復。'),
     'cursor': dict(name='Cursor', vendor='Cursor', binary='cursor-agent', kind='cursor', tools=True, extra_paths=['~/.local/bin/cursor-agent'],
                    install='curl https://cursor.com/install -fsS | bash', update=['update'], logout=['logout'], terminal_login=True, terminal_args=['login'], docs='https://cursor.com/docs/cli',
                    login_note='免費（Hobby）和付費方案都能用，額度依 Cursor 帳號。安裝時，Cursor 會把終端機的 agent 指令改成它自己的（Zook 用 grok 指令，不受影響）。'),

@@ -32,6 +32,9 @@ def opencode_env(base, env):
                 OPENCODE_DISABLE_CLAUDE_CODE_SKILLS='1', OPENCODE_DISABLE_CLAUDE_CODE_PROMPT='1', OPENCODE_DISABLE_AUTOUPDATE='1')
 
 
+OPENCODE_NO_FILES = '/var/empty/zook-reads-nothing/*'
+
+
 def opencode_permissions(native, planning, scope, root, web, tools, features, attachments=None):
     rules = [dict(action='*', resource='*', effect='deny')]
     allow = lambda action, resource='*': rules.append(dict(action=action, resource=resource, effect='allow'))
@@ -45,6 +48,10 @@ def opencode_permissions(native, planning, scope, root, web, tools, features, at
         if 'multi' in (features or {}): allow('subagent')
     if attachments: allow('read', str(attachments).rstrip('/') + '/*'); allow('external_directory', str(attachments).rstrip('/') + '/*')
     if web: allow('webfetch'); allow('websearch')
+    if not any(r['action'] == 'read' and r['effect'] == 'allow' for r in rules):
+        # OpenCode's free service refuses requests that offer no read tool (it answers with its free-limit error every time).
+        # This one points into /var/empty, which is empty and only the system may change: the Bot still reads nothing.
+        allow('read', OPENCODE_NO_FILES)
     return rules
 
 

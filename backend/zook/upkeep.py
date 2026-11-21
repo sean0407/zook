@@ -95,6 +95,7 @@ def backup_restore(app, name):
         data.update(keep)
         if keep_remote is not None: data['settings']['remote'] = keep_remote
         browser_keep_local(store.data, data)  # a copy never turns the browser on
+        task_keep_local(store.data, data)  # nor 任務引擎, nor work that starts by itself
         with store.path.open('w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False)
         Store.keep_aside = True  # the conversations that are there now stay in chats.old until the copy is known to be in place
         try: fresh = Store(store.dir, recover=False)  # runs the same upgrades an old data file gets at startup

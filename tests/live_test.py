@@ -12,7 +12,7 @@ if '--help' in sys.argv: print('--print --output-format --mcp-config --allowedTo
 if '--version' in sys.argv: print('9.9.9 (fake)'); sys.exit(0)
 here = os.path.dirname(sys.argv[0]); live = '--input-format' in sys.argv
 session = sys.argv[sys.argv.index('--resume') + 1] if '--resume' in sys.argv else 'sess-' + uuid.uuid4().hex[:8]
-open(os.path.join(here, 'starts.log'), 'a').write(json.dumps(dict(pid=os.getpid(), live=live, resume='--resume' in sys.argv, web='WebSearch' in ' '.join(sys.argv))) + '\n')
+open(os.path.join(here, 'starts.log'), 'a').write(json.dumps(dict(pid=os.getpid(), live=live, resume='--resume' in sys.argv, web='WebSearch' in ' '.join(sys.argv), pwd_ok=os.path.realpath(os.environ.get('PWD', '')) == os.path.realpath(os.getcwd()))) + '\n')
 def tool():
     if not os.path.exists(os.path.join(here, 'call.json')) or '--mcp-config' not in sys.argv: return ''
     config = json.loads(sys.argv[sys.argv.index('--mcp-config') + 1])['mcpServers']['zook']
@@ -99,6 +99,7 @@ class LiveTest(unittest.TestCase):
         one, two, three = self.ask(), self.ask(), self.ask()
         self.assertEqual([j['status'] for j in (one, two, three)], ['completed'] * 3)
         self.assertEqual(len(self.starts()), 1); self.assertTrue(self.starts()[0]['live'])
+        self.assertTrue(self.starts()[0]['pwd_ok'])  # a kept-open CLI is told the folder it really runs in, too
         pid = self.starts()[0]['pid']
         self.assertEqual([j['content'] for j in (one, two, three)], ['reply %d from %d' % (i, pid) for i in (1, 2, 3)])
         self.assertEqual([bool(j.get('kept')) for j in (one, two, three)], [False, True, True])

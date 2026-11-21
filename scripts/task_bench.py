@@ -32,6 +32,9 @@ def run(mode, port, keep):
         while time.time() < end:
             state = z.req('GET', 'groups/%s' % group['id'])
             g = state.get('group') or state
+            run = g.get('taskRun') or {}
+            if run.get('awaitingConfirm'):  # press 「照這個做」 for what the card shows
+                z.req('POST', 'groups/%s/tasks/confirm' % group['id'], {'tasks': [t['id'] for t in run['tasks'] if t.get('confirmed') is False and t['status'] in ('pending', 'ready', 'waiting')]})
             if g.get('status') != 'running' and time.time() - began > 3: break
             time.sleep(2)
         took = time.time() - began

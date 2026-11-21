@@ -40,7 +40,7 @@ if rule.get('calls') and config:
     proc.stdin.close(); proc.wait(timeout=5)
 time.sleep(rule.get('sleep', 0))
 with open(os.path.join(here, 'runs.jsonl'), 'a') as log:
-    log.write(json.dumps(dict(match=rule['match'], cli='codex' if codex else 'claude', began=began, ended=time.time(), tools=names, answers=answers, prompt=prompt), ensure_ascii=False) + '\n')
+    log.write(json.dumps(dict(match=rule['match'], cli='codex' if codex else 'claude', argv=sys.argv[1:], cwd=os.getcwd(), pwd=os.environ.get('PWD', ''), began=began, ended=time.time(), tools=names, answers=answers, prompt=prompt), ensure_ascii=False) + '\n')
 if codex:
     print(json.dumps({'type': 'thread.started', 'thread_id': 'fake-thread'}))
     print(json.dumps({'type': 'item.completed', 'item': {'type': 'agent_message', 'text': rule.get('reply', 'ok')}}))
@@ -106,15 +106,31 @@ class TaskEngineTest(unittest.TestCase):
         path = self.root / 'bin/runs.jsonl'
         return [json.loads(x) for x in path.read_text(encoding='utf-8').splitlines()] if path.exists() else []
 
+    autoconfirm = True  # press 「照這個做」 whenever a plan waits for it
+    autoaccept = True   # press 「接受結果」 for finished work nobody of another vendor could check (most groups here use only Claude)
+
     def send(self, text='請大家分工完成三件事', mode='auto'):
         status, body = self.req('POST', '/api/groups/%s/messages' % self.group['id'], {'content': text, 'mode': mode})
         self.assertEqual(status, 202, body)
-        end = time.time() + 40
+        return self.wait_group()
+
+    def wait_group(self, seconds=40):
+        end = time.time() + seconds
         while time.time() < end:
             group = self.req('GET', '/api/groups/' + self.group['id'])[1]['group']
             if group['status'] != 'running': return group
+            if self.autoconfirm and (group.get('taskRun') or {}).get('awaitingConfirm'): self.confirm(group)
+            if self.autoaccept:
+                for t in (group.get('taskRun') or {}).get('tasks') or []:
+                    if t['status'] == 'review': self.req('POST', '/api/groups/%s/tasks/%s/accept' % (self.group['id'], t['id']), {})
             time.sleep(0.1)
         self.fail('the group did not finish')
+
+    def confirm(self, group=None):
+        """Press 「照這個做」 for the tasks the card shows now."""
+        run = (group or self.req('GET', '/api/groups/' + self.group['id'])[1]['group']).get('taskRun') or {}
+        shown = [t['id'] for t in run.get('tasks') or [] if t.get('confirmed') is False and t['status'] in ('pending', 'ready', 'waiting')]
+        return self.req('POST', '/api/groups/%s/tasks/confirm' % self.group['id'], {'tasks': shown})[0]
 
     def engine(self, on=True): self.assertEqual(self.req('PATCH', '/api/settings', {'taskEngine': on})[0], 200)
 
@@ -138,12 +154,13 @@ class TaskEngineTest(unittest.TestCase):
         run = group['taskRun']
         self.assertEqual(run['status'], 'done')
         self.assertEqual([t['status'] for t in run['tasks']], ['done'] * 3)
-        self.assertEqual((run['wakes'], run['batches']), (1, 1))
+        self.assertEqual((run['wakes'], run['batches']), (1, 1), json.dumps(run.get('batchLog'), ensure_ascii=False) + json.dumps([(t['n'], t['status'], len(t['attempts']), t.get('note')) for t in run['tasks']], ensure_ascii=False))
         workers = [r for r in self.runs() if r['match'] == '=== 工作']
         self.assertEqual(len(workers), 3)
         self.assertLess(max(w['began'] for w in workers), min(w['ended'] for w in workers))  # all three were working at the same time
         for w in workers:
             self.assertIn('zook_task_done', w['tools']); self.assertNotIn('zook_task_create', w['tools'])
+            self.assertEqual(os.path.realpath(w['pwd']), os.path.realpath(w['cwd']))  # every CLI is told the folder it really runs in
             self.assertNotIn('藍鯨', w['prompt'])  # a member sees its task, not the conversation
         host = [r for r in self.runs() if r['match'] in (PLAN, WAKE)]
         self.assertEqual([r['match'] for r in host], [PLAN, WAKE])
@@ -161,7 +178,7 @@ class TaskEngineTest(unittest.TestCase):
                     {'match': '=== 工作 2', 'reply': '我忘了回報'}])
         group = self.send()
         run = group['taskRun']
-        self.assertEqual([(t['n'], t['status']) for t in run['tasks']], [(1, 'done'), (2, 'failed')])
+        self.assertEqual([(t['n'], t['status']) for t in run['tasks']], [(1, 'done'), (2, 'stuck')])
         plan = next(r for r in self.runs() if r['match'] == PLAN)
         self.assertEqual([a['error'] for a in plan['answers']], [False, False, True, True])  # not to the host itself, not to a stranger
         first = next(r for r in self.runs() if r['match'] == '=== 工作 1')
@@ -248,7 +265,7 @@ class TaskRecoverTest(unittest.TestCase):
 
     def test_only_well_formed_books_come_back_from_a_file(self):
         m = load()
-        good = dict(id='r', status='done', tasks=[dict(id='t', n=1, title='a', status='done', assignee='b', attempts=[dict(state='reported', summary='ok', files=[])])])
+        good = dict(id='r', status='done', origin='user', hostId='h', tasks=[dict(id='t', n=1, title='a', status='done', assignee='b', spec='做一件事', doneWhen='做完', attempts=[dict(state='reported', summary='ok', files=[])])])
         self.assertTrue(m.task_run_ok(good))
         for bad in (dict(good, tasks='x'), dict(good, tasks=[dict(good['tasks'][0], n='<img src=x onerror=alert(1)>')]),
                     dict(good, tasks=[dict(good['tasks'][0], attempts=[dict(summary={'a': 1})])]), 'x'):
