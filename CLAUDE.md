@@ -34,7 +34,7 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 | `native/Browser.swift` | Bot 的內建瀏覽器（`Zook --zook-browser`，同一個執行檔）：不保存資料的 WKWebView，可瀏覽與在搜尋框輸入 |
 | `native/remote/` | `zook-remote`，與中繼伺服器的加密連線 |
 | `backend/server.py` | 啟動入口：依序載入 `backend/zook/` 的檔案，全部共用同一個命名空間 |
-| `backend/zook/` | 依 `server.py` 裡的順序載入，共用同一個命名空間。`core` 資料儲存、`accounts` 帳號與更新、`library` 設定包與排程規則、`oauth` 連接器與 Google 登入、`catalog` 連接器目錄、`outputs` 產出、`mobile` 手機、`groupfiles` 群組共用檔案、`groups` 群組討論、`triggers` 資料夾與信件觸發、`sync` 多台 Mac 同步、`errors` CLI 失敗原因分類、`stream` 回覆逐字顯示、`waiting` 忙碌時排隊、`paging` 長對話分頁與搜尋、`compact` 對話過長自動整理、`automation` 本機腳本介面、`choices` 選項按鈕與 Bot 提問、`teams` 一句話建立團隊、`live` 保持 CLI 開啟、`opencode` OpenCode、`cursor` Cursor、`browser` 內建瀏覽器（擋私有位址的轉送層、工具、誰能用）、`app` 回覆、`parsing` 解讀 CLI 輸出、`abilities` 各家能力對照、`sessions` 接續 CLI 原生對話與即時讀取輸出、`routing` 自動選擇模型、`fields` 欄位檢查、`upkeep` 備份、活動紀錄、用量預算、固定規則、舊工作瘦身、已刪除的 Bot、`templates` Skill 範本、`usageview` 用量頁、`handler` HTTP 路由 |
+| `backend/zook/` | 依 `server.py` 裡的順序載入，共用同一個命名空間。`core` 資料儲存、`accounts` 帳號與更新、`library` 設定包與排程規則、`oauth` 連接器與 Google 登入、`catalog` 連接器目錄、`outputs` 產出、`mobile` 手機、`groupfiles` 群組共用檔案、`groups` 群組討論、`triggers` 資料夾與信件觸發、`sync` 多台 Mac 同步、`errors` CLI 失敗原因分類、`stream` 回覆逐字顯示、`waiting` 忙碌時排隊、`paging` 長對話分頁與搜尋、`compact` 對話過長自動整理、`automation` 本機腳本介面、`choices` 選項按鈕與 Bot 提問、`teams` 一句話建立團隊、`live` 保持 CLI 開啟、`opencode` OpenCode、`cursor` Cursor、`browser` 內建瀏覽器（擋私有位址的轉送層、工具、誰能用）、任務引擎（[設計](docs/task-engine-design.md)）：`tasks` 帳本、提示詞與工具，`taskrun` 執行迴圈，`taskcheck` 交叉驗收、重試、決策關卡與確認，`taskplus` 依驗收紀錄派工與派助手、`app` 回覆、`parsing` 解讀 CLI 輸出、`abilities` 各家能力對照、`sessions` 接續 CLI 原生對話與即時讀取輸出、`routing` 自動選擇模型、`fields` 欄位檢查、`upkeep` 備份、活動紀錄、用量預算、固定規則、舊工作瘦身、已刪除的 Bot、`templates` Skill 範本、`usageview` 用量頁、`handler` HTTP 路由 |
 | `backend/runtime.py` | MCP 客戶端、工具執行、核准分級；連接器的工具用到才載入 |
 | `backend/discovery.py` | 掃描這台 Mac 上 Codex、Claude 與共用庫的 Skills、連接器、插件（由 `runtime.py` 以路徑載入） |
 | `backend/zook_cli.py` | 本機腳本介面的指令工具，說明在 [docs/automation.md](docs/automation.md) |
@@ -87,6 +87,8 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 3. **真實 App**：`bash scripts/build.sh` 後執行 `python3 scripts/check_app.py`（檢查建置好的 App 內的後端）；要連真實 CLI 加 `--live`（會用到少量額度）。要看視窗就建 Preview 版開起來截圖。
 
 改到回覆流程（CLI 的呼叫、輸出解讀、排隊、來源、壓縮）時，另外跑 `python3 scripts/acceptance.py --speed --compare docs/0.14-baseline.json`：它用真實 CLI 檢查約 20 項並量四家的速度，結束碼 0 表示沒有比基準差。某家額度用完時該家會標成「略過」。
+
+改到任務引擎（`tasks`、`taskrun`、`taskcheck`、`taskplus`）時，另外跑 `python3 scripts/task_eval.py --compare docs/0.17-eval-baseline.json`：用假的 CLI 跑八個固定情境（同時進行、先後順序、交叉驗收、三次後停下、決策關卡、先問我、依紀錄派工、助手兩層），分數比基準低或模型請求變多時結束碼 1。加 `--live` 會多跑一次真實 CLI（Claude 主持、Grok 與 Claude 成員，用少量額度）。整段群組工作的速度、請求與 token 用 `scripts/task_bench.py --mode split|auto` 量。
 
 做不到、需要使用者驗收的：另一台 Mac、公司帳號的連接器、手機實機、App 內的更新按鈕。
 
@@ -142,6 +144,12 @@ GitHub Actions（`.github/workflows/test.yml`）會在每次推送跑測試和�
 - Grok 在「指定資料夾」時從那個資料夾啟動，靠它自己的嚴格沙盒限制在資料夾內；Zook 的設定放在該資料夾的 `.grok`（有 `.zook-owned` 標記），回覆結束就刪。資料夾裡原本就有 `.grok` 時不執行。這個模式下 Grok 讀不到對話附件。新版 Grok 仍不接受 `--add-dir`。它的嚴格沙盒不限制系統暫存區，所以這類測試不要在 `/tmp` 做。
 - 回覆逐字顯示：Codex 的 CLI 只在整則訊息完成時輸出，所以是整段出現；Grok 會先思考幾十秒才出字；手機是輪詢，一兩秒跳一段。
 - 群組討論沒有分頁，也不套用自動整理。
+- 任務引擎（設定裡預設關閉）：
+  - 主持人、驗收者、只讀的工作都用只能讀的回覆；工作只透過 `zook_task_*` 工具回報，回報綁在當次嘗試上。
+  - 驗收一定找另一家；群組裡沒有另一家能驗時改成「等你看結果」。驗收沒通過最多重試三次，做過對外動作的不自動重試。
+  - 成員可以派助手，最多兩層（主持人派的工作是第一層，助手是第二層，助手不能再派），一項工作最多三位助手，助手能做的不能比原工作多。
+  - 依驗收紀錄派工：某家在某類工作（寫程式、分析、簡短工作、圖片，用自動選擇的分類）至少驗收三次、通過不到一半，而另一位成員那家的通過率高 30 個百分點以上，才改派；紀錄存在 `swarmr.json` 的 `taskStats`。
+  - 沒做：Zook 工具的權杖仍放在 CLI 的環境變數（0.16 以前就這樣，所有 Zook 工具共用，和上面「內部權杖不放環境變數」的規則衝突，待改）；換到備用模型那一刻不再檢查每家 CLI 的同時上限；重試時主持人會看到之後的群組對話。
 - 自動整理用的輸入量是 CLI 回報的整個回合總和，是估算；所以要連續兩則都超過門檻才觸發。
 - 來源規則擋的是 Zook 自己的工具。CLI 的原生工具仍可直接改 Mac 上的檔案，包含 Zook 的資料檔。
 - 本機腳本介面：同一個使用者的任何程式都讀得到權杖檔，包含 Bot 自己的 CLI。它能用已開啟的 Bot 的身分做事，但不能核准、不能改設定。

@@ -1,0 +1,113 @@
+{
+ "at": "2026-11-21 11:42",
+ "score": 100.0,
+ "passed": 20,
+ "total": 20,
+ "requests": 37,
+ "scenarios": {
+  "同時進行": {
+   "checks": {
+    "三項都完成": true,
+    "三項同時進行": true,
+    "主持人只被叫醒一次": true,
+    "只有一個批次": true
+   },
+   "wakes": 1,
+   "requests": 5,
+   "seconds": 1.9
+  },
+  "先後順序": {
+   "checks": {
+    "兩項都完成": true,
+    "第二項在第一項結束後才開始": true,
+    "第二項拿到第一項的回報": true
+   },
+   "requests": 4,
+   "seconds": 0.8
+  },
+  "交叉驗收": {
+   "checks": {
+    "由另一家驗收": true,
+    "沒通過的理由交給重做": true,
+    "重做後通過": true
+   },
+   "requests": 6,
+   "seconds": 1.1
+  },
+  "三次後停下": {
+   "checks": {
+    "三次後停下等你": true
+   },
+   "requests": 5,
+   "seconds": 0.9
+  },
+  "決策關卡": {
+   "checks": {
+    "只有相關的工作等決定": true,
+    "決定交給那項工作": true
+   },
+   "requests": 5,
+   "seconds": 0.9
+  },
+  "先問我": {
+   "checks": {
+    "確認前沒有開始": true,
+    "確認後完成": true
+   },
+   "requests": 3,
+   "seconds": 2.2
+  },
+  "依紀錄派工": {
+   "checks": {
+    "改派給紀錄較好的一家": true,
+    "原因寫在任務板上": true,
+    "驗收結果記進紀錄": true
+   },
+   "requests": 4,
+   "seconds": 3.0
+  },
+  "助手兩層": {
+   "checks": {
+    "助手完成，原工作帶著回報接著做": true,
+    "第三層被拒絕": true
+   },
+   "requests": 5,
+   "seconds": 1.1
+  }
+ },
+ "live": {
+  "平行與驗收": {
+   "checks": {
+    "在時限內結束": true,
+    "全部完成": true,
+    "每項由另一家驗收": true,
+    "主持人叫醒次數不超過批次加一": true,
+    "沒有超過兩層": true,
+    "三項工作、那句話接在計算之後": true,
+    "計算和列城市同時進行": true
+   },
+   "seconds": 88,
+   "requests": 8,
+   "tokens": 384099,
+   "wakes": 1,
+   "batches": 1,
+   "tasks": 3
+  },
+  "派助手": {
+   "checks": {
+    "在時限內結束": true,
+    "全部完成": true,
+    "每項由另一家驗收": true,
+    "主持人叫醒次數不超過批次加一": true,
+    "沒有超過兩層": true,
+    "派了助手，原工作在助手回報後才接著做": true
+   },
+   "seconds": 207,
+   "requests": 7,
+   "tokens": 319465,
+   "wakes": 1,
+   "batches": 2,
+   "tasks": 2
+  }
+ }
+}

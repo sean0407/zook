@@ -158,7 +158,7 @@ def task_route(handler, store, group, parts):
         if run['status'] != 'running' or not run.get('awaitingConfirm'): return handler.error(409, '現在沒有等你確認的分工。')
         shown = handler.body().get('tasks')
         if not isinstance(shown, list) or not shown or any(not isinstance(x, str) for x in shown): return handler.error(400, '要列出你看到的工作。')
-        waiting = [t for t in run['tasks'] if not t.get('confirmed', True) and t['status'] in ('pending', 'ready', 'waiting')]
+        waiting = [t for t in run['tasks'] if not t.get('confirmed', True) and t['status'] in ('pending', 'ready', 'waiting') and not t.get('staged')]
         if {t['id'] for t in waiting} != set(shown): return handler.error(409, '主持人剛剛改了分工，請看過新的清單再確認。')  # never more than what was on the screen
         for t in waiting: t['confirmed'] = True
         run.pop('confirmSince', None); run['awaitingConfirm'] = False
@@ -170,6 +170,7 @@ def task_route(handler, store, group, parts):
         if not task: return handler.error(404, '找不到這項工作。')
         accept = parts[5] == 'accept'
         if task['status'] not in (('stuck', 'review') if accept else ('stuck', 'unknown', 'failed', 'cancelled')): return handler.error(409, '這項工作現在不能%s。' % ('接受' if accept else '重試'))
+        if task.get('aborted'): return handler.error(409, '派這個助手的那一輪沒有完成，請重試原本的工作 %d。' % task['parent'])
         if group['status'] == 'running' and group.get('runId') != run.get('groupRunId'): return handler.error(409, '群組正在進行其他討論，等它結束再重試。')
         if run['status'] != 'running' and group['status'] == 'running': return handler.error(409, '這個任務正在結束，等幾秒再重試。')
         last = task['attempts'][-1] if task['attempts'] else {}
@@ -182,7 +183,7 @@ def task_route(handler, store, group, parts):
             task.update(status='verifying', verify=dict(state='waiting')); task.pop('note', None)  # the work is done: only the check runs again
         else:
             # A new series: the count starts again, the history stays. What waits for it waits again.
-            task.update(status='pending' if task.get('deps') or task.get('gate') else 'ready', failures=0, confirmed=True); task.pop('note', None)
+            task.update(status='pending' if task.get('deps') or task.get('gate') else 'ready', failures=0, confirmed=True if task['attempts'] else task.get('confirmed', True)); task.pop('note', None)  # never started: it still needs 「照這個做」
             gate = next((g for g in run.get('gates') or [] if g['id'] == task.get('gate')), None)
             if gate and gate['status'] in ('timeout', 'cancelled'): gate.update(status='pending', since=time.time())  # the decision it waited for is asked again
         run['bonusAttempts'] = run.get('bonusAttempts', 0) + TASK_FAILS; run['bonusWakes'] = run.get('bonusWakes', 0) + 2  # room the user gave for this try
@@ -254,6 +255,8 @@ class TaskChecks:
             if task['status'] == 'verifying':
                 who = task_member_name(store, check['bot'])
                 if not turn or turn['job']['status'] != 'completed': check.pop('verdict', None)  # it failed or was stopped after its verdict: not a check
+                try: task_rate_record(store, task, check.get('verdict'))
+                except Exception: pass  # the record is a hint; the verdict settles the task whatever happens to it
                 if check.get('verdict') == 'pass': task['status'] = 'done'; check['state'] = 'done'
                 elif check.get('verdict') == 'fail':
                     check['state'] = 'done'

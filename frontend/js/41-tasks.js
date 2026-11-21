@@ -14,12 +14,12 @@
     const head = run.tasks.length ? `已完成 ${done}／${run.tasks.length}` : (run.status === 'running' ? `${esc(name(run.hostId))} 正在規劃工作…` : '主持人直接回答，沒有建立工作');
     const rows = run.tasks.map(t => {
       const attempts = Array.isArray(t.attempts) ? t.attempts : [], last = attempts[attempts.length - 1] || {};
-      const detail = [last.summary, t.status === 'asked' && t.question ? '問主持人：' + t.question : '', last.reason, t.note, t.why,
+      const detail = [last.summary, t.status === 'asked' && t.question ? '問主持人：' + t.question : '', last.reason, t.note, t.why || (t.basis ? '派工依據：' + t.basis : ''),
         Array.isArray(t.deps) && t.deps.length && ['pending', 'ready'].includes(t.status) ? '等工作 ' + t.deps.join('、') + ' 完成' : '',
         t.verify?.verdict ? `${name(t.verify.bot)} 驗收${t.verify.verdict === 'pass' ? '通過' : '沒有通過：' + (t.verify.reasons || '')}` : t.status === 'verifying' && t.verify?.bot ? `${name(t.verify.bot)} 驗收中` : '',
         t.failures ? `已經 ${t.failures} 次沒完成` : '', t.confirmed === false && ['pending', 'ready'].includes(t.status) ? '等你確認' : '', Array.isArray(last.files) && last.files.length ? '產出：' + last.files.join('、') : '', attempts.length > 1 ? `第 ${attempts.length} 次` : ''].filter(x => typeof x === 'string' && x);
       const canAccept = (t.status === 'review' || t.status === 'stuck') && last.state === 'reported' && last.outcome === 'succeeded';
-      const retry = !taskEngineOn() ? '' : (TASK_RETRY.includes(t.status) && g.status !== 'running' || ['stuck', 'unknown'].includes(t.status) ? `<button type="button" class="link" data-task-retry="${esc(t.id)}">重試</button>` : '') + (canAccept ? `<button type="button" class="link" data-task-accept="${esc(t.id)}">接受結果</button>` : '');
+      const retry = !taskEngineOn() ? '' : (!t.aborted && (TASK_RETRY.includes(t.status) && g.status !== 'running' || ['stuck', 'unknown'].includes(t.status)) ? `<button type="button" class="link" data-task-retry="${esc(t.id)}">重試</button>` : '') + (canAccept ? `<button type="button" class="link" data-task-accept="${esc(t.id)}">接受結果</button>` : '');
       return `<li class="task-row"><span class="pill ${TASK_TONE[t.status] || ''}">${esc(TASK_STATE[t.status] || t.status)}</span><span class="task-title"><strong>${esc(String(t.n))}. ${esc(String(t.title))}</strong> <span class="muted">${esc(name(t.assignee))}</span>${detail.length ? `<span class="task-detail">${esc(detail.join(' · '))}</span>` : ''}</span>${retry}</li>`;
     }).join('');
     const live = run.status === 'running' ? '<span class="browsing-dot" aria-hidden="true"></span>' : '';
@@ -32,7 +32,7 @@
     if (!run || run.status !== 'running' || !Array.isArray(run.tasks)) return '';
     const cards = [];
     if (run.awaitingConfirm) {
-      const waiting = run.tasks.filter(t => t.confirmed === false && ['pending', 'ready', 'waiting'].includes(t.status));
+      const waiting = run.tasks.filter(t => t.confirmed === false && ['pending', 'ready', 'waiting'].includes(t.status) && !t.staged);
       cards.push(`<section class="approval-card task-confirm"><strong>主持人排好了 ${waiting.length} 項工作，確認後才開始</strong><ol class="task-list">${waiting.map(t => `<li><details><summary>${esc(String(t.n))}. ${esc(String(t.title))} <span class="muted">${esc(state.data.bots.find(b => b.id === t.assignee)?.name || '')}${t.changes === 'none' ? ' · 只讀' : t.changes === 'external' ? ' · 會對外動作' : ' · 會改檔案'}</span></summary><div class="task-detail">${esc(String(t.spec || ''))}</div><div class="task-detail"><strong>怎樣算完成：</strong>${esc(String(t.doneWhen || ''))}</div></details></li>`).join('')}</ol><div class="actions"><button class="primary" data-task-confirm="${esc(waiting.map(t => t.id).join(','))}">照這個做</button><button class="secondary" data-action="stop-group" data-id="${esc(g.id)}">不要，停止</button></div></section>`);
     }
     for (const t of run.tasks.filter(x => x.status === 'review')) {
@@ -50,6 +50,7 @@
     const s = state.data.settings, rows = [settingRow('任務引擎', '群組多一種討論方式「自動（主持人決定）」：主持人拆工作、派給成員同時進行，成員回報後再整理結果', toggle('data-task-engine', taskEngineOn(), '任務引擎'))];
     if (taskEngineOn()) {
       rows.push(settingRow('結論後的執行方式', '主持人排好工作後', dropdown('taskExecution', s.taskExecution === 'lowrisk' ? 'lowrisk' : 'ask', [{id: 'ask', name: '先問我', hint: '每次都等你按「照這個做」'}, {id: 'lowrisk', name: '低風險直接做', hint: '不改檔案、不對外動作的工作直接開始，其他仍先問'}], 'data-task-execution')));
+      rows.push(settingRow('依驗收紀錄派工', '某家模型在某類工作的驗收通過率明顯偏低時，改派給表現較好的成員；原因寫在任務板上', toggle('data-task-learn', s.taskLearn !== false, '依驗收紀錄派工')));
       rows.push(settingRow('同時進行的工作', '一個群組同時最多幾項', dropdown('taskMax', String(s.taskMax || 4), TASK_COUNTS(6), 'data-task-max')));
       for (const p of (state.providers || []).filter(p => p.installed && p.tools)) {
         rows.push(settingRow(esc(p.name), '這個 CLI 同時最多幾項（每個帳號各自計算）', dropdown('taskCli-' + p.id, String((s.taskCliLimits || {})[p.id] || 3), TASK_COUNTS(4), `data-task-cli="${esc(p.id)}"`)));
@@ -69,6 +70,11 @@
     if (max || cli) {
       const body = max ? {taskMax: Number(e.target.value)} : {taskCliLimits: {...(state.data.settings.taskCliLimits || {}), [cli]: Number(e.target.value)}};
       try { state.data.settings = await post('settings', body, 'PATCH'); toast('已更新同時進行的上限'); } catch (error) { toast(error.message); }
+      render(true); return;
+    }
+    if (e.target.dataset?.taskLearn !== undefined) {
+      try { state.data.settings = await post('settings', {taskLearn: e.target.checked}, 'PATCH'); toast(e.target.checked ? '會參考過去的驗收紀錄派工' : '照主持人的指定派工'); }
+      catch (error) { e.target.checked = !e.target.checked; toast(error.message); }
       render(true); return;
     }
     if (e.target.dataset?.taskEngine === undefined) return;

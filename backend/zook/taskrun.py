@@ -63,6 +63,8 @@ class TaskRuns:
                 if run and run['id'] == (group.get('taskRun') or {}).get('id') and run.get('groupRunId') == run_id:
                     run['status'] = 'done' if ended == 'done' else 'stopped'
                     for t in run['tasks']:
+                        if t.get('parent') and t.get('staged'): task_handoff_abort(run, t['parent'])
+                    for t in run['tasks']:
                         if t['status'] not in TASK_SETTLED: t['status'] = 'cancelled'
                     task_board_update(store, group); store.save()
             if self.__dict__.get('task_events', {}).get(group_id) is event: self.task_events.pop(group_id, None)
@@ -74,7 +76,8 @@ class TaskRuns:
                 if target == self._task_host:
                     with self.store.lock:
                         group = self.store.find('groups', args[0]); run = (group or {}).get('taskRun') or {}
-                        for t in run.get('tasks') or []: t.pop('staged', None)
+                        for t in run.get('tasks') or []:
+                            if not t.get('parent'): t.pop('staged', None)  # a helper waits for its own member's turn
                         run['hostMissed'] = run.get('hostMissed', 0) + 1
                         if group: group['messages'].append(dict(id=ID(), role='system', content='主持人這一輪出錯了：%s' % str(exc)[:150], createdAt=NOW()))
                         self.store.save()
@@ -83,6 +86,7 @@ class TaskRuns:
                         group = self.store.find('groups', args[0]); run = (group or {}).get('taskRun') or {}
                         for t in run.get('tasks') or []:
                             if t['id'] == args[2] and t['status'] in ('running', 'verifying'): t['status'] = 'stuck'; t['note'] = 'Zook 內部錯誤：%s' % str(exc)[:150]
+                        if run.get('tasks'): task_handoff_orphans(run)
                         self.store.save()
                 self.task_poke(args[0])
         th = threading.Thread(target=guarded, daemon=True); th.start()
@@ -121,6 +125,7 @@ class TaskRuns:
                 out['stop'] = '沒有等到你確認分工，任務停在這裡。'
                 return out
         else: run.pop('confirmSince', None)
+        task_handoff_orphans(run)
         running = [t for t in run['tasks'] if t['status'] == 'running']
         ready = [t for t in run['tasks'] if t['status'] == 'ready' and t.get('confirmed', True) and not t.get('staged')]
         if ready and run['attempts'] >= task_limit(run, 'attempts'):
@@ -222,7 +227,8 @@ class TaskRuns:
             if not group: return
             run = group.get('taskRun') or {}
             if run.get('id') == run_ref:
-                for t in run.get('tasks') or []: t.pop('staged', None)  # the host's turn is over: what it planned may start (or be confirmed)
+                for t in run.get('tasks') or []:
+                    if not t.get('parent'): t.pop('staged', None)  # the host's turn is over: what it planned may start (or be confirmed); a helper waits for its member's turn
             if run.get('id') == run_ref and (not turn or turn['job']['status'] != 'completed'):
                 run['hostMissed'] = run.get('hostMissed', 0) + 1
                 if kind == 'wake':  # the host did not get the reports: they are news again
@@ -273,7 +279,8 @@ class TaskRuns:
             if not group or group.get('runId') != run_id or not task['attempts'] or task['attempts'][-1] is not attempt:  # old news: leave the newer try alone
                 store.save(); return
             job = turn['job']
-            said = attempt.get('summary') if attempt['state'] == 'reported' else task.get('question') if attempt['state'] == 'asked' else attempt.get('reason') if attempt['state'] == 'blocked' else ''
+            said = attempt.get('summary') if attempt['state'] == 'reported' else task.get('question') if attempt['state'] == 'asked' else attempt.get('reason') if attempt['state'] == 'blocked' else \
+                '派了助手，等它的回報再接著做。' if attempt['state'] == 'delegated' else ''
             if said and job['status'] == 'completed' and not (job.get('content') or '').strip():
                 store.finish_message(job, said, 'completed')  # it reported and ended without words, as it was told to: its report is the reply
             attempt['cli'] = task_job_cli(store, job, store.find('bots', task['assignee']))  # what a checker must not be
@@ -286,6 +293,7 @@ class TaskRuns:
             if task['status'] == 'running':
                 if job['status'] == 'cancelled' and attempt['state'] == 'failed': task['status'] = 'cancelled'
                 elif attempt['state'] in ('asked', 'blocked'): task['status'] = attempt['state']
+                elif attempt['state'] == 'delegated': task_handoff_end(task, run, job, turn.get('published', True))
                 elif attempt['state'] == 'reported' and attempt.get('outcome') == 'succeeded':
                     task['status'] = 'verifying'; task['verify'] = dict(state='waiting')  # checked by a member of another vendor next
                 else: task_failed_attempt(task, attempt.get('summary') or '沒有完成', job)

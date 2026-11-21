@@ -323,9 +323,11 @@ class GroupRuns:
             try: seen = sync_group_files_in(store, group_id, bot['id'], turn['skipFiles'])
             except (OSError, ValueError): seen = None
             self.run_job(turn['job']['id'], turn['prompt'], turn['provider'], turn['model'], bot, None)
-            if seen is None or not turn['writable'] or turn['job']['status'] != 'completed': return
+            if not turn['writable'] or turn['job']['status'] != 'completed': return
+            if seen is None: turn['published'] = False; return
             try: saved, skipped = sync_group_files_out(store, group_id, bot['name'], bot['id'], seen)
-            except (OSError, ValueError): saved, skipped = [], []
+            except (OSError, ValueError): saved, skipped = [], []; turn['published'] = False
+            if skipped: turn['published'] = False
             turn['saved'] = saved
         with store.lock:
             group = store.find('groups', group_id)
