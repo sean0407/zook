@@ -752,13 +752,15 @@ def fallback_reason(error):
 
 
 def fallback_why(error, kind=None):
-    """Why the first model did not answer, for 「這次改用…（…）」: the kind of failure, else the first line of what it said."""
-    why = fallback_reason(error)
-    if why != '無法回覆': return why
+    """Why a model did not answer, for 「這次改用…（…）」: always one of a few fixed reasons, never words taken from the error itself
+    (it may hold an account name). The kind this try reported comes first; then what the words say."""
     named = ERROR_REASONS.get(kind or '') if kind and kind != 'unknown' else ''
     if named: return named
-    first = next((line.strip() for line in str(error or '').splitlines() if line.strip()), '')
-    return '無法回覆：' + (first[:60] + ('…' if len(first) > 60 else '')) if first else '無法回覆'
+    text = str(error or '')
+    if '時間上限' in text or '逾時' in text: return '回應逾時'
+    if 'API 金鑰' in text: return '找不到 API 金鑰'
+    why = fallback_reason(text)
+    return why if why != '無法回覆' else ('無法回覆（沒有說明原因）' if not text.strip() else '無法回覆（CLI 回報錯誤）')
 
 
 def is_pass(content):
