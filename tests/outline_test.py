@@ -34,6 +34,22 @@ class OutlineTest(unittest.TestCase):
         self.assertEqual(out['outline'][2]['reply'], '')  # nothing finished yet
         self.assertNotIn('messages', out)  # only the outline travels
 
+    def test_a_note_added_while_the_reply_ran_stays_with_its_question(self):
+        messages = [dict(id='u1', role='user', content='原本的問題'), dict(id='u2', role='user', content='補充一下', interjected=True),
+                    dict(id='a1', role='assistant', content='回覆'), dict(id='u3', role='user', content='下一題', interjected=True)]
+        out = self.m.page_list(messages, {'outline': ['1']})['outline']
+        self.assertEqual([(x['id'], x['reply']) for x in out], [('u1', '回覆')])  # u3 was also added while answering u1's thread
+
+    def test_whole_conversation_beyond_the_loaded_page(self):
+        many = []
+        for i in range(150):
+            many += [dict(id='u%d' % i, role='user', content='第 %d 題' % i), dict(id='a%d' % i, role='assistant', content='答 %d' % i)]
+        group = dict(id='g', messages=many)
+        self.assertEqual(len(self.m.page_group_messages(group, {'outline': ['1']})['outline']), 150)  # far more than one page (100 messages)
+        bot = dict(id='b', chatId='c1', chats=[dict(id='c1', title='')], messages=many)
+        out = self.m.page_messages(bot, 'c1', {'outline': ['1']})['outline']
+        self.assertEqual((len(out), out[0]['title'], out[-1]['reply']), (150, '第 0 題', '答 149'))
+
     def test_long_questions_are_cut(self):
         out = self.m.page_list([dict(id='u', role='user', content='字' * 500)], {'outline': ['1']})
         self.assertEqual(len(out['outline'][0]['title']), 61); self.assertTrue(out['outline'][0]['title'].endswith('…'))

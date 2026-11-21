@@ -423,6 +423,7 @@
     let input = previousInput?.value || '';
     let cursor = document.activeElement === previousInput ? [previousInput.selectionStart, previousInput.selectionEnd] : null;
     let openApprovals = [...document.querySelectorAll('[data-approval-details][open]')].map(x => x.dataset.approvalDetails);
+    const railFocus = document.activeElement?.dataset?.rail;  // a reply streaming in must not take the keyboard off the rail
     app.innerHTML = `<div class="layout">${sidebar()}${state.page==='chat'?(activeGroup()?groupChat():chat()):page()}</div>`;
     if ($('#chat-input')) {
       $('#chat-input').value = input;
@@ -437,6 +438,7 @@
       const c = $('#conversation');
       if (!keepFocus()) c.scrollTo({top: y != null && !nearBottom ? y : c.scrollHeight, behavior: 'instant'});
       updateChatNav();  // the rail's current question and the 直接到底 button follow where the page now is
+      if (railFocus) [...document.querySelectorAll('[data-rail]')].find(x => x.dataset.rail === railFocus)?.focus();
     }
     if ($('#settings-form')) {
       const f = $('#settings-form');

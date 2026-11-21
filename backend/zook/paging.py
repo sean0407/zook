@@ -46,6 +46,7 @@ def page_outline(messages):
     """The conversation beside the messages: every question in order, with the start of the first finished reply to it."""
     out, last = [], None
     for m in messages:
+        if m.get('role') == 'user' and m.get('interjected') and last is not None: continue  # added while the reply ran: part of that question
         if m.get('role') == 'user':
             last = dict(id=m.get('id'), createdAt=m.get('createdAt') or '', author=m.get('author') or '',
                         title=outline_text(m.get('content'), 60) or ('（附件）' if m.get('attachments') else '（空白訊息）'), reply='', replyBy='')
