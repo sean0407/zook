@@ -218,7 +218,7 @@
         const [provider, account] = e.target.value.split('::');
         const same = form.elements.provider.value === provider;
         form.elements.provider.value = provider; form.elements.account.value = account || '';
-        if (same) return;  // only another account of the same CLI: its model stays
+        if (same) { saveBotDraft(form); return; }  // only another account of the same CLI: its model stays
       }
       form.elements.model.value = '';
       form.elements.modelSelect.value = '';
@@ -286,13 +286,13 @@
           color: d.get('color'),
           instructions: d.get('instructions'),
           persona: d.get('persona') || '',
-          provider: d.get('provider'),
+          provider: d.has('providerChoice') ? String(d.get('providerChoice')).split('::')[0] : d.get('provider'),  // what the menu shows
           model: d.get('model'),
           section: d.get('section'),
           pinned: d.has('pinned'),
           scripts: d.has('scripts'),
           fallbacks: d.get('fallbackChoice') === '__none' ? [] : !d.get('fallbackChoice') || d.get('fallbackChoice') === '__default' ? null : [d.get('fallbackChoice')], permissionMode: d.get('permissionMode') || '', effort: d.get('effort') || '', features: Object.fromEntries([['multi', d.get('featureMulti')], ['image', d.get('featureImage')], ['browser', d.get('featureBrowser')]].filter(x => x[1]).map(x => [x[0], x[1] === 'on'])),
-          account: d.get('account') || '',
+          account: d.has('providerChoice') ? String(d.get('providerChoice')).split('::')[1] || '' : d.get('account') || '',
           access: d.get('access') || '', accessFolder: d.get('access') === 'folder' ? d.get('accessFolder') || '' : ''
         };
         if (data.access === 'folder' && !data.accessFolder) { toast('請先選擇資料夾'); return; }

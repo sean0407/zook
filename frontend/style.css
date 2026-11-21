@@ -1930,3 +1930,4 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 /* Windows over the page stay in the middle of the window, also in the dark look (whose filter would otherwise pin them to the page's foot) */
 #modal-root { position:fixed; inset:0; z-index:100; pointer-events:none; }
 #modal-root > * { pointer-events:auto; }
+#toast { z-index:110; }  /* a message stays readable above an open window */

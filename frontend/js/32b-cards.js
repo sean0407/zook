@@ -21,6 +21,7 @@
   const cliShort = p => String(p.name).split('（')[0];
   // What a CLI reports when a limit is reached, in plain words; an unknown one still says the account cannot be used now.
   const LIMIT_WORDS = {workspace_owner_credits_depleted: '工作區的點數用完了，這個帳號暫時不能用（要由工作區擁有者加值）', usage_limit_reached: '額度用完了，等重置後才能再用', rate_limit_reached: '額度用完了，等重置後才能再用'};
+  const limitNow = s => !!s?.limitReached && Date.now() - Date.parse(s.updatedAt) < 30 * 60e3;  // same half hour as the backend's limit_reached_now
   const limitWords = code => LIMIT_WORDS[code] || (/credit/i.test(code) ? '點數用完了，這個帳號暫時不能用' : '已達使用上限，這個帳號暫時不能用');
   function loginButtons(p, a) {
     const acct = a ? a.id : '', signed = (a || p).status === 'logged_in';
@@ -45,9 +46,10 @@
     if (q?.apiBilling || who.type === 'key') return '<p class="quota-empty">使用 API 計費，費用依用量計算。</p>';
     if (q?.noQuotaApi) return '<p class="quota-empty">不提供額度資料</p>';
     if (q?.quotaUnread && !(s?.windows || []).length) return '<p class="quota-empty">讀不到額度</p>';
+    if (limitNow(s) && !(s.windows || []).length) return `<p class="error-text small">${esc(limitWords(s.limitReached))}</p>`;
     if (!s || !(s.windows || []).length) return '<p class="quota-empty">還沒有額度資料，按右上角「偵測使用量」讀取。</p>';
     const bars = s.windows.map(w => { const left = windowLeft(w); return `<div class="quota-row"><div class="quota-label"><span>${esc(w.label)}</span><span><b>剩餘 ${left}%</b></span></div><div class="quota-track left-track"><div class="quota-bar ${left < 20 ? 'bad' : ''}" style="width:${left}%"></div></div><small class="quota-reset">${esc(left >= 100 ? '' : fmtReset(w.resetsAt))}</small></div>`; }).join('');
-    const extra = (s.resetCredits ? `<p class="quota-coupon-line">額度重置券 ${s.resetCredits} 張（在 Codex 中使用）</p>` : '') + (s.credits && (s.credits.unlimited || (s.credits.balance && s.credits.balance !== '0')) ? `<p class="quota-extra">額外額度：${s.credits.unlimited ? '不限' : esc(s.credits.balance)}</p>` : '') + (s.limitReached ? `<p class="error-text small">${esc(limitWords(s.limitReached))}</p>` : '');
+    const extra = (s.resetCredits ? `<p class="quota-coupon-line">額度重置券 ${s.resetCredits} 張（在 Codex 中使用）</p>` : '') + (s.credits && (s.credits.unlimited || (s.credits.balance && s.credits.balance !== '0')) ? `<p class="quota-extra">額外額度：${s.credits.unlimited ? '不限' : esc(s.credits.balance)}</p>` : '') + (limitNow(s) ? `<p class="error-text small">${esc(limitWords(s.limitReached))}</p>` : '');
     return done + bars + extra;
   }
   function accountCard(p, a) {

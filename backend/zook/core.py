@@ -706,11 +706,25 @@ def remote_device_id(public_key):
     return hashlib.sha256(raw).hexdigest()[:32] if len(raw) == 32 else None
 
 
+LIMIT_FRESH = 1800  # seconds a reported 「limit reached」 counts before it has to be read again
+
+
+def limit_reached_now(snap):
+    """The CLI reported a reached limit in a reading from the last half hour. An older one no longer decides anything."""
+    if not isinstance(snap, dict) or not snap.get('limitReached'): return False
+    try: at = datetime.datetime.fromisoformat(str(snap.get('updatedAt')).replace('Z', '+00:00')).timestamp()
+    except ValueError: return False
+    now = time.time()
+    full = [w for w in snap.get('windows') or [] if isinstance(w.get('usedPercent'), (int, float)) and w['usedPercent'] >= 100]
+    if full and not any(_window_open(w, snap, now) for w in full): return False  # the window that was full has reset since
+    return now - at < LIMIT_FRESH
+
+
 def quota_exhausted(store, provider):
     if provider == 'antigravity': return False  # its limits are per model group; a used-up group simply fails over
     """True when the last known quota snapshot says this provider is used up and has not reset yet."""
     snap = (store.data.get('quota') or {}).get(provider) or {}
-    if snap.get('limitReached'): return True  # the CLI says so itself, e.g. a workspace out of credits with every window still open
+    if limit_reached_now(snap): return True  # the CLI says so itself, e.g. a workspace out of credits with every window still open
     now = time.time()
     return any(isinstance(w.get('usedPercent'), (int, float)) and w['usedPercent'] >= 100 and _window_open(w, snap, now) for w in snap.get('windows') or [])
 

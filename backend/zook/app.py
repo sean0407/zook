@@ -448,7 +448,8 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             first, skipped = chain[0], {}
             for x in chain[:]:
                 p, a = x[0], x[2]
-                used_up = quota_exhausted(store, p + '@' + a) if a else quota_exhausted(store, p) and not find_account(bot.get('account'), p)
+                own = None if a is not None else find_account(bot.get('account'), p)  # the account this try really uses
+                used_up = quota_exhausted(store, p + '@' + (a or own['id'])) if a or own else quota_exhausted(store, p)
                 reason = '尚未安裝' if not find_cli(p) else '額度已用完' if used_up else '用量預算已用完' if budget_blocks(store, p) else None  # 'stop' too: a backup that is over its own budget must not answer instead
                 if reason and len(chain) > 1: skipped[x] = reason; chain.remove(x)
             if budget_blocks(store, chain[0][0]) == 'stop':

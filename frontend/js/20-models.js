@@ -341,8 +341,12 @@
     try {
       const draft = JSON.parse(sessionStorage.getItem('swarmr-new-bot-draft') || 'null');
       if (!draft) return;
-      for (const key of ['name','instructions','providerChoice','provider','account','model','section','shape','color']) {
-        if (draft[key] != null && form.elements[key]) form.elements[key].value = draft[key];
+      if (draft.providerChoice === undefined && draft.provider !== undefined) draft.providerChoice = draft.provider === 'auto' ? 'auto' : (draft.provider || '') + (draft.account ? '::' + draft.account : '');  // a draft from before the one menu
+      for (const key of ['name','jobTitle','persona','instructions','providerChoice','provider','account','model','section','effort','shape','color']) {
+        if (draft[key] == null || !form.elements[key]) continue;
+        form.elements[key].value = draft[key];
+        const dd = form.elements[key].closest?.('.dd'), chosen = dd?.querySelector(`.dd-opt[data-value="${CSS.escape(draft[key])}"]`);
+        if (chosen) { dd.querySelector('.dd-label').textContent = chosen.dataset.label; dd.querySelectorAll('.dd-opt').forEach(o => { o.classList.toggle('selected', o === chosen); o.setAttribute('aria-selected', o === chosen); }); }
       }
       form.elements.pinned.checked = !!draft.pinned;
       form.querySelector('.bot-preview .avatar').className = `avatar shape-${shapeIndex(draft.shape)} hero`;
@@ -350,6 +354,7 @@
       form.querySelectorAll('.shape-btn').forEach(x => x.classList.toggle('selected', x.dataset.id === draft.shape));
       form.querySelectorAll('.swatch').forEach(x => x.classList.toggle('selected', x.dataset.id === draft.color));
     } catch (_) {}
+    syncFeatureRows(form);  // the fields that go with the restored choice
   }
 
   function page() {

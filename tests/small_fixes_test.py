@@ -39,8 +39,40 @@ class SmallFixesTest(unittest.TestCase):
         fields, notes = self.m.tool_bot_fields(self.store, dict(provider='codex', account='不存在', effort='超級'))
         self.assertEqual(fields, dict(provider='codex')); self.assertEqual(len(notes), 2)
 
+    def test_same_names_api_keys_and_thinking_levels(self):
+        self.store.data['accounts'] += [dict(id='c' * 32, provider='codex', name='Work', type='login'), dict(id='d' * 32, provider='codex', name='work', type='key'),
+                                        dict(id='e' * 32, provider='codex', name='公司', type='key')]
+        self.assertEqual(self.m.tool_bot_fields(self.store, dict(provider='codex', account='Work'))[0]['account'], 'c' * 32)  # exact name first
+        fields, notes = self.m.tool_bot_fields(self.store, dict(provider='codex', account='WORK'))
+        self.assertNotIn('account', fields); self.assertIn('不只一個', notes[0])
+        fields, notes = self.m.tool_bot_fields(self.store, dict(provider='codex', account='公司'))
+        self.assertNotIn('account', fields); self.assertIn('API 計費', notes[0])
+        fields, notes = self.m.tool_bot_fields(self.store, dict(provider='gemini', effort='high'))
+        self.assertNotIn('effort', fields); self.assertTrue(notes)
+
+    def test_a_full_window_that_has_reset_no_longer_decides(self):
+        reset = {'windows': [dict(label='5 小時', usedPercent=100, resetsAt='2026-01-01T00:00:00+00:00')], 'limitReached': 'usage_limit_reached', 'updatedAt': self.m.NOW()}
+        self.store.data['quota'] = {'codex': reset}
+        self.assertFalse(self.m.limit_reached_now(reset)); self.assertFalse(self.m.auto_quota_low(self.store, 'codex'))
+
+    def test_a_sign_in_known_to_bill_is_not_bound(self):
+        self.store.data['accounts'].append(dict(id='f' * 32, provider='claude', name='Console', type='login'))
+        self.store.data.setdefault('autoStatus', {})[self.m.auto_account_key(self.store.data['accounts'][-1])] = dict(signedIn=True, billed=True)
+        fields, notes = self.m.tool_bot_fields(self.store, dict(provider='claude', account='Console'))
+        self.assertNotIn('account', fields); self.assertIn('API 計費', notes[0])
+
+    def test_a_version_without_thinking_levels_is_said(self):
+        self.store.data['abilityChecks'] = {'claude': {'missing': {'effort': 'x'}}}
+        fields, notes = self.m.tool_bot_fields(self.store, dict(provider='claude', effort='deep'))
+        self.assertNotIn('effort', fields); self.assertTrue(notes)
+
+    def test_an_old_limit_reading_no_longer_decides(self):
+        old = {'windows': [], 'limitReached': 'workspace_owner_credits_depleted', 'updatedAt': '2026-01-01T00:00:00+00:00'}
+        self.store.data['quota'] = {'codex': old}
+        self.assertFalse(self.m.quota_exhausted(self.store, 'codex')); self.assertFalse(self.m.auto_quota_low(self.store, 'codex'))
+
     def test_a_workspace_out_of_credits_is_used_up(self):
-        snap = {'windows': [{'label': '5 小時', 'usedPercent': 0, 'resetsAt': time.time() + 3600}], 'limitReached': 'workspace_owner_credits_depleted', 'updatedAt': '2026-11-21T00:00:00+00:00'}
+        snap = {'windows': [{'label': '5 小時', 'usedPercent': 0, 'resetsAt': time.time() + 3600}], 'limitReached': 'workspace_owner_credits_depleted', 'updatedAt': self.m.NOW()}
         self.store.data['quota'] = {'codex': snap}
         self.assertTrue(self.m.quota_exhausted(self.store, 'codex'))
         self.assertTrue(self.m.auto_quota_low(self.store, 'codex'))

@@ -85,14 +85,20 @@ def tool_bot_fields(store, args):
     wanted = str(args.get('account') or '').strip()
     if wanted:
         cli = fields.get('provider', '')
-        match = next((a for a in store.data.get('accounts') or [] if a.get('provider') == cli and same_name(a.get('name')) == same_name(wanted)), None) if cli and cli != AUTO else None
-        if match: fields['account'] = match['id']
-        elif not cli or cli == AUTO: notes.append('帳號「%s」要搭配指定的模型（例如 Codex）才能套用，這次沒有套用。' % wanted)
-        else: notes.append('%s 沒有名為「%s」的帳號，這次用預設帳號。' % (provider_label(cli).split('（')[0], wanted))
+        mine = [a for a in store.data.get('accounts') or [] if a.get('provider') == cli] if cli and cli != AUTO else []
+        exact = [a for a in mine if a.get('name') == wanted]; loose = [a for a in mine if same_name(a.get('name')) == same_name(wanted)]
+        match = exact[0] if len(exact) == 1 else loose[0] if not exact and len(loose) == 1 else None
+        if not cli or cli == AUTO: notes.append('帳號「%s」要搭配指定的模型（例如 Codex）才能套用，這次沒有套用。' % wanted)
+        elif len(exact) > 1 or (not exact and len(loose) > 1): notes.append('%s 有不只一個叫「%s」的帳號，這次用預設帳號，請你在 Bot 設定裡選。' % (provider_label(cli).split('（')[0], wanted))
+        elif not match: notes.append('%s 沒有名為「%s」的帳號，這次用預設帳號。' % (provider_label(cli).split('（')[0], wanted))
+        elif match.get('type') == 'key' or auto_known_billed((store.data.get('autoStatus') or {}).get(auto_account_key(match))): notes.append('「%s」是 API 計費的帳號，要由你在 Bot 設定裡指定，這次用預設帳號。' % match['name'])
+        else: fields['account'] = match['id']
     if args.get('effort'):
-        level = TOOL_EFFORTS.get(str(args['effort']).strip().lower())
-        if level: fields['effort'] = level
-        else: notes.append('思考強度「%s」看不懂，用預設。' % args['effort'])
+        level = TOOL_EFFORTS.get(str(args['effort']).strip().lower()); cli = fields.get('provider', '')
+        if not level: notes.append('思考強度「%s」看不懂，用預設。' % args['effort'])
+        elif cli and cli != AUTO and ('effort' not in ABILITY_CHECKS.get(provider_kind(cli), {}) or 'effort' in ((store.data.get('abilityChecks') or {}).get(cli) or {}).get('missing', {})):
+            notes.append('%s 不能調整思考強度，沒有套用。' % provider_label(cli).split('（')[0])
+        else: fields['effort'] = level
     return fields, notes
 
 

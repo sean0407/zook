@@ -208,7 +208,7 @@
   const FIELD_NAMES = {path: '檔案', content: '內容', name: '名稱', persona: '人格', instructions: '工作指示', provider: '模型', model: '模型版本',
     color: '顏色', bot_names: '成員', group_name: '群組', message: '訊息', skill_id: 'Skill', argv: '要執行的內容', cwd: '位置', scope: '範圍', query: '搜尋內容',
     target: '對象', repeat: '重複', time: '時間', date: '日期', day: '每月幾號', enabled: '啟用', schedule_id: '排程',
-    url: '網址', field: '欄位', text: '文字', enter: '按 Enter', number: '連結編號', part: '第幾段', direction: '方向'};
+    url: '網址', field: '欄位', text: '文字', enter: '按 Enter', number: '連結編號', part: '第幾段', direction: '方向', account: '帳號', effort: '思考強度', jobTitle: '職稱'};
   const humanWords = t => String(t || '').replace(/[_-]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
   const skillName = id => (state.integrations?.skills || []).find(x => x.id === id)?.name || 'Skill';
   const fileName = p => String(p || '').split('/').pop() || '檔案';
@@ -259,11 +259,12 @@
     if (c.status === 'error' || c.status === 'failed') return ['bad', humanError(c.error)];
     return ['ok', c.autoApproved ? '已自動完成' : '完成'];
   }
+  const EFFORT_WORDS = {fast: '快速', low: '快速', standard: '標準', medium: '標準', deep: '深入', high: '深入'};
   const scheduleLabel = id => String((state.data?.schedules || []).find(x => x.id === id)?.content || '排程').slice(0, 40);
   function argsList(args) {
     const entries = Object.entries(args || {}).filter(([, v]) => v !== '' && v != null);
     if (!entries.length) return '<p class="muted">沒有其他內容。</p>';
-    return `<dl class="args-list">${entries.map(([k, v]) => `<dt>${esc(FIELD_NAMES[k] || humanWords(k))}</dt><dd>${esc(Array.isArray(v) ? v.join('、') : typeof v === 'object' ? Object.entries(v).map(([x, y]) => humanWords(x) + '：' + y).join('，') : k === 'skill_id' ? skillName(v) : k === 'repeat' ? repeatName(v) : k === 'enabled' ? (v === 'off' ? '停用' : '啟用') : k === 'schedule_id' ? scheduleLabel(v) : String(v))}</dd>`).join('')}</dl>`;
+    return `<dl class="args-list">${entries.map(([k, v]) => `<dt>${esc(FIELD_NAMES[k] || humanWords(k))}</dt><dd>${esc(Array.isArray(v) ? v.join('、') : typeof v === 'object' ? Object.entries(v).map(([x, y]) => humanWords(x) + '：' + y).join('，') : k === 'effort' ? EFFORT_WORDS[String(v).toLowerCase()] || String(v) : k === 'skill_id' ? skillName(v) : k === 'repeat' ? repeatName(v) : k === 'enabled' ? (v === 'off' ? '停用' : '啟用') : k === 'schedule_id' ? scheduleLabel(v) : String(v))}</dd>`).join('')}</dl>`;
   }
   // The page a Bot is reading in Zook's built-in browser, while it reads it. The link opens it in your own browser.
   function browsingCard(botId, jobs) {
@@ -509,9 +510,10 @@
   // 模型與帳號 in the Bot form: 使用預設, 自動選擇, then each CLI on its own sign-in followed by each of its extra accounts.
   const choiceOptions = (provider, account) => {
     const list = (state.providers || [{id: 'codex', name: 'Codex'}, {id: 'claude', name: 'Claude'}]).filter(p => p.chat !== false || provider === p.id);
-    const picked = provider && provider !== 'auto' ? provider + (account ? '::' + account : '') : provider || '';
+    const picked = provider === 'auto' ? 'auto' : (provider || '') + (account ? '::' + account : '');
     const opt = (value, label) => `<option value="${esc(value)}" ${picked === value ? 'selected' : ''}>${esc(label)}</option>`;
-    return opt('', '使用預設') + opt('auto', '自動選擇（每則訊息自己挑）') + list.map(p => {
+    const kept = !provider && account ? list.flatMap(p => p.accounts || []).find(a => a.id === account) : null;  // an older Bot: the default CLI with one of its extra accounts
+    return opt('', '使用預設') + (kept ? opt('::' + account, '使用預設（' + kept.name + '）') : '') + opt('auto', '自動選擇（每則訊息自己挑）') + list.map(p => {
       const name = String(p.name).split('（')[0], extra = p.accounts || [];
       return opt(p.id, extra.length ? name + '（預設帳號）' : name) + extra.map(a => opt(p.id + '::' + a.id, name + '（' + a.name + (a.type === 'key' ? '・API 金鑰' : '') + '）')).join('');
     }).join('');

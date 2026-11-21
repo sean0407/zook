@@ -71,7 +71,7 @@ def intro_blocked(store, bot, provider, account_id):
     if not auto_ready(store, key): return '還沒確認是訂閱帳號'
     if budget_state(store, provider) == 'over': return '用量預算已用完'
     snap = (store.data.get('quota') or {}).get(key) or {}
-    if quota_exhausted(store, key) or (isinstance(snap, dict) and snap.get('limitReached')): return '額度已用完'
+    if quota_exhausted(store, key) or limit_reached_now(snap): return '額度已用完'
     return ''
 
 
