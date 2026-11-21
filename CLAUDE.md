@@ -133,7 +133,7 @@ GitHub Actions（`.github/workflows/test.yml`）會在每次推送跑測試和�
 - 手機 App 的排程、照片、切換對話和通知還沒在實機測過；真正的推播需要付費開發者帳號。
 - 群組討論每次重新帶入最近的對話，不接續 CLI 原生對話。
 - 自動選擇：每個帳號各自是一個選項（同一家的預設帳號優先），各有自己的開關與額度；API 計費帳號一律不選。
-- Grok 額度：`grok usage --json` 到 1.0.89 還不能用，Zook 每次先試它；不能用時在看不見的終端機開 Grok、讀畫面底部的「Weekly limit left」，再關掉（`grokquota.py`）。唯一會輸入的是 Grok 問「是否信任」Zook 自己的空資料夾時的「y」。只有每週額度，沒有重置時間。`grok usage --json` 能用後，移除讀畫面的做法。
+- Grok 額度：`grok usage --json` 到 1.0.89 還不能用，Zook 每次先試它；不能用時在看不見的終端機開 Grok、讀畫面底部的「Weekly limit left」，再關掉（`grokquota.py`）。只在 Zook 資料夾裡的 `grok-usage`（必須是空的、只有本人能進、不是連結）開；只帶 Grok 需要的環境變數。唯一會輸入的是「y」，而且只在畫面上除了「是否信任這個資料夾」以外沒有別的內容時輸入一次。只有每週額度，沒有重置時間。`grok usage --json` 能用後，移除讀畫面的做法。
 - Antigravity 走官方 `agy` CLI。Google 條款限制第三方工具使用，帳號有被暫停的風險，卡片上有寫明；AI 點數一律關閉。
 - Gemini CLI 沒有接 Zook 工具（ROADMAP E6）。到 0.16.2 為止使用者還沒在 Zook 加 Gemini API 金鑰帳號。Google 已不讓個人帳號使用這個 CLI（`IneligibleTierError`），要有 Gemini API 金鑰才能用，所以沒辦法開發與驗證。技術上可行的做法：工作資料夾裡的 `.gemini/settings.json` 設 `mcpServers`，加上 `--allowed-mcp-server-names` 與 `--approval-mode`。
 - Grok 在「指定資料夾」時從那個資料夾啟動，靠它自己的嚴格沙盒限制在資料夾內；Zook 的設定放在該資料夾的 `.grok`（有 `.zook-owned` 標記），回覆結束就刪。資料夾裡原本就有 `.grok` 時不執行。這個模式下 Grok 讀不到對話附件。新版 Grok 仍不接受 `--add-dir`。它的嚴格沙盒不限制系統暫存區，所以這類測試不要在 `/tmp` 做。
