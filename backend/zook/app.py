@@ -549,7 +549,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 with store.lock: skill_ids = shared_skill_ids(store, inventory); mcp_ids = shared_mcp_ids(store, inventory)
                 session = runtime.RuntimeSession(skill_ids, mcp_ids, bot['allowCommands'], root if scope == 'folder' else workspace,
                     lambda *a: self.approve(job_id, *a), lambda event: self.record_event(job_id, event), inventory=inventory,
-                    extra_tools=(plan_safe if planning else list)(self.app_tools(bot, runtime, job.get('groupId'), job.get('origin') or 'user') + ([] if job.get('groupId') or job.get('internal') else question_tools(self, job_id, runtime, job.get('origin') or 'user')) + browser_tools(self, job_id, bot, kind, job.get('origin') or 'user', runtime) + task_tools(self, job_id, runtime)), permission_mode=lambda bot_id=bot['id']: self.live_permission(bot_id, job_id))
+                    extra_tools=(plan_safe if planning else list)(self.app_tools(bot, runtime, job.get('groupId'), job.get('origin') or 'user') + git_tools(store, bot, scope, root, runtime, kind) + ([] if job.get('groupId') or job.get('internal') else question_tools(self, job_id, runtime, job.get('origin') or 'user')) + browser_tools(self, job_id, bot, kind, job.get('origin') or 'user', runtime) + task_tools(self, job_id, runtime)), permission_mode=lambda bot_id=bot['id']: self.live_permission(bot_id, job_id))
                 session.read_only = planning
                 token = secrets.token_urlsafe(32)
                 with store.lock:

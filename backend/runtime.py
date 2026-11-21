@@ -754,6 +754,8 @@ class RuntimeSession:
                 if len(frozen['content'].encode()) > MAX_TEXT:
                     raise RuntimeError('Workspace write exceeds 128 KiB.')
                 path = self._path(self.workspace, frozen['path'], True)
+                if any(part.lower() == '.git' for part in path.relative_to(self.workspace.resolve()).parts):
+                    raise RuntimeError('Files under .git are managed by git and cannot be written; use zook_git_commit to commit.')
                 path.parent.mkdir(parents=True, exist_ok=True)
                 # Recheck containment after mkdir; O_NOFOLLOW rejects final symlinks.
                 path = self._path(self.workspace, frozen['path'], True)
