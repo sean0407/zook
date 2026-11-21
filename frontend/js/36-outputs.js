@@ -27,6 +27,14 @@
     }
     modal(o.name, `<div class="modal-body">${body}<p class="muted small output-path">${esc(o.path)}</p></div><div class="modal-foot"><button type="button" class="secondary" data-action="output-reveal" data-id="${esc(o.id)}" data-bot="${esc(botId)}">在 Finder 顯示</button><a class="secondary button-link" href="${url}" download="${esc(o.name)}">下載</a><button type="button" class="primary" data-action="close-modal">關閉</button></div>`, '', true);
   }
+  // A link to a file on this Mac that is not one of the outputs: the window cannot open it, so its path is copied.
+  document.addEventListener('click', e => {
+    const a = e.target.closest?.('a.local-link');
+    if (!a) return;
+    e.preventDefault();
+    let path = a.getAttribute('href').replace(/^file:\/\//, ''); try { path = decodeURIComponent(path); } catch (_) {}
+    navigator.clipboard?.writeText(path).then(() => toast('已複製檔案位置：' + path), () => toast('檔案位置：' + path));
+  });
   // File names of this Bot's outputs inside a reply open the preview.
   function linkOutputs(html, botId) {
     const list = (state.outputs[botId] || []).filter(o => o.name.length >= 4).slice(0, 80);
