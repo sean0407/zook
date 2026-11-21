@@ -470,6 +470,11 @@ NATURAL_REPLY_NOTE = ('回覆時像真人同事一樣，用自然、口語的方
                       '也不要貼出工具回傳的原始資料；除非使用者明確要求看程式碼或技術細節。')
 
 
+# Files a person can open as they are: real files, checked, Excel showing its numbers everywhere (Quick Look and phones do not recalculate).
+FILE_DELIVERY_NOTE = ('要交出檔案（Excel、Word、簡報、PDF、圖片）時：存成真的檔案，回覆裡寫出檔名與完整路徑；交付前自己打開或轉成圖片看過內容與版面。'
+                      'Excel 有公式的格子要同時存入算好的值（例如用 xlsxwriter 的 write_formula 帶入 value，或直接寫數值），不然預覽和手機會顯示 0。')
+
+
 def web_enabled():
     """Web search is one switch in 設定 for all Bots."""
     return bool((_active.get('data') or {}).get('settings', {}).get('webSearch'))
@@ -478,7 +483,7 @@ def web_enabled():
 def identity_block(bot):
     """Who the Bot is: its own persona file, then its work instructions. Personal instruction files are not used."""
     now = datetime.datetime.now().astimezone()
-    parts = ['你是 %s%s。' % (bot['name'], '，職稱是「%s」' % bot['jobTitle'] if bot.get('jobTitle') else ''), '現在時間：%s（%s）。' % (now.strftime('%Y-%m-%d %H:%M'), now.tzname() or 'local'), ISOLATION_NOTE, NATURAL_REPLY_NOTE]
+    parts = ['你是 %s%s。' % (bot['name'], '，職稱是「%s」' % bot['jobTitle'] if bot.get('jobTitle') else ''), '現在時間：%s（%s）。' % (now.strftime('%Y-%m-%d %H:%M'), now.tzname() or 'local'), ISOLATION_NOTE, NATURAL_REPLY_NOTE, FILE_DELIVERY_NOTE]
     if web_enabled():
         parts.append('你可以上網搜尋與讀取網頁來取得最新資訊。涉及價格、新聞、日期等會變動的事實時，先查證再回答，並註明來源網站與資料時間。')
     else:
