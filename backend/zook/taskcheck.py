@@ -78,7 +78,8 @@ def task_verify_prompt(store, group, run, task, bot):
     attempt = next((a for a in reversed(task['attempts']) if a.get('state') == 'reported'), {})
     rules = ['你負責驗收群組「%s」裡的一項工作。依「怎樣算完成」檢查成員交回的結果，只檢查，不要修改任何檔案，也不要自己重做。' % group['name'],
              '檢查完呼叫 zook_task_verdict 一次：result 寫 pass（符合）或 fail（不符合）；reasons 用三句以內寫依據，不符合時寫清楚要改什麼。',
-             '沒有把握就寫 fail 並說明缺什麼；不要因為看不到檔案就當成通過。呼叫後直接結束這一輪，不要 @ 任何人。']
+             '沒有把握就寫 fail 並說明缺什麼；不要因為看不到檔案就當成通過。呼叫後直接結束這一輪，不要 @ 任何人。',
+             'reasons 和回覆一律用繁體中文，不要用簡體字。']
     shared = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
     if shared: rules.append('群組共用檔案在 %s：%s。用你的讀檔工具查看；讀不到時改用 zook_group_file_read。' % (group_copy_folder(store, bot['id']), '、'.join(shared[:40])))
     known = ['使用者的決定：%s → %s' % (q, a) for q, a in task.get('decisions') or []]

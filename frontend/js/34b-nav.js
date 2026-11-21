@@ -144,3 +144,9 @@
   let railKey = '';
   document.addEventListener('scroll', e => { if (e.target?.id === 'conversation' && !navFrame) navFrame = setTimeout(updateChatNav, 60); }, true);  // a timer, not an animation frame: those stop while the window is covered
   window.addEventListener('resize', () => { if (state.page === 'chat') updateChatNav(); });
+  let wideBefore = window.innerWidth > 1100;
+  window.addEventListener('resize', () => {  // the side panel closes when the window gets narrow, and comes back when it is wide again
+    const wide = window.innerWidth > 1100;
+    if (wide === wideBefore) return;
+    wideBefore = wide; state.detailOpen = wide; render(true);
+  });

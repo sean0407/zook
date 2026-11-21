@@ -14,6 +14,7 @@
     const codes = [];
     let s = esc(text).replace(/`([^`\n]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`);
     s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => `<a href="${u}" rel="noopener noreferrer">${t}</a>`)
+      .replace(/\[([^\]\n]+)\]\(((?:file:\/\/)?\/[^\s)]+)\)/g, (_, t, u) => `<a href="${u}" class="local-link" title="${u}">${t}</a>`)
       .replace(/(^|[\s(（])(https?:\/\/[^\s<)）]+)/g, (_, p, u) => `${p}<a href="${u}" rel="noopener noreferrer">${u}</a>`)
       .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<strong>$1</strong>')
       .replace(/__(?=\S)([\s\S]*?\S)__/g, '<strong>$1</strong>')
@@ -58,12 +59,12 @@
           else break;
         }
         const tag = ordered ? 'ol' : 'ul';
-        out.push(`<${tag}>${items.map(t => `<li>${t.split('\n').map(mdInline).join('<br>')}</li>`).join('')}</${tag}>`); continue;
+        out.push(`<${tag}>${items.map(t => `<li>${mdInline(t).replace(/\n/g, '<br>')}</li>`).join('')}</${tag}>`); continue;
       }
       const para = [];
       while (i < lines.length && lines[i].trim() && !/^\s*(```|#{1,6}\s|>|[-*+]\s|\d+[.)]\s)/.test(lines[i]) && !(lines[i].includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1]))) para.push(lines[i++]);
       if (!para.length) para.push(lines[i++]);
-      out.push(`<p>${para.map(mdInline).join('<br>')}</p>`);
+      out.push(`<p>${mdInline(para.join('\n')).replace(/\n/g, '<br>')}</p>`);  // bold may span the lines of one paragraph
     }
     return out.join('');
   }
@@ -91,7 +92,7 @@
     groupPollers: {},
     page: 'chat',
     detail: 'activity',
-    detailOpen: true,
+    detailOpen: window.innerWidth > 1100,  // a narrow window keeps the conversation readable
     query: '',
     launcher: false,
     collapsed: {},
@@ -154,9 +155,11 @@
     return state.data.bots.find(b => b.id === state.selected)
   }
 
+  // A one-line preview in the sidebar: the words, without Markdown marks.
+  const plainPreview = text => String(text || '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/\*\*|__|~~|`+/g, '').replace(/^\s*#+\s*/gm, '');
   function messagePreview(b) {
     const m = (b.messages || []).slice(-1)[0];
-    return m?.content || b.instructions || '開始新的對話'
+    return plainPreview(m?.content) || b.instructions || '開始新的對話'
   }
 
   function matches(s) {
@@ -332,7 +335,7 @@
     const m = (g.messages || []).filter(x => x.content).slice(-1)[0];
     if (!m) return groupMembers(g).map(b => b.name).join('、') || '尚無成員';
     const who = m.role === 'user' ? '我' : m.role === 'system' ? '' : (state.data.bots.find(b => b.id === m.botId)?.name || 'Bot');
-    return (who ? who + '：' : '') + m.content;
+    return (who ? who + '：' : '') + plainPreview(m.content);
   }
   function groupsBlock() {
     const groups = (state.data.groups || []).filter(g => !state.query || matches(g.name) || matches(groupPreview(g)));
@@ -368,6 +371,7 @@
     if (m.checkOf) return '';
     if (m.taskBoard) return taskBoardView(g, m);
     const fileMark = groupFileMark(g);
+    if (m.role === 'system' && g.paused && m.id === (g.messages || []).filter(x => x.role === 'system').slice(-1)[0]?.id && /發言上限/.test(m.content)) return '';  // the bar below says it
     if (m.role === 'system') return `<div class="system-note">${esc(m.content)}</div>${messageFiles(m.content, groupSharedFiles(g, fileMark))}`;
     const tag = html => highlightMentions(html, groupMembers(g));
     if (m.role === 'user') return `<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message user" data-mid="${esc(m.id)}">${m.author ? `<div class="speaker-wrap user-author"><div class="speaker">由 ${esc(m.author)} 發起</div><div class="bubble">${tag(esc(m.content))}</div></div>` : `<div class="bubble">${tag(esc(m.content))}</div>`}${attachmentsView(m)}${m.interjected ? `<div class="interject-note">${m.waiting ? '討論途中插話・這輪結束後回覆' : '討論途中插話'}</div>` : ''}</div>`;

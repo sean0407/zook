@@ -426,7 +426,7 @@ def cli_issue(text):
     """A plain explanation for account problems a CLI reports in English."""
     text = str(text or '').lower()
     if 'ineligibletiererror' in text or 'no longer supported for gemini code assist' in text:
-        return 'Google 已不開放個人免費方案使用 Gemini CLI。請按「＋ 新增帳號」加入 Gemini API 金鑰，再到 Bot 的進階設定選用它。'
+        return 'Google 已不開放個人免費方案使用 Gemini CLI。請按「＋ 帳號」加入 Gemini API 金鑰，再到 Bot 的進階設定選用它。'
     if 'api_key_invalid' in text or 'api key not valid' in text:
         return 'Google 不接受這把 Gemini API 金鑰，請移除後重新新增。'
     return ''
