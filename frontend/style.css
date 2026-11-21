@@ -1923,3 +1923,11 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .msg-file-name strong { font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .msg-file-name small { color:var(--muted); font-size:11.5px; }
 .message.assistant .msg-files { margin-left:0; }
+
+/* 自動選用: a smaller switch in front of its words */
+.auto-pick.small-switch { justify-content:flex-start; gap:8px; }
+.auto-pick.small-switch .switch { transform:scale(.78); transform-origin:left center; margin:0 -6px 0 0; }
+/* Windows over the page stay in the middle of the window, also in the dark look (whose filter would otherwise pin them to the page's foot) */
+#modal-root { position:fixed; inset:0; z-index:100; pointer-events:none; }
+#modal-root > * { pointer-events:auto; }
+#toast { z-index:110; }  /* a message stays readable above an open window */

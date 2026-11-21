@@ -196,6 +196,7 @@ def _window_open(window, snap, now):
 def auto_quota_low(store, provider, account_id=''):
     """True when the saved quota shows less than 10% left in a limit that has not reset yet."""
     snap = (store.data.get('quota') or {}).get(provider + '@' + account_id if account_id else provider) or {}
+    if limit_reached_now(snap): return True  # e.g. the workspace ran out of credits (a recent reading only)
     windows = [w for w in snap.get('windows') or [] if isinstance(w, dict)]
     if provider == 'antigravity': windows = [w for w in windows if 'gemini' in str(w.get('label')).lower()] or windows  # Zook runs its default Gemini model
     now = time.time()

@@ -448,7 +448,8 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             first, skipped = chain[0], {}
             for x in chain[:]:
                 p, a = x[0], x[2]
-                used_up = quota_exhausted(store, p + '@' + a) if a else quota_exhausted(store, p) and not find_account(bot.get('account'), p)
+                own = None if a is not None else find_account(bot.get('account'), p)  # the account this try really uses
+                used_up = quota_exhausted(store, p + '@' + (a or own['id'])) if a or own else quota_exhausted(store, p)
                 reason = '尚未安裝' if not find_cli(p) else '額度已用完' if used_up else '用量預算已用完' if budget_blocks(store, p) else None  # 'stop' too: a backup that is over its own budget must not answer instead
                 if reason and len(chain) > 1: skipped[x] = reason; chain.remove(x)
             if budget_blocks(store, chain[0][0]) == 'stop':
@@ -836,10 +837,12 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             with store.lock:
                 if any(b['name'].strip().lower() == name.lower() for b in store.data['bots']): raise RuntimeError('已經有名為「%s」的 Bot。' % name)
                 new = dict(id=ID(), name=name, color=args.get('color') or colors_for(len(store.data['bots'])), shape=str(len(store.data['bots']) % 13), instructions='', persona='', provider=AUTO, model='', pinned=False, section='團隊', messages=[], enabledSkills=[], enabledMcp=[], allowCommands=True, isAdmin=False)
-                update(new, {k: args[k] for k in ('name', 'jobTitle', 'persona', 'instructions', 'provider', 'model', 'color') if args.get(k)}, 'bot')
+                chosen, notes = tool_bot_fields(store, args)  # the account by name and the thinking level too; what cannot be set is said
+                update(new, dict({k: args[k] for k in ('name', 'jobTitle', 'persona', 'instructions', 'color') if args.get(k)}, **chosen), 'bot')
                 ensure_chats(new); store.data['bots'].append(new); store.save(); watch_auto_status(store, new)
             self.want_intro(new['id'])  # its greeting, from the persona just written
-            return {'created': new['name'], 'id': new['id']}
+            done = dict(provider=new.get('provider') or AUTO, model=new.get('model') or '', account=(find_account(new.get('account')) or {}).get('name') or '預設帳號', effort=new.get('effort') or '預設')
+            return dict({'created': new['name'], 'id': new['id'], 'applied': done}, **({'notApplied': notes} if notes else {}))  # say only what is in 'applied'
         def create_group(args):
             with store.lock:
                 ids = [find_bot(n)['id'] for n in args['bot_names']]
@@ -857,7 +860,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
         return tools + [
             (runtime._schema('zook_list_team', 'List all Zook Bots (name, role, model) and groups.', {}), list_team, False),
             (runtime._schema('zook_create_bot', 'Create a new Zook Bot after user approval.',
-                             {'name': S('Bot name'), 'jobTitle': S('Job title, at most 12 characters, e.g. 行銷企劃'), 'persona': S('Persona: personality, tone, values and how it talks (Traditional Chinese)'), 'instructions': S('Work instructions: role and responsibilities'), 'provider': S('Provider id; empty = pick automatically for each message'), 'model': S('Model ID; empty = default'), 'color': S('Hex color like #2585f6, optional')}, ['name', 'persona', 'instructions'], False), create_bot, True),
+                             {'name': S('Bot name'), 'jobTitle': S('Job title, at most 12 characters, e.g. 行銷企劃'), 'persona': S('Persona: personality, tone, values and how it talks (Traditional Chinese)'), 'instructions': S('Work instructions: role and responsibilities'), 'provider': S('Provider id (e.g. codex, claude); empty = pick automatically for each message'), 'model': S('Model ID; empty = default'), 'account': S('Name of one of that provider\'s extra accounts (e.g. Waifdance); needs provider; empty = its own sign-in'), 'effort': S('Thinking level: fast, standard or deep (low/medium/high also accepted); empty = default'), 'color': S('Hex color like #2585f6, optional')}, ['name', 'persona', 'instructions'], False), create_bot, True),
             (runtime._schema('zook_create_group', 'Create a group chat of 2–10 existing Bots (by name) after user approval.',
                              {'name': S('Group name, optional'), 'bot_names': A('Exact Bot names, 2–10')}, ['bot_names'], False), create_group, True),
             (runtime._schema('zook_start_group_discussion', 'Post a kickoff message into a group so its Bots start working, after user approval. Use @Bot names to assign owners.',

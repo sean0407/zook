@@ -26,7 +26,7 @@
     catch (error) { item.autoOn = was; input.checked = was; toast(error.message); }
   }
   document.addEventListener('change', e => {
-    if (e.target.name === 'provider' && e.target.closest('#bot-form')) syncFeatureRows(e.target.closest('#bot-form'));
+    if (e.target.name === 'providerChoice' && e.target.closest('#bot-form')) syncFeatureRows(e.target.closest('#bot-form'));
     if (e.target.dataset.autoModel) saveAutoModel(e.target);
     if (e.target.dataset.botDefault) saveBotDefault(e.target);
     if (e.target.name === 'connectorAccount') switchConnectorAccount(e.target);
@@ -213,14 +213,18 @@
     }
     const form = e.target.closest('form');
     if (!form || !form.querySelector('.model-picker')) return;
-    if (e.target.name === 'provider') {
+    if (e.target.name === 'providerChoice' || e.target.name === 'provider') {
+      if (e.target.name === 'providerChoice') {  // the Bot form: the model and the account in one menu, CLI or CLI::account
+        const [provider, account] = e.target.value.split('::');
+        const same = form.elements.provider.value === provider;
+        form.elements.provider.value = provider; form.elements.account.value = account || '';
+        if (same) { saveBotDraft(form); return; }  // only another account of the same CLI: its model stays
+      }
       form.elements.model.value = '';
       form.elements.modelSelect.value = '';
       form.elements.modelCustom.value = '';
       form.elements.modelCustom.hidden = true;
       form.dataset.providerChanged = '1';
-      const slot = form.querySelector('[data-account-field]');
-      if (slot) slot.innerHTML = accountField(e.target.value, '');
       form.querySelector('.model-note').textContent = '提供者已變更，模型已切換為預設。';
       loadModels(form);
     } else if (e.target.name === 'modelSelect') {
@@ -282,13 +286,13 @@
           color: d.get('color'),
           instructions: d.get('instructions'),
           persona: d.get('persona') || '',
-          provider: d.get('provider'),
+          provider: d.has('providerChoice') ? String(d.get('providerChoice')).split('::')[0] : d.get('provider'),  // what the menu shows
           model: d.get('model'),
           section: d.get('section'),
           pinned: d.has('pinned'),
           scripts: d.has('scripts'),
           fallbacks: d.get('fallbackChoice') === '__none' ? [] : !d.get('fallbackChoice') || d.get('fallbackChoice') === '__default' ? null : [d.get('fallbackChoice')], permissionMode: d.get('permissionMode') || '', effort: d.get('effort') || '', features: Object.fromEntries([['multi', d.get('featureMulti')], ['image', d.get('featureImage')], ['browser', d.get('featureBrowser')]].filter(x => x[1]).map(x => [x[0], x[1] === 'on'])),
-          account: d.get('account') || '',
+          account: d.has('providerChoice') ? String(d.get('providerChoice')).split('::')[1] || '' : d.get('account') || '',
           access: d.get('access') || '', accessFolder: d.get('access') === 'folder' ? d.get('accessFolder') || '' : ''
         };
         if (data.access === 'folder' && !data.accessFolder) { toast('請先選擇資料夾'); return; }
