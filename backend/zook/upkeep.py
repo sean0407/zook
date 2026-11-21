@@ -424,9 +424,12 @@ def trim_jobs(store):
     for job in reversed(jobs):
         if job.get('status') == 'running' or job.get('slim') or job['id'] in waiting or job.get('groupId') in talking: continue
         seen[job['botId']] = seen.get(job['botId'], 0) + 1
-        if seen[job['botId']] > JOBS_WITH_ANSWER and job.pop('content', None): changed = True
+        if seen[job['botId']] > JOBS_WITH_ANSWER and job.get('content'):
+            named = named_paths(job.pop('content'))  # the files its answer named still count for 產出
+            if named: job['wrote'] = list(dict.fromkeys((job.get('wrote') or []) + named))[:50]
+            changed = True
         if seen[job['botId']] <= JOBS_FULL_PER_BOT and job['botId'] in alive: continue  # a deleted Bot's replies keep only their usage figures
-        wrote = [str((c.get('arguments') or {}).get('path') or '')[:300] for c in job.get('toolCalls') or [] if c.get('name') == 'native_write']
+        wrote = [str((c.get('arguments') or {}).get('path') or '')[:300] for c in job.get('toolCalls') or [] if c.get('name') == 'native_write'] + (job.get('wrote') or [])
         small = {k: job[k] for k in JOB_SLIM_KEEP if k in job}
         if job.get('error'): small['error'] = str(job['error'])[:300]
         if wrote: small['wrote'] = [p for p in dict.fromkeys(wrote) if p][:50]

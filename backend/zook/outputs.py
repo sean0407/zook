@@ -16,6 +16,14 @@ def _inside(path, folder):
     return path.casefold().startswith(folder.rstrip(os.sep).casefold() + os.sep)
 
 
+NAMED_PATH = re.compile(r'(?<![\w/.~:])(/(?:[^\s`\'"<>()（）\[\]「」，。、；：！？*|]+/)*[^\s`\'"<>()（）\[\]「」，。、；：！？*|/]+\.[A-Za-z0-9]{1,8})')
+
+
+def named_paths(text):
+    """Absolute file paths a reply names, e.g. 「已存到 /tmp/x/報表.xlsx」. Only a hint: the file still has to have changed during that reply."""
+    return list(dict.fromkeys(m.group(1) for m in NAMED_PATH.finditer(str(text or ''))))[:30]
+
+
 def bot_outputs(store, bot):
     """Files in the Bot's working folder, plus files elsewhere that one of its replies really changed. Newest first."""
     workspace = os.path.realpath(str(store.dir / 'workspaces' / bot['id'])); data_dir = os.path.realpath(str(store.dir)); found = {}
@@ -42,7 +50,7 @@ def bot_outputs(store, bot):
             elif entry.is_file(follow_symlinks=False): add(entry.path)
     with store.lock:
         wrote = [(str((c.get('arguments') or {}).get('path') or ''), j.get('createdAt'), j.get('finishedAt')) for j in store.data['jobs'] if j.get('botId') == bot['id']
-                 for c in (j.get('toolCalls') or []) + [dict(name='native_write', arguments={'path': p}) for p in j.get('wrote') or []] if c.get('name') == 'native_write']
+                 for c in (j.get('toolCalls') or []) + [dict(name='native_write', arguments={'path': p}) for p in (j.get('wrote') or []) + named_paths(j.get('content'))] if c.get('name') == 'native_write']
         scope, chosen = bot_scope(bot)
         folder = os.path.realpath(chosen) if scope == 'folder' and chosen else ''
     for path, started, finished in wrote[-400:]:

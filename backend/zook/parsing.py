@@ -72,6 +72,12 @@ def parse_cli_output(provider, text, model=''):
         for o in objs:
             step = o.get('step_update') if o.get('event') == 'step_update' and isinstance(o.get('step_update'), dict) else {}
             if step.get('state') == 'DONE' and isinstance(step.get('usage'), dict): steps[('step', step['step_index']) if 'step_index' in step else ('line', len(steps))] = step['usage']
+            if step.get('state') == 'DONE' and step.get('step_type') == 'tool':  # a file it wrote or a command it ran, for 動態 and 產出
+                tool = str(step.get('tool_name') or '').lower(); info = step.get('tool_info') if isinstance(step.get('tool_info'), dict) else {}
+                given = info.get('parameters') if isinstance(info.get('parameters'), dict) else {}
+                where = given.get('Path') or given.get('path') or given.get('TargetFile') or given.get('AbsolutePath') or given.get('file_path') or ''
+                if where and any(w in tool for w in ('write', 'replace', 'edit', 'create')): out['web'].append(native_action('write', where))
+                elif any(w in tool for w in ('command', 'shell', 'bash')): out['web'].append(native_action('command', given.get('CommandLine') or given.get('command') or given.get('Command') or ''))
         u = d.get('usage') if isinstance(d.get('usage'), dict) else None
         if steps: u = {k: sum(_int(s.get(k)) for s in steps.values()) for k in ('input_tokens', 'cache_read_tokens', 'output_tokens')}
         if u: out['usage'] = dict(input=_int(u.get('input_tokens')), cachedInput=_int(u.get('cache_read_tokens')), output=_int(u.get('output_tokens')), model=model or '預設模型', costUsd=None)
