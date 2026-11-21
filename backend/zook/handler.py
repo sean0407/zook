@@ -471,6 +471,11 @@ class Handler(BaseHTTPRequestHandler):
                     bot = store.find('bots', parts[2])
                     if not bot: return self.error(404, '找不到機器人。')
                     return self.respond(200, {'ok': True}) if queue_cancel(store, bot, parts[4]) else self.error(409, '這則訊息已經送出了。')
+            if len(parts) == 4 and parts[:2] == ['api', 'bots'] and parts[3] == 'intro' and self.command == 'POST':  # an older Bot's empty conversation opened
+                self.body()
+                with store.lock: known = bool(store.find('bots', parts[2]))
+                if not known: return self.error(404, '找不到機器人。')
+                self.server.want_intro(parts[2]); return self.respond(202, {'ok': True})
             if len(parts) == 4 and parts[:2] == ['api', 'bots'] and parts[3] == 'restore' and self.command == 'POST' and not self.device:
                 self.body()
                 with store.lock: bot = restore_bot(store, parts[2]); store.save()
@@ -855,7 +860,7 @@ class Handler(BaseHTTPRequestHandler):
                     body = self.body(); name = body.get('name', '')
                     if not isinstance(name, str) or not name.strip() or len(name)>100: raise ValueError('名稱無效。')
                     bot = dict(id=ID(), name=name, color='#8275f4', shape='circle', instructions='', persona='', provider='', model='', pinned=False, section='團隊', messages=[], enabledSkills=[], enabledMcp=[], allowCommands=True)
-                    update(bot, body, 'bot'); validate_selection(bot, inventory); ensure_chats(bot); store.data['bots'].append(bot); store.save(); watch_auto_status(store, bot); return self.respond(201, bot)
+                    update(bot, body, 'bot'); validate_selection(bot, inventory); ensure_chats(bot); store.data['bots'].append(bot); store.save(); watch_auto_status(store, bot); self.server.want_intro(bot['id']); return self.respond(201, bot)
                 if path == '/api/bots/arrange' and self.command == 'POST':
                     body = self.body(); arrange_bots(store, body); store.save()
                     return self.respond(200, dict(bots=[dict(id=b['id'], section=b.get('section'), pinned=b.get('pinned')) for b in store.data['bots']], sections=store.data['settings']['sections']))
@@ -894,6 +899,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not bot: return self.error(404, '找不到機器人。')
                     body = self.body(); candidate = copy.deepcopy(bot); update(candidate, body, 'bot'); validate_selection(candidate, inventory); bot.update(candidate); store.save(); watch_auto_status(store, bot)
                     if 'permissionMode' in body: self.server.release_approvals()
+                    if (bot.get('intro') or {}).get('source') != intro_source(bot): self.server.want_intro(bot['id'])  # what it is changed: a new greeting
                     return self.respond(200, bot)
                 if len(parts) == 3 and parts[:2] == ['api', 'bots'] and self.command == 'DELETE':
                     bot = store.find('bots', parts[2])

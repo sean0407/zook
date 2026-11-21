@@ -1,5 +1,5 @@
 # The running service: schedules, replies, group discussions. Loaded by backend/server.py into one shared namespace.
-class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compacting, Teams, ThreadingHTTPServer):
+class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compacting, Teams, Intros, ThreadingHTTPServer):
     daemon_threads = True
     def __init__(self, address, store, assets, token):
         super().__init__(address, Handler)
@@ -838,6 +838,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 new = dict(id=ID(), name=name, color=args.get('color') or colors_for(len(store.data['bots'])), shape=str(len(store.data['bots']) % 13), instructions='', persona='', provider=AUTO, model='', pinned=False, section='團隊', messages=[], enabledSkills=[], enabledMcp=[], allowCommands=True, isAdmin=False)
                 update(new, {k: args[k] for k in ('name', 'jobTitle', 'persona', 'instructions', 'provider', 'model', 'color') if args.get(k)}, 'bot')
                 ensure_chats(new); store.data['bots'].append(new); store.save(); watch_auto_status(store, new)
+            self.want_intro(new['id'])  # its greeting, from the persona just written
             return {'created': new['name'], 'id': new['id']}
         def create_group(args):
             with store.lock:

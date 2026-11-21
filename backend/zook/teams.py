@@ -117,4 +117,5 @@ class Teams:
         if body.get('kickoff') is True: self.post_group_message(group, TEAM_KICKOFF)
         store.save(); watch_auto_status(store, bots[0])
         log_activity(store, 'bot', '建立團隊「%s」：%s' % (team, '、'.join(b['name'] for b in bots)))
+        for b in bots: self.want_intro(b['id'])  # each new member's greeting, one at a time in the background
         return dict(group=group, bots=[dict(id=b['id'], name=b['name']) for b in bots])

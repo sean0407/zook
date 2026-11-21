@@ -1905,3 +1905,9 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .work-thinking { margin:8px 0 0; padding:8px 12px; border:1px solid var(--line); border-radius:12px; font-size:13px; color:#555; }
 .work-thinking summary { cursor:pointer; color:var(--muted); font-size:12px; }
 .work-thinking p { margin:8px 0 0; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
+
+/* An empty conversation: the Bot's greeting and questions you might ask */
+.empty-chat h1 { font-size:22px; line-height:1.45; max-width:520px; text-align:center; }
+.intro-questions { display:flex; flex-direction:column; align-items:center; gap:8px; margin-top:18px; width:min(440px, 100%); }
+.intro-q { width:100%; padding:10px 16px; border:1px solid #e4e4e4; border-radius:14px; background:#fff; color:#333; font-size:14px; text-align:left; cursor:pointer; line-height:1.45; }
+.intro-q:hover { background:#f6f6f6; border-color:#d6d6d6; }
