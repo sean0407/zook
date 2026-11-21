@@ -37,7 +37,8 @@ class IntroParseTest(unittest.TestCase):
         bot = dict(id='b', name='x')
         self.assertEqual(self.m.intro_blocked(store, bot, 'codex', ''), '')
         self.assertEqual(self.m.intro_blocked(store, bot, 'codex', 'k' * 32), 'API 計費')
-        self.assertEqual(self.m.intro_blocked(store, bot, 'claude', ''), 'API 計費')
+        self.assertTrue(self.m.intro_blocked(store, bot, 'claude', ''))  # billed: not a subscription
+        self.assertTrue(self.m.intro_blocked(store, bot, 'grok', ''))  # its tools cannot all be switched off
         store.data['quota'] = {'codex': {'windows': [{'label': '5 小時', 'usedPercent': 100, 'resetsAt': time.time() + 3600}]}}
         self.assertEqual(self.m.intro_blocked(store, bot, 'codex', ''), '額度已用完')
 
@@ -45,6 +46,9 @@ class IntroParseTest(unittest.TestCase):
         self.assertIsNone(self.m.parse_intro('{"greeting": "\\ud800", "questions": ["\\ud800"]}'))
         self.assertEqual(self.m.parse_intro('{"greeting": "嗨", "questions": ["/goal 做完"]}')['questions'], ['goal 做完'])  # never a slash command
         self.assertFalse(self.m.intro_valid(dict(greeting='嗨', questions={'a': 1})))
+        self.assertFalse(self.m.intro_valid(dict(greeting='嗨', questions=['/plan 做'])))  # a restored one must be clean too
+        self.assertFalse(self.m.intro_valid(dict(greeting='嗨\u202e', questions=['好'])))
+        self.assertTrue(self.m.intro_valid(dict(greeting='嗨', questions=['好嗎？'])))
 
     def test_reply_is_read_strictly(self):
         ok = self.m.parse_intro('好的：\n```json\n{"greeting": "嗨，我是小香！", "questions": ["A？", "", "B？", 3, "C？", "D？"]}\n```')
@@ -92,7 +96,8 @@ class IntroServerTest(unittest.TestCase):
         intro = self.intro_of(bot['id'])
         self.assertEqual(intro['greeting'], '嗨！我是香氛研發，今天想從哪個配方開始聊？'); self.assertEqual(len(intro['questions']), 3)
         log = self.log.read_text()
-        self.assertIn('細心的配方師', log); self.assertIn('--sandbox', log); self.assertIn('read-only', log)  # read-only, whatever the Bot may do in chats
+        self.assertIn('細心的配方師', log); self.assertIn('"--sandbox", "read-only"', log)  # read-only, whatever the Bot may do in chats
+        self.assertIn('web_search=\\"disabled\\"', log); self.assertIn('"--disable", "shell_tool"', log); self.assertNotIn('mcp_servers', log)  # no tools, web or Zook tools
         self.assertEqual(next(b for b in self.req('GET', '/api/state')[1]['bots'] if b['id'] == bot['id'])['messages'], [])  # nothing lands in the conversation
         self.req('PATCH', '/api/bots/' + bot['id'], {'color': '#123456'}); time.sleep(.5)
         self.assertEqual(self.log.read_text().count('====='), 1)  # looks alone do not ask again

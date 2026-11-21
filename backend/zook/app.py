@@ -519,14 +519,14 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             effort = job.get('effort') if ability_on(store, provider, 'effort') else 'standard'  # a CLI version without the option just uses its default
             if not kind: raise RuntimeError('找不到這個提供者，請到「各模型使用量」頁確認。')
             if kind == 'unverified': raise RuntimeError('%s 還沒驗證能不能在 Zook 回覆，目前只能安裝和登入。請改用其他模型。' % provider_label(provider))
-            web = web_enabled() and not job.get('bare')
+            web = web_enabled()
             # Each CLI keeps its own built-in tools (files, commands) inside the Bot's workspace when 主動性 is 自動 or 全部允許.
             # In 謹慎 only Zook's tools are available, because built-in tools cannot ask before each action.
             with store.lock:
                 planning = bool((store.find('jobs', job_id) or {}).get('plan'))
                 streaming = stream_on(store)
                 native = permission_mode(store, bot) in ('auto', 'bypass') and not planning
-            selected = kind in PLAN_KINDS and not job.get('bare')  # Zook tools need MCP support in the CLI; other CLIs (and a bare job) run as plain chat.
+            selected = kind in PLAN_KINDS  # Zook tools need MCP support in the CLI; other CLIs run as plain chat.
             workspace = store.dir / 'workspaces' / bot['id']; workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
             # The access scope applies to every CLI. Grok and plain CLIs cannot ask before each action, so with 主動性 謹慎 they stay in the workspace.
             scope, root = bot_access(bot, workspace) if native or kind in ('codex', 'claude') or (kind == 'cursor' and planning) else ('workspace', workspace)
