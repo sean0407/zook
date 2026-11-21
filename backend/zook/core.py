@@ -751,5 +751,15 @@ def fallback_reason(error):
     return '無法回覆'
 
 
+def fallback_why(error, kind=None):
+    """Why the first model did not answer, for 「這次改用…（…）」: the kind of failure, else the first line of what it said."""
+    why = fallback_reason(error)
+    if why != '無法回覆': return why
+    named = ERROR_REASONS.get(kind or '') if kind and kind != 'unknown' else ''
+    if named: return named
+    first = next((line.strip() for line in str(error or '').splitlines() if line.strip()), '')
+    return '無法回覆：' + (first[:60] + ('…' if len(first) > 60 else '')) if first else '無法回覆'
+
+
 def is_pass(content):
     return content.strip().strip('。.!！').upper() == 'PASS'

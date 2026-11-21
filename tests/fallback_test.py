@@ -56,6 +56,7 @@ class FallbackTest(unittest.TestCase):
         self.assertEqual((message['status'], message['content']), ('completed', 'claude says hi'))
         self.assertIn('改用 Claude', message['note']); self.assertIn('額度已用完', message['note'])
         self.assertEqual(job['fallback']['provider'], 'claude')
+        self.assertEqual(job['attempts'][0]['provider'], 'codex'); self.assertTrue(job['attempts'][0]['error'])  # why the first one did not answer is kept
         message, job = self.ask('CODEX-OK')  # the first choice works again: no switch, no note
         self.assertEqual(message['content'], 'codex says hi'); self.assertNotIn('note', message)
 

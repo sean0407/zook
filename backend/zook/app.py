@@ -497,7 +497,9 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 if job['status'] != 'running': return
                 # This attempt failed and another model is available.
                 error = self.attempt_errors.pop(job_id, '')
-                if (p, a) == (first[0], first[2]): why = fallback_reason(error)
+                if (p, a) == (first[0], first[2]): why = fallback_why(error, job.get('errorKind'))
+                job.setdefault('attempts', []).append(dict(provider=p, account=a or '', error=str(error or '')[:300], kind=job.get('errorKind') or ''))  # why each model before the backup did not answer
+                print('[zook] %s 沒有回覆（%s）：%s' % (p, job.get('errorKind') or '?', str(error or '')[:300].replace('\n', ' ')), file=sys.stderr, flush=True)
                 acted = job.get('mayHaveActed') or any(c.get('category') not in ('read', 'external_read') for c in (job.get('toolCalls') or [])[before:])
                 if acted:  # It already changed something; repeating the work on another model could do it twice.
                     job.update(status='failed', error=error or 'CLI 執行失敗。', finishedAt=NOW())
