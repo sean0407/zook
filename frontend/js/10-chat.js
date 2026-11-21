@@ -240,6 +240,7 @@
       case 'zook_browser_type': return `在網頁輸入「${String(a.text || '').slice(0, 60)}」${a.enter === true ? '並按 Enter' : ''}`;
       case 'zook_list_schedules': return '查看排程';
       case 'zook_create_schedule': return `建立排程「${String(a.content || '').slice(0, 40)}」`;
+      case 'zook_git_commit': return `提交到 git「${String(a.message || '').slice(0, 40)}」`;
       case 'zook_update_schedule': return `修改排程「${scheduleLabel(a.schedule_id)}」`;
       case 'zook_delete_schedule': return `刪除排程「${scheduleLabel(a.schedule_id)}」`;
       case 'web_search': return a.query ? `上網搜尋「${String(a.query).slice(0, 60)}」` : '上網搜尋';
