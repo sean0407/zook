@@ -70,7 +70,7 @@ class IntroServerTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name); self.log = self.root / 'intro.log'
         (self.root / 'assets').mkdir(); (self.root / 'assets/index.html').write_text('x'); (self.root / 'bin').mkdir()
         cli = self.root / 'bin/codex'; cli.write_text(CLI); cli.chmod(0o755)
-        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', INTRO_LOG=str(self.log), ZOOK_SECRETS_DIR=str(self.root / 'secrets'))
+        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='0', INTRO_LOG=str(self.log), ZOOK_SECRETS_DIR=str(self.root / 'secrets'))
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')],
                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
@@ -114,7 +114,7 @@ class IntroServerTest(unittest.TestCase):
 
     def test_a_message_is_answered_while_the_greeting_is_being_made(self):
         self.proc.terminate(); self.proc.wait(timeout=5); self.proc.stdout.close()
-        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', INTRO_LOG=str(self.log), ZOOK_SECRETS_DIR=str(self.root / 'secrets'), INTRO_SLOW='1')
+        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='0', INTRO_LOG=str(self.log), ZOOK_SECRETS_DIR=str(self.root / 'secrets'), INTRO_SLOW='1')
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
         bot = self.req('POST', '/api/bots', {'name': '香氛研發', 'provider': 'codex', 'persona': 'x'})[1]

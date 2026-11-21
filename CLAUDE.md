@@ -79,7 +79,8 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 
 每個改動都要過這三層，缺一層就在報告寫「未驗證」：
 
-1. **自動測試**：`python3 -m unittest discover -s tests -p '*test.py'`。新功能先寫會失敗的測試，再實作。
+1. **自動測試**：`/usr/bin/python3 scripts/run_tests.py`（每個測試檔各自一個程序、同時跑幾個，全部約 2–3 分鐘；只跑幾個檔：`scripts/run_tests.py outline_test intro_test`）。開 PR 前一定跑完整一次。失敗的檔會單獨重跑一次，重跑才通過的列為「不穩定」，要找出原因修掉，不能當作沒事。新功能先寫會失敗的測試，再實作。
+   - 每個測試檔都要能單獨跑（不能依賴其他測試先載入的東西）；啟動 Zook 並用假 CLI 的測試要設 `ZOOK_NO_INTRO=1`。
 2. **介面實測**：啟動臨時伺服器，用內建瀏覽器實際操作。
    ```sh
    ZOOK_SKIP_UPDATE_CHECK=1 ZOOK_SECRETS_DIR=<暫存> python3 backend/server.py --port 8791 --data-dir <暫存>/data --assets frontend
@@ -93,10 +94,23 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 
 做不到、需要使用者驗收的：另一台 Mac、公司帳號的連接器、手機實機、App 內的更新按鈕。
 
+## 開發與發佈的分工（使用者 2026-11-21 定）
+
+兩個對話分工，各做各的：
+
+- **開發視窗（「ZOOK開發」）只做到開 PR**：開分支 → 寫測試 → 實作 → 三層驗證 → Codex 審查 → 開 PR（下面「每個項目的流程」1–8），然後用 SendMessage 把 PR 交給「ZOOK發佈」，接著做下一件事。不等 CI、不合併、不改版號、不打包。
+  - 下一件事從最新的 `main` 開分支；要用到還沒合併的改動時，接在上一個分支後面做，PR 說明寫清楚它接在哪個 PR 後面。
+  - 一個版本一個 PR。
+- **「ZOOK發佈」對話**：收到 PR 後用 App 的 ccd_pr 工具綁定這個 PR、打開 Auto-fix 盯 CI（不自己輪詢）。
+  - CI 失敗：先看原因。只跟測試環境、時間、格式有關的簡單問題直接在 PR 的分支修；需要動功能（例如新功能干擾了舊測試的行為、驗收條件沒達成）就用 SendMessage 回報「ZOOK開發」，附上失敗的測試和原因，不要一直重跑。
+  - 合併衝突：沒有功能影響的（文件、版號、相鄰的行）由發佈對話解決；牽涉功能的回報「ZOOK開發」。
+  - CI 通過後依下面「發佈」做完：合併到 `main`、改版號、建置、打包 DMG、建立 GitHub 發佈、確認下載網址、安裝。
+- **授權**：CI 通過就合併、發佈並直接安裝這台 Mac，不用再問使用者。安裝前一定等使用者的 Zook 沒有進行中的工作。
+
 ## 每個項目的流程
 
 1. 在 [docs/ROADMAP.md](docs/ROADMAP.md) 寫驗收條件（白話、可檢查）。
-2. 開分支 `item/<編號>-<簡稱>`。
+2. 從最新的 `main` 開分支 `item/<編號>-<簡稱>`（要用到還沒合併的改動時，從上一個分支開）。
 3. 先寫測試，確認它失敗。
 4. 實作。
 5. 三層驗證。
@@ -107,14 +121,15 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
    - 審查範圍只限這一版的改動（diff）；只改文字或文件的小版本，併到下一版一起審。
    - 結果檔放在 repo 外面；進度檔記下它印出的帳號、模型和 token，以及每個發現怎麼處理。
    - 另外請 Claude 子代理審查時，兩邊互相看不到結果；兩邊都找到的先修，只有一邊找到的先重現再決定，理由寫進進度檔，報告分開列出。
-7. 驗收報告：每條驗收條件寫「通過／未通過／未驗證」和證據。全部通過才併入 `main` 並發佈。
-8. 更新 ROADMAP 的狀態。
+7. 驗收報告：每條驗收條件寫「通過／未通過／未驗證」和證據，寫在進度檔。
+8. 更新 ROADMAP 的狀態，推送分支，用 sean0407 開 PR（`gh pr create --repo sean0407/zook --base main`，說明列出驗收結果、審查結果和要發佈的版本號），交給「ZOOK發佈」。
 
-GitHub Actions（`.github/workflows/test.yml`）會在每次推送跑測試和建置，沒過不能併入。
+GitHub Actions（`.github/workflows/test.yml`）在每個 PR 和推送到 `main` 時用同一個 `scripts/run_tests.py` 跑測試，再建置與檢查 App；沒過不能併入。有合併衝突的 PR，GitHub 不會跑檢查：解完衝突推送後才會跑。
 
-## 發佈
+## 發佈（由「ZOOK發佈」對話做）
 
-1. 改版號：`scripts/build.sh` 和 `native/Zook.swift` 兩處。
+0. PR 的 CI 通過後，用 sean0407 合併到 `main`（`gh pr merge --merge`），之後的步驟都在更新過的 `main` 上做。
+1. 改版號：`scripts/build.sh` 和 `native/Zook.swift` 兩處，ROADMAP 的狀態改成 ✅；提交到 `main`。
 2. 跑全部測試、`bash scripts/build.sh`、`codesign --verify --deep build/Zook.app`。
 3. 打包：暫存資料夾放 `Zook.app` 和指向 `/Applications` 的捷徑，`hdiutil create -volname Zook -srcfolder <資料夾> -ov -format UDZO <dmg>`，再 `hdiutil verify`。DMG 放在 `/Users/sean/Documents/Claude code/Zook/`。
 4. GitHub 一律用 sean0407 帳號，不切換 gh 的作用中帳號：
@@ -126,7 +141,8 @@ GitHub Actions（`.github/workflows/test.yml`）會在每次推送跑測試和�
    gh release create vX.Y.Z <dmg> --repo sean0407/zook --target main --title "Zook X.Y.Z" --notes "<中文>\n\n<English>"
    ```
 5. 確認下載網址回 200。
-6. 替換這台 Mac 的 `~/Applications/Zook.app` 前，先確認 `swarmr.json` 裡沒有 `running` 的工作。
+6. 安裝：等使用者的 Zook 沒有進行中的工作（`swarmr.json` 裡沒有 `running` 的工作，也沒有 `running` 的群組討論，連續兩次檢查都是）才換版。結束 Zook → 舊的 App 另存到暫存資料夾 → 從 DMG 複製新的 `Zook.app` 到 `~/Applications` → `codesign --verify --deep` → 開啟 → 確認後端已啟動、Bot／群組／排程數量和換版前一樣。
+7. 在進度檔記下發佈結果，提交並推送到 `main`。
 
 ## 已知限制
 

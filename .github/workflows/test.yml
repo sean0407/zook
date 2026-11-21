@@ -2,6 +2,7 @@ name: test
 
 on:
   push:
+    branches: [main]  # a pull request runs once (below), not once more for the push to its branch
   pull_request:
 
 permissions:
@@ -17,7 +18,7 @@ jobs:
         env:
           ZOOK_SKIP_UPDATE_CHECK: '1'
           ZOOK_SHELL_ENV: '0'
-        run: /usr/bin/python3 -m unittest discover -s tests -p '*test.py' -v
+        run: /usr/bin/python3 scripts/run_tests.py  # every test file at once, a few at a time
       - name: Build the app
         run: bash scripts/build.sh
       - name: Check the built app

@@ -1,8 +1,10 @@
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1] / 'backend'
 
@@ -20,6 +22,7 @@ runtime = load('zook_team_runtime', 'runtime.py')
 class TeamToolsTest(unittest.TestCase):
     def setUp(self):
         server.watch_auto_status = lambda store, bot: None  # no background sign-in check while this test's folder is removed
+        patcher = mock.patch.dict(os.environ, {'ZOOK_NO_INTRO': '1'}); patcher.start(); self.addCleanup(patcher.stop)  # no background greeting writing into the folder as it is removed
         self.temp = tempfile.TemporaryDirectory()
         self.store = server.Store(Path(self.temp.name) / 'data')
         self.app = server.App(('127.0.0.1', 0), self.store, self.temp.name, 'token')
