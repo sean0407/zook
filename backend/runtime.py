@@ -759,7 +759,10 @@ class RuntimeSession:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 # Recheck containment after mkdir; O_NOFOLLOW rejects final symlinks.
                 path = self._path(self.workspace, frozen['path'], True)
-                fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+                fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+                if os.fstat(fd).st_nlink > 1:  # the same file is also somewhere else (a hard link): writing would change that too
+                    os.close(fd); raise RuntimeError('This file is linked from another place and cannot be written.')
+                os.ftruncate(fd, 0)
                 with os.fdopen(fd, 'w', encoding='utf-8') as output:
                     output.write(frozen['content'])
                 result = _content({'written': frozen['path'], 'bytes': len(frozen['content'].encode())})
