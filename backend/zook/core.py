@@ -279,6 +279,61 @@ def upload_meta(store, upload_id):
     except (OSError, ValueError): return None
 
 
+import unicodedata
+
+
+def upload_from_path(store, path):
+    """附上 a file on this Mac that the user named in the message box and then chose to attach (one click per file, Mac only).
+    Only plain files in the user's own folders, /tmp or an external disk: never ~/Library, hidden files or folders, Zook's own data or
+    sync files, links (at any level) or hard links, and at most 20 MB, counted while copying. Every folder on the way is opened in turn,
+    so what is checked is what is read."""
+    if not isinstance(path, str) or not path.startswith('/') or len(path) > 1000 or '\x00' in path or {'.', '..'} & set(path.split('/')): raise ValueError('檔案路徑無效。')
+    full = os.path.normpath(path)  # only drops repeated slashes now: . and .. were refused above
+    if full == '/tmp' or full.startswith('/tmp/'): full = '/private' + full  # the one system link people type
+    parts = full.split('/')[1:]
+    home = os.path.realpath(str(pathlib.Path.home()))
+    inside = lambda root: full.startswith(root.rstrip('/') + '/')  # exact letters: a path spelled differently is not taken
+    same = lambda x: unicodedata.normalize('NFC', x).casefold()  # how the Mac's disk compares names
+    zook = [os.path.realpath(str(store.dir)), (store.data.get('sync') or {}).get('folder') or '', os.path.join(home, 'Library')]
+    if not (inside(home) or inside('/private/tmp') or inside('/Volumes')) or any(z and same(full).startswith(same(z).rstrip('/') + '/') for z in zook) \
+            or same(parts[-1]).startswith('zook-sync-'):
+        raise ValueError('這個位置的檔案不能從路徑附上，請用＋或拖曳加入。')
+    hidden = getattr(stat, 'UF_HIDDEN', 0)
+    fd = os.open('/', os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+    folder = None
+    try:
+        for i, name in enumerate(parts):  # one level at a time; a link at any level is refused
+            last = i == len(parts) - 1
+            if name.startswith('.'): raise ValueError('隱藏檔不能從路徑附上，請用＋或拖曳加入。')
+            flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | (getattr(os, 'O_NONBLOCK', 0) if last else getattr(os, 'O_DIRECTORY', 0))
+            try: nxt = os.open(name, flags, dir_fd=fd)
+            except OSError: raise ValueError('找不到這個檔案、路徑裡有捷徑，或沒有權限讀取。')
+            os.close(fd); fd = nxt
+            info = os.fstat(fd)
+            system = (i == 0 and name in ('private', 'Volumes', 'Users')) or (i == 1 and parts[0] == 'private' and name == 'tmp')  # macOS hides these itself
+            if getattr(info, 'st_flags', 0) & hidden and not system: raise ValueError('隱藏檔不能從路徑附上，請用＋或拖曳加入。')
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1: raise ValueError('這不是一般檔案，請用＋或拖曳加入。')
+        if not 0 < info.st_size <= MAX_UPLOAD: raise ValueError('檔案是空的或超過 20 MB。')
+        upload_id = ID(); folder = store.dir / 'uploads' / upload_id; folder.mkdir(parents=True, mode=0o700)
+        copied = 0
+        with os.fdopen(os.dup(fd), 'rb') as source, open(folder / 'file', 'wb') as out:
+            while True:
+                chunk = source.read(1 << 20)
+                if not chunk: break
+                copied += len(chunk)
+                if copied > MAX_UPLOAD: raise ValueError('檔案超過 20 MB。')  # it grew while being copied
+                out.write(chunk)
+        if not copied: raise ValueError('檔案是空的。')
+        name = upload_name(parts[-1])
+        meta = dict(id=upload_id, name=name, size=copied, kind='image' if pathlib.Path(name).suffix.lower() in IMAGE_TYPES else 'file', createdAt=NOW())
+        (folder / 'meta.json').write_text(json.dumps(meta, ensure_ascii=False), encoding='utf-8')
+        folder = None
+        return meta
+    finally:
+        os.close(fd)
+        if folder: shutil.rmtree(str(folder), ignore_errors=True)
+
+
 def attachments_for(store, ids):
     """The uploads a message refers to, checked."""
     if ids in (None, []): return []

@@ -1,6 +1,7 @@
   // ---- Attachments: each file is uploaded as soon as it is added, then sent with the message.
   if (!state.pendingBy) state.pendingBy = {};  // files waiting to be sent, per Bot or group
-  const pendingList = () => state.pendingBy[effortKey()] || (state.pendingBy[effortKey()] = []);
+  const pendingKey = () => activeGroup() ? effortKey() : effortKey() + ':' + ((state.data?.bots || []).find(b => b.id === state.selected)?.chatId || '');  // each conversation has its own
+  const pendingList = () => state.pendingBy[pendingKey()] || (state.pendingBy[pendingKey()] = []);
   const kb = n => n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1024 / 1024).toFixed(1) + ' MB';
   function pendingFiles() {
     if (!pendingList().length) return '';
@@ -27,10 +28,40 @@
         const meta = await res.json();
         if (!res.ok) throw new Error(meta.error || '上傳失敗');
         Object.assign(item, {id: meta.id, kind: meta.kind, uploading: false});
-      } catch (e) { list.splice(list.indexOf(item), 1); toast(`「${name}」${e.message}`); }
+      } catch (e) { if (list.includes(item)) list.splice(list.indexOf(item), 1); toast(`「${name}」${e.message}`); }
       render(true);
     }
   }
+  // A file path typed or pasted into the message box: offer to attach that file. Nothing is read until the user clicks 附上.
+  state.pathSkip = state.pathSkip || new Set();
+  const typedPaths = text => [...new Set(String(text || '').slice(0, 20000).split(/[\s`'"<>()（）\[\]「」『』，、。：；！？*|]+/)
+    .map(w => w.replace(/[。，.,:：;]+$/, '')).filter(w => /^\/(?!\/)/.test(w) && w.length < 300 && /\/[^/]+\.[A-Za-z0-9]{1,8}$/.test(w)))].slice(0, 3);
+  function showPathOffers() {
+    const input = $('#chat-input'), form = $('#chat-form');
+    let bar = $('#path-offers');
+    const taken = new Set(pendingList().map(f => f.fromPath));
+    const paths = input ? typedPaths(input.value).filter(p => !state.pathSkip.has(p) && !taken.has(p)) : [];
+    if (!paths.length || !form) { bar?.remove(); return; }
+    if (!bar) { bar = document.createElement('div'); bar.id = 'path-offers'; bar.className = 'path-offers'; form.before(bar); }
+    bar.innerHTML = paths.map(p => `<div class="path-offer"><span title="${esc(p)}">要附上 <strong>${esc(p.split('/').pop())}</strong> 嗎？<small>（${esc(p.split('/').slice(0, -1).join('/').replace(/^\/Users\/[^/]+/, '~') || '/')}）</small></span><button type="button" class="link" data-action="attach-path" data-id="${esc(p)}">附上</button><button type="button" class="icon-btn mini" data-action="skip-path" data-id="${esc(p)}" aria-label="不要附上">×</button></div>`).join('');
+  }
+  let pathTimer = 0;
+  document.addEventListener('input', e => { if (e.target.id === 'chat-input') { clearTimeout(pathTimer); pathTimer = setTimeout(showPathOffers, 300); } });
+  document.addEventListener('click', async e => {
+    const btn = e.target.closest?.('[data-action="attach-path"], [data-action="skip-path"]');
+    if (!btn) return;
+    const path = btn.dataset.id;
+    if (btn.dataset.action === 'skip-path') { state.pathSkip.add(path); showPathOffers(); return; }
+    const list = pendingList();  // this conversation's draft, even if another one is opened while the file is copied
+    if (list.length >= 10) { toast('每則訊息最多 10 個檔案'); return; }
+    const item = {key: Math.random().toString(36).slice(2), name: path.split('/').pop(), size: 0, uploading: true, fromPath: path, url: ''};
+    list.push(item); render(true); showPathOffers();
+    try {
+      const meta = await post('uploads/path', {path});
+      Object.assign(item, {id: meta.id, name: meta.name, size: meta.size, kind: meta.kind, uploading: false, url: meta.kind === 'image' ? '/api/uploads/' + meta.id : ''});
+    } catch (err) { if (list.includes(item)) list.splice(list.indexOf(item), 1); toast(err.message || '附上失敗'); }  // removed already if the user pressed ×
+    render(true); showPathOffers();
+  });
   document.addEventListener('paste', e => {
     const files = [...(e.clipboardData?.files || [])];
     if (!files.length || e.target.id !== 'chat-input') return;

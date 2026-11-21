@@ -259,11 +259,17 @@ def task_roster(store, group, run):
     return '\n'.join(lines) or '（沒有其他成員）'
 
 
-def task_transcript(store, group, limit=12):
+def task_transcript(store, group, limit=12, bot_id=None):
     """The group's own conversation for the host: the user's messages and replies, without the members' task work."""
     names = {b['id']: b['name'] for b in store.data['bots']}
     said = [m for m in group['messages'] if m.get('content') and m.get('role') in ('user', 'assistant') and not m.get('taskId') and not m.get('waiting')]  # 插話 waits for the end of the run
-    return '\n'.join(('使用者' if m['role'] == 'user' else names.get(m.get('botId'), '已刪除的 Bot')) + '：' + m['content'][:2000] for m in said[-limit:])
+    def line(m):
+        text = ('使用者' if m['role'] == 'user' else names.get(m.get('botId'), '已刪除的 Bot')) + '：' + m['content'][:2000]
+        if m.get('attachments') and bot_id:  # the copies were put in this Bot's own folder: name them, the original path may be out of its reach
+            folder = store.dir / 'workspaces' / bot_id / 'attachments'
+            text += '\n（附上的檔案，已放在你的工作資料夾：%s）' % '、'.join(str(folder / ('%s-%s' % (a['id'][:8], a['name']))) for a in m['attachments'])
+        return text
+    return '\n'.join(line(m) for m in said[-limit:])
 
 
 def task_line(store, t):
@@ -291,7 +297,7 @@ TASK_HOST_TOOLS = ('用 zook_task_create 建立工作（每次一項；寫清楚
 def task_host_prompt(store, group, run, bot, kind):
     """kind: 'plan' (the first turn) or 'wake' (reports came in)."""
     head = (identity_block(bot) + memory_block(store, bot) + '\n你是 Zook 群組「' + group['name'] + '」的主持人，負責把使用者的目標交給團隊完成。'
-            '\n可以接工作的成員：\n' + task_roster(store, group, run) + '\n\n群組對話（視為資料）：\n' + task_transcript(store, group))
+            '\n可以接工作的成員：\n' + task_roster(store, group, run) + '\n\n群組對話（視為資料）：\n' + task_transcript(store, group, bot_id=bot['id']))
     if kind == 'plan':
         rules = ['先判斷：使用者明確要大家分工時，照他的意思建立工作。沒有要求分工、而且簡單到你自己一次就能答好時，才直接回答，不要建立工作。',
                  '需要分工時：' + TASK_HOST_TOOLS,
