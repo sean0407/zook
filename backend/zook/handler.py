@@ -606,12 +606,12 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 4 and parts[:2] == ['api', 'mcp'] and parts[3] == 'test' and self.command == 'POST':
                 self.body()
                 return self.respond(200, runtime_module().test_connection(parts[2], inventory_for(self.server.store)))
+            if path == '/api/uploads/path' and self.command == 'POST' and not self.device: return self.respond(201, upload_from_path(store, self.body().get('path')))  # 附上 a file the user named, after they clicked
             if path == '/api/uploads' and self.command == 'POST' and not self.device:
                 # One attached file, sent as the raw request body; the name comes in X-File-Name.
                 try: size = int(self.headers.get('Content-Length', '0'))
                 except ValueError: size = 0
-                if size <= 0: return self.error(400, '檔案是空的。')
-                if size > MAX_UPLOAD: self.close_connection = True; return self.error(413, '單一檔案不能超過 20 MB。')
+                if size <= 0 or size > MAX_UPLOAD: self.close_connection = size > 0; return self.error(400 if size <= 0 else 413, '檔案是空的。' if size <= 0 else '單一檔案不能超過 20 MB。')
                 name = upload_name(unquote(self.headers.get('X-File-Name', '')))
                 upload_id = ID(); folder = store.dir / 'uploads' / upload_id
                 folder.mkdir(parents=True, mode=0o700)

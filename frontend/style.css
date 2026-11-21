@@ -1941,3 +1941,8 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 }
 .composer textarea, .composer .input-wrap { min-width: 60px; }
 #chat-input::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 附上 a file named in the message box */
+.path-offers { max-width: 960px; margin: 0 auto 6px; display: flex; flex-direction: column; gap: 4px; }
+.path-offer { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #555; padding: 4px 12px; background: #f6f6f6; border-radius: 12px; }
+.path-offer span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
