@@ -63,7 +63,7 @@ class AutoAccountTest(unittest.TestCase):
         self.fail('the extra account never got a sign-in status')
 
     def req(self, method, path, body=None):
-        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=15)
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=60)  # the usage page asks each fake CLI in turn; slow when the whole suite runs
         conn.request(method, path, json.dumps(body).encode() if body is not None else None, {'Authorization': 'Bearer ' + self.token})
         resp = conn.getresponse(); raw = resp.read(); conn.close()
         return resp.status, json.loads(raw)
