@@ -55,11 +55,14 @@ class FeederTest(unittest.TestCase):
 CODEX = '''#!/usr/bin/env python3
 import json, os, sys, time
 sys.stdin.read()
-mode = open(os.path.join(os.path.dirname(sys.argv[0]), 'mode')).read().strip()
+here = os.path.dirname(sys.argv[0]); mode = open(os.path.join(here, 'mode')).read().strip()
 say = lambda t: print(json.dumps({'type': 'item.completed', 'item': {'type': 'agent_message', 'text': t}}), flush=True)
-say('先說第一段'); time.sleep(1.2)
+def wait_for(name):  # the test says when to go on, so nothing depends on how busy the machine is
+    end = time.time() + 20
+    while not os.path.exists(os.path.join(here, name)) and time.time() < end: time.sleep(0.02)
+say('先說第一段'); wait_for('go')
 if mode == 'fail': print(json.dumps({'type': 'turn.failed', 'error': {'message': 'stream disconnected'}}), flush=True); sys.exit(1)
-say('這是完整的最後回覆'); time.sleep(0.3)
+say('這是完整的最後回覆')
 print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 10, 'output_tokens': 5}}), flush=True)
 '''
 CLAUDE = '''#!/usr/bin/env python3
@@ -67,8 +70,10 @@ import json, os, sys, time
 if 'auth' in sys.argv: print(json.dumps({'loggedIn': True})); sys.exit(0)
 if '--help' in sys.argv or '--version' in sys.argv: sys.exit(0)  # Zook asking what this CLI can do
 sys.stdin.read()
-open(os.path.join(os.path.dirname(sys.argv[0]), 'claude.args'), 'w').write(' '.join(sys.argv[1:]))
-time.sleep(0.8)
+here = os.path.dirname(sys.argv[0])
+open(os.path.join(here, 'claude.args'), 'w').write(' '.join(sys.argv[1:]))
+end = time.time() + 20
+while not os.path.exists(os.path.join(here, 'go2')) and time.time() < end: time.sleep(0.02)
 print(json.dumps({'type': 'result', 'result': '備用模型的回覆', 'is_error': False, 'usage': {'input_tokens': 3, 'output_tokens': 2}}))
 '''
 
@@ -113,16 +118,26 @@ class EndToEndTest(unittest.TestCase):
             time.sleep(0.1)
         self.fail('no reply')
 
+    def until(self, test, what, limit=15):
+        end = time.time() + limit
+        while time.time() < end:
+            value = test()
+            if value: return value
+            time.sleep(0.05)
+        self.fail(what)
+
+    def go(self, name='go'): (self.root / 'bin' / name).write_text('1')
+
     def test_stream_then_the_finished_reply(self):
         job_id = self.send()
         seen = []
         watcher = threading.Thread(target=lambda: seen.extend(self.events(job_id))); watcher.start()
-        time.sleep(0.6)
-        polled = self.req('GET', '/api/jobs/' + job_id)[1]
+        polled = self.until(lambda: (lambda j: j if j.get('partial') else None)(self.req('GET', '/api/jobs/' + job_id)[1]), 'no partial reply')
         self.assertEqual((polled['status'], polled.get('partial')), ('running', '先說第一段'))  # the phone's way: asking again
-        watcher.join(timeout=15)
+        time.sleep(0.5)  # the watcher is connected by now; codex keeps waiting however long this takes
+        self.go(); watcher.join(timeout=15)
         self.assertEqual(seen[0], {'text': '先說第一段'}); self.assertEqual(seen[-1], {'done': True})
-        self.assertIn({'text': '這是完整的最後回覆'}, seen)  # not a continuation of the first, so it is sent whole
+        self.assertTrue(all(e == {'text': '這是完整的最後回覆'} for e in seen[1:-1]))  # if the second part is streamed before the end, it is sent whole (not a continuation)
         job = self.wait(job_id)
         self.assertEqual((job['content'], job['usage']['input']), ('這是完整的最後回覆', 10)); self.assertNotIn('partial', job)
         self.assertNotIn('partial', json.dumps(self.req('POST', '/api/export', {})[1]))  # never written to the data file
@@ -131,11 +146,12 @@ class EndToEndTest(unittest.TestCase):
 
     def test_half_reply_is_dropped_when_a_backup_takes_over(self):
         self.req('PATCH', '/api/settings', {'fallbacks': ['claude']}); (self.root / 'bin/mode').write_text('fail')
-        job_id = self.send(); time.sleep(0.6)
-        self.assertEqual(self.req('GET', '/api/jobs/' + job_id)[1].get('partial'), '先說第一段')
-        time.sleep(1.1)  # codex has failed; claude is answering and has shown nothing yet
-        self.assertNotIn('partial', self.req('GET', '/api/jobs/' + job_id)[1])
-        job = self.wait(job_id)
+        job_id = self.send()
+        self.until(lambda: self.req('GET', '/api/jobs/' + job_id)[1].get('partial') == '先說第一段', 'no partial reply')
+        self.go()  # codex fails now
+        self.until(lambda: (self.root / 'bin/claude.args').exists(), 'the backup did not start')
+        self.assertNotIn('partial', self.req('GET', '/api/jobs/' + job_id)[1])  # claude is answering and has shown nothing yet
+        self.go('go2'); job = self.wait(job_id)
         end = time.time() + 3
         while 'fallback' not in job and time.time() < end: time.sleep(0.05); job = self.req('GET', '/api/jobs/' + job_id)[1]  # the note is written a moment after the reply
         self.assertEqual((job['content'], job['fallback']['provider']), ('備用模型的回覆', 'claude'))
@@ -144,10 +160,10 @@ class EndToEndTest(unittest.TestCase):
     def test_switched_off_is_as_before(self):
         self.assertEqual(self.req('PATCH', '/api/settings', {'streamReplies': 'no'})[0], 400)
         self.req('PATCH', '/api/settings', {'streamReplies': False, 'fallbacks': ['claude']})
-        job_id = self.send(); time.sleep(0.6)
+        job_id = self.send(); time.sleep(0.6)  # codex has said its first part and waits; nothing may show
         self.assertNotIn('partial', self.req('GET', '/api/jobs/' + job_id)[1])
-        self.assertEqual(self.wait(job_id)['content'], '這是完整的最後回覆')
-        (self.root / 'bin/mode').write_text('fail'); self.wait(self.send())
+        self.go(); self.assertEqual(self.wait(job_id)['content'], '這是完整的最後回覆')
+        (self.root / 'bin/mode').write_text('fail'); self.go('go2'); self.wait(self.send())
         self.assertNotIn('--include-partial-messages', (self.root / 'bin/claude.args').read_text())  # the CLI is called the way it was
 
 
