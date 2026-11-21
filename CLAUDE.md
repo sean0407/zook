@@ -124,7 +124,7 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 7. 驗收報告：每條驗收條件寫「通過／未通過／未驗證」和證據，寫在進度檔。
 8. 更新 ROADMAP 的狀態，推送分支，用 sean0407 開 PR（`gh pr create --repo sean0407/zook --base main`，說明列出驗收結果、審查結果和要發佈的版本號），交給「ZOOK發佈」。
 
-GitHub Actions（`.github/workflows/test.yml`）在每個 PR 和推送到 `main` 時用同一個 `scripts/run_tests.py` 跑測試，再建置與檢查 App；沒過不能併入。
+GitHub Actions（`.github/workflows/test.yml`）在每個 PR 和推送到 `main` 時用同一個 `scripts/run_tests.py` 跑測試，再建置與檢查 App；沒過不能併入。有合併衝突的 PR，GitHub 不會跑檢查：解完衝突推送後才會跑。
 
 ## 發佈（由「ZOOK發佈」對話做）
 
