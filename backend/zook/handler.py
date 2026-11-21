@@ -37,7 +37,8 @@ class Handler(BaseHTTPRequestHandler):
             with store.lock: snap = copy.deepcopy(store.data.get('quota', {}).get(provider))
             if provider == 'codex' and account['status'] == 'logged_in': snap = self.codex_live_quota() or snap
             if provider == 'antigravity' and account['status'] == 'logged_in': snap = self.antigravity_live_quota() or snap
-            if provider not in ('codex', 'claude', 'antigravity'): snap = None  # the other CLIs do not report plan limits to Zook
+            if provider == 'grok' and account['status'] == 'logged_in': snap = grok_live_quota(self.server) or snap
+            if provider not in ('codex', 'claude', 'antigravity', 'grok'): snap = None  # the other CLIs do not report plan limits to Zook
             profiles = []
             for extra in [] if phone else [a for a in store.data.get('accounts') or [] if a.get('provider') == provider]:
                 try: view = account_view(extra)
@@ -45,18 +46,22 @@ class Handler(BaseHTTPRequestHandler):
                 billed = extra['type'] == 'key' or view.get('method') in ('Anthropic Console', 'API 金鑰')
                 with store.lock:
                     used = provider_usage(store, provider, extra['id']); saved = copy.deepcopy(store.data.get('quota', {}).get(provider + '@' + extra['id']))
-                if provider == 'codex' and view['status'] == 'logged_in' and not billed: saved = self.codex_live_quota(extra) or saved
-                profiles.append(dict(view, zookUsage=used, quota=saved if provider in ('codex', 'claude') else None, apiBilling=billed, noQuotaApi=provider not in ('codex', 'claude')))
+                if provider in ('codex', 'grok') and view['status'] == 'logged_in' and not billed: saved = (self.codex_live_quota(extra) if provider == 'codex' else grok_live_quota(self.server, extra)) or saved
+                profiles.append(dict(view, zookUsage=used, quota=saved if provider in ('codex', 'claude', 'grok') else None, apiBilling=billed, noQuotaApi=provider not in ('codex', 'claude', 'grok'), quotaUnread=provider == 'grok' and not saved, _account=extra))
             with store.lock: zook = provider_usage(store, provider)
             result.append(dict(id=provider, name=account['name'], vendor=(P.spec(store.data, provider) or {}).get('vendor', ''), zookUsage=zook,
-                               status=account['status'], method=account['method'], noQuotaApi=provider not in ('codex', 'claude', 'antigravity'),
+                               status=account['status'], method=account['method'], noQuotaApi=provider not in ('codex', 'claude', 'antigravity', 'grok'), quotaUnread=provider == 'grok' and not snap,
                                plan=(snap or {}).get('plan') or account['plan'], email=account['email'], workspace=account.get('workspace', ''), quota=snap,
                                apiBilling=account['method'] in ('Anthropic Console', 'API 金鑰'), profiles=profiles))
         with store.lock:
             known = store.data.setdefault('autoStatus', {}); known.update(merge_auto_status(known, {x['id']: auto_state(x['id'], x['status'], x['method']) for x in result if x['id'] in AUTO_MODELS}))
+            known.update(merge_auto_status(known, {auto_account_key(a['_account']): auto_state(x['id'], a['status'], a['method'], a['_account']) for x in result if x['id'] in AUTO_MODELS for a in x['profiles']}))
             allowed = auto_allowed(store)
             for item in result:
                 if item['id'] in AUTO_MODELS: item.update(autoOn=item['id'] in allowed, autoBilled=auto_known_billed(store.data['autoStatus'].get(item['id'])))
+                for a in item['profiles']:
+                    account = a.pop('_account')
+                    if item['id'] in AUTO_MODELS: a.update(autoOn=auto_account_on(store, account), autoBilled=account.get('type') == 'key' or auto_known_billed(known.get(auto_account_key(account))))
         return {'providers': result}
 
     def detect_usage(self):

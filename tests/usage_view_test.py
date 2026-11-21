@@ -70,6 +70,7 @@ class UsageViewTest(unittest.TestCase):
         self.assertEqual(t['freshInput'] + t['cachedInput'] + t['cacheWrite'] + t['output'], t['withCacheRead'])  # nothing is counted twice
         by = {p['id']: p for p in o['providers']}
         self.assertEqual((by['claude']['kind'], by['codex']['kind'], by['codex']['unpriced'], by['codex']['unpricedModels']), ('reported', 'estimated', 1, ['預設模型']))
+        self.assertEqual(by['claude']['dailyTokens'][-2:], [2010, 1050]); self.assertEqual(by['codex']['dailyTokens'][-1], 1001011)
         self.assertEqual(by['claude']['daily'][-2:], [0.01, 0.02]); self.assertAlmostEqual(sum(p['share'] for p in o['providers']), 100, delta=0.2)
         self.assertEqual(self.m.usage_overview(self.store, 90)['replies'], 5)
         self.assertRaises(ValueError, self.m.usage_overview, self.store, 31)

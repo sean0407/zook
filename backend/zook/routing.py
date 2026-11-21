@@ -56,10 +56,44 @@ def auto_status(provider):
     return auto_state(provider, account['status'], account['method'])
 
 
-def auto_state(provider, status, method):
+def auto_state(provider, status, method, account=None):
     """Only a sign-in known to be a subscription counts as free to use; anything else is treated as billed."""
     signed = True if status == 'logged_in' else False if status == 'not_logged_in' else None
-    return dict(signedIn=signed, billed=method not in AUTO_SUBSCRIPTIONS or any(provider_env(provider).get(k) for k in ACCOUNT_KEYS.get(provider, ())))
+    if account and account.get('type') == 'key': return dict(signedIn=signed, billed=True)
+    return dict(signedIn=signed, billed=method not in AUTO_SUBSCRIPTIONS or any(provider_env(provider, account).get(k) for k in ACCOUNT_KEYS.get(provider, ())))
+
+
+# Extra accounts are choices of their own, keyed 'provider@account' in autoStatus and quota. Each has its own switch in
+# settings['autoAccounts']; until the user sets it, a signed-in subscription is on (like the default accounts) and API billing never is.
+def auto_accounts(store, provider=None):
+    return [a for a in store.data.get('accounts') or [] if isinstance(a, dict) and a.get('provider') in AUTO_MODELS and (provider is None or a['provider'] == provider)]
+
+
+def auto_account_key(account): return account['provider'] + '@' + account['id']
+
+
+def auto_account_status(account):
+    """What the CLI reports about one extra account's sign-in. Runs the CLI."""
+    view = account_view(account)
+    return auto_state(account['provider'], view['status'], view['method'], account)
+
+
+def auto_account_on(store, account):
+    """Lock held. Whether 自動選擇 may use this extra account."""
+    status = (store.data.get('autoStatus') or {}).get(auto_account_key(account)) or {}
+    if account.get('type') == 'key' or auto_known_billed(status): return False  # API billing is never picked automatically
+    chosen = (store.data['settings'].get('autoAccounts') or {}).get(account['id'])
+    if isinstance(chosen, bool): return chosen
+    return account['provider'] not in AUTO_DEFAULT_OFF and status.get('signedIn') is True and status.get('billed') is False
+
+
+def auto_account_name(account_id): return (find_account(account_id) or {}).get('name', '')
+
+
+def auto_choice_name(provider, account_id=''):
+    """'Codex', or 'Codex（Waifdance）' for an extra account."""
+    short = provider_label(provider).split('（')[0]
+    return '%s（%s）' % (short, auto_account_name(account_id)) if account_id else short
 
 
 def merge_auto_status(old, new):
@@ -75,6 +109,11 @@ def refresh_auto_status(store):
     if not _auto_checking.acquire(blocking=False): return  # one check at a time
     try:
         found = {p: auto_status(p) for p in AUTO_MODELS if P.spec(store.data, p) and find_cli(p)}
+        with store.lock: extras = [dict(a) for a in auto_accounts(store) if P.spec(store.data, a['provider'])]
+        for account in extras:
+            if find_cli(account['provider']):
+                try: found[auto_account_key(account)] = auto_account_status(account)
+                except (OSError, ValueError, RuntimeError): pass
         with store.lock:
             store.data['autoStatus'] = merge_auto_status(store.data.get('autoStatus') or {}, found)
             try: store.save()
@@ -89,13 +128,17 @@ def refresh_auto(app):
     def work():
         store = app.store
         refresh_auto_status(store)
-        with store.lock: allowed = auto_allowed(store)
+        with store.lock: allowed = auto_allowed(store); extras = [dict(a) for a in auto_accounts(store, 'codex') if auto_account_on(store, a)]
         live = {}
+        for key, account in ([('codex', None)] if 'codex' in allowed else []) + [(auto_account_key(a), a) for a in extras]:
+            try:
+                if find_cli('codex'):
+                    live[key] = normalize_quota('codex', codex_rpc(find_cli('codex'), 'account/rateLimits/read', {}, provider_env('codex', account)))
+                    if live[key]: live[key].update(updatedAt=NOW(), source='live')
+            except (OSError, ValueError, TimeoutError, AttributeError, RuntimeError, TypeError): pass
         try:
-            if 'codex' in allowed and find_cli('codex'):
-                live['codex'] = normalize_quota('codex', codex_rpc(find_cli('codex'), 'account/rateLimits/read', {}, provider_env('codex', None)))
-                if live['codex']: live['codex'].update(updatedAt=NOW(), source='live')
-        except (OSError, ValueError, TimeoutError, AttributeError, RuntimeError, TypeError): pass
+            if 'grok' in allowed and find_cli('grok'): live['grok'] = grok_live_quota(app)
+        except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError): pass
         try:
             if 'antigravity' in allowed and find_cli('antigravity'): live['antigravity'] = antigravity_quota(find_cli('antigravity'))
         except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError): pass
@@ -128,9 +171,9 @@ def _window_open(window, snap, now):
     return at > now
 
 
-def auto_quota_low(store, provider):
+def auto_quota_low(store, provider, account_id=''):
     """True when the saved quota shows less than 10% left in a limit that has not reset yet."""
-    snap = (store.data.get('quota') or {}).get(provider) or {}
+    snap = (store.data.get('quota') or {}).get(provider + '@' + account_id if account_id else provider) or {}
     windows = [w for w in snap.get('windows') or [] if isinstance(w, dict)]
     if provider == 'antigravity': windows = [w for w in windows if 'gemini' in str(w.get('label')).lower()] or windows  # Zook runs its default Gemini model
     now = time.time()
@@ -149,23 +192,29 @@ def pick_auto(store, content, names=(), plan=False, bot=None, taken=None, keep=N
     if 'autoStatus' not in store.data:  # billing is not known yet, so nothing can be picked safely
         threading.Thread(target=refresh_auto_status, args=(store,), daemon=True).start()
         raise ValueError('正在確認各模型的登入狀態，請幾秒後再送一次。')
-    status = store.data['autoStatus']
-    allowed = [p for p in order if p in auto_allowed(store) and P.spec(store.data, p) and find_cli(p) and (status.get(p) or {}).get('billed') is False and (status.get(p) or {}).get('signedIn') is not False]
-    if task == 'image': allowed = [p for p in allowed if ability_on(store, p, 'images')]
-    if plan: allowed = [p for p in allowed if provider_kind(p) in PLAN_KINDS and ability_on(store, p, 'plan')]
+    status = store.data['autoStatus']; main = auto_allowed(store)
+    def ready(key): return (status.get(key) or {}).get('billed') is False and (status.get(key) or {}).get('signedIn') is not False
+    allowed = []  # (provider, account id); '' is the CLI's own sign-in, which comes before that CLI's extra accounts
+    for p in order:
+        if not (P.spec(store.data, p) and find_cli(p)): continue
+        if task == 'image' and not ability_on(store, p, 'images'): continue
+        if plan and not (provider_kind(p) in PLAN_KINDS and ability_on(store, p, 'plan')): continue
+        if p in main and ready(p): allowed.append((p, ''))
+        allowed += [(p, a['id']) for a in auto_accounts(store, p) if auto_account_on(store, a) and ready(auto_account_key(a))]
     if not allowed: raise ValueError('自動選擇目前沒有可用的模型。請到「各模型使用量」開啟至少一個已登入的模型。')
-    short = lambda p: provider_label(p).split('（')[0]
-    usable = [p for p in allowed if not auto_quota_low(store, p)]
-    if not usable: raise ValueError('可自動選用的模型額度都低於 10%%：%s。Zook 不會自動改用付費方式，請等額度重置，或指定其他模型。' % '、'.join(short(p) for p in allowed))
+    name = lambda c: auto_choice_name(*c)
+    usable = [c for c in allowed if not auto_quota_low(store, *c)]
+    if not usable: raise ValueError('可自動選用的模型額度都低於 10%%：%s。Zook 不會自動改用付費方式，請等額度重置，或指定其他模型。' % '、'.join(name(c) for c in allowed))
     settings = store.data['settings']
     best, spread = usable[0], False
-    if keep in usable: usable = [keep] + [p for p in usable if p != keep]
+    kept = next((c for c in usable if c[0] == keep), None)
+    if kept: usable = [kept] + [c for c in usable if c != kept]
     elif taken is not None:
-        rank, used = {p: i for i, p in enumerate(usable)}, {p: list(taken).count(p) for p in usable}
-        usable = sorted(usable, key=lambda p: (used[p], rank[p])); spread = usable[0] != best
-    chain = [[p, settings.get('model', '') if p == settings.get('provider', 'codex') else ''] for p in usable]
-    why = ('這個 Bot 的角色偏向%s，所以用 %s' if by_role else 'Zook 判斷這是%s，所以用 %s') % (label, short(best))
-    if spread: why = '%s原本會用 %s；群組裡讓成員分散使用不同模型，這次用 %s' % ('依角色' if by_role else '', short(best), short(usable[0]))
-    elif usable[0] != best: why = '這一輪討論沿用一開始的 %s' % short(usable[0])
-    elif best != allowed[0]: why += '（%s 額度不足）' % short(allowed[0])
-    return chain, dict(auto='%s %s' % (short(usable[0]), AUTO_MARKS[task]), autoWhy=why)
+        rank, used = {c: i for i, c in enumerate(usable)}, {p: list(taken).count(p) for p in {c[0] for c in usable}}
+        usable = sorted(usable, key=lambda c: (used[c[0]], rank[c])); spread = usable[0][0] != best[0]
+    chain = [[p, settings.get('model', '') if p == settings.get('provider', 'codex') else ''] + ([a] if a else []) for p, a in usable]
+    why = ('這個 Bot 的角色偏向%s，所以用 %s' if by_role else 'Zook 判斷這是%s，所以用 %s') % (label, name(best))
+    if spread: why = '%s原本會用 %s；群組裡讓成員分散使用不同模型，這次用 %s' % ('依角色' if by_role else '', name(best), name(usable[0]))
+    elif usable[0] != best: why = '這一輪討論沿用一開始的 %s' % name(usable[0])
+    elif best != allowed[0]: why += '（%s 額度不足）' % name(allowed[0])
+    return chain, dict(auto='%s %s' % (name(usable[0]), AUTO_MARKS[task]), autoWhy=why)

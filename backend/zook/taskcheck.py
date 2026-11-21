@@ -63,7 +63,7 @@ def task_pick_verifier(store, group, run, task, working):
         if provider == AUTO:
             try: options = pick_auto(store, '請查核這項工作', plan=True, bot=bot)[0]
             except ValueError: continue
-            fit = next(((p, m) for p, m in options if provider_kind(p) != kind and provider_kind(p) in PLAN_KINDS), None)
+            fit = next((x for x in options if provider_kind(x[0]) != kind and provider_kind(x[0]) in PLAN_KINDS), None)  # with the account 自動選擇 picked, if any
             if not fit: continue
             pick = (bot['id'], list(fit))
         elif provider_kind(provider) == kind or task_quota_why(store, bot): continue

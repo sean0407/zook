@@ -30,7 +30,11 @@
             toast('已刪除群組')
           }
           break;
+        case 'account-detail':
+          accountDetail(id, el.dataset.account || '');
+          break;
         case 'terminal-login':
+          closeModal();
           await post('accounts/' + encodeURIComponent(id) + '/terminal-login');
           toast('已開啟終端機，請在那裡選擇 Google 登入，完成後回到 Zook');
           break;
@@ -65,7 +69,7 @@
         case 'account-login':
           el.disabled = true;
           await post('accounts/' + encodeURIComponent(id) + '/login', {method: el.dataset.method, account: el.dataset.account || ''});
-          await reloadAccounts();
+          closeModal(); await reloadAccounts();  // the card shows the sign-in from here on
           break;
         case 'update-open':
           updateModal();
@@ -88,7 +92,7 @@
         case 'profile-delete':
           if (!confirm(`移除帳號「${el.dataset.name}」？使用它的 Bot 會改用預設帳號。`)) break;
           await post('accounts/' + encodeURIComponent(id) + '/profiles/delete', {account: el.dataset.account});
-          await reloadAccounts(); toast('已移除帳號');
+          closeModal(); await reloadAccounts(); toast('已移除帳號');
           break;
         case 'provider-add':
           providerAddModal();
@@ -111,7 +115,7 @@
           if (!confirm(msg)) break;
           el.disabled = true;
           await post('accounts/' + encodeURIComponent(id) + '/install');
-          await reloadAccounts();
+          closeModal(); await reloadAccounts();
           break;
         }
         case 'install-cancel':
@@ -122,7 +126,7 @@
           const p = state.accounts.providers.find(x => x.id === id);
           if (!confirm(`從 Zook 移除 ${p.name}？這不會解除安裝 CLI，也不會登出。`)) break;
           await post('accounts/' + encodeURIComponent(id) + '/remove');
-          await reloadAccounts(); toast('已從 Zook 移除');
+          closeModal(); await reloadAccounts(); toast('已從 Zook 移除');
           break;
         }
         case 'account-cancel':
@@ -132,7 +136,7 @@
         case 'account-logout':
           if (confirm('確定登出？使用它的 Bot 會無法回覆。')) {
             await post('accounts/' + encodeURIComponent(id) + '/logout');
-            await reloadAccounts(); toast('已登出');
+            closeModal(); await reloadAccounts(); toast('已登出');
           }
           break;
         case 'persona-reset':

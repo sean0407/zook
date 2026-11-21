@@ -161,7 +161,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
         if not isinstance(content, str) or not content.strip() or len(content) > 30000: raise ValueError('訊息內容無效。')
         if any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs']): raise Busy('此機器人已有執行中的工作。')
         auto_chain, auto_mark = pick_auto(store, content, [a.get('name') for a in attachments or []], plan, bot=bot) if not use and bot.get('provider') == AUTO else (None, {})
-        provider, model = use or (auto_chain[0] if auto_chain else bot_model(store, bot))
+        provider, model = use or (auto_chain[0][:2] if auto_chain else bot_model(store, bot))
         if auto_chain and not plan and auto_quick_effort(store, bot, content, [a.get('name') for a in attachments or []], asked_effort):
             effort = 'fast'; auto_mark = dict(auto_mark, autoWhy=auto_mark.get('autoWhy', '') + QUICK_NOTE)
         if not P.spec(store.data, provider) or not isinstance(model, str) or len(model) > 100: raise ValueError('模型設定無效。')
@@ -439,38 +439,42 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             if not job or job['status'] != 'running': return
             if bot is None: bot = copy.deepcopy(store.find('bots', job['botId']))
             chain = [tuple(x) for x in job['autoChain']] if job.get('autoChain') else provider_chain(store, bot, provider, model)
+            chain = [(x[0], x[1], x[2] if len(x) > 2 else None) for x in chain]  # 自動選擇 may name an extra account; None keeps the Bot's own
             if job.get('plan'): chain = [x for x in chain if provider_kind(x[0]) in PLAN_KINDS] or chain[:1]  # a backup must be held to read-only too
-            skipped = {}
-            for p, _ in chain[:]:
-                reason = '尚未安裝' if not find_cli(p) else '額度已用完' if quota_exhausted(store, p) and not find_account(bot.get('account'), p) else '用量預算已用完' if budget_blocks(store, p) else None  # 'stop' too: a backup that is over its own budget must not answer instead
-                if reason and len(chain) > 1: skipped[p] = reason; chain.remove(next(x for x in chain if x[0] == p))
+            first, skipped = chain[0], {}
+            for x in chain[:]:
+                p, a = x[0], x[2]
+                used_up = quota_exhausted(store, p + '@' + a) if a else quota_exhausted(store, p) and not find_account(bot.get('account'), p)
+                reason = '尚未安裝' if not find_cli(p) else '額度已用完' if used_up else '用量預算已用完' if budget_blocks(store, p) else None  # 'stop' too: a backup that is over its own budget must not answer instead
+                if reason and len(chain) > 1: skipped[x] = reason; chain.remove(x)
             if budget_blocks(store, chain[0][0]) == 'stop':
                 job.update(status='failed', error='這個月的用量預算已用完。可到「各模型使用量」調整上限。', finishedAt=NOW())
                 store.finish_message(job, '', 'failed'); store.save(); return
-        why = skipped.get(provider)
-        if job.get('compact'): prompt = self.compact_chat(job_id, prompt, chain[0], bot, inventory)  # two long replies in a row: start this one from a summary
-        for index, (p, m) in enumerate(chain):
+        why = skipped.get(first)
+        if job.get('compact'): prompt = self.compact_chat(job_id, prompt, chain[0][:2], bot, inventory)  # two long replies in a row: start this one from a summary
+        for index, (p, m, a) in enumerate(chain):
             final = index == len(chain) - 1
+            run_bot = bot if a is None else dict(bot, account=a)  # the account 自動選擇 picked for this try
             with store.lock: before = len(store.find('jobs', job_id).get('toolCalls') or [])
-            self._run_attempt(job_id, prompt, p, m, bot, inventory, final)
+            self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)
             with store.lock:
                 job = store.find('jobs', job_id) or {}
                 acted = any(c.get('category') not in ('read', 'external_read') for c in (job.get('toolCalls') or [])[before:])
                 retry = job.get('status') == 'running' and job.get('resumed') and job.get('resumeGone') and not acted
                 if retry: job.update(noResume=True, resumeLost=True, resumed=False, resumeGone=False); self.attempt_errors.pop(job_id, None)
-            if retry: self._run_attempt(job_id, prompt, p, m, bot, inventory, final)  # the CLI could not continue: use the conversation Zook saved
+            if retry: self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)  # the CLI could not continue: use the conversation Zook saved
             with store.lock:
                 job = store.find('jobs', job_id) or {}
                 tidy = job.get('status') == 'running' and job.get('errorKind') == 'context' and not job.get('compactTried') and not acted and can_compact(store, job)
                 if tidy: job.update(compactTried=True); job.pop('errorKind', None); self.attempt_errors.pop(job_id, None)
             if tidy:  # the CLI says the conversation is too long: turn the earlier part into a summary and try this reply once more
                 prompt = self.compact_chat(job_id, prompt, (p, m), bot, inventory)
-                self._run_attempt(job_id, prompt, p, m, bot, inventory, final)
+                self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)
             with store.lock:
                 job = store.find('jobs', job_id)
                 if not job: return
-                if job['status'] == 'completed' and p != provider:
-                    note = '這次改用 %s（%s %s）' % (provider_label(p).split('（')[0], provider_label(provider).split('（')[0], why or '無法回覆')
+                if job['status'] == 'completed' and (p, a) != (first[0], first[2]):
+                    note = '這次改用 %s（%s %s）' % (auto_choice_name(p, a or ''), auto_choice_name(first[0], first[2] or ''), why or '無法回覆')
                     job['fallback'] = dict(provider=p, original=provider, reason=why or '無法回覆')
                     owner = store.find('groups', job['groupId']) if job.get('groupId') else store.find('bots', job['botId'])
                     message = find_message(owner, job['messageId'])
@@ -479,7 +483,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 if job['status'] != 'running': return
                 # This attempt failed and another model is available.
                 error = self.attempt_errors.pop(job_id, '')
-                if p == provider: why = fallback_reason(error)
+                if (p, a) == (first[0], first[2]): why = fallback_reason(error)
                 acted = job.get('mayHaveActed') or any(c.get('category') not in ('read', 'external_read') for c in (job.get('toolCalls') or [])[before:])
                 if acted:  # It already changed something; repeating the work on another model could do it twice.
                     job.update(status='failed', error=error or 'CLI 執行失敗。', finishedAt=NOW())

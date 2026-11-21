@@ -61,7 +61,7 @@ def group_verifier(store, group, message):
         if any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs']): continue
         try: models = pick_auto(store, '請查核', plan=True)[0] if bot.get('provider') == AUTO else [list(bot_model(store, bot))]
         except ValueError: continue
-        options += [(bot['id'], p, m, provider_kind(p) == provider_kind(origin)) for p, m in models if provider_kind(p) in PLAN_KINDS and find_cli(p)]
+        options += [(bot['id'], p, m, provider_kind(p) == provider_kind(origin)) for p, m, *_ in models if provider_kind(p) in PLAN_KINDS and find_cli(p)]
     return next((x for x in options if not x[3]), options[0] if options else None)
 
 
@@ -284,7 +284,7 @@ class GroupRuns:
                 except ValueError as exc:
                     group['messages'].append(dict(id=ID(), role='system', content='%s 這次略過：%s' % (bot['name'], exc), createdAt=NOW()))
                     store.save(); return None
-            provider, model = auto_chain[0] if auto_chain else bot_model(store, bot)
+            provider, model = auto_chain[0][:2] if auto_chain else bot_model(store, bot)
             if readonly and provider_kind(provider) not in PLAN_KINDS:
                 group['messages'].append(dict(id=ID(), role='system', content=bot['name'] + ' 的模型無法限制成只讀，這次略過。', createdAt=NOW()))
                 store.save(); return None
@@ -404,7 +404,7 @@ class GroupRuns:
             if not bot: return
             provider, model = bot_model(store, bot)
             if provider == AUTO:
-                try: provider, model = pick_auto(store, '整理群組討論摘要', plan=True)[0][0]
+                try: provider, model = pick_auto(store, '整理群組討論摘要', plan=True)[0][0][:2]
                 except (ValueError, IndexError): return
             helper = dict(id=ID(), botId=bot['id'], messageId='', status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[], plan=True, noResume=True, internal='summary')
             store.data['jobs'].append(helper); bot = copy.deepcopy(bot)

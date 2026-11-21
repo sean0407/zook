@@ -66,13 +66,17 @@ button {
 }
 
 .brand {
-  font-size: 18px;
-  font-weight: 720;
-  letter-spacing: -.8px
+  display: flex;
+  align-items: center;
+  height: 28px
 }
 
-.brand span {
-  color: #f87649
+.brand img {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  display: block;
+  pointer-events: none
 }
 
 .side-actions {
@@ -1767,7 +1771,7 @@ body[data-voice="on"] [data-action="voice"] { color: #c0564f; background: #fdece
 .overview-model small { color:var(--muted); font-size:12px; }
 .overview-model b { white-space:nowrap; }
 .overview-chart-title { font-weight:650; margin-bottom:6px; }
-.cost-chart { width:100%; height:auto; display:block; }
+.cost-chart { display:block; max-width:100%; }
 .chart-grid { stroke:#ececec; stroke-width:1; }
 .chart-tick { fill:#999; font-size:11px; }
 .chart-line { fill:none; stroke-width:2; stroke-linejoin:round; stroke-linecap:round; }
@@ -1847,3 +1851,34 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .interject-pick { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#666; white-space:nowrap; margin:0 2px; }
 .interject-pick .switch { transform:scale(.8); margin:0; }
 .interject-note { font-size:11px; color:#8a8a8a; text-align:right; margin-top:3px; }
+
+/* 剩餘額度: one card per account, all the same size */
+.account-grid { grid-template-columns:repeat(auto-fill, minmax(250px, 1fr)); grid-auto-rows:1fr; }
+.account-card { min-height:210px; gap:12px; }
+.account-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+.account-title { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.account-title span { color:var(--muted); font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.new-version { flex:none; font-size:11px; padding:1px 7px; border-radius:99px; background:#fff4dc; color:#8a5a00; white-space:nowrap; }
+.account-body { display:flex; flex-direction:column; gap:10px; flex:1; min-height:0; }
+.account-body .login-flow { margin:0; }
+.card-login { display:flex; flex-direction:column; gap:8px; }
+.quota-coupon-line { margin:0; font-size:12px; color:#8a5a00; }
+.account-foot { margin-top:auto; padding-top:10px; border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.account-foot .auto-pick { margin:0; flex:1; min-width:0; font-size:12px; }
+.account-foot .auto-pick span { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.account-foot .card-actions { margin-left:auto; flex:none; }
+.small-btn { padding:4px 10px; font-size:12px; }
+.account-detail .detail-rows { display:grid; gap:8px; margin:10px 0 14px; }
+.account-detail .detail-rows div { display:flex; justify-content:space-between; gap:12px; font-size:13px; }
+.account-detail .detail-rows span { color:var(--muted); }
+.account-detail .detail-rows b { font-weight:550; text-align:right; overflow-wrap:anywhere; }
+.account-detail .detail-version { font-size:13px; margin-bottom:8px; }
+.account-detail .detail-manage { display:flex; gap:12px; justify-content:flex-end; margin-top:16px; padding-top:12px; border-top:1px solid var(--line); }
+
+/* 用量總覽: the chart takes the size of its column and the height of the list beside it */
+.overview-right { display:flex; flex-direction:column; min-width:0; }
+.overview-chart-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px; }
+.overview-chart-head .overview-chart-title { margin:0; }
+.overview-chart { flex:1; min-height:200px; width:100%; }
+.overview-name { display:flex; align-items:center; flex-wrap:wrap; gap:6px; }
+.unpriced-chip { font-size:11px; padding:1px 7px; border-radius:99px; background:#f1f1f1; color:#777; white-space:nowrap; }

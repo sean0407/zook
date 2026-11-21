@@ -9,29 +9,6 @@
     return `${rel}（${d.toLocaleString('zh-TW', {month: 'numeric', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit'})}）`;
   }
   const loadingBlock = text => `<div class="loading-block" role="status"><span class="spinner" aria-hidden="true"></span><span>${esc(text)}</span></div>`;
-  // Limits and Zook's own usage of one sign-in, as the parts of its card.
-  function usageParts(p) {
-    if (!state.quota) return {body: loadingBlock('正在偵測使用量…'), zook: '<div class="zook-usage empty"></div>', when: ''};
-    if (state.quota.error) return {body: `<p class="error-text small">${esc(state.quota.error)}</p>`, zook: '<div class="zook-usage empty"></div>', when: ''};
-    if (!p) return {body: '', zook: '<div class="zook-usage empty"></div>', when: ''};
-    const money = v => v == null ? '' : ' · $' + v.toFixed(v < 1 ? 3 : 2), s = p.quota, ready = ['logged_in', 'installed'].includes(p.status);
-    let body;
-    if (!ready) body = '<p class="quota-empty">登入後才能查看額度。</p>';
-    else if (p.apiBilling) body = '<p class="quota-empty">使用 API 計費，沒有 5 小時／每週額度，費用依用量計算。</p>';
-    else if (p.noQuotaApi) body = '<p class="quota-empty">這個 CLI 不提供方案額度給 Zook，下方是 Zook 記錄的用量。</p>';
-    else if (!s || !(s.windows || []).length) body = '<p class="quota-empty">還沒有額度資料，按右上角「偵測使用量」讀取。</p>';
-    else body = s.windows.map(w => {
-      const used = Math.max(0, Math.min(100, w.usedPercent)), left = Math.round((100 - used) * 10) / 10, level = used >= 90 ? 'bad' : used >= 70 ? 'warn' : '';
-      return `<div class="quota-row"><div class="quota-label"><span>${esc(w.label)}</span><span><b>剩餘 ${left}%</b><small>已用 ${Math.round(used * 10) / 10}%</small></span></div><div class="quota-track"><div class="quota-bar ${level}" style="width:${used}%"></div></div><small class="quota-reset">${esc(fmtReset(w.resetsAt))}</small></div>`;
-    }).join('') + (s.credits && (s.credits.unlimited || (s.credits.balance && s.credits.balance !== '0')) ? `<p class="quota-extra">額外額度：${s.credits.unlimited ? '不限' : esc(s.credits.balance)}</p>` : '')
-      + (s.limitReached ? `<p class="error-text small">已達上限：${esc(s.limitReached)}</p>` : '');
-    const z = p.zookUsage;
-    const coupons = s?.resetCredits && ready ? `<span class="quota-coupon">額度重置券 ${s.resetCredits} 張（在 Codex 中使用）</span>` : '';
-    const zook = !(z && ready) ? '<div class="zook-usage empty"></div>' : `<div class="zook-usage"><span class="zook-usage-title"><span>用量</span>${coupons}</span><div><span>近 5 小時</span><b>${fmtN(z.fiveHour.tokens)}</b><small>${z.fiveHour.replies} 次回覆${money(z.fiveHour.costUsd)}</small></div><div><span>近 7 天</span><b>${fmtN(z.week.tokens)}</b><small>${z.week.replies} 次回覆${money(z.week.costUsd)}</small></div></div>`;
-    const stamp = d => { const t = new Date(d); return isNaN(t) ? '' : ` · ${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; };
-    const when = s?.updatedAt && (s.windows || []).length ? (s.source === 'live' ? '即時查詢' : s.source === 'probe' ? '手動偵測' : '定時更新') + stamp(s.updatedAt) : '暫無資料';
-    return {body, zook, when};
-  }
   const quotaFor = (id, account) => { const q = (state.quota?.providers || []).find(x => x.id === id); return account ? (q?.profiles || []).find(x => x.id === account) : q; };
   function botUsageSection() {
     const u = state.botUsage;
@@ -417,8 +394,8 @@
         ['輸入 Token', groups.reduce((a, g) => a + (g.inputTokens || 0), 0)],
         ['輸出 Token', groups.reduce((a, g) => a + (g.outputTokens || 0), 0)]
       ];
-      content = guideCard() + leftSection() + overviewSection() + fold('accounts', '帳號與版本', accountsPage(), !(state.data.rings || []).some(x => x.known)) + fold('budget', '用量預算', budgetSection()) + fold('bots', 'Bot 用量', botUsageSection()) + `<details class="usage-local"><summary>本機 CLI 全部紀錄（包含 Zook 以外的使用）</summary><p>${esc(u.note||'本機記錄的使用情況。')} ${u.truncated?'資料已截斷。':''}</p><div class="stats">${metrics.map(([k,v])=>`<div class="card"><span class="muted">${k}</span><div class="stat-num">${v.toLocaleString()}</div></div>`).join('')}</div>${groups.length?`<div class="usage-chart">${groups.slice(0,14).map(g=>`<div class="usage-row"><span>${esc(g.date)} · ${esc(g.provider)}</span><div class="usage-track"><div class="usage-bar" style="width:${Math.round(100*((g.inputTokens||0)+(g.outputTokens||0))/Math.max(1,...groups.map(x=>(x.inputTokens||0)+(x.outputTokens||0))))}%"></div></div><small>${((g.inputTokens||0)+(g.outputTokens||0)).toLocaleString()} tokens</small></div>`).join('')}</div><div class="cards">${groups.map(g=>`<div class="card"><h3>${esc(g.date)} · ${esc(g.provider)}</h3><p>${esc(g.model)}<br>${(g.inputTokens||0).toLocaleString()} 輸入 / ${(g.outputTokens||0).toLocaleString()} 輸出</p></div>`).join('')}</div>`:'<div class="blank">尚無使用紀錄。</div>'}` + '</details>';
-      if (!state.usage || state.usage.error) content = guideCard() + leftSection() + overviewSection() + fold('accounts', '帳號與版本', accountsPage(), !(state.data.rings || []).some(x => x.known)) + fold('budget', '用量預算', budgetSection()) + fold('bots', 'Bot 用量', botUsageSection()) + `<details class="usage-local"><summary>本機 CLI 全部紀錄（包含 Zook 以外的使用）</summary>${state.usage?.error ? `<div class="blank error-text">${esc(state.usage.error)}</div>` : loadingBlock('正在讀取本機紀錄…')}</details>`;
+      content = guideCard() + accountCards() + overviewSection() + fold('budget', '用量預算', budgetSection()) + fold('bots', 'Bot 用量', botUsageSection()) + `<details class="usage-local"><summary>本機 CLI 全部紀錄（包含 Zook 以外的使用）</summary><p>${esc(u.note||'本機記錄的使用情況。')} ${u.truncated?'資料已截斷。':''}</p><div class="stats">${metrics.map(([k,v])=>`<div class="card"><span class="muted">${k}</span><div class="stat-num">${v.toLocaleString()}</div></div>`).join('')}</div>${groups.length?`<div class="usage-chart">${groups.slice(0,14).map(g=>`<div class="usage-row"><span>${esc(g.date)} · ${esc(g.provider)}</span><div class="usage-track"><div class="usage-bar" style="width:${Math.round(100*((g.inputTokens||0)+(g.outputTokens||0))/Math.max(1,...groups.map(x=>(x.inputTokens||0)+(x.outputTokens||0))))}%"></div></div><small>${((g.inputTokens||0)+(g.outputTokens||0)).toLocaleString()} tokens</small></div>`).join('')}</div><div class="cards">${groups.map(g=>`<div class="card"><h3>${esc(g.date)} · ${esc(g.provider)}</h3><p>${esc(g.model)}<br>${(g.inputTokens||0).toLocaleString()} 輸入 / ${(g.outputTokens||0).toLocaleString()} 輸出</p></div>`).join('')}</div>`:'<div class="blank">尚無使用紀錄。</div>'}` + '</details>';
+      if (!state.usage || state.usage.error) content = guideCard() + accountCards() + overviewSection() + fold('budget', '用量預算', budgetSection()) + fold('bots', 'Bot 用量', botUsageSection()) + `<details class="usage-local"><summary>本機 CLI 全部紀錄（包含 Zook 以外的使用）</summary>${state.usage?.error ? `<div class="blank error-text">${esc(state.usage.error)}</div>` : loadingBlock('正在讀取本機紀錄…')}</details>`;
     } else if (state.page === 'plugins-legacy') {
       const list = state.integrations?.plugins || [];
       content = `<p class="muted">來自 Claude Code 的插件。啟用後所有 Bot 共用。</p>${list.length ? `<div class="cards">${list.map(pl => {
@@ -454,6 +431,7 @@
     updateMentionMenu();
     if (localOpen && $('.usage-local')) $('.usage-local').open = true;
     if (pageY && $('.page')) $('.page').scrollTop = pageY;
+    if (state.page === 'usage') drawOverviewChart();  // sized to its column, so it is drawn after the page is in place
     document.querySelectorAll('[data-approval-details]').forEach(x => { if (openApprovals.includes(x.dataset.approvalDetails)) x.open = true; });
     if ($('#conversation')) {
       const c = $('#conversation');

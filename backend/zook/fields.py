@@ -42,6 +42,11 @@ def update(target, body, kind):
         value = body['autoModels']
         if not isinstance(value, list) or any(x not in AUTO_MODELS for x in value): raise ValueError('自動選擇的模型無效。')
         changes['autoModels'] = list(dict.fromkeys(value))
+    if kind == 'settings' and 'autoAccounts' in body:
+        value = body['autoAccounts']; extras = {a['id']: a for a in _active['data'].get('accounts') or [] if a.get('provider') in AUTO_MODELS}
+        if not isinstance(value, dict) or any(k not in extras or not isinstance(v, bool) for k, v in value.items()): raise ValueError('自動選擇的帳號無效。')
+        if any(v and extras[k].get('type') == 'key' for k, v in value.items()): raise ValueError('API 計費的帳號不會被自動選用。')
+        changes['autoAccounts'] = dict(target.get('autoAccounts') or {}, **value)
     if kind == 'bot':
         for key in ('enabledSkills', 'enabledMcp'):
             if key in body:

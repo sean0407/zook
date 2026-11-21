@@ -118,15 +118,15 @@ def usage_overview(store, span=30):
             for k in row: row[k] += old.get(k) or 0
     providers, total = {}, _usage_row()
     for (day, provider, model), row in cells.items():
-        p = providers.setdefault(provider, dict(_usage_row(), id=provider, name=provider_label(provider).split('（')[0] if P.spec(store.data, provider) else (provider or '其他'), daily={}, models={}))
+        p = providers.setdefault(provider, dict(_usage_row(), id=provider, name=provider_label(provider).split('（')[0] if P.spec(store.data, provider) else (provider or '其他'), daily={}, tokensByDay={}, models={}))
         for k in total: total[k] += row[k]; p[k] += row[k]
-        p['daily'][day] = p['daily'].get(day, 0.0) + row['cost']
+        p['daily'][day] = p['daily'].get(day, 0.0) + row['cost']; p['tokensByDay'][day] = p['tokensByDay'].get(day, 0) + row['input'] + row['output']
         if row['unpriced']: p['models'][model or '預設模型'] = True
     listing = []
     for p in sorted(providers.values(), key=lambda p: (p['cost'], p['input'] + p['output']), reverse=True):
         listing.append(dict(id=p['id'], name=p['name'], cost=round(p['cost'], 4), share=round(100 * p['cost'] / total['cost'], 1) if total['cost'] else None, tokens=p['input'] + p['output'], replies=p['replies'],
                             kind='reported' if p['reported'] and not p['estimated'] else 'estimated' if p['estimated'] else None, unpriced=p['unpriced'], unpricedModels=sorted(p['models'])[:5],
-                            daily=[round(p['daily'].get(d, 0.0), 4) for d in days]))
+                            daily=[round(p['daily'].get(d, 0.0), 4) for d in days], dailyTokens=[p['tokensByDay'].get(d, 0) for d in days]))
     sent = 0
     for owner in store.data['bots'] + store.data.get('groups', []):
         for messages in [owner.get('messages') or []] + [c.get('messages') or [] for c in owner.get('chats') or [] if c.get('messages') is not owner.get('messages')]:

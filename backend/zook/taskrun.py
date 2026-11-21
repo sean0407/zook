@@ -150,7 +150,7 @@ class TaskRuns:
             if pick == 'wait': continue
             if pick != 'none':
                 checker = store.find('bots', pick[0]) or {}
-                lane = task_lane(store, checker) if task_lane(store, checker)[0] != AUTO else (pick[1][0], '')
+                lane = task_lane(store, checker) if task_lane(store, checker)[0] != AUTO else (pick[1][0], pick[1][2] if len(pick[1]) > 2 else '')
                 if active >= most or lanes.get(tuple(lane), 0) >= per_cli.get(lane[0], TASK_PER_CLI): continue  # no room now: check a little later
                 lanes[tuple(lane)] = lanes.get(tuple(lane), 0) + 1; active += 1; check['lane'] = list(lane)
             if pick == 'none': check['state'] = 'none'; t['status'] = 'review'; t['reviewSince'] = time.time(); t['note'] = '沒有其他家的模型可以驗收這項。看過結果後按「接受結果」。'; continue
@@ -197,9 +197,9 @@ class TaskRuns:
             if lane[0] == AUTO:  # 自動選擇: pick its model now, among the CLIs that still have room
                 try: options = pick_auto(store, t['spec'], plan=t.get('changes') == 'none', bot=bot)[0]
                 except ValueError as exc: t['status'] = 'failed'; t['note'] = str(exc)[:200]; continue
-                fit = next(((p, m) for p, m in options if lanes.get((p, ''), 0) < per_cli.get(p, TASK_PER_CLI)), None)
+                fit = next((x for x in options if lanes.get((x[0], x[2] if len(x) > 2 else ''), 0) < per_cli.get(x[0], TASK_PER_CLI)), None)
                 if not fit: continue
-                lane, use = (fit[0], ''), fit
+                lane, use = (fit[0], fit[2] if len(fit) > 2 else ''), fit  # an option may name one of the CLI's extra accounts
             elif lanes.get(lane, 0) >= per_cli.get(lane[0], TASK_PER_CLI): continue  # this CLI (this account of it) is full
             lanes[lane] = lanes.get(lane, 0) + 1; working.add(t['assignee']); chosen.append((t, lane, use))
         return chosen

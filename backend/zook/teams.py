@@ -78,7 +78,7 @@ class Teams:
             carrier = next((b for b in store.data['bots'] if b.get('isAdmin')), None) or next(iter(store.data['bots']), None)
             if not carrier: raise ValueError('請先新增一個 Bot，再建立團隊。')
             existing = [b['name'] for b in store.data['bots']]
-            try: provider, model = pick_auto(store, '請分析並規劃', plan=True)[0][0] if store.data.get('autoStatus') and auto_allowed(store) else bot_model(store, {})
+            try: provider, model = pick_auto(store, '請分析並規劃', plan=True)[0][0][:2] if store.data.get('autoStatus') and auto_allowed(store) else bot_model(store, {})
             except ValueError: provider, model = bot_model(store, {})
             helper = dict(id=ID(), botId=carrier['id'], messageId='', status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[], plan=True, noResume=True, internal='team')
             store.data['jobs'].append(helper); bot = copy.deepcopy(carrier)

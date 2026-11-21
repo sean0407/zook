@@ -77,8 +77,9 @@ def task_running_lane(store, run, task):
     attempt = task['attempts'][-1] if task.get('attempts') else {}
     job = store.find('jobs', attempt.get('jobId')) if attempt.get('jobId') else None
     if job:
-        provider = (job.get('fallback') or {}).get('provider') or ((job.get('autoChain') or [[None]])[0][0])
-        if provider: return (provider, '')
+        first = (job.get('autoChain') or [[None]])[0]
+        if (job.get('fallback') or {}).get('provider'): return (job['fallback']['provider'], '')
+        if first[0]: return (first[0], first[2] if len(first) > 2 else '')  # 自動選擇 may have picked an extra account
         lane = task_lane(store, store.find('bots', task['assignee']) or {})
         if lane[0] != AUTO: return lane
     return tuple((run.get('lanes') or {}).get(task['id']) or ('', ''))

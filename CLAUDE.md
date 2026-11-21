@@ -99,18 +99,12 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 3. 先寫測試，確認它失敗。
 4. 實作。
 5. 三層驗證。
-6. 用 Codex 審查（和開發者不同家的模型），在 repo 根目錄執行：
-   `python3 scripts/codex_review.py --family sol|astra --brief <審查說明> --out <結果檔>`。
-   它在這台 Mac 的 Codex 帳號之間輪流（Codex 預設帳號與 Zook 裡的 Codex 登入；輪到誰記在 `~/.config/zook-dev/codex-review.json`），一個額度用完就換下一個，全部用完時結束碼 3、不執行；不會改用付費點數。它自動取最新模型，用 `codex exec --ignore-user-config --ephemeral -s read-only`。進度檔要記下它印出的帳號、模型和 token。
-   - 每一版的例行審查用 sol 系列：找錯誤、漏掉的測試、和這份規則衝突的地方。
-   - 交辦標「找獨立審查」的版本用 astra 系列：冒名回報、繞過核准、派工失控、權限與金鑰這類安全問題。
-   - 一律用該系列最新的模型（2026-11-20 是 `gpt-6.2-sol`、`gpt-6.2-astra`），腳本會從 Codex 的模型清單自動挑。
-   - 審查說明只寫範圍、需求和重點，不寫自己的判斷，不放金鑰或個資。`--ignore-user-config` 讓它不載入使用者自己的 Codex 連接器與指示。
-   - 省額度（使用者 2026-11-20 同意）：
-     - 審查範圍只限這一版的改動（diff），不讓它讀整個專案。
-     - sol 例行審查用 medium 思考強度；astra 用 high，而且只用在交辦標「找獨立審查」的版本（腳本預設就是這樣）。
-     - 只改文字或文件的小版本，併到下一版一起審。
-     - Zook 用量頁上 Codex 額度低於 20% 時先不跑審查，告訴使用者。
+6. 用 Codex 審查（和開發者不同家的模型）：使用共用的 `codex-review` Skill（`~/.claude/skills/codex-review`，帳號輪流、20% 下限、不用付費點數、自動取最新模型都在它的 SKILL.md）。在 repo 根目錄執行：
+   `python3 scripts/codex_review.py --family sol|astra --brief <審查說明> --out <結果檔>`（這個檔案只是轉給共用 Skill，參數相同）。Zook 自己的規定：
+   - 每一版的例行審查用 sol（medium）：找錯誤、漏掉的測試、和這份規則衝突的地方。
+   - 交辦標「找獨立審查」的版本，以及改到核准、權限、沙盒、金鑰的版本，用 astra（high）：冒名回報、繞過核准、派工失控、權限與金鑰這類安全問題。
+   - 審查範圍只限這一版的改動（diff）；只改文字或文件的小版本，併到下一版一起審。
+   - 結果檔放在 repo 外面；進度檔記下它印出的帳號、模型和 token，以及每個發現怎麼處理。
    - 另外請 Claude 子代理審查時，兩邊互相看不到結果；兩邊都找到的先修，只有一邊找到的先重現再決定，理由寫進進度檔，報告分開列出。
 7. 驗收報告：每條驗收條件寫「通過／未通過／未驗證」和證據。全部通過才併入 `main` 並發佈。
 8. 更新 ROADMAP 的狀態。
@@ -138,7 +132,8 @@ GitHub Actions（`.github/workflows/test.yml`）會在每次推送跑測試和�
 - 綁在 Claude 或 ChatGPT 帳號的遠端連接器（例如 LogiQ／Google Chat）複製到 Zook 後會被拒絕，因為授權留在原服務。要在 Zook 的連接器頁新增網址後按「登入」。
 - 手機 App 的排程、照片、切換對話和通知還沒在實機測過；真正的推播需要付費開發者帳號。
 - 群組討論每次重新帶入最近的對話，不接續 CLI 原生對話。
-- 自動選擇：Grok 沒有額度資料，無法套用「剩餘低於 10% 不選」；API 計費帳號一律不選。
+- 自動選擇：每個帳號各自是一個選項（同一家的預設帳號優先），各有自己的開關與額度；API 計費帳號一律不選。
+- Grok 額度：`grok usage --json` 到 1.0.89 還不能用，Zook 每次先試它；不能用時在看不見的終端機開 Grok、讀畫面底部的「Weekly limit left」，再關掉（`grokquota.py`）。唯一會輸入的是 Grok 問「是否信任」Zook 自己的空資料夾時的「y」。只有每週額度，沒有重置時間。`grok usage --json` 能用後，移除讀畫面的做法。
 - Antigravity 走官方 `agy` CLI。Google 條款限制第三方工具使用，帳號有被暫停的風險，卡片上有寫明；AI 點數一律關閉。
 - Gemini CLI 沒有接 Zook 工具（ROADMAP E6）。到 0.16.2 為止使用者還沒在 Zook 加 Gemini API 金鑰帳號。Google 已不讓個人帳號使用這個 CLI（`IneligibleTierError`），要有 Gemini API 金鑰才能用，所以沒辦法開發與驗證。技術上可行的做法：工作資料夾裡的 `.gemini/settings.json` 設 `mcpServers`，加上 `--allowed-mcp-server-names` 與 `--approval-mode`。
 - Grok 在「指定資料夾」時從那個資料夾啟動，靠它自己的嚴格沙盒限制在資料夾內；Zook 的設定放在該資料夾的 `.grok`（有 `.zook-owned` 標記），回覆結束就刪。資料夾裡原本就有 `.grok` 時不執行。這個模式下 Grok 讀不到對話附件。新版 Grok 仍不接受 `--add-dir`。它的嚴格沙盒不限制系統暫存區，所以這類測試不要在 `/tmp` 做。

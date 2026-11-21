@@ -26,12 +26,6 @@
     const open = rings.find(x => x.id === state.ringOpen);
     return `<div class="usage-dock" aria-label="各模型剩餘額度">${open ? `<div class="ring-card" role="dialog" aria-label="${esc(open.name)} 剩餘額度"><strong>${esc(open.name)}</strong>${leftBars(open)}${open.fiveHour != null && open.week != null ? '<small class="muted">外圈是 5 小時額度，內圈是每週額度。</small>' : ''}<button class="text-btn" data-action="page" data-id="usage">查看用量</button></div>` : ''}${rings.map(x => `<button class="ring ${ringLevel(x)} ${state.ringOpen === x.id ? 'active' : ''}" data-ring="${esc(x.id)}" title="${esc(ringText(x))}" aria-label="${esc(ringText(x))}" aria-expanded="${state.ringOpen === x.id}">${ringSvg(x)}<span>${esc(x.name)}</span></button>`).join('')}</div>`;
   }
-  // The top of the usage page: every model's limits as bars, with the same wording as the rings.
-  function leftSection() {
-    const rings = (state.data.rings || []).filter(x => x.known);
-    if (!rings.length) return '';
-    return `<section class="usage-block"><h2>剩餘額度</h2><div class="left-grid">${rings.map(x => `<article class="left-card"><h3>${esc(x.name)}</h3>${leftBars(x)}</article>`).join('')}</div></section>`;
-  }
   // Sections of the usage page that stay folded until asked for; the choice survives a redraw.
   if (!state.folds) state.folds = {};
   const fold = (key, title, html, openByDefault) => `<details class="usage-fold" data-fold="${esc(key)}" ${(state.folds[key] ?? !!openByDefault) ? 'open' : ''}><summary>${esc(title)}</summary>${html}</details>`;
@@ -48,29 +42,45 @@
   const MODEL_COLOR = {claude: '#d97757', codex: '#a78bfa', grok: '#444', antigravity: '#4285f4', gemini: '#1aa260'};
   const modelColor = id => MODEL_COLOR[id] || '#999';
   const usd = v => 'US$' + (v >= 100 ? v.toFixed(0) : v >= 0.01 || v === 0 ? v.toFixed(2) : v.toFixed(4));
-  const fmtWan = n => n == null ? '—' : n >= 1e8 ? (n / 1e8).toFixed(2) + ' 億' : n >= 1e4 ? (n / 1e4).toFixed(2) + ' 萬' : Number(n).toLocaleString();
-  function costChart(o) {
-    const W = 640, H = 220, L = 54, R = 10, T = 12, B = 26, n = o.days.length, max = Math.max(0.01, ...o.providers.flatMap(p => p.daily));
-    const top = max <= 0.05 ? Math.ceil(max * 100) / 100 : max <= 1 ? Math.ceil(max * 10) / 10 : Math.ceil(max);
+  const fmtTok = n => n == null ? '—' : n >= 1e9 ? (n / 1e9).toFixed(1) + 'B' : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'K' : String(Math.round(n));
+  const OVERVIEW_METRICS = [{id: 'cost', name: '費用'}, {id: 'tokens', name: 'Token'}];
+  // The daily chart is drawn at the size of its column, so text keeps its size and the chart lines up with the list beside it.
+  function dailyChart(o, W, H) {
+    const tokens = state.overviewMetric === 'tokens', series = p => tokens ? p.dailyTokens || [] : p.daily, label = tokens ? fmtTok : usd;
+    const R = 10, T = 12, B = 26, n = o.days.length, max = Math.max(tokens ? 1 : 0.01, ...o.providers.flatMap(series));
+    const nice = v => { const e = Math.pow(10, Math.floor(Math.log10(v))), f = v / e; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * e; };
+    const top = tokens ? nice(max) : max <= 0.05 ? Math.ceil(max * 100) / 100 : max <= 1 ? Math.ceil(max * 10) / 10 : Math.ceil(max);
+    const L = 14 + 6.6 * Math.max(...[0, 1, 2, 3].map(k => label(top * k / 3).length));  // room for the widest axis label
     const x = i => L + (n === 1 ? 0 : i * (W - L - R) / (n - 1)), y = v => T + (H - T - B) * (1 - v / top);
-    const grid = [0, 1, 2, 3].map(k => { const v = top * k / 3; return `<line class="chart-grid" x1="${L}" x2="${W - R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}"></line><text class="chart-tick" x="${L - 8}" y="${(y(v) + 4).toFixed(1)}" text-anchor="end">${usd(v)}</text>`; }).join('');
+    const grid = [0, 1, 2, 3].map(k => { const v = top * k / 3; return `<line class="chart-grid" x1="${L}" x2="${W - R}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}"></line><text class="chart-tick" x="${L - 8}" y="${(y(v) + 4).toFixed(1)}" text-anchor="end">${label(v)}</text>`; }).join('');
     const marks = [...new Set([0, Math.round((n - 1) / 3), Math.round((n - 1) * 2 / 3), n - 1])].map(i => `<text class="chart-tick" x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="${i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle'}">${esc(o.days[i].slice(5).replace('-', '/'))}</text>`).join('');
-    const lines = o.providers.filter(p => p.kind).map(p => `<polyline class="chart-line" stroke="${modelColor(p.id)}" points="${p.daily.map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ')}"><title>${esc(p.name)}</title></polyline>`).join('');
-    return `<svg class="cost-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="每日費用">${grid}${marks}${lines}</svg>`;
+    const lines = o.providers.filter(p => tokens || p.kind).map(p => `<polyline class="chart-line" stroke="${modelColor(p.id)}" points="${series(p).map((v, i) => x(i).toFixed(1) + ',' + y(v).toFixed(1)).join(' ')}"><title>${esc(p.name)}</title></polyline>`).join('');
+    return `<svg class="cost-chart" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="${tokens ? '每日 Token' : '每日費用'}">${grid}${marks}${lines}</svg>`;
   }
+  function drawOverviewChart() {
+    const box = $('[data-overview-chart]'), o = state.overview;
+    if (!box || !o || o.error || !o.replies) return;
+    const wide = getComputedStyle($('.overview-top')).gridTemplateColumns.split(' ').length > 1;
+    const left = $('.overview-left'), title = $('.overview-chart-head');
+    const W = Math.max(240, Math.floor(box.clientWidth)), H = wide ? Math.max(200, Math.floor(left.getBoundingClientRect().height - title.getBoundingClientRect().height - 8)) : 220;
+    box.innerHTML = dailyChart(o, W, H);
+  }
+  window.addEventListener('resize', () => { if (state.page === 'usage') drawOverviewChart(); });
   function overviewSection() {
     const o = state.overview, pick = `<div class="overview-span">${dropdown('overviewDays', String(state.overviewDays || 30), USAGE_SPANS, 'data-overview-days')}</div>`;
     if (!o) return `<section class="usage-block"><h2>用量總覽</h2>${loadingBlock('正在整理用量…')}</section>`;
     if (o.error) return `<section class="usage-block"><h2>用量總覽</h2><div class="blank error-text">${esc(o.error)}</div></section>`;
-    const t = o.totals, cells = [['不含快取讀取的 Token', fmtWan(t.withoutCacheRead)], ['含快取讀取的 Token', fmtWan(t.withCacheRead)], ['快取輸入', fmtWan(t.cachedInput)], ['未快取輸入', fmtWan(t.freshInput)], ['快取寫入', fmtWan(t.cacheWrite)], ['輸出', fmtWan(t.output)], ['我送出的訊息', fmtN(t.sent)], ['完成的回覆', fmtN(t.replies)]];
-    const rows = o.providers.map(p => `<div class="overview-model"><span class="dot" style="background:${modelColor(p.id)}"></span><div><strong>${esc(p.name)}</strong><small>${p.kind ? `${p.share == null ? '' : '占 ' + p.share + '% · '}` : ''}${fmtWan(p.tokens)} 個 Token${p.unpriced ? ` · ${p.unpriced} 則無價格（${esc(p.unpricedModels.join('、'))}）` : ''}</small></div><b title="${p.kind === 'reported' ? '這家 CLI 自己回報的金額' : p.kind === 'estimated' ? '依價格表計算' : ''}">${p.kind ? usd(p.cost) : '無價格'}</b></div>`).join('');
-    return `<section class="usage-block usage-overview"><div class="overview-head"><h2>用量總覽</h2>${pick}</div><div class="overview-top"><div class="overview-left"><div class="overview-cost">${usd(o.cost)}</div><p class="muted small">${fmtN(o.replies)} 則回覆 · 依 API 價格估算</p><p class="muted small">訂閱帳號不會被收這筆錢；這是同樣用量走 API 的價錢。${o.unpriced ? `有 ${o.unpriced} 則回覆的模型不在價格表裡，沒有算進去。` : ''}</p>${rows || '<p class="quota-empty">這段期間沒有用量。</p>'}</div><div class="overview-right"><div class="overview-chart-title">每日費用</div>${o.replies ? costChart(o) : '<p class="quota-empty">這段期間沒有用量。</p>'}</div></div><div class="overview-totals">${cells.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('')}</div><p class="muted small">價格表日期 ${esc(o.priceDate)}（${esc(o.priceSource)}）。「—」表示 CLI 沒有提供這個數字。</p></section>`;
+    const t = o.totals, cells = [['不含快取讀取的 Token', fmtTok(t.withoutCacheRead)], ['含快取讀取的 Token', fmtTok(t.withCacheRead)], ['快取輸入', fmtTok(t.cachedInput)], ['未快取輸入', fmtTok(t.freshInput)], ['快取寫入', fmtTok(t.cacheWrite)], ['輸出', fmtTok(t.output)], ['我送出的訊息', fmtN(t.sent)], ['完成的回覆', fmtN(t.replies)]];
+    const rows = o.providers.map(p => `<div class="overview-model"><span class="dot" style="background:${modelColor(p.id)}"></span><div><span class="overview-name"><strong>${esc(p.name)}</strong>${p.unpriced ? `<span class="unpriced-chip" title="這些回覆的模型不在價格表裡，沒有算進費用">${esc(p.unpricedModels.join('、'))} ${fmtN(p.unpriced)} 則未計價</span>` : ''}</span><small>${p.kind && p.share != null ? '占 ' + p.share + '% · ' : ''}${fmtTok(p.tokens)} Token</small></div><b title="${p.kind === 'reported' ? '這家 CLI 自己回報的金額' : p.kind === 'estimated' ? '依價格表計算' : ''}">${p.kind ? usd(p.cost) : '無價格'}</b></div>`).join('');
+    const metric = `<div class="overview-metric">${dropdown('overviewMetric', state.overviewMetric || 'cost', OVERVIEW_METRICS, 'data-overview-metric')}</div>`;
+    return `<section class="usage-block usage-overview"><div class="overview-head"><h2>用量總覽</h2>${pick}</div><div class="overview-top"><div class="overview-left"><div class="overview-cost">${usd(o.cost)}</div><p class="muted small">${fmtN(o.replies)} 則回覆 · 依 API 價格估算</p><p class="muted small">訂閱帳號不會被收這筆錢。</p>${rows || '<p class="quota-empty">這段期間沒有用量。</p>'}</div><div class="overview-right"><div class="overview-chart-head"><span class="overview-chart-title">每日${state.overviewMetric === 'tokens' ? ' Token' : '費用'}</span>${metric}</div>${o.replies ? '<div class="overview-chart" data-overview-chart></div>' : '<p class="quota-empty">這段期間沒有用量。</p>'}</div></div><div class="overview-totals">${cells.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('')}</div><p class="muted small">價格表日期 ${esc(o.priceDate)}（${esc(o.priceSource)}）。「—」表示 CLI 沒有提供這個數字。</p></section>`;
   }
   async function loadOverview() {
     try { state.overview = await api('usage/overview?days=' + (state.overviewDays || 30)); } catch (e) { state.overview = {error: e.message}; }
     if (state.page === 'usage') { const y = $('.page')?.scrollTop; render(true); if (y && $('.page')) $('.page').scrollTop = y; }
   }
   document.addEventListener('change', e => {
+    if (e.target.dataset.overviewMetric !== undefined) { state.overviewMetric = e.target.value; render(true); return; }
     if (e.target.dataset.overviewDays === undefined) return;
     state.overviewDays = Number(e.target.value) || 30; loadOverview();
   });
