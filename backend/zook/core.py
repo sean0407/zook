@@ -710,6 +710,7 @@ def quota_exhausted(store, provider):
     if provider == 'antigravity': return False  # its limits are per model group; a used-up group simply fails over
     """True when the last known quota snapshot says this provider is used up and has not reset yet."""
     snap = (store.data.get('quota') or {}).get(provider) or {}
+    if snap.get('limitReached'): return True  # the CLI says so itself, e.g. a workspace out of credits with every window still open
     now = time.time()
     return any(isinstance(w.get('usedPercent'), (int, float)) and w['usedPercent'] >= 100 and _window_open(w, snap, now) for w in snap.get('windows') or [])
 

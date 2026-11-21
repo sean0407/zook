@@ -506,5 +506,15 @@
   };
   const accountCount = provider => (((state.providers || []).find(p => p.id === (provider || state.data.settings.provider || 'codex')) || {}).accounts || []).length;
   const accountField = (provider, selected) => `帳號<select name="account">${accountOptions(provider, selected)}</select>${accountCount(provider) ? '' : '<small class="muted field-hint">這個模型目前只有預設帳號。<button type="button" class="link" data-action="accounts-from-form">新增其他帳號</button></small>'}`;
+  // 模型與帳號 in the Bot form: 使用預設, 自動選擇, then each CLI on its own sign-in followed by each of its extra accounts.
+  const choiceOptions = (provider, account) => {
+    const list = (state.providers || [{id: 'codex', name: 'Codex'}, {id: 'claude', name: 'Claude'}]).filter(p => p.chat !== false || provider === p.id);
+    const picked = provider && provider !== 'auto' ? provider + (account ? '::' + account : '') : provider || '';
+    const opt = (value, label) => `<option value="${esc(value)}" ${picked === value ? 'selected' : ''}>${esc(label)}</option>`;
+    return opt('', '使用預設') + opt('auto', '自動選擇（每則訊息自己挑）') + list.map(p => {
+      const name = String(p.name).split('（')[0], extra = p.accounts || [];
+      return opt(p.id, extra.length ? name + '（預設帳號）' : name) + extra.map(a => opt(p.id + '::' + a.id, name + '（' + a.name + (a.type === 'key' ? '・API 金鑰' : '') + '）')).join('');
+    }).join('');
+  };
   const providerOptions = (selected, withDefault, withAuto) => (withDefault ? `<option value="" ${!selected ? 'selected' : ''}>使用預設</option>` : '') + (withAuto ? `<option value="auto" ${selected === 'auto' ? 'selected' : ''}>自動選擇</option>` : '') + (state.providers || [{id: 'codex', name: 'Codex'}, {id: 'claude', name: 'Claude'}]).filter(p => p.chat !== false || selected === p.id).map(p => `<option value="${esc(p.id)}" ${selected === p.id ? 'selected' : ''}>${esc(p.name)}${p.installed === false ? '（未安裝）' : p.chat === false ? '（未驗證）' : ''}</option>`).join('');
 

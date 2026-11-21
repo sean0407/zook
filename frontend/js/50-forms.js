@@ -26,7 +26,7 @@
     catch (error) { item.autoOn = was; input.checked = was; toast(error.message); }
   }
   document.addEventListener('change', e => {
-    if (e.target.name === 'provider' && e.target.closest('#bot-form')) syncFeatureRows(e.target.closest('#bot-form'));
+    if (e.target.name === 'providerChoice' && e.target.closest('#bot-form')) syncFeatureRows(e.target.closest('#bot-form'));
     if (e.target.dataset.autoModel) saveAutoModel(e.target);
     if (e.target.dataset.botDefault) saveBotDefault(e.target);
     if (e.target.name === 'connectorAccount') switchConnectorAccount(e.target);
@@ -213,14 +213,18 @@
     }
     const form = e.target.closest('form');
     if (!form || !form.querySelector('.model-picker')) return;
-    if (e.target.name === 'provider') {
+    if (e.target.name === 'providerChoice' || e.target.name === 'provider') {
+      if (e.target.name === 'providerChoice') {  // the Bot form: the model and the account in one menu, CLI or CLI::account
+        const [provider, account] = e.target.value.split('::');
+        const same = form.elements.provider.value === provider;
+        form.elements.provider.value = provider; form.elements.account.value = account || '';
+        if (same) return;  // only another account of the same CLI: its model stays
+      }
       form.elements.model.value = '';
       form.elements.modelSelect.value = '';
       form.elements.modelCustom.value = '';
       form.elements.modelCustom.hidden = true;
       form.dataset.providerChanged = '1';
-      const slot = form.querySelector('[data-account-field]');
-      if (slot) slot.innerHTML = accountField(e.target.value, '');
       form.querySelector('.model-note').textContent = '提供者已變更，模型已切換為預設。';
       loadModels(form);
     } else if (e.target.name === 'modelSelect') {
