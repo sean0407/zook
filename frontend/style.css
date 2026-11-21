@@ -1911,3 +1911,15 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .intro-questions { display:flex; flex-direction:column; align-items:center; gap:8px; margin-top:18px; width:min(440px, 100%); }
 .intro-q { width:100%; padding:10px 16px; border:1px solid #e4e4e4; border-radius:14px; background:#fff; color:#333; font-size:14px; text-align:left; cursor:pointer; line-height:1.45; }
 .intro-q:hover { background:#f6f6f6; border-color:#d6d6d6; }
+
+/* Files a reply mentions: pictures shown, other files as cards */
+.msg-files { display:flex; flex-direction:column; gap:8px; margin-top:8px; width:100%; max-width:640px; }
+.msg-pics { display:flex; flex-wrap:wrap; gap:8px; }
+.msg-pic { padding:0; border:1px solid var(--line); border-radius:12px; overflow:hidden; background:#f6f6f6; cursor:zoom-in; max-width:220px; }
+.msg-pic img { display:block; max-width:220px; max-height:170px; object-fit:contain; }
+.msg-file { display:flex; align-items:center; gap:10px; padding:9px 12px; border:1px solid var(--line); border-radius:12px; background:#fff; }
+.msg-file-icon { font-size:18px; flex:none; }
+.msg-file-name { flex:1; min-width:0; display:flex; flex-direction:column; }
+.msg-file-name strong { font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.msg-file-name small { color:var(--muted); font-size:11.5px; }
+.message.assistant .msg-files { margin-left:0; }

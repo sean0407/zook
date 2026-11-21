@@ -26,7 +26,7 @@ def _file_hash(path):
 
 def list_group_files(store, group):
     info = group.get('fileInfo') or {}
-    return [dict(name=e.name, size=e.stat(follow_symlinks=False).st_size, at=datetime.datetime.fromtimestamp(e.stat(follow_symlinks=False).st_mtime, datetime.timezone.utc).isoformat(), by=(info.get(e.name) or {}).get('by', '')) for e in _plain_files(group_files_dir(store, group['id']))]
+    return [dict(name=e.name, kind=_output_kind(e.name), size=e.stat(follow_symlinks=False).st_size, at=datetime.datetime.fromtimestamp(e.stat(follow_symlinks=False).st_mtime, datetime.timezone.utc).isoformat(), by=(info.get(e.name) or {}).get('by', '')) for e in _plain_files(group_files_dir(store, group['id']))]
 
 
 def group_files_size(store, group_id, skip=''):
