@@ -39,7 +39,7 @@ def fake_home(root):
 
 class FakeHost:
     """`security` on the user's login keychain, as agykeychain._agy_host runs it: (exit code, output); 44 means no such item."""
-    def __init__(self): self.items, self.calls, self.fail = {}, [], ''
+    def __init__(self): self.items, self.calls, self.fail, self.ready = {}, [], '', True
 
     def __call__(self, args, command=None):
         self.calls.append((args, command)); words = shlex.split(command) if command else list(args)
@@ -57,6 +57,7 @@ class Base(unittest.TestCase):
         self.m = load(); self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name).resolve()
         self.home = fake_home(self.root); self.old_home = os.environ.get('HOME'); os.environ['HOME'] = str(self.home)
         os.environ.pop('ZOOK_SECRETS_DIR', None); self.host = FakeHost(); self.m._agy_host = self.host  # the real path, never the user's own keychain
+        self.m.agy_host_ready = lambda: self.host.ready
         self.store = self.m.Store(self.root / 'data'); self.account = dict(id='a' * 32, provider='antigravity', name='工作', type='login')
         self.store.data['accounts'] = [self.account, dict(id='c' * 32, provider='codex', name='C', type='login')]
 
@@ -228,19 +229,42 @@ class Keychain(Base):
         folder = self.m.agy_account_home(self.account['id'])
         self.assertIn("O'Brien x", str(folder)); self.assertIn(str(self.kc(folder)), security(folder, 'default-keychain').stdout)
 
-    def test_removal_ends_its_agy_and_forgets_everything_or_says_why(self):
-        folder = self.m.agy_account_home(self.account['id']); (folder / '.zook-login').mkdir()
-        signing = subprocess.Popen(['/bin/sleep', '60'], cwd=str(folder / '.zook-login'))  # a Terminal sign-in still open
-        app = type('App', (), {})()
-        self.host.fail = 'delete-generic-password'
-        self.assertIn('鑰匙圈', self.m.agy_account_remove(app, self.account['id'])); self.assertTrue(folder.exists())
-        self.host.fail = ''; self.assertEqual(signing.wait(timeout=10), -signal.SIGTERM)
+    def test_no_such_item_counts_only_from_a_login_keychain_that_is_there(self):
+        folder = self.m.agy_account_home(self.account['id']); data = self.kc(folder).read_bytes()
+        self.host.items.clear(); self.host.ready = False; self.m._agy_keychain_cache.clear()  # "no such item" from a missing keychain file
+        with self.assertRaises(RuntimeError): self.m.agy_account_home(self.account['id'])
+        self.assertEqual(self.kc(folder).read_bytes(), data); self.assertEqual(self.host.items, {})
+        self.assertFalse([p for p in (folder / 'Library/Keychains').iterdir() if 'zook-old' in p.name])
+
+    def removed(self):
         self.store.data['accounts'] = [a for a in self.store.data['accounts'] if a['id'] != self.account['id']]
+
+    def test_removal_ends_its_agy_and_forgets_everything_or_says_why(self):
+        folder = self.m.agy_account_home(self.account['id']); (folder / '.zook-login').mkdir(); secret = self.host.items[self.account['id']]
+        signing = subprocess.Popen(['/bin/sh', '-c', 'trap "" TERM; /bin/sleep 60'], cwd=str(folder / '.zook-login'))  # a Terminal sign-in that ignores SIGTERM
+        app = type('App', (), {})(); self.removed()
+        self.host.fail = 'delete-generic-password'
+        self.assertIn('鑰匙圈', self.m.agy_account_remove(app, self.account['id']))
+        self.assertEqual(signing.wait(timeout=1), -signal.SIGKILL)  # already gone when removal went on
+        self.assertTrue(self.kc(folder).is_file()); self.assertEqual(self.host.items[self.account['id']], secret)  # put back: still opens
+        self.host.fail = ''
+        with mock.patch('os.rename', side_effect=OSError('busy')):  # the folder cannot go: the password stays
+            self.assertIn('資料夾', self.m.agy_account_remove(app, self.account['id']))
+        self.assertEqual(self.host.items[self.account['id']], secret); self.assertTrue(self.kc(folder).is_file())
+        def slow(*a, **k): raise subprocess.TimeoutExpired('lsof', 30)
+        with mock.patch('subprocess.run', slow): self.assertIn('Antigravity', self.m.agy_account_remove(app, self.account['id']))
+        self.assertEqual(self.host.items[self.account['id']], secret); self.assertTrue(folder.exists())
         self.assertEqual(self.m.agy_account_remove(app, self.account['id']), '')
         self.assertFalse(folder.exists()); self.assertNotIn(self.account['id'], self.host.items)
         with self.assertRaises(RuntimeError): self.m.agy_account_home(self.account['id'])  # a late quota check does not bring it back
         self.assertFalse(folder.exists()); self.assertNotIn(self.account['id'], self.host.items)
 
+    def test_another_zook_still_holding_the_account_does_not_make_it_again(self):
+        folder = self.m.agy_account_home(self.account['id'])
+        self.assertEqual(self.m.agy_account_remove(type('App', (), {})(), self.account['id']), '')  # removed by the other Zook
+        self.assertIsNotNone(self.m.find_account(self.account['id']))  # still in this one's memory
+        with self.assertRaises(RuntimeError): self.m.agy_account_home(self.account['id'])
+        self.assertFalse(folder.exists()); self.assertNotIn(self.account['id'], self.host.items)
 
 class Server(unittest.TestCase):
     def setUp(self):

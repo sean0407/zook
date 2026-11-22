@@ -46,6 +46,12 @@ def agy_host_keychain():
     return os.path.join(pwd.getpwuid(os.getuid()).pw_dir, 'Library', 'Keychains', 'login.keychain-db')
 
 
+def agy_host_ready():
+    """Whether the user's login keychain is there and Zook can open the file: only then does "no such item" mean none."""
+    path = agy_host_keychain()
+    return os.path.isfile(path) and os.access(path, os.R_OK | os.W_OK)
+
+
 def _agy_host(args, command=None):
     """`security` on the user's own login keychain: (exit code, output). A command with a secret goes on stdin."""
     try:
@@ -71,7 +77,7 @@ def agy_keychain_password(account_id):
         except OSError: raise RuntimeError(AGY_KEYCHAIN_ERROR)
     else:
         code, out = _agy_host(['find-generic-password', '-s', AGY_KEYCHAIN_SERVICE, '-a', account_id, '-w', agy_host_keychain()])
-        if code == 44: return ''  # errSecItemNotFound
+        if code == 44 and agy_host_ready(): return ''  # errSecItemNotFound, from a login keychain that is really there
         if code != 0 or not out.strip(): raise RuntimeError(AGY_KEYCHAIN_ERROR)
         value = out.strip()
     if value: _agy_keychain_cache[account_id] = value
@@ -145,31 +151,68 @@ def agy_keychain(account_id, folder):
     except OSError: raise RuntimeError(AGY_KEYCHAIN_ERROR)
 
 
+def _agy_alive(pid):
+    try: os.kill(pid, 0)
+    except ProcessLookupError: return False
+    except OSError: return True
+    try: state = subprocess.run(['/bin/ps', '-o', 'stat=', '-p', str(pid)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10).stdout.decode().strip()
+    except (OSError, subprocess.TimeoutExpired): return True
+    return bool(state) and not state.startswith('Z')  # a zombie has already ended
+
+
 def _agy_stop_in(folder):
-    """End agy processes working inside the account's folder: a Terminal sign-in runs there."""
+    """End the processes working inside the account's folder (a Terminal sign-in runs there) and wait until they are gone.
+    False when that cannot be checked or done."""
     top = os.path.realpath(str(folder))
     try: out = subprocess.run(['/usr/sbin/lsof', '-nP', '-w', '-d', 'cwd', '-Fpn'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30).stdout.decode('utf-8', 'replace')
-    except (OSError, subprocess.TimeoutExpired): return
-    pid = None
+    except (OSError, subprocess.TimeoutExpired): return False
+    if not out.strip(): return False  # it always sees at least Zook itself
+    pids, pid = set(), None
     for line in out.splitlines():
         if line.startswith('p'): pid = int(line[1:]) if line[1:].isdigit() else None
-        elif line.startswith('n') and pid and pid != os.getpid() and (line[1:] == top or line[1:].startswith(top + '/')):
-            try: os.kill(pid, signal.SIGTERM)
+        elif line.startswith('n') and pid and pid != os.getpid() and (line[1:] == top or line[1:].startswith(top + '/')): pids.add(pid)
+    for sig, wait in ((signal.SIGTERM, 5), (signal.SIGKILL, 3)):
+        for pid in pids:
+            try: os.kill(pid, sig)
             except OSError: pass
+        end = time.monotonic() + wait
+        while pids and time.monotonic() < end:
+            pids = {p for p in pids if _agy_alive(p)}
+            if pids: time.sleep(0.1)
+        if not pids: return True
+    return False
+
+
+def agy_account_gone(account_id):
+    """Set on disk when an account is removed, so another Zook still holding it in memory does not make it again."""
+    return _active['dir'] / 'accounts' / ('.' + account_id + '.removed')
 
 
 def agy_account_remove(app, account_id):
-    """After the account left the list: end its agy (kept open or signing in), then forget its keychain password and remove its
-    folder. '' when all of it is gone; otherwise why not, and the caller puts the account back."""
-    folder = _active['dir'] / 'accounts' / account_id
+    """After the account left the list: end its agy (kept open or signing in), then remove its folder and its keychain password.
+    '' when all of it is gone; otherwise why not, with everything as it was, and the caller puts the account back."""
+    folder = _active['dir'] / 'accounts' / account_id; aside = folder.with_name('.' + account_id + '.removing')
     with agy_account_lock(account_id):
+        gone = agy_account_gone(account_id); gone.touch(mode=0o600)
         guard = app.__dict__.get('live_lock')
         if guard:
             with guard:
                 for cli in [c for c in app.lives.values() if getattr(c, 'home', '') == str(folder)]: live_close(app, cli, wait=3)
-        _agy_stop_in(folder)
-        if not agy_keychain_forget(account_id): return '無法從鑰匙圈刪除這個帳號的密碼，帳號沒有移除。請確認鑰匙圈已解鎖後再試一次。'
-        try:
-            if os.path.lexists(str(folder)): shutil.rmtree(str(folder))
-        except OSError: return '無法刪除這個帳號的資料夾，帳號沒有移除，請稍後再試。'
+        problem = ''
+        if not _agy_stop_in(folder): problem = '無法結束這個帳號正在執行的 Antigravity，帳號沒有移除，請關掉它的終端機視窗後再試一次。'
+        else:
+            try:
+                if os.path.lexists(str(aside)): shutil.rmtree(str(aside))
+                if os.path.lexists(str(folder)): os.rename(str(folder), str(aside))
+            except OSError: problem = '無法刪除這個帳號的資料夾，帳號沒有移除，請稍後再試。'
+            if not problem and not agy_keychain_forget(account_id):
+                problem = '無法從鑰匙圈刪除這個帳號的密碼，帳號沒有移除。請確認鑰匙圈已解鎖後再試一次。'
+                try:
+                    if os.path.lexists(str(aside)): os.rename(str(aside), str(folder))  # its sign-in still opens
+                except OSError: pass
+        if problem:
+            try: gone.unlink()
+            except OSError: pass
+            return problem
+        shutil.rmtree(str(aside), ignore_errors=True)
     return ''

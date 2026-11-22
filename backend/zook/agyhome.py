@@ -29,7 +29,7 @@ def agy_account_home(account_id, home=None):
     one of those names is left alone; a link pointing anywhere else is put back. Also the account's own keychain (agykeychain.py).
     An account that was just removed is not made again."""
     with agy_account_lock(account_id):
-        if not find_account(account_id, 'antigravity'): raise RuntimeError('找不到這個帳號。')
+        if not find_account(account_id, 'antigravity') or agy_account_gone(account_id).exists(): raise RuntimeError('找不到這個帳號。')
         return _agy_account_home(account_id, home)
 
 
