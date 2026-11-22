@@ -341,14 +341,37 @@ def bot_usage(store):
 
 def signal_group(proc, sig):
     """Send a signal to a CLI and everything it started. False when nothing is left to signal. macOS refuses (EPERM) a group whose
-    leader has ended but is not yet collected; then the leader itself is signalled, if it was not collected yet."""
+    leader has ended but is not yet collected; then each process still in the group is signalled by itself, and the leader too
+    while it was not collected yet."""
     proc = getattr(getattr(proc, 'cli', None), 'proc', None) or proc  # a kept CLI's reply (live.py) stands for its process
     try: os.killpg(proc.pid, sig); return True
     except ProcessLookupError: return False
-    except OSError:
-        if proc.returncode is not None: return False  # collected: its number may belong to another program now
-        try: os.kill(proc.pid, sig); return True
-        except OSError: return False
+    except OSError: pass
+    sent = False
+    for pid in group_members(proc.pid) + ([proc.pid] if proc.returncode is None else []):  # a collected leader's number may be another program's now
+        try: os.kill(pid, sig); sent = True
+        except OSError: pass
+    return sent
+
+
+def group_members(pgid):
+    """The processes still in a process group, its leader left out. A group's number is not given to a new process while any
+    member is alive, so these are the CLI's own helpers."""
+    try: out = subprocess.run(['/bin/ps', '-A', '-o', 'pid=,pgid='], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError): return []
+    found = []
+    for line in out.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[1] == str(pgid) and fields[0].isdigit() and int(fields[0]) not in (pgid, os.getpid()): found.append(int(fields[0]))
+    return found
+
+
+def group_alive(proc):
+    """Whether the CLI or anything it started is still running."""
+    if proc.poll() is None: return True
+    try: os.killpg(proc.pid, 0); return True
+    except ProcessLookupError: return False
+    except OSError: return bool(group_members(proc.pid))
 
 
 def kill_group(proc): signal_group(proc, signal.SIGKILL)

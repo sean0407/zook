@@ -83,6 +83,26 @@ def read_group_file(path):
         return f.read()
 
 
+NAMED_CHECK_MAX = 5  # PDFs named in a checked reply that are copied for the checker
+
+
+def named_for_check(store, group, message, given=()):
+    """Lock held. PDFs a reply being checked names by a path, which are neither attached nor among the group's files: each goes
+    through the same checks as a path the user attaches (upload_from_path: the user's own folders, no hidden files, links or hard
+    links, nothing of Zook's), and is then copied in for the checker. Returns them as attachments."""
+    shared = {e.name for e in _plain_files(group_files_dir(store, group['id']))}
+    known = shared | {a.get(k) for m in group['messages'] for a in m.get('attachments') or [] for k in ('name', 'origName')} | {a.get('name') for a in given}
+    found = []
+    for path in named_paths((message or {}).get('content')):
+        name = path.rsplit('/', 1)[-1]
+        if len(found) >= NAMED_CHECK_MAX: break
+        if not name.lower().endswith('.pdf') or name in known or upload_name(name) in known: continue
+        try: meta = upload_from_path(store, path)
+        except (OSError, ValueError): continue  # refused, or not there: the checker says it could not read it
+        found.append(dict(meta, named=True)); known.add(name)
+    return found
+
+
 def group_copy_folder(store, bot_id):
     return store.dir / 'workspaces' / bot_id / 'attachments' / GROUP_FILES_FOLDER
 

@@ -479,26 +479,66 @@ try: AGY_QUIET = max(1.0, float(os.environ.get('ZOOK_AGY_QUIET') or 300))  # sec
 except ValueError: AGY_QUIET = 300.0
 
 
-def agy_read_paths(workspace, job):
-    """What agy may read although it may change nothing: the copies Zook placed in the Bot's attachments folder (files attached
-    to the message, the group's shared files, files the user named and Zook copied in). Only regular files there are named; a
-    link is never named, and the folder itself only when nothing in it is a link (a Bot could have left one pointing elsewhere)."""
-    folder = pathlib.Path(workspace) / 'attachments'
-    if folder.is_symlink() or not folder.is_dir(): return []
-    files, linked = [], False
-    for here, dirs, names in os.walk(str(folder)):  # os.walk does not follow links into other folders
-        for name in dirs + names:
-            path = os.path.join(here, name)
-            if os.path.islink(path): linked = True
-            elif name in names and os.path.isfile(path) and len(files) < AGY_READ_MAX: files.append(path)
-    wanted = {os.path.realpath(str(x)) for x in job.get('attachments') or []}
-    files.sort(key=lambda p: os.path.realpath(p) not in wanted)  # this reply's own files first, if the list is cut
+def agy_read_paths(store, bot_id, job, fresh=False):
+    """What a read-only agy turn may read: this turn's own copies in the Bot's attachments folder (the files of this message and
+    conversation, the group's files copied for this turn), one by one. Never the folder: another conversation's attachments stay
+    out of reach. A file is named only when every step from the Bot's workspace down is a real folder (no link, the workspace
+    itself included), it is a regular file with one name (no hard link to a file elsewhere), it resolves inside this Bot's own
+    attachments folder, and Zook's own tools would read it without asking (keys and sign-ins, by its name here and the name it was
+    uploaded with, are left out). With fresh, the attached copies are made again from the uploads first, so a copy an earlier turn
+    changed is never what gets read."""
+    home = store.dir / 'workspaces' / bot_id; box = os.path.join(os.path.realpath(str(store.dir / 'workspaces')), bot_id, 'attachments')
+    if os.path.realpath(str(home)) != os.path.dirname(box): return []  # the workspace itself is a link
+    with store.lock:
+        metas = [m for m in (upload_meta(store, x) for x in job.get('attachmentIds') or []) if m]
+        group_files = (group_copy_folder(store, bot_id), job.get('groupId')) if job.get('groupFiles') and job.get('groupId') else None
+    if fresh and metas:
+        try: place_attachments(store, bot_id, metas, fresh=True)
+        except OSError: return []
+    originals = {'%s-%s' % (m['id'][:8], m['name']): m.get('origName') or m['name'] for m in metas}
+    wanted = [str(x) for x in job.get('attachments') or []]
+    if group_files:
+        try: names = sorted(os.listdir(str(group_files[0])))
+        except OSError: names = []
+        wanted += [str(group_files[0] / n) for n in names]
+        with store.lock: originals.update({n: group_original(store, group_files[1], n) for n in names})
+    secret = runtime_module().secret_name
+    files = []
+    for path in dict.fromkeys(wanted):  # this turn's files first, then the cap
+        if len(files) >= AGY_READ_MAX: break
+        if agy_safe_copy(home, box, path) and not secret(path, originals.get(os.path.basename(path)) or None): files.append(path)
     out = []
-    for path in ([] if linked else [str(folder)]) + files:
-        if '(' in path or ')' in path: continue  # would end the rule early; the folder rule still covers it
-        for one in (path, os.path.realpath(path)):
-            if one not in out: out.append(one)
+    for path in files:
+        for one in dict.fromkeys((path, os.path.realpath(path))):
+            rule = agy_rule_path(one)
+            if rule and rule not in out: out.append(rule)
     return out
+
+
+def agy_safe_copy(home, box, path):
+    """A plain file of its own, reached from the Bot's workspace through real folders only, inside its attachments folder."""
+    rel = os.path.relpath(os.path.abspath(path), os.path.abspath(str(home)))
+    parts = rel.split(os.sep)
+    if parts[0] != 'attachments' or len(parts) < 2 or '..' in parts: return False
+    here = str(home)
+    for i, part in enumerate(parts):
+        here = os.path.join(here, part)
+        try: info = os.lstat(here)
+        except OSError: return False
+        if i < len(parts) - 1 and not stat.S_ISDIR(info.st_mode): return False  # a link on the way, even to another Bot's folder
+        if i == len(parts) - 1 and (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1): return False
+    return os.path.realpath(here).startswith(box + os.sep)
+
+
+def agy_rule_path(path):
+    """The path as a read rule. A bracket would end the rule early, so it stands as ? (any one letter). A rule with any wildcard
+    letter in it is used only when nothing else in that folder matches it; otherwise the file is left out."""
+    if not set(path) & set('()*?['): return path
+    pattern = path.replace('(', '?').replace(')', '?')
+    folder, name = os.path.split(pattern)
+    try: others = [n for n in os.listdir(folder) if fnmatch.fnmatchcase(n, name)]
+    except OSError: return ''
+    return pattern if others == [os.path.basename(path)] else ''
 
 
 def agy_quiet(kind, limit):

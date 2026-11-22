@@ -67,30 +67,106 @@ class Units(unittest.TestCase):
                 (chosen / name).rmdir()
             server.prepare_antigravity_folder(work, 'folder', chosen, 100)
 
-    def test_a_read_only_check_may_read_the_copies_zook_made_and_nothing_more(self):
+    def grants_store(self, d):
+        store = server.Store(Path(d) / 'data'); store.data['groups'] = [dict(id='g1', messages=[], fileInfo={'key.txt': {'origName': 'credentials.json'}})]
+        def upload(name, orig=None, data=b'%PDF'):
+            uid = os.urandom(16).hex(); folder = store.dir / 'uploads' / uid; folder.mkdir(parents=True)
+            (folder / 'file').write_bytes(data); meta = dict(id=uid, name=name, size=len(data), kind='file', **({'origName': orig} if orig else {}))
+            (folder / 'meta.json').write_text(json.dumps(meta)); return meta
+        return store, upload
+
+    def test_a_read_only_turn_may_read_only_its_own_copies(self):
         with tempfile.TemporaryDirectory() as d:
-            work = Path(d).resolve() / 'w'; group = work / 'attachments' / 'group-files'; group.mkdir(parents=True)
-            (group / '預算.pdf').write_bytes(b'%PDF'); (work / 'attachments' / 'ab12cd34-資料.txt').write_text('x'); (work / 'notes.txt').write_text('x')
-            reads = server.agy_read_paths(work, {'attachments': [str(work / 'attachments' / 'ab12cd34-資料.txt')]})
-            self.assertIn(str(work / 'attachments'), reads); self.assertIn(str(group / '預算.pdf'), reads)
-            self.assertEqual(reads.index(str(work / 'attachments' / 'ab12cd34-資料.txt')), 1)  # this reply's own file right after the folder
-            self.assertNotIn(str(work / 'notes.txt'), reads)
+            store, upload = self.grants_store(d)
+            mine, other, key, env = upload('報告.pdf'), upload('私聊.pdf'), upload('credentials.json'), upload('env', '.env')
+            placed = server.place_attachments(store, 'b1', [mine, key, env]); server.place_attachments(store, 'b1', [other])
+            group = server.group_copy_folder(store, 'b1'); group.mkdir(parents=True)
+            (group / '預算.pdf').write_bytes(b'%PDF'); (group / 'key.txt').write_text('k'); (group / '報告 (2).pdf').write_bytes(b'%PDF')
+            job = dict(attachments=[str(x) for x in placed], attachmentIds=[mine['id'], key['id'], env['id']], groupFiles=True, groupId='g1')
+            reads = server.agy_read_paths(store, 'b1', job)
+            box = store.dir / 'workspaces/b1/attachments'
+            self.assertNotIn(str(box), reads)  # never the folder: another conversation's copies stay out of reach
+            self.assertIn(str(placed[0]), reads); self.assertIn(str(group / '預算.pdf'), reads)
+            self.assertFalse([r for r in reads if '私聊' in r or 'credentials' in r or r.endswith('-env') or 'key.txt' in r])  # keys, by either name
+            self.assertIn(str(group / '報告 ?2?.pdf'), reads)  # a bracket would end the rule
+            (group / '報告 x2y.pdf').write_bytes(b'x')
+            self.assertFalse([r for r in server.agy_read_paths(store, 'b1', job) if '報告 ?' in r])  # the pattern would match another file
+            self.assertEqual(server.agy_read_paths(store, 'b1', dict(job, groupFiles=False))[:1], [str(placed[0])])  # without the group's files
             s = server.antigravity_settings(False, 'workspace', False, reads)
-            self.assertIn('read_file(%s)' % (work / 'attachments'), s['permissions']['allow'])
             self.assertFalse([r for r in s['permissions']['allow'] if not r.startswith(('read_file(', 'mcp(zook'))])  # reading only
             for rule in ('write_file(*)', 'command(*)', 'execute_url(*)'): self.assertIn(rule, s['permissions']['deny'])
-            self.assertEqual(s['toolPermission'], 'request-review')
-            args = server.antigravity_args('agy', '', 'standard', False, True, 'full', '/x', False, reads)
-            self.assertIn('read_file(%s)' % (group / '預算.pdf'), json.loads(args[args.index('--settings') + 1])['permissions']['allow'])
-            # A link a Bot left there is never named, and then the folder is not named as a whole either.
-            os.symlink('/etc', str(work / 'attachments' / 'etc')); os.symlink('/etc/hosts', str(group / 'hosts.pdf'))
-            reads = server.agy_read_paths(work, {})
-            self.assertNotIn(str(work / 'attachments'), reads); self.assertIn(str(group / '預算.pdf'), reads)
-            self.assertFalse([r for r in reads if 'etc' in r or 'hosts' in r])
-            (work / 'attachments' / 'etc').unlink(); (group / 'hosts.pdf').unlink(); (work / 'attachments').rename(work / 'real')
-            os.symlink(str(work / 'real'), str(work / 'attachments'))
-            self.assertEqual(server.agy_read_paths(work, {}), [])  # the folder itself replaced by a link
-            self.assertEqual(server.agy_read_paths(Path(d) / 'none', {}), [])
+
+    def test_read_grants_refuse_links_hard_links_and_another_bots_folder(self):
+        with tempfile.TemporaryDirectory() as d:
+            store, upload = self.grants_store(d)
+            mine = upload('a.pdf'); placed = server.place_attachments(store, 'b1', [mine])
+            job = dict(attachments=[str(placed[0])], attachmentIds=[mine['id']])
+            outside = Path(d) / 'secret.pdf'; outside.write_bytes(b'%PDF')
+            hard = placed[0].parent / 'hard.pdf'; os.link(str(outside), str(hard))
+            self.assertEqual(server.agy_read_paths(store, 'b1', dict(job, attachments=[str(hard)])), [])  # a second name of a file elsewhere
+            os.symlink(str(outside), str(placed[0].parent / 'link.pdf'))
+            self.assertEqual(server.agy_read_paths(store, 'b1', dict(job, attachments=[str(placed[0].parent / 'link.pdf')])), [])
+            # Bot b3's workspace is a link to b1's: nothing of b1 is named for b3, whatever path it is given.
+            os.symlink(str(store.dir / 'workspaces/b1'), str(store.dir / 'workspaces/b3'))
+            self.assertEqual(server.agy_read_paths(store, 'b3', dict(job, attachments=[str(store.dir / 'workspaces/b3/attachments' / placed[0].name)])), [])
+            # A folder on the way that is a link to another Bot's copies.
+            other = server.group_copy_folder(store, 'b2'); other.mkdir(parents=True); (other / 'x.pdf').write_bytes(b'%PDF')
+            os.symlink(str(other), str(server.group_copy_folder(store, 'b1')))
+            self.assertEqual(server.agy_read_paths(store, 'b1', dict(groupFiles=True, groupId='g1', attachments=[str(server.group_copy_folder(store, 'b1') / 'x.pdf')])), [])
+            self.assertEqual(server.agy_read_paths(store, 'b1', dict(attachments=[str(store.dir / 'workspaces/b1/notes.txt')])), [])  # outside attachments
+
+    def test_this_turns_files_come_before_the_cap_and_are_copied_again(self):
+        with tempfile.TemporaryDirectory() as d:
+            store, upload = self.grants_store(d)
+            group = server.group_copy_folder(store, 'b1'); group.mkdir(parents=True)
+            for n in range(server.AGY_READ_MAX + 20): (group / ('%03d.pdf' % n)).write_bytes(b'x')
+            mine = upload('z.pdf', data=b'original'); placed = server.place_attachments(store, 'b1', [mine])
+            job = dict(attachments=[str(placed[0])], attachmentIds=[mine['id']], groupFiles=True, groupId='g1')
+            reads = server.agy_read_paths(store, 'b1', job)
+            self.assertEqual(reads[0], str(placed[0])); self.assertEqual(len(reads), server.AGY_READ_MAX)
+            placed[0].write_bytes(b'changed by a writable turn')
+            server.place_attachments(store, 'b1', [mine]); self.assertEqual(placed[0].read_bytes(), b'changed by a writable turn')  # kept as before
+            server.agy_read_paths(store, 'b1', job, fresh=True); self.assertEqual(placed[0].read_bytes(), b'original')  # a read-only turn reads the upload
+
+    def test_a_check_gets_a_copy_of_a_pdf_the_reply_names(self):
+        base = Path(tempfile.mkdtemp(dir='/private/tmp'))
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                store, upload = self.grants_store(d)
+                (base / '企劃.pdf').write_bytes(b'%PDF-1'); (base / '.h').mkdir(); (base / '.h/a.pdf').write_bytes(b'%PDF')
+                os.symlink(str(base / '企劃.pdf'), str(base / 'link.pdf')); (base / 'note.txt').write_text('x')
+                server.group_files_dir(store, 'g1').mkdir(parents=True); (server.group_files_dir(store, 'g1') / 'shared.pdf').write_bytes(b'%PDF')
+                said = '已存到 %s/企劃.pdf，另見 %s/.h/a.pdf、%s/link.pdf、%s/note.txt、%s/shared.pdf' % ((base,) * 5)
+                with store.lock: found = server.named_for_check(store, store.data['groups'][0], dict(content=said))
+                self.assertEqual([(f['name'], f['named']) for f in found], [('企劃.pdf', True)])  # hidden, linked, not a PDF, or a group file: left out
+                self.assertEqual((store.dir / 'uploads' / found[0]['id'] / 'file').read_bytes(), b'%PDF-1')
+        finally: subprocess.run(['/bin/rm', '-rf', str(base)])
+
+    def test_a_member_the_host_gives_nothing_is_not_woken(self):
+        bots = [dict(id='a', name='客服小幫手'), dict(id='b', name='總務小幫手'), dict(id='c', name='人資')]
+        plan = '本次目標與產出：尾牙企劃\n- **客服小幫手**：本次沒有客服工作項目\n2. 總務小幫手：確認沒有遺漏的場地需求\n人資（Codex）：無'
+        self.assertEqual(server.split_idle(plan, bots), {'a', 'c'})
+        self.assertEqual(server.split_idle('客服小幫手：整理沒有回覆的客訴\n總務小幫手：無需額外工作。', bots), {'b'})
+        with tempfile.TemporaryDirectory() as d:
+            store, _ = self.grants_store(d); store.data['bots'] = bots; store.data['groups'][0].update(runId='r')
+            fake = types.SimpleNamespace(store=store)
+            steps = [dict(role='split_work', bots=['a', 'b']), dict(role='split_merge', bots=['c'])]
+            left = server.GroupRuns._skip_idle(fake, 'g1', 'r', dict(job=dict(content=plan)), steps)
+            self.assertEqual([s['bots'] for s in left], [['b'], ['c']]); self.assertIn('客服小幫手', store.data['groups'][0]['messages'][-1]['content'])
+            self.assertEqual(server.GroupRuns._skip_idle(fake, 'g1', 'r', dict(job=dict(content='客服小幫手：無\n總務小幫手：無')), steps)[0]['role'], 'split_merge')
+
+    def test_a_group_turn_whose_files_cannot_be_placed_safely_does_not_run(self):
+        with tempfile.TemporaryDirectory() as d:
+            store, _ = self.grants_store(d)
+            (store.dir / 'workspaces/b2').mkdir(parents=True); os.symlink(str(store.dir / 'workspaces/b2'), str(store.dir / 'workspaces/b1'))
+            fake = types.SimpleNamespace(store=store, run_job=mock.Mock(), processes={})
+            fake._group_stage_failed = lambda *a: server.GroupRuns._group_stage_failed(fake, *a)
+            for staged in (True, False):
+                job = dict(id='j%s' % staged, botId='b1', groupId='g1', messageId='m', status='running'); store.data['jobs'].append(job)
+                turn = dict(bot=dict(id='b1', name='x'), job=job, provider='antigravity', prompt='', model='', skipFiles=set(), writable=False, staged=staged)
+                server.GroupRuns._group_job(fake, 'g1', turn)
+                self.assertEqual(job['status'], 'failed'); self.assertIn('工作資料夾', job['error'])
+            fake.run_job.assert_not_called()
 
     def test_a_silent_antigravity_reply_is_stopped_sooner(self):
         self.assertEqual(server.agy_quiet('antigravity', 900), min(900, server.AGY_QUIET))
@@ -110,6 +186,23 @@ class Units(unittest.TestCase):
         finally:
             if proc.poll() is None: proc.kill(); proc.wait()
 
+    def test_a_refused_group_signal_still_reaches_the_helpers(self):
+        proc = subprocess.Popen(['/bin/sh', '-c', '/bin/sleep 30 & wait'], start_new_session=True)
+        try:
+            end = time.time() + 5
+            while not server.group_members(proc.pid) and time.time() < end: time.sleep(0.05)
+            helper = server.group_members(proc.pid)[0]
+            with mock.patch.object(server.os, 'killpg', side_effect=PermissionError(1, 'x')): self.assertTrue(server.signal_group(proc, signal.SIGKILL))
+            proc.wait(timeout=5); end = time.time() + 5
+            while time.time() < end:
+                try: os.kill(helper, 0)
+                except OSError: break
+                time.sleep(0.05)
+            else: self.fail('the helper was left running')
+            self.assertFalse(server.group_alive(proc))
+        finally:
+            if proc.poll() is None: proc.kill(); proc.wait()
+
     def test_one_agy_per_bot(self):
         def kept(key, kind='antigravity'):
             return server.LiveCli(key, ['/bin/sleep', '30'], tempfile.gettempdir(), dict(os.environ), 'm', 'live-%s-%s' % key, 't', kind)
@@ -124,6 +217,32 @@ class Units(unittest.TestCase):
             self.assertNotIn(chat.ident, app.live_ids)
         finally:
             for c in everyone: c.close(wait=3)
+
+
+    def test_a_stopped_agy_ends_before_the_next_one_starts(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = server.Store(Path(d) / 'data')
+            proc = subprocess.Popen(['/bin/sh', '-c', 'trap "" TERM; /bin/sleep 30 & wait'], start_new_session=True)  # slow to stop
+            store.data['jobs'] += [dict(id='old', botId='b1', status='cancelled', runKind='antigravity'), dict(id='new', botId='b1', status='running')]
+            app = types.SimpleNamespace(store=store, processes={'old': proc})
+            began = time.monotonic()
+            try:
+                server.live_drop_bot(app, 'b1', dict(id='new', groupId='g'))
+                self.assertFalse(server.group_alive(proc)); self.assertLess(time.monotonic() - began, 9)
+            finally:
+                if proc.poll() is None: proc.kill(); proc.wait()
+
+    def test_a_kept_agy_that_no_longer_fits_is_ended_before_its_replacement(self):
+        d = tempfile.gettempdir()
+        cli = server.LiveCli(('b1', 'c1'), ['/bin/sleep', '30'], d, dict(os.environ), 'old-mark', 'live-x', 't', 'antigravity')
+        app = types.SimpleNamespace(lives={cli.key: cli}, live_ids={cli.ident: cli}, live_lock=threading.Lock())
+        try:
+            args, env = ['agy', '--mode', 'plan'], {'A': '1'}
+            cli.mark, cli.session = server.live_mark(args, d, env, 'user', server.agy_config('antigravity', d)), 's1'
+            server.live_settle(app, dict(botId='b1', chatId='c1'), 'antigravity', args, d, env, 's1'); self.assertTrue(cli.alive())  # it fits: kept
+            server.live_settle(app, dict(botId='b1', chatId='c1'), 'antigravity', ['agy'], d, env, 's1')  # 先規劃 switched off
+            self.assertIsNotNone(cli.proc.poll()); self.assertEqual(app.lives, {})  # ended, not merely asked to end
+        finally: cli.close(wait=3)
 
 
 class Chat(unittest.TestCase):
@@ -184,9 +303,16 @@ class Chat(unittest.TestCase):
         args = json.loads((self.root / 'bin/run.json').read_text())['args']
         rules = json.loads(args[args.index('--settings') + 1])['permissions']
         folder = (self.root / 'data/workspaces' / self.bot['id'] / 'attachments').resolve()
-        self.assertIn('read_file(%s)' % folder, rules['allow'])
+        self.assertNotIn('read_file(%s)' % folder, rules['allow'])
         self.assertTrue([r for r in rules['allow'] if r.startswith('read_file(') and r.endswith('-報告.pdf)')])
         self.assertIn('write_file(*)', rules['deny']); self.assertIn('command(*)', rules['deny'])
+        key = self.upload('credentials.json', b'{}')
+        self.ask(plan=True, attachments=[key['id']])
+        args = json.loads((self.root / 'bin/run.json').read_text())['args']
+        self.assertFalse([r for r in json.loads(args[args.index('--settings') + 1])['permissions']['allow'] if 'credentials' in r])  # never past Zook's key check
+        self.req('PATCH', '/api/bots/' + self.bot['id'], {'permissionMode': 'bypass'}); self.ask(attachments=[doc['id']])
+        args = json.loads((self.root / 'bin/run.json').read_text())['args']
+        self.assertFalse([r for r in json.loads(args[args.index('--settings') + 1])['permissions']['allow'] if r.startswith('read_file(')])  # a turn that can write
 
     def test_a_reply_that_prints_nothing_is_stopped_and_explained(self):
         job = self.ask(content='HANG')

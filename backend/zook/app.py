@@ -168,7 +168,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
         if plan and (provider_kind(provider) not in PLAN_KINDS or not ability_on(store, provider, 'plan')): raise ValueError('這個模型不支援先規劃。')
         knowledge = [x for x in store.data['knowledge'] if not x.get('botId') or x.get('botId') == bot['id']][-10:]
         placed = place_attachments(store, bot['id'], attachments) if attachments else []
-        earlier = place_attachments(store, bot['id'], recent_attachments(store, messages[-12:], {a['id'] for a in attachments or []}))
+        earlier = place_attachments(store, bot['id'], (before := recent_attachments(store, messages[-12:], {a['id'] for a in attachments or []})))
         so_far = len(messages)
         def build():
             # Built again when the conversation is turned into a summary just before this reply.
@@ -191,7 +191,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
         chat['updatedAt'] = NOW()
         if not chat.get('title'): chat['title'] = chat_title(content)
         job = dict(id=ID(), botId=bot['id'], chatId=chat_id, messageId=msg['id'], status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[])
-        if placed or earlier: job['attachments'] = [str(x) for x in (earlier + placed)[-MAX_ATTACHMENTS:]]
+        if placed or earlier: job.update(attachments=[str(x) for x in (earlier + placed)[-MAX_ATTACHMENTS:]], attachmentIds=[a['id'] for a in before + (attachments or [])][-MAX_ATTACHMENTS:])
         if replaces: job.update(redoOf=replaces, askedId=asked['id'])
         job['effort'] = effort
         if use and bot.get('provider') == AUTO: job.update(autoChain=[[provider, model, '']], autoNamed=True)  # 換模型重答 stays on the model the user named, on its own sign-in
@@ -649,8 +649,8 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 live_drop_bot(self, bot['id'], job); prepare_antigravity_folder(workspace, scope, root, wait)  # one agy per Bot: they share its workspace
                 if scope != 'workspace': prompt += '\n你目前在 Bot 的工作資料夾，要處理的檔案在 %s。' % root
                 if not (native and scope == 'full'): prompt += '\n不要讀取工作資料夾以外的檔案，也不要使用你內建的記憶或知識資料夾；這類動作會被擋下。要記住事情就直接回覆，或使用 zook 工具。'
-                args = antigravity_args(binary, model, effort, native, planning, scope, root, web, agy_read_paths(workspace, job)) + (['--conversation', resume] if resume else [])
-                prompt = json.dumps({'event': 'user', 'message': {'content': prompt}}, ensure_ascii=False) + '\n'
+                args = antigravity_args(binary, model, effort, native, planning, scope, root, web, () if native else agy_read_paths(store, bot['id'], job, fresh=True)) + (['--conversation', resume] if resume else [])  # only a turn that cannot change them
+                prompt = json.dumps({'event': 'user', 'message': {'content': prompt}}, ensure_ascii=False) + '\n'; live_settle(self, job, kind, args, cli_cwd, env, resume)
             elif kind == 'cursor':
                 prepare_cursor_folder(workspace, adapter, selected, wait)
                 if scope != 'workspace': prompt += '\n你目前在 Bot 的工作資料夾，要處理的檔案在 %s，請用完整路徑。' % root
