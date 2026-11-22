@@ -180,7 +180,7 @@ LOGIN_TIMEOUT = 600
 
 
 # Extra accounts. Each CLI keeps a whole account in one folder, and reads an API key from its own environment variable.
-ACCOUNT_HOME = {'codex': 'CODEX_HOME', 'claude': 'CLAUDE_CONFIG_DIR', 'grok': 'GROK_HOME', 'gemini': 'GEMINI_CLI_HOME'}
+ACCOUNT_HOME = {'codex': 'CODEX_HOME', 'claude': 'CLAUDE_CONFIG_DIR', 'grok': 'GROK_HOME', 'gemini': 'GEMINI_CLI_HOME', 'antigravity': 'HOME'}  # agy: only HOME moves it (agyhome.py)
 ACCOUNT_KEYS = {'codex': ('CODEX_API_KEY', 'OPENAI_API_KEY'), 'claude': ('ANTHROPIC_API_KEY',), 'grok': ('XAI_API_KEY',), 'gemini': ('GEMINI_API_KEY',), 'cursor': ('CURSOR_API_KEY',)}
 ACCOUNT_ID = re.compile(r'[0-9a-f]{32}')
 KEYCHAIN_SERVICE = 'Zook account API key'
@@ -261,7 +261,7 @@ def provider_env(provider, account=None):
     env.update((P.spec(_active['data'], provider) or {}).get('run_env') or {})
     account = find_account(account, provider) if isinstance(account, str) else account
     if not account: return env
-    if provider in ACCOUNT_HOME: env[ACCOUNT_HOME[provider]] = str(account_dir(account['id']))
+    if provider in ACCOUNT_HOME: env[ACCOUNT_HOME[provider]] = str(agy_account_home(account['id']) if provider == 'antigravity' else account_dir(account['id']))
     if provider == 'gemini' and account.get('type') == 'key':  # its own folder, or Gemini keeps using the saved Google sign-in
         settings = account_dir(account['id']) / '.gemini' / 'settings.json'
         if not settings.exists():
@@ -305,14 +305,14 @@ def account_status(provider, account=None):
                 item['method'] = 'Grok 帳號'
                 item['email'] = str((_active['data'].get('accountInfo') or {}).get(info_key, {}).get('email') or '')
         elif s.get('kind') == 'antigravity':
-            hit = _agy_status.get(path)
+            cache = (path, account['id'] if account else ''); hit = _agy_status.get(cache)  # each account signs in on its own
             if not hit or time.time() - hit[0] > 30:
                 try:
                     p = subprocess.run([path, 'models'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, timeout=15)
                     text = ANSI.sub('', p.stdout.decode('utf-8', 'replace')).lower()
-                    state = 'not_logged_in' if 'authentication required' in text or 'not logged in' in text else ('logged_in' if p.returncode == 0 else 'unknown')
+                    state = 'not_logged_in' if 'authentication required' in text or 'not logged in' in text or 'please sign in' in text else ('logged_in' if p.returncode == 0 else 'unknown')
                 except subprocess.TimeoutExpired: state = 'unknown'
-                hit = _agy_status[path] = (time.time(), state)
+                hit = _agy_status[cache] = (time.time(), state)
             item['status'] = hit[1]
             if item['status'] == 'logged_in': item['method'] = 'Google 帳號'
         elif s.get('kind') == 'cursor':
@@ -497,9 +497,9 @@ def antigravity_error(error, stderr=''):
     return ''
 
 
-def antigravity_quota(path):
-    """Remaining limits from `agy -p /usage`, which uses no model quota itself."""
-    done = subprocess.run([path, '-p', '/usage', '--output-format', 'json'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20, cwd=tempfile.gettempdir())
+def antigravity_quota(path, env=None):
+    """Remaining limits from `agy -p /usage`, which uses no model quota itself. env: an extra account's (provider_env)."""
+    done = subprocess.run([path, '-p', '/usage', '--output-format', 'json'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20, cwd=tempfile.gettempdir(), env=env)
     data = json.loads(done.stdout.decode('utf-8', 'replace'))
     windows = []
     for group in ((data.get('command') or {}).get('data') or {}).get('groups') or []:

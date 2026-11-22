@@ -17,15 +17,15 @@ class Handler(BaseHTTPRequestHandler):
         with store.lock: store.data.setdefault('quota', {})[key] = live; store.save()
         return live
 
-    def antigravity_live_quota(self):
-        store, app = self.server.store, self.server
-        caches = app.__dict__.setdefault('codex_quota_caches', {}); hit = caches.get('antigravity')
+    def antigravity_live_quota(self, account=None):
+        store, app = self.server.store, self.server; key = 'antigravity' + ('@' + account['id'] if account else '')
+        caches = app.__dict__.setdefault('codex_quota_caches', {}); hit = caches.get(key)
         if hit and time.time() - hit[0] < 60: return hit[1]
-        try: live = antigravity_quota(find_cli('antigravity'))
-        except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError): live = None
-        caches['antigravity'] = (time.time(), live)  # a failed read is not retried on every page load either
+        try: live = antigravity_quota(find_cli('antigravity'), provider_env('antigravity', account) if account else None)
+        except (OSError, ValueError, TypeError, AttributeError, RuntimeError, subprocess.SubprocessError): live = None
+        caches[key] = (time.time(), live)  # a failed read is not retried on every page load either
         if not live: return None
-        with store.lock: store.data.setdefault('quota', {})['antigravity'] = live; store.save()
+        with store.lock: store.data.setdefault('quota', {})[key] = live; store.save()
         return live
 
     def quota(self):
@@ -46,8 +46,8 @@ class Handler(BaseHTTPRequestHandler):
                 billed = extra['type'] == 'key' or view.get('method') in ('Anthropic Console', 'API 金鑰')
                 with store.lock:
                     used = provider_usage(store, provider, extra['id']); saved = copy.deepcopy(store.data.get('quota', {}).get(provider + '@' + extra['id']))
-                if provider in ('codex', 'grok') and view['status'] == 'logged_in' and not billed: saved = (self.codex_live_quota(extra) if provider == 'codex' else grok_live_quota(self.server, extra)) or saved
-                profiles.append(dict(view, zookUsage=used, quota=saved if provider in ('codex', 'claude', 'grok') else None, apiBilling=billed, noQuotaApi=provider not in ('codex', 'claude', 'grok'), quotaUnread=provider == 'grok' and not saved, _account=extra))
+                if provider in ('codex', 'grok', 'antigravity') and view['status'] == 'logged_in' and not billed: saved = (self.codex_live_quota(extra) if provider == 'codex' else grok_live_quota(self.server, extra) if provider == 'grok' else self.antigravity_live_quota(extra)) or saved
+                profiles.append(dict(view, zookUsage=used, quota=saved if provider in ('codex', 'claude', 'grok', 'antigravity') else None, apiBilling=billed, noQuotaApi=provider not in ('codex', 'claude', 'grok', 'antigravity'), quotaUnread=provider == 'grok' and not saved, _account=extra))
             with store.lock: zook = provider_usage(store, provider)
             result.append(dict(id=provider, name=account['name'], vendor=(P.spec(store.data, provider) or {}).get('vendor', ''), zookUsage=zook,
                                status=account['status'], method=account['method'], noQuotaApi=provider not in ('codex', 'claude', 'antigravity', 'grok'), quotaUnread=provider == 'grok' and not snap,
@@ -103,7 +103,7 @@ class Handler(BaseHTTPRequestHandler):
                 record = (data.get('providerIssues') or {}).get(provider)
                 item.update(issue=(record or {}).get('issue', '') if item['status'] == 'logged_in' else '', needsCheck=provider_needs_check(s, item['status'], record))
                 item.update(ability_view(self.server.store, provider))
-                item.update(profiles=profiles, canAddLogin=bool(provider in ACCOUNT_HOME and login_methods(provider)), canAddKey=provider in ACCOUNT_KEYS)
+                item.update(profiles=profiles, canAddLogin=can_add_login(provider), canAddKey=provider in ACCOUNT_KEYS)
                 items.append(item)
             return self.respond(200, {'providers': items, 'catalog': P.catalog_view(data)})
         if len(parts) == 3 and parts[2] == 'custom' and self.command == 'POST':
@@ -127,7 +127,7 @@ class Handler(BaseHTTPRequestHandler):
             if action == 'profiles':
                 name, kind, key = body.get('name'), body.get('type'), body.get('key')
                 if not isinstance(name, str) or not name.strip() or len(name) > 60: raise ValueError('請輸入帳號名稱。')
-                if kind == 'login' and not (provider in ACCOUNT_HOME and login_methods(provider)): raise ValueError('這個模型不支援再登入一個帳號，請改用 API 金鑰。')
+                if kind == 'login' and not can_add_login(provider): raise ValueError('這個模型不支援再登入一個帳號，請改用 API 金鑰。')
                 if kind == 'key' and provider not in ACCOUNT_KEYS: raise ValueError('這個模型不支援 API 金鑰。')
                 if kind not in ('login', 'key'): raise ValueError('帳號類型無效。')
                 with store.lock:
@@ -140,6 +140,8 @@ class Handler(BaseHTTPRequestHandler):
             if action == 'profiles/delete':
                 if not account: raise ValueError('帳號無效。')
                 if flow and flow.state == 'running': flow.cancel()
+                with store.lock:
+                    if any(j['status'] == 'running' and (store.find('bots', j['botId']) or {}).get('account') == account['id'] for j in store.data['jobs']): raise RuntimeError('有 Bot 正在用這個帳號回覆，等它完成後再移除。')
                 logins.pop(login_key, None)
                 with store.lock:
                     store.data['accounts'] = [a for a in store.data['accounts'] if a['id'] != account['id']]
@@ -185,11 +187,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.note_provider_issue(provider, issue, unsure=bool(done.returncode and not issue))
                 return self.respond(200, {'issue': issue})
             if action == 'terminal-login':
-                path = find_cli(provider); s = P.spec(self.server.store.data, provider) or {}
-                if not path or not s.get('terminal_login'): raise ValueError('這個模型不能用終端機登入。')
-                folder = _active['dir'] / 'tools'; folder.mkdir(parents=True, exist_ok=True, mode=0o700)
-                script = folder / (provider + '-login.command')
-                script.write_text('#!/bin/sh\nexec %s\n' % ' '.join(shlex.quote(x) for x in [path] + list(s.get('terminal_args') or [])), encoding='utf-8'); script.chmod(0o700); _agy_status.clear()
+                script = terminal_login_script(provider, account)  # agyhome.py; an extra Antigravity account signs in in its own home
                 subprocess.run(['/usr/bin/open', str(script)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15, check=True)
                 return self.respond(200, {'ok': True})
             if action == 'install/cancel':

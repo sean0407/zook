@@ -168,9 +168,11 @@ def refresh_auto(app):
             try:
                 if find_cli('grok'): live[key] = grok_live_quota(app, account)
             except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError): pass
-        try:
-            if 'antigravity' in allowed and find_cli('antigravity'): live['antigravity'] = antigravity_quota(find_cli('antigravity'))
-        except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError): pass
+        with store.lock: agys = [dict(a) for a in auto_accounts(store, 'antigravity') if auto_account_on(store, a)]
+        for key, account in ([('antigravity', None)] if 'antigravity' in allowed else []) + [(auto_account_key(a), a) for a in agys]:
+            try:
+                if find_cli('antigravity'): live[key] = antigravity_quota(find_cli('antigravity'), provider_env('antigravity', account) if account else None)
+            except (OSError, ValueError, TypeError, AttributeError, RuntimeError, subprocess.SubprocessError): pass
         with store.lock:
             store.data.setdefault('quota', {}).update({k: v for k, v in live.items() if v}); store.save()
     threading.Thread(target=work, daemon=True).start()
@@ -420,7 +422,7 @@ def auth_fingerprint(key):
     else: files = [pathlib.Path(os.path.expanduser(p)) for p in AUTH_FILES.get(provider_kind(provider) or '', ())]
     out = []
     for f in files:
-        try: out.append([str(f), max([f.stat().st_mtime] + [c.stat().st_mtime for c in f.iterdir()] if f.is_dir() else [f.stat().st_mtime])])
+        try: out.append([str(f), max([f.stat().st_mtime] + [c.lstat().st_mtime for c in f.iterdir()] if f.is_dir() else [f.stat().st_mtime])])
         except OSError: out.append([str(f), 0])
     return out
 

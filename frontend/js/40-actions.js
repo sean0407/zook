@@ -35,7 +35,7 @@
           break;
         case 'terminal-login':
           closeModal();
-          await post('accounts/' + encodeURIComponent(id) + '/terminal-login');
+          await post('accounts/' + encodeURIComponent(id) + '/terminal-login', {account: el.dataset.account || ''});
           toast('已開啟終端機，請在那裡選擇 Google 登入，完成後回到 Zook');
           break;
         case 'detect-usage':
