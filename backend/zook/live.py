@@ -50,6 +50,7 @@ class LiveCli:
     """One CLI process that stays open and answers one message at a time."""
     def __init__(self, key, args, cwd, env, mark, ident, token, kind='claude'):
         self.key, self.mark, self.ident, self.token, self.kind = key, mark, ident, token, kind
+        self.home = env.get('HOME', '')  # an extra Antigravity account's folder: closed when that account is removed
         self.session, self.job_id, self.turn, self.used, self.turns, self.spoiled = '', None, None, time.monotonic(), 0, ''
         self.lock = threading.Lock(); self.err = bytearray(); self.cost = 0.0; self.reading = False
         self.writes = queue.Queue()  # one writer, so messages reach the CLI in the order they were sent

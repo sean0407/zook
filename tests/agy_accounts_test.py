@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """Extra Antigravity accounts: agy only moves its sign-in with HOME, so each account gets its own home folder with the user's
 everyday folders linked in. Zook's own checks keep using the real home folder."""
-import http.client, importlib.util, json, os, shutil, subprocess, sys, tempfile, time, unittest
+import http.client, importlib.util, json, os, pwd, shlex, shutil, signal, subprocess, sys, tempfile, threading, time, unittest
+from unittest import mock
 from pathlib import Path
 
 SERVER = Path(__file__).resolve().parents[1] / 'backend/server.py'
@@ -36,25 +37,45 @@ def fake_home(root):
     return home
 
 
-class Units(unittest.TestCase):
+class FakeHost:
+    """`security` on the user's login keychain, as agykeychain._agy_host runs it: (exit code, output); 44 means no such item."""
+    def __init__(self): self.items, self.calls, self.fail, self.ready = {}, [], '', True
+
+    def __call__(self, args, command=None):
+        self.calls.append((args, command)); words = shlex.split(command) if command else list(args)
+        if self.fail in ('all', words[0]): return 51, ''
+        assert words[-1] == pwd.getpwuid(os.getuid()).pw_dir + '/Library/Keychains/login.keychain-db', words  # always named
+        assert words[words.index('-s') + 1] == 'Zook Antigravity keychain'
+        who = words[words.index('-a') + 1]
+        if words[0] == 'add-generic-password': self.items[who] = words[words.index('-w') + 1]; return 0, ''
+        if words[0] == 'find-generic-password': return (0, self.items[who] + '\n') if who in self.items else (44, '')
+        if words[0] == 'delete-generic-password': return (0, '') if self.items.pop(who, None) else (44, '')
+        raise AssertionError(words)
+
+class Base(unittest.TestCase):
     def setUp(self):
         self.m = load(); self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name).resolve()
         self.home = fake_home(self.root); self.old_home = os.environ.get('HOME'); os.environ['HOME'] = str(self.home)
+        os.environ.pop('ZOOK_SECRETS_DIR', None); self.host = FakeHost(); self.m._agy_host = self.host  # the real path, never the user's own keychain
+        self.m.agy_host_ready = lambda: self.host.ready
         self.store = self.m.Store(self.root / 'data'); self.account = dict(id='a' * 32, provider='antigravity', name='工作', type='login')
         self.store.data['accounts'] = [self.account, dict(id='c' * 32, provider='codex', name='C', type='login')]
 
     def tearDown(self):
         os.environ['HOME'] = self.old_home; self.temp.cleanup()
 
+
+class Units(Base):
     def test_home_links_everyday_folders_and_nothing_sensitive(self):
         folder = self.m.agy_account_home(self.account['id'])
         self.assertEqual(folder, self.root / 'data/accounts' / self.account['id'])
         for name in LINKED: self.assertEqual(os.readlink(str(folder / name)), str(self.home / name))
         self.assertTrue((folder / 'Library').is_dir() and not (folder / 'Library').is_symlink())  # never the whole Library
-        self.assertEqual([p.name for p in (folder / 'Library').iterdir()], ['Mobile Documents'])
+        self.assertEqual(sorted(p.name for p in (folder / 'Library').iterdir()), ['Keychains', 'Mobile Documents'])
         self.assertEqual(os.readlink(str(folder / 'Library/Mobile Documents')), str(self.home / 'Library/Mobile Documents'))
         self.assertEqual(sorted(p.name for p in folder.iterdir()), sorted(LINKED + ['Library']))
-        for name in ('.ssh', '.config', '.aws', 'Library/Keychains'): self.assertFalse(os.path.lexists(str(folder / name)))
+        for name in ('.ssh', '.config', '.aws'): self.assertFalse(os.path.lexists(str(folder / name)))
+        self.assertFalse((folder / 'Library/Keychains').is_symlink())  # its own keychain folder, never the user's
         self.assertEqual((folder / 'Desktop/keep.txt').read_text(), 'mine')  # ~/Desktop still means the user's own
         # A link pointed elsewhere is put back, a whole-Library link is replaced, a real folder agy made is left alone; a missing one is skipped.
         (folder / 'Desktop').unlink(); os.symlink(str(self.home / '.ssh'), str(folder / 'Desktop'))
@@ -71,7 +92,7 @@ class Units(unittest.TestCase):
         shutil.rmtree(str(self.home / 'Library/Mobile Documents')); shutil.rmtree(str(folder / 'Library')); os.symlink(str(self.home / 'Library'), str(folder / 'Library'))
         self.m.agy_account_home(self.account['id'])
         self.assertFalse(os.path.lexists(str(folder / 'Pictures'))); self.assertFalse((folder / 'Library').is_symlink())
-        self.assertEqual(list((folder / 'Library').iterdir()), [])
+        self.assertEqual([p.name for p in (folder / 'Library').iterdir()], ['Keychains'])
         # Removing the account removes the links, never what they point to.
         shutil.rmtree(str(folder)); self.assertEqual((self.home / 'Desktop/keep.txt').read_text(), 'mine'); self.assertTrue((self.home / '.ssh/id_ed25519').exists())
 
@@ -125,6 +146,127 @@ class Units(unittest.TestCase):
         self.assertNotIn('HOME', self.m.terminal_login_script('antigravity').read_text())  # the default sign-in: as before
         with self.assertRaises(ValueError): self.m.terminal_login_script('antigravity', dict(self.account, type='key'))
 
+
+def security(home, *args):
+    """`security` as agy runs it (agy saves its sign-in through /usr/bin/security); a timeout means macOS showed a dialog."""
+    return subprocess.run(['/usr/bin/security'] + list(args), env=dict(os.environ, HOME=str(home)), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
+
+
+class Keychain(Base):
+    """Each extra account gets its own keychain, so agy's sign-in no longer makes macOS ask for a missing keychain."""
+    def user_keychains(self):
+        real = pwd.getpwuid(os.getuid()).pw_dir
+        return [security(real, *a).stdout for a in (['list-keychains', '-d', 'user'], ['default-keychain', '-d', 'user'])]
+
+    def kc(self, folder): return folder / 'Library/Keychains/zook-agy.keychain-db'
+
+    def test_own_keychain_made_unlocked_and_never_on_a_command_line(self):
+        before, calls, real_run = self.user_keychains(), [], subprocess.run
+        def run(args, *a, **k): calls.append((list(args), dict(k.get('env') or {}))); return real_run(args, *a, **k)
+        with mock.patch('subprocess.run', run): folder = self.m.agy_account_home(self.account['id'])
+        keychains = folder / 'Library/Keychains'; secret = self.host.items[self.account['id']]
+        self.assertEqual(len(secret), 64); self.assertTrue(self.kc(folder).is_file())
+        self.assertEqual(os.readlink(str(keychains / 'login.keychain-db')), 'zook-agy.keychain-db')
+        self.assertIn(str(self.kc(folder)), security(folder, 'default-keychain').stdout)
+        self.assertEqual(security(folder, 'show-keychain-info', str(self.kc(folder))).stderr.split()[-1], 'no-timeout')
+        self.assertEqual(security(folder, 'add-generic-password', '-U', '-s', 'antigravity', '-a', 'x', '-w', 'tok').returncode, 0)  # no dialog
+        for args, env in calls + [(list(a or []), {}) for a, _ in self.host.calls]:
+            self.assertFalse(any(secret in x for x in args + list(env.values())), args)  # stdin only
+        for path in folder.rglob('*'):
+            if path.is_file() and not path.is_symlink() and path.name != 'zook-agy.keychain-db': self.assertNotIn(secret, path.read_text(errors='ignore'))
+        self.assertFalse(any(secret in v for v in self.m.provider_env('antigravity', self.account).values()))  # never in agy's environment
+        self.assertEqual(self.user_keychains(), before)  # the user's search list and default keychain stay as they were
+        # Locked again (after a restart, say): the next run unlocks it with the same password, read again from the login keychain.
+        self.assertEqual(security(folder, 'lock-keychain', str(self.kc(folder))).returncode, 0)
+        self.m._agy_keychain_cache.clear(); self.m.provider_env('antigravity', self.account)
+        self.assertEqual(security(folder, 'find-generic-password', '-s', 'antigravity', '-a', 'x', '-w').stdout.strip(), 'tok')
+        self.assertEqual(self.host.items[self.account['id']], secret)
+
+    def test_a_password_that_cannot_be_read_now_changes_nothing(self):
+        folder = self.m.agy_account_home(self.account['id']); data = self.kc(folder).read_bytes(); secret = self.host.items[self.account['id']]
+        self.m._agy_keychain_cache.clear(); self.host.fail = 'all'  # the login keychain is locked, refused or timed out
+        with self.assertRaises(RuntimeError): self.m.provider_env('antigravity', self.account)  # agy is not started
+        cli = self.root / 'bin/agy'; cli.parent.mkdir(exist_ok=True); cli.write_text('#!/bin/sh\n'); cli.chmod(0o755)
+        self.m.find_cli = lambda provider: str(cli)  # a Mac without agy (CI) must reach the keychain check too
+        with self.assertRaises(RuntimeError): self.m.terminal_login_script('antigravity', self.account)
+        self.assertEqual(self.kc(folder).read_bytes(), data); self.assertEqual(self.host.items[self.account['id']], secret)
+        self.assertEqual(sorted(p.name for p in (folder / 'Library/Keychains').iterdir() if not p.name.startswith('.fl')), ['login.keychain-db', 'zook-agy.keychain-db'])
+        # Could not store a new one: nothing half made is left.
+        shutil.rmtree(str(folder / 'Library/Keychains')); self.host.items.clear(); self.host.fail = 'add-generic-password'
+        with self.assertRaises(RuntimeError): self.m.agy_account_home(self.account['id'])
+        self.assertFalse(os.path.lexists(str(self.kc(folder))))
+
+    def test_older_accounts_get_one_and_nothing_is_deleted(self):
+        folder = self.m.account_dir(self.account['id']); keychains = folder / 'Library/Keychains'; keychains.mkdir(parents=True)
+        (keychains / 'login.keychain-db').write_text('an earlier sign-in')  # left by the sign-in before this release
+        (folder / 'Library/Preferences').mkdir(); (folder / 'Library/Preferences/com.apple.security.plist').write_text('elsewhere')
+        self.m.agy_account_home(self.account['id'])
+        names = sorted(p.name for p in keychains.iterdir() if not p.name.startswith('.fl'))
+        self.assertEqual(names[:2], ['login.keychain-db', 'login.keychain-db.zook-old-' + names[1].rsplit('-', 1)[-1]])
+        self.assertEqual((keychains / names[1]).read_text(), 'an earlier sign-in')
+        self.assertEqual([p.read_text() for p in (folder / 'Library/Preferences').iterdir()], ['elsewhere'])  # kept beside, not in use
+        self.assertIn(str(self.kc(folder)), security(folder, 'default-keychain').stdout)
+        # Its password surely gone (not merely unreadable): a new keychain, the old one kept beside.
+        first = self.host.items.pop(self.account['id']); self.m._agy_keychain_cache.clear()
+        self.m.agy_account_home(self.account['id']); self.assertNotEqual(self.host.items[self.account['id']], first)
+        self.assertEqual(len([p for p in keychains.iterdir() if p.name.startswith('zook-agy.keychain-db.zook-old-')]), 1)
+        self.assertEqual(security(folder, 'add-generic-password', '-U', '-s', 'antigravity', '-a', 'x', '-w', 'tok').returncode, 0)
+
+    def test_two_starts_at_once_agree_on_one_password(self):
+        errors = []
+        def start():
+            try: self.m.agy_account_home(self.account['id'])
+            except Exception as e: errors.append(e)
+        threads = [threading.Thread(target=start) for _ in range(4)]
+        for t in threads: t.start()
+        for t in threads: t.join()
+        self.assertEqual(errors, [])
+        folder = self.root / 'data/accounts' / self.account['id']
+        self.assertEqual(security(folder, 'lock-keychain', str(self.kc(folder))).returncode, 0)
+        self.assertEqual(security(folder, 'unlock-keychain', '-p', self.host.items[self.account['id']], str(self.kc(folder))).returncode, 0)
+
+    def test_quotes_in_the_data_folder(self):
+        self.m.Store(self.root / "O'Brien x" / 'data'); self.store = None
+        self.m._active['data']['accounts'] = [self.account]
+        folder = self.m.agy_account_home(self.account['id'])
+        self.assertIn("O'Brien x", str(folder)); self.assertIn(str(self.kc(folder)), security(folder, 'default-keychain').stdout)
+
+    def test_no_such_item_counts_only_from_a_login_keychain_that_is_there(self):
+        folder = self.m.agy_account_home(self.account['id']); data = self.kc(folder).read_bytes()
+        self.host.items.clear(); self.host.ready = False; self.m._agy_keychain_cache.clear()  # "no such item" from a missing keychain file
+        with self.assertRaises(RuntimeError): self.m.agy_account_home(self.account['id'])
+        self.assertEqual(self.kc(folder).read_bytes(), data); self.assertEqual(self.host.items, {})
+        self.assertFalse([p for p in (folder / 'Library/Keychains').iterdir() if 'zook-old' in p.name])
+
+    def removed(self):
+        self.store.data['accounts'] = [a for a in self.store.data['accounts'] if a['id'] != self.account['id']]
+
+    def test_removal_ends_its_agy_and_forgets_everything_or_says_why(self):
+        folder = self.m.agy_account_home(self.account['id']); (folder / '.zook-login').mkdir(); secret = self.host.items[self.account['id']]
+        signing = subprocess.Popen(['/bin/sh', '-c', 'trap "" TERM; /bin/sleep 60'], cwd=str(folder / '.zook-login'))  # a Terminal sign-in that ignores SIGTERM
+        app = type('App', (), {})(); self.removed()
+        self.host.fail = 'delete-generic-password'
+        self.assertIn('鑰匙圈', self.m.agy_account_remove(app, self.account['id']))
+        self.assertEqual(signing.wait(timeout=1), -signal.SIGKILL)  # already gone when removal went on
+        self.assertTrue(self.kc(folder).is_file()); self.assertEqual(self.host.items[self.account['id']], secret)  # put back: still opens
+        self.host.fail = ''
+        with mock.patch('os.rename', side_effect=OSError('busy')):  # the folder cannot go: the password stays
+            self.assertIn('資料夾', self.m.agy_account_remove(app, self.account['id']))
+        self.assertEqual(self.host.items[self.account['id']], secret); self.assertTrue(self.kc(folder).is_file())
+        def slow(*a, **k): raise subprocess.TimeoutExpired('lsof', 30)
+        with mock.patch('subprocess.run', slow): self.assertIn('Antigravity', self.m.agy_account_remove(app, self.account['id']))
+        self.assertEqual(self.host.items[self.account['id']], secret); self.assertTrue(folder.exists())
+        self.assertEqual(self.m.agy_account_remove(app, self.account['id']), '')
+        self.assertFalse(folder.exists()); self.assertNotIn(self.account['id'], self.host.items)
+        with self.assertRaises(RuntimeError): self.m.agy_account_home(self.account['id'])  # a late quota check does not bring it back
+        self.assertFalse(folder.exists()); self.assertNotIn(self.account['id'], self.host.items)
+
+    def test_another_zook_still_holding_the_account_does_not_make_it_again(self):
+        folder = self.m.agy_account_home(self.account['id'])
+        self.assertEqual(self.m.agy_account_remove(type('App', (), {})(), self.account['id']), '')  # removed by the other Zook
+        self.assertIsNotNone(self.m.find_account(self.account['id']))  # still in this one's memory
+        with self.assertRaises(RuntimeError): self.m.agy_account_home(self.account['id'])
+        self.assertFalse(folder.exists()); self.assertNotIn(self.account['id'], self.host.items)
 
 class Server(unittest.TestCase):
     def setUp(self):
@@ -183,8 +325,10 @@ class Server(unittest.TestCase):
         self.ask(bot['id']); self.assertEqual(json.loads((self.root / 'bin/run.json').read_text())['home'], str(self.home))
         # Removing the account removes its folder and links, never the user's files.
         self.assertTrue(os.path.islink(str(folder / 'Desktop')))
+        kept = self.root / 'secrets' / ('agy-keychain-' + work['id']); self.assertTrue(kept.exists())
         self.assertEqual(self.req('POST', '/api/accounts/antigravity/profiles/delete', {'account': work['id']})[0], 200)
         self.assertFalse(folder.exists()); self.assertEqual((self.home / 'Desktop/keep.txt').read_text(), 'mine')
+        self.assertFalse(kept.exists())  # its keychain password goes with it
 
 
 if __name__ == '__main__': unittest.main()

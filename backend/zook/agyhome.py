@@ -26,7 +26,14 @@ AGY_NEVER = ('.ssh', '.config', '.aws', '.gnupg', '.docker', '.kube', 'Library/K
 
 def agy_account_home(account_id, home=None):
     """The folder agy uses as home for one extra account, with the user's everyday folders linked in. A real folder agy made at
-    one of those names is left alone; a link pointing anywhere else is put back."""
+    one of those names is left alone; a link pointing anywhere else is put back. Also the account's own keychain (agykeychain.py).
+    An account that was just removed is not made again."""
+    with agy_account_lock(account_id):
+        if not find_account(account_id, 'antigravity') or agy_account_gone(account_id).exists(): raise RuntimeError('找不到這個帳號。')
+        return _agy_account_home(account_id, home)
+
+
+def _agy_account_home(account_id, home):
     folder = account_dir(account_id); home = pathlib.Path(home or pathlib.Path.home())
     if folder.is_symlink() or folder.parent.is_symlink(): raise RuntimeError('帳號資料夾不正確，請移除這個帳號後重新新增。')
     library = folder / 'Library'
@@ -39,6 +46,7 @@ def agy_account_home(account_id, home=None):
             link.unlink()
         elif os.path.lexists(str(link)): continue
         if target: os.symlink(str(target), str(link))
+    agy_keychain(account_id, folder)
     return folder
 
 
