@@ -53,6 +53,7 @@ def add_group_file(store, group, name, source, size, by):
     """Move an uploaded temporary file into the group's files. The name it was uploaded with is kept (origName): a key file stays known."""
     original = upload_original(name)
     if size > MAX_UPLOAD: raise ValueError('單一檔案不能超過 20 MB。')
+    if scratch_name(_short_name(name)): raise ValueError('這個檔名會被當成暫存檔或鎖檔（例如 .tmp、~$ 開頭），放進群組後看不到。請改檔名再上傳。')  # it would be stored but never listed
     with _group_files_lock:
         if group_files_size(store, group['id']) + size > GROUP_FILES_TOTAL: raise ValueError('這個群組的檔案已達 200 MB 上限，請先刪除一些。')
         folder = group_files_dir(store, group['id']); folder.mkdir(parents=True, exist_ok=True, mode=0o700)

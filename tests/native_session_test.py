@@ -20,7 +20,8 @@ class NativeSessions(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name)
         (self.root / 'assets').mkdir(); (self.root / 'assets/index.html').write_text('x'); (self.root / 'bin').mkdir()
         cli = self.root / 'bin/codex'; cli.write_text(CODEX); cli.chmod(0o755)
-        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_CLI_DIRS=str(self.root / 'bin'), ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', ZOOK_SCHEDULE_TICK='3600', ZOOK_SHELL_ENV='0')
+        skill = self.root / 'home/.codex/skills/poster'; skill.mkdir(parents=True); (skill / 'SKILL.md').write_text('---\nname: poster-art\ndescription: posters\n---\nx\n')
+        env = dict(os.environ, HOME=str(self.root / 'home'), PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_CLI_DIRS=str(self.root / 'bin'), ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', ZOOK_SCHEDULE_TICK='3600', ZOOK_SHELL_ENV='0')
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
         self.bot = self.req('POST', '/api/bots', {'name': 'N', 'provider': 'codex'})[1]
@@ -52,6 +53,13 @@ class NativeSessions(unittest.TestCase):
         self.assertIn('第二句話', run['prompt']); self.assertNotIn('對話紀錄', run['prompt']); self.assertNotIn('第一句話', run['prompt'])
         self.req('POST', '/api/bots/%s/chats' % self.bot['id'], {})
         self.say('新對話'); self.assertNotIn('resume', self.last()['args'])
+
+    def test_a_continued_conversation_still_hears_how_to_pick_a_skill(self):
+        """#28: a chat started before the rule changed is continued without the Skill list, so the rule is sent again."""
+        self.say('做週報'); first = self.last()['prompt']
+        self.assertIn('poster-art', first); self.assertIn('只是輸出格式相同不算', first)
+        self.say('改成 PDF'); run = self.last(); self.assertIn('resume', run['args'])
+        self.assertNotIn('poster-art', run['prompt']); self.assertIn('只是輸出格式相同不算', run['prompt']); self.assertTrue(run['prompt'].rstrip().endswith('改成 PDF'))
 
     def test_a_lost_conversation_falls_back_to_what_zook_saved(self):
         self.say('記得藍鯨'); (self.root / 'bin/lost').write_text('x')

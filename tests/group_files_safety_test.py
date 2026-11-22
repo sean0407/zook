@@ -51,6 +51,17 @@ class GroupFileSafety(unittest.TestCase):
         (self.shared / '~$keep.txt').write_text('lock')  # one already there from before is not listed either
         self.assertEqual([e.name for e in server._plain_files(self.shared)], ['keep.txt', '提案.pptx'])
 
+    def test_an_upload_that_would_be_hidden_is_refused(self):
+        """An uploaded capture.tmp was stored, listed nowhere, and could not be downloaded or deleted."""
+        group = dict(id='g1')
+        for name in ('capture.tmp', '~$提案.pptx', 'Thumbs.db', 'page.crdownload'):
+            temp = self.root / 'upload'; temp.write_bytes(b'data')
+            with self.assertRaises(ValueError) as caught: server.add_group_file(self.store, group, name, temp, 4, '你')
+            self.assertIn('改檔名', str(caught.exception)); self.assertTrue(temp.exists())
+        self.assertEqual(sorted(p.name for p in self.shared.iterdir()), ['keep.txt'])
+        temp = self.root / 'upload'; self.assertEqual(server.add_group_file(self.store, group, 'capture.txt', temp, 4, '你'), 'capture.txt')
+        self.assertEqual([f['name'] for f in server.list_group_files(self.store, group)], ['capture.txt', 'keep.txt'])
+
     def test_hidden_answers_are_not_copied_to_later_members(self):
         (self.shared / 'other.txt').write_text('answer')
         self.assertEqual(list(server.sync_group_files_in(self.store, 'g1', 'b1', {'other.txt'})), ['keep.txt'])

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Every Bot is told how to hand over files a person can open as they are (Excel showing its numbers in previews too)."""
-import importlib.util, os, re, subprocess, sys, tempfile, unittest, zipfile
+import importlib.util, os, re, subprocess, sys, tempfile, time, unittest, zipfile
 from pathlib import Path
 
 SERVER = Path(__file__).resolve().parents[1] / 'backend/server.py'
@@ -30,6 +30,7 @@ class FileDelivery(unittest.TestCase):
         self.assertIn('每一頁', text); self.assertIn('對比', text); self.assertIn('16:9', text)  # #27
         self.assertIn('mktemp -d', text); self.assertIn('不要放在交付位置或群組檔案裡', text); self.assertIn('群組主持人與成員', text)  # #22
         self.assertIn('Skill 的內部規則', text)  # #28
+        self.assertIn('讀不到、失敗時', text); self.assertIn('沒轉出的頁', text)  # a Bot limited to one folder cannot read the helper in the app
 
     def test_group_and_task_prompts_carry_it(self):
         """Group hosts and members and task-engine members all get the shared rules, plus the user's named location."""
@@ -60,10 +61,77 @@ class PagePictures(unittest.TestCase):
                 with zipfile.ZipFile(path) as z: seen.append(re.findall(r'id="(\d+)"', z.read('ppt/presentation.xml').decode())); self.assertEqual(z.read('ppt/slides/slide1.xml'), b'one')
                 made = os.path.join(folder, os.path.basename(path) + '.png'); open(made, 'wb').close(); return made
             real, pics.quicklook = pics.quicklook, fake
-            try: pages = pics.pptx_pages(str(deck), str(out))
+            try: pages, missing = pics.pptx_pages(str(deck), str(out))
             finally: pics.quicklook = real
-            self.assertEqual(seen, [['256'], ['257']]); self.assertEqual(sorted(os.listdir(out)), ['d-01.png', 'd-02.png'])
+            self.assertEqual(missing, []); self.assertEqual(seen, [['256'], ['257']]); self.assertEqual(sorted(os.listdir(out)), ['d-01.png', 'd-02.png'])
             self.assertEqual([pics.ratio(w, h) for _, w, h in pages], ['16:9', '16:9']); self.assertEqual(sorted(os.listdir(root)), ['d.pptx', 'pics'])
+
+    def deck(self, root, prefix='p:', declare=True, slides=('256', '257')):
+        deck = Path(root) / 'd.pptx'; ns = 'xmlns%s="http://schemas.openxmlformats.org/presentationml/2006/main"' % ((':' + prefix[:-1]) if prefix else '')
+        items = ''.join('<%ssldId id="%s" r:id="rId%s"/>' % (prefix, s, s) for s in slides)
+        with zipfile.ZipFile(deck, 'w') as z:
+            z.writestr('ppt/presentation.xml', '<%spresentation %s xmlns:r="r"><%ssldIdLst>%s</%ssldIdLst><%ssldSz cx="12192000" cy="6858000"/></%spresentation>'
+                       % (prefix, ns if declare else '', prefix, items, prefix, prefix, prefix))
+        return deck
+
+    def run_deck(self, deck, out, fail=()):
+        seen = []
+        def fake(path, folder, width=1600):
+            with zipfile.ZipFile(path) as z: seen.append(re.findall(r'id="(\d+)"', z.read('ppt/presentation.xml').decode()))
+            if len(seen) in fail: return None
+            made = os.path.join(folder, os.path.basename(path) + '.png'); open(made, 'wb').close(); return made
+        real, pics.quicklook = pics.quicklook, fake
+        try: return pics.pptx_pages(str(deck), str(out)), seen
+        finally: pics.quicklook = real
+
+    def test_slides_are_found_by_namespace_not_by_prefix(self):
+        for prefix in ('ps:', ''):
+            with tempfile.TemporaryDirectory() as root:
+                out = Path(root) / 'pics'; out.mkdir()
+                (pages, missing), seen = self.run_deck(self.deck(root, prefix), out)
+                self.assertEqual((len(pages), missing, seen), (2, [], [['256'], ['257']]), prefix)
+                self.assertEqual([pics.ratio(w, h) for _, w, h in pages], ['16:9', '16:9'])
+
+    def test_missing_slides_are_named_and_fail(self):
+        with tempfile.TemporaryDirectory() as root:
+            out = Path(root) / 'pics'; out.mkdir(); deck = self.deck(root, slides=('256', '257', '258'))
+            (pages, missing), _ = self.run_deck(deck, out, fail=(2,))
+            self.assertEqual((len(pages), missing), (2, [2]))
+            real = pics.pptx_pages; pics.pptx_pages = lambda path, folder: (pages, missing)
+            try:
+                with self.assertRaises(SystemExit) as caught: pics.main(['pagepics.py', str(deck), str(out)])
+            finally: pics.pptx_pages = real
+            self.assertIn('第 2 頁', str(caught.exception.code)); self.assertNotIn('第 1', str(caught.exception.code))
+
+    def test_stopping_it_leaves_no_copies(self):
+        """Zook stops a job with SIGTERM: the one-slide copies, kept inside the output (scratch) folder, are removed."""
+        with tempfile.TemporaryDirectory() as root:
+            out = Path(root) / 'pics'; ready = Path(root) / 'ready'; deck = self.deck(root)
+            driver = ('import importlib.util, sys, time\n'
+                      'spec = importlib.util.spec_from_file_location("p", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n'
+                      'def slow(path, folder, width=1600):\n    open(sys.argv[2], "w").write(folder); time.sleep(60)\n'
+                      'm.quicklook = slow; m.main(["pagepics.py", sys.argv[3], sys.argv[4]])\n')
+            proc = subprocess.Popen(['/usr/bin/python3', '-c', driver, str(PAGEPICS), str(ready), str(deck), str(out)], stderr=subprocess.PIPE)
+            end = time.time() + 30
+            while not ready.exists() and time.time() < end: time.sleep(0.05)
+            folder = ready.read_text(); self.assertEqual(Path(folder).parent, out); self.assertTrue(os.listdir(folder))
+            proc.terminate(); proc.wait(timeout=10); proc.stderr.close()
+            self.assertNotEqual(proc.returncode, 0); self.assertEqual(os.listdir(out), [])
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'macOS only')
+    def test_a_picture_that_cannot_be_written_fails(self):
+        with tempfile.TemporaryDirectory() as root:
+            pdf = Path(root) / 'r.pdf'; out = Path(root) / 'pics'; out.mkdir(); self.pdf(pdf); out.chmod(0o555)
+            try: result = subprocess.run(['/usr/bin/python3', str(PAGEPICS), str(pdf), str(out)], capture_output=True, text=True, timeout=120)
+            finally: out.chmod(0o755)
+            self.assertEqual(result.returncode, 1); self.assertIn('第 1、2 頁', result.stderr); self.assertEqual(os.listdir(out), [])
+
+    def pdf(self, pdf):
+        objs = ['<</Type/Catalog/Pages 2 0 R>>', '<</Type/Pages/Kids[3 0 R 4 0 R]/Count 2>>', '<</Type/Page/Parent 2 0 R/MediaBox[0 0 960 540]>>', '<</Type/Page/Parent 2 0 R/MediaBox[0 0 960 540]>>']
+        body, offsets = b'%PDF-1.4\n', []
+        for i, o in enumerate(objs, 1): offsets.append(len(body)); body += ('%d 0 obj\n%s\nendobj\n' % (i, o)).encode()
+        xref = len(body); body += ('xref\n0 %d\n0000000000 65535 f \n' % (len(objs) + 1)).encode() + b''.join(b'%010d 00000 n \n' % x for x in offsets)
+        pdf.write_bytes(body + ('trailer\n<</Size %d/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n' % (len(objs) + 1, xref)).encode())
 
     @unittest.skipUnless(sys.platform == 'darwin', 'macOS only')
     def test_every_pdf_page(self):
