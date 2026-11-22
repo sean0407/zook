@@ -73,7 +73,7 @@ def claude_gate_settings(wait):
 
 
 # The whole Mac only after the hook was seen running in this Claude setup (its settings folder): the hook leaves a mark (ZOOK_GATE_MARK)
-# with a random word only this CLI was given, when Claude starts and before each tool. Until then, and again whenever Claude used a tool without leaving it, a Claude Bot works in
+# with a random word only this CLI was given (word:start when Claude starts, word:tool before each tool; only the latter counts). Until then, and again whenever Claude used a tool without leaving it, a Claude Bot works in
 # its workspace. A policy that turns hooks off for the first time in the very reply that starts cannot be seen in advance.
 def claude_gate_key(env):
     return str((env or {}).get('CLAUDE_CONFIG_DIR') or pathlib.Path.home() / '.claude')
@@ -115,7 +115,7 @@ def claude_gate_after(store, env, gate, used_tools):
         with open(gate[0], 'rb') as f: f.seek(gate[2]); new = f.read(1 << 20)
     except OSError: new = b''
     gate[2] += len(new)
-    ran = gate[1].encode() in new.split(b'\n')
+    ran = (gate[1] + ':tool').encode() in new.split(b'\n')  # a tool was checked; the start of Claude alone proves nothing
     with store.lock:
         seen = store.data.setdefault('claudeGate', {}); key = claude_gate_key(env)
         if ran: seen[key] = True

@@ -276,6 +276,11 @@ def upload_name(name):
     return name[:120] or 'file'
 
 
+def upload_original(name):
+    """The name a file was uploaded with, as it was (a leading dot too), for knowing a key file by it: never used as a path."""
+    return re.sub(r'[\x00-\x1f]+', '', str(name or '').replace('\\', '/').split('/')[-1]).strip()[:200]
+
+
 def upload_meta(store, upload_id):
     if not isinstance(upload_id, str) or not re.fullmatch(r'[0-9a-f]{32}', upload_id): return None
     try: return json.loads((store.dir / 'uploads' / upload_id / 'meta.json').read_text(encoding='utf-8'))
@@ -328,7 +333,7 @@ def upload_from_path(store, path):
                 out.write(chunk)
         if not copied: raise ValueError('檔案是空的。')
         name = upload_name(parts[-1])
-        meta = dict(id=upload_id, name=name, size=copied, kind='image' if pathlib.Path(name).suffix.lower() in IMAGE_TYPES else 'file', createdAt=NOW())
+        meta = dict(id=upload_id, name=name, origName=upload_original(parts[-1]), size=copied, kind='image' if pathlib.Path(name).suffix.lower() in IMAGE_TYPES else 'file', createdAt=NOW())
         (folder / 'meta.json').write_text(json.dumps(meta, ensure_ascii=False), encoding='utf-8')
         folder = None
         return meta
@@ -343,7 +348,7 @@ def attachments_for(store, ids):
     if not isinstance(ids, list) or len(ids) > MAX_ATTACHMENTS: raise ValueError('每則訊息最多 %d 個檔案。' % MAX_ATTACHMENTS)
     metas = [upload_meta(store, x) for x in ids]
     if not all(metas): raise ValueError('找不到附加的檔案，請重新附加。')
-    return [dict(id=m['id'], name=m['name'], size=m['size'], kind=m['kind']) for m in metas]
+    return [dict(id=m['id'], name=m['name'], size=m['size'], kind=m['kind'], **({'origName': m['origName']} if isinstance(m.get('origName'), str) else {})) for m in metas]
 
 
 def place_attachments(store, bot_id, attachments):
@@ -355,7 +360,21 @@ def place_attachments(store, bot_id, attachments):
             name = '%s-%s' % (a['id'][:8], a['name'])
             with open(store.dir / 'uploads' / a['id'] / 'file', 'rb') as source: write_into_folder(fd, name, source, keep=True)
             paths.append(folder / name)
+    remember_uploaded_names(folder.parent, {'%s-%s' % (a['id'][:8], a['name']): a.get('origName') or a['name'] for a in attachments})
     return paths
+
+
+def remember_uploaded_names(folder, names):
+    """Keep, next to the attachments folder, the name each was uploaded with (zook_gate.secret_name reads it): .env stays known as .env."""
+    index = pathlib.Path(folder) / '.zook-uploads.json'
+    try: kept = json.loads(index.read_text(encoding='utf-8')) if index.is_file() and not index.is_symlink() else {}
+    except (OSError, ValueError): kept = {}
+    kept = dict(kept if isinstance(kept, dict) else {}, **names)
+    try:
+        if index.is_symlink(): index.unlink()
+        fd = os.open(str(index), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        with os.fdopen(fd, 'w', encoding='utf-8') as f: json.dump(dict(list(kept.items())[-500:]), f, ensure_ascii=False)
+    except OSError: pass
 
 
 @contextlib.contextmanager

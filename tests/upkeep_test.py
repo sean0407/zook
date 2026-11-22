@@ -46,7 +46,12 @@ class UpkeepTest(unittest.TestCase):
         end = time.time() + 15
         while time.time() < end:
             job = self.req('GET', '/api/jobs/' + out['jobId'])[1]
-            if job['status'] != 'running': return job
+            if job['status'] != 'running':  # a backup's note is written a moment after the reply: wait until the job stops changing
+                for _ in range(30):
+                    time.sleep(0.1); again = self.req('GET', '/api/jobs/' + out['jobId'])[1]
+                    if again == job: return job
+                    job = again
+                return job
             time.sleep(0.1)
         self.fail('no reply')
 

@@ -117,6 +117,17 @@ def _secret_path(path):
 ATTACHED = re.compile(r'^[0-9A-Za-z]{8}-(.+)$')  # an attachment is kept as 「8 characters of its id」-「the name it was uploaded with」
 
 
+def _uploaded_names(path):
+    """The list Zook keeps next to a Bot's attachments folder (.zook-uploads.json): each attachment's name as the user uploaded it."""
+    parts = os.path.normpath(path).split(os.sep)
+    if 'attachments' not in parts: return {}
+    base = os.sep.join(parts[:len(parts) - 1 - parts[::-1].index('attachments')]) or os.sep
+    try:
+        with open(os.path.join(base, '.zook-uploads.json'), encoding='utf-8') as f: found = json.load(f)
+    except (OSError, ValueError): return {}
+    return {str(k): str(v) for k, v in found.items()} if isinstance(found, dict) else {}
+
+
 def secret_name(path, original=None):
     """Whether a file is a key, password or sign-in by its name: the name asked for, the name of what it really is (after links), and
     an attachment's name as the user uploaded it. The one judgement for the CLIs' tools and Zook's own file tools (runtime.py)."""
@@ -126,6 +137,9 @@ def secret_name(path, original=None):
     if original: names.append(os.path.basename(str(original)))
     if 'attachments' in os.path.normpath(_abs(path)).split(os.sep) + full.split(os.sep):
         names += [m.group(1) for m in map(ATTACHED.match, list(names)) if m]
+        for one in {_abs(path), full}:
+            names.append(_uploaded_names(one).get(os.path.basename(one), ''))  # the name the user uploaded it with (Zook keeps a list)
+        names += ['.' + n for n in list(names) if n and not n.startswith('.')]  # a name whose leading dot an upload dropped (.env kept as env)
     return any(CREDENTIAL_NAMES.match(n) for n in names if n)
 
 
@@ -192,10 +206,8 @@ def _host(arg):
 
 
 def _destination(url):
-    """Where one send goes: its site and path, never a password or the query in the address."""
-    try: parts = urllib.parse.urlsplit(url if '://' in url else 'https://' + url)
-    except ValueError: return _host(url)
-    return (parts.hostname or '') + (parts.path if parts.path not in ('', '/') else '')
+    """Where one send goes: the site only. A path or query may carry a token (a webhook's address often does), so neither is kept."""
+    return _host(url)
 
 
 def _url_hosts(args):
@@ -451,7 +463,11 @@ def _argv_boundaries(argv, whole, depth):
         files += [v[1:].split(';')[0] for i, a in enumerate(args) for v in [a.split('=', 1)[1] if a.startswith('--') and '=' in a and a.split('=', 1)[0] in CURL_SEND else args[i + 1] if a in CURL_SEND and i + 1 < len(args) else '']
                   if '@' in v and v.split('=', 1)[-1].startswith('@') for v in [v.split('=', 1)[-1]]]
         urls = [a for a in args if '://' in a or re.fullmatch(r'[\w-]+(\.[\w-]+)+(:\d+)?(/\S*)?', a)]
-        if sends and (len(urls) > 1 or len(files) > 1 or '--next' in args or '-:' in args):  # several sends in one call: each must be shown on its own
+        globbed = '-g' not in args and '--globoff' not in args and any(re.search(r'\{[^}]*,[^}]*\}|\[[^\]]*-[^\]]*\]', u) for u in urls)  # curl turns one pattern into many addresses
+        if sends and any(a in ('-K', '--config') or a.startswith('--config=') or re.fullmatch(r'-[a-zA-Z]*K.*', a) and not a.startswith('--') for a in args):
+            found.append(('split', '這個 curl 指令從設定檔讀取要傳的內容和目的地，看不出會傳幾次、傳到哪裡'))
+        elif sends and globbed: found.append(('split', '這個 curl 的網址是一個樣式（例如 {a,b} 或 [1-3]），會展開成好幾個目的地'))
+        elif sends and (len(urls) > 1 or len(files) > 1 or '--next' in args or '-:' in args):  # several sends in one call: each must be shown on its own
             found.append(('split', '一個 curl 指令裡有多次傳送（%d 個目的地、%d 個檔案）' % (len(urls), len(files))))
         elif sends: found.append(_hit('send', '%s到 %s' % (('檔案 %s ' % _names(files)) if files else '', _destination(urls[0]) if urls else '網路')))
     if name == 'wget' and any(a.startswith(WGET_SEND) for a in args): found.append(_hit('send', '到 %s' % (_url_hosts(args) or '網路')))
@@ -613,14 +629,14 @@ def decide(tool, data, home=''):
 _TOOL_USE = ['']
 
 
-def _mark():
+def _mark(what):
     """Leave Zook a sign that this hook really runs in this very CLI: the random word Zook gave this CLI when it started
     (ZOOK_GATE_NONCE), added to its file (ZOOK_GATE_MARK). Nothing else knows the word, so no other Bot or program can leave it."""
     mark, nonce = os.environ.get('ZOOK_GATE_MARK'), os.environ.get('ZOOK_GATE_NONCE')
     if not mark or not nonce: return
     try:
         fd = os.open(mark, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
-        try: os.write(fd, (nonce + '\n').encode())
+        try: os.write(fd, ('%s:%s\n' % (nonce, what)).encode())
         finally: os.close(fd)
     except OSError: pass
 
@@ -633,8 +649,8 @@ def main():
         if len(raw) > MAX_INPUT: raise ValueError('too large')
         event = json.loads(raw.decode('utf-8'))
         if not isinstance(event, dict): raise ValueError('not an object')
-        _mark()
-        if event.get('hook_event_name') == 'SessionStart': return 0
+        if event.get('hook_event_name') == 'SessionStart': _mark('start'); return 0  # only that Claude started: not that a tool was checked
+        _mark('tool')
         data = event.get('tool_input') if isinstance(event.get('tool_input'), dict) else {}
         _TOOL_USE[0] = str(event.get('tool_use_id') or '')[:100]  # so the record of this call can say the user allowed it
         allowed, why = decide(event.get('tool_name'), data, str(event.get('cwd') or ''))

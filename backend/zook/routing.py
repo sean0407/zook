@@ -388,9 +388,19 @@ def auto_billing_stale(store, keys):
 
 
 # CLIs whose sign-in Zook cannot watch on disk (Claude keeps it in the Keychain; Cursor and Antigravity in their own stores): their
-# billing is asked of the CLI itself right before each use, so only a check from the last AUTO_LIVE seconds counts.
+# billing is asked of the CLI itself right before each request (auto_recheck_live), so only a check from these last seconds counts:
+# no cached answer is used. Asking takes about 0.1 s for Claude and 1 s for Cursor (measured 2026-11-22).
 UNWATCHED = ('claude', 'cursor', 'antigravity')
-AUTO_LIVE = 60
+AUTO_LIVE = 10
+
+
+def auto_unwatched(key): return provider_kind(str(key).partition('@')[0]) in UNWATCHED
+
+
+def auto_recheck_live(store, bot, provider, account):
+    """Right before a request of a Bot whose model must not run on API billing: ask a CLI Zook cannot watch which sign-in it uses now."""
+    with store.lock: key = auto_billing_keys(store, bot, [(provider, '', account, False)])[0]
+    if auto_unwatched(key): auto_recheck(store, [key])
 
 
 def _auto_stale(state, key):

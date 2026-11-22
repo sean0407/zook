@@ -472,11 +472,11 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 job.update(status='failed', error='這個月的用量預算已用完。可到「各模型使用量」調整上限。', finishedAt=NOW())
                 store.finish_message(job, '', 'failed'); store.save(); return
             billing_keys = auto_billing_keys(store, bot, chain) if fixed else []; stale = auto_billing_stale(store, billing_keys)
-        if stale: auto_recheck(store, [k for k in billing_keys if auto_billing_stale(store, [k])])  # asked of each CLI now, before anything runs
+        if stale: auto_recheck(store, [k for k in billing_keys if auto_billing_stale(store, [k]) and not auto_unwatched(k)])  # watched sign-ins, checked now
         why, compacted = skipped.get(first), False
         for index, (p, m, a, check) in enumerate(chain):
             final = index == len(chain) - 1
-            run_bot = bot if a is None else dict(bot, account=a)  # the account 自動選擇 picked for this try
+            run_bot = bot if a is None else dict(bot, account=a); fixed and auto_recheck_live(store, bot, p, a)  # the account picked; asked of the CLI now when Zook cannot watch it
             with store.lock:
                 problem = auto_choice_problem(store, p, a or '') if check else auto_billing_problem(store, p, a if a is not None else (find_account(bot.get('account'), p) or {}).get('id', '')) if fixed else ''  # fixed: still a subscription
                 if problem:
@@ -570,7 +570,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 session = runtime.RuntimeSession(skill_ids, mcp_ids, bot['allowCommands'], root if scope == 'folder' else workspace,
                     lambda *a: self.approve(job_id, *a), lambda event: self.record_event(job_id, event), inventory=inventory,
                     extra_tools=(plan_safe if planning else list)(self.app_tools(bot, runtime, job.get('groupId'), job.get('origin') or 'user') + git_tools(store, bot, scope, root, runtime, kind) + ([] if job.get('groupId') or job.get('internal') else question_tools(self, job_id, runtime, job.get('origin') or 'user')) + browser_tools(self, job_id, bot, kind, job.get('origin') or 'user', runtime) + task_tools(self, job_id, runtime)), permission_mode=lambda bot_id=bot['id']: self.live_permission(bot_id, job_id))
-                session.read_only = planning
+                session.read_only = planning; session.attachment_files = (job.get('attachments') or []) + ([str(group_copy_folder(store, bot['id']))] if job.get('groupFiles') else [])  # this reply's own
                 token = secrets.token_urlsafe(32)
                 with store.lock:
                     job = store.find('jobs', job_id)

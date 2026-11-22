@@ -238,7 +238,9 @@ class RoundThreeTest(unittest.TestCase):
             self.assertEqual(m.claude_scope(store, 'claude', bot, 'full', Path.home(), work), ('workspace', work))  # nothing seen yet
             Path(gate[0]).write_text('someone-else\n')  # another program writing the file is not this CLI's hook
             self.assertFalse(m.claude_gate_after(store, env, gate, used_tools=True))
-            with open(gate[0], 'a') as f: f.write(gate[1] + '\n')  # this CLI's own word
+            with open(gate[0], 'a') as f: f.write(gate[1] + ':start\n')  # Claude started: no tool was checked
+            self.assertFalse(m.claude_gate_after(store, env, gate, used_tools=True))
+            with open(gate[0], 'a') as f: f.write(gate[1] + ':tool\n')  # this CLI's own word, before a tool
             self.assertTrue(m.claude_gate_after(store, env, gate, used_tools=True))
             self.assertEqual(m.claude_scope(store, 'claude', bot, 'full', Path.home(), work)[0], 'full')
             self.assertFalse(m.claude_gate_after(store, env, gate, used_tools=True))  # the next turn of a kept CLI: an old line proves nothing
@@ -278,6 +280,11 @@ class RoundThreeTest(unittest.TestCase):
         self.assertTrue(m.auto_billing_problem(store, 'claude', ''))
         bot = dict(id='g', name='g', provider='claude', account='')
         self.assertEqual(m.intro_keys(store, bot), ['claude'])
+        with mock.patch.object(m, 'auto_status', return_value=dict(signedIn=True, billed=False)) as asked:  # before every request: no cached answer
+            m.auto_recheck_live(store, bot, 'claude', None); m.auto_recheck_live(store, bot, 'claude', None); m.auto_recheck_live(store, bot, 'codex', None)
+        self.assertEqual(asked.call_count, 2)  # Claude each time; Codex's sign-in file is watched instead
+        self.assertEqual(m.auto_billing_problem(store, 'claude', ''), '')
+        self.assertLessEqual(m.AUTO_LIVE, 10)
 
     def test_billing_is_checked_again_when_a_sign_in_changes(self):
         m, store = self.m, self.store
@@ -301,6 +308,19 @@ class RoundThreeTest(unittest.TestCase):
         page = ''.join(p.read_text(encoding='utf-8') for p in sorted((ROOT / 'frontend/js').glob('*.js')))
         self.assertIn("b.fallbacks.length ? b.fallbacks[0] : '__none';", page)
         self.assertIn("{id: '__none', name: '不自動換'}, ...providerList()]", page)
+
+
+class UploadNameTest(unittest.TestCase):
+    def test_the_uploaded_name_is_kept_for_the_key_check(self):
+        m = load(); temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
+        store = m.Store(Path(temp.name) / 'data')
+        self.assertEqual((m.upload_name('.env'), m.upload_original('.env')), ('env', '.env'))
+        uid = 'a' * 32; folder = store.dir / 'uploads' / uid; folder.mkdir(parents=True); (folder / 'file').write_text('K=1')
+        (folder / 'meta.json').write_text(json.dumps(dict(id=uid, name='secrets', origName='prod.pem', size=3, kind='file')))
+        placed = m.place_attachments(store, 'b1', m.attachments_for(store, [uid]))
+        self.assertTrue(runtime.secret_name(str(placed[0])))  # known by its uploaded name
+        self.assertTrue(json.loads((placed[0].parent.parent / '.zook-uploads.json').read_text())[placed[0].name] == 'prod.pem')
+        self.assertEqual([p.name for p in placed[0].parent.iterdir()], [placed[0].name])  # nothing else among the attachments
 
 
 class CardTest(unittest.TestCase):
@@ -351,6 +371,16 @@ class CardTest(unittest.TestCase):
         self.assertEqual(s.classify('zook_workspace_read', {'path': 'notes.txt'}), 'danger')  # by what the link really is
         self.events.clear(); s.call('zook_workspace_read', {'path': 'attachments/1a2b3c4d-credentials.json'})
         self.assertNotIn('hunter3', json.dumps(self.events, ensure_ascii=False))  # the record is masked by the same judgement
+
+    def test_workspace_tools_reach_only_this_replys_attachments(self):
+        box = self.root / 'workspace/attachments'; box.mkdir(); (box / 'mine.txt').write_text('mine'); (box / 'other.txt').write_text('other chat')
+        (self.root / 'workspace/報告.md').write_text('work')
+        s = self.session; s.permission_mode = 'bypass'; s.attachment_files = [str(box / 'mine.txt')]
+        self.assertFalse(s.call('zook_workspace_read', {'path': 'attachments/mine.txt'}).get('isError'))
+        self.assertTrue(s.call('zook_workspace_read', {'path': 'attachments/other.txt'}).get('isError'))
+        self.assertFalse(s.call('zook_workspace_read', {'path': '報告.md'}).get('isError'))  # the Bot's own work stays readable
+        listed = json.loads(s.call('zook_workspace_list', {'path': 'attachments'})['content'][0]['text'])['entries']
+        self.assertEqual([e['name'] for e in listed], ['mine.txt'])
 
 
 if __name__ == '__main__': unittest.main()

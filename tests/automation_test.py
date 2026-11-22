@@ -18,6 +18,7 @@ time.sleep(float(open(os.path.join(here, 'delay')).read()))
 call = os.path.join(here, 'call.json')
 if '--settings' in sys.argv:  # Claude runs its SessionStart hook when it starts: Zook sees that its gate really runs
     subprocess.run(json.loads(sys.argv[sys.argv.index('--settings') + 1])['hooks']['SessionStart'][0]['hooks'][0]['command'], shell=True, input='{"hook_event_name": "SessionStart"}', text=True)
+    if '先打個招呼' in ask: subprocess.run(json.loads(sys.argv[sys.argv.index('--settings') + 1])['hooks']['PreToolUse'][0]['hooks'][0]['command'], shell=True, input=json.dumps({'hook_event_name': 'PreToolUse', 'tool_name': 'Read', 'tool_input': {'file_path': os.path.join(os.getcwd(), 'a.txt')}}), text=True, capture_output=True)
 if '刪掉舊檔' in ask:  # Claude runs Zook's boundary gate (its PreToolUse hook) before its own Bash tool
     hook = json.loads(sys.argv[sys.argv.index('--settings') + 1])['hooks']['PreToolUse'][0]['hooks'][0]['command']
     done = subprocess.run(hook, shell=True, input=json.dumps({'tool_name': 'Bash', 'tool_input': {'command': 'rm ~/Desktop/腳本的舊檔.xlsx'}}), capture_output=True, text=True)

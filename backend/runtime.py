@@ -698,6 +698,20 @@ class RuntimeSession:
             raise RuntimeError('File is unavailable or exceeds the 128 KiB read limit.')
         return path.read_text(encoding='utf-8')
 
+    # This reply's own attachments (and its group's shared files): the only ones in the attachments folder Zook's workspace tools reach.
+    # None (the default) leaves them all, as before; Zook sets it for every reply.
+    attachment_files = None
+
+    def _attachment_ok(self, target, folder=False):
+        if self.attachment_files is None: return True
+        box = (Path(self.workspace) / 'attachments').resolve()
+        try: real = Path(target).resolve()
+        except OSError: return False
+        if real != box and box not in real.parents: return True  # not an attachment
+        allowed = [Path(f).resolve() for f in self.attachment_files]
+        if folder: return real == box or any(real == a or real in a.parents for a in allowed)  # a folder on the way to one of them
+        return any(real == a or a in real.parents for a in allowed)
+
     def _secret(self, name, args):
         """Whether this call of Zook's own file tools reads or writes a key file, judged by the real file in the workspace."""
         if name not in SECRET_TOOLS or not isinstance(args, dict) or not isinstance(args.get(SECRET_TOOLS[name]), str): return False
@@ -826,10 +840,14 @@ class RuntimeSession:
                             break
                         if entry.name == '.grok' or entry.name.startswith('.zook'):
                             continue  # Zook's per-reply CLI scaffolding, not the Bot's files.
+                        if not self._attachment_ok(Path(entry.path)) and not self._attachment_ok(Path(entry.path), folder=True):
+                            continue  # another conversation's attachment
                         items.append({'name': entry.name, 'type': 'symlink' if entry.is_symlink() else ('directory' if entry.is_dir(follow_symlinks=False) else 'file')})
                 result = _content({'entries': sorted(items, key=lambda x: x['name']), 'limit': 200})
             elif name == 'zook_workspace_read':
-                result = _content(self._read(self._path(self.workspace, frozen['path'])))
+                target = self._path(self.workspace, frozen['path'])
+                if not self._attachment_ok(target): raise RuntimeError('這個附件屬於另一則對話，這一則不能讀。')
+                result = _content(self._read(target))
             elif name == 'zook_workspace_write':
                 if len(frozen['content'].encode()) > MAX_TEXT:
                     raise RuntimeError('Workspace write exceeds 128 KiB.')

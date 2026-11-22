@@ -622,7 +622,7 @@ class Handler(BaseHTTPRequestHandler):
                         if not chunk: break
                         out.write(chunk); remaining -= len(chunk)
                 if remaining: shutil.rmtree(str(folder), ignore_errors=True); return self.error(400, '檔案沒有傳完整。')
-                meta = dict(id=upload_id, name=name, size=size, kind='image' if pathlib.Path(name).suffix.lower() in IMAGE_TYPES else 'file', createdAt=NOW())
+                meta = dict(id=upload_id, name=name, origName=upload_original(unquote(self.headers.get('X-File-Name', ''))), size=size, kind='image' if pathlib.Path(name).suffix.lower() in IMAGE_TYPES else 'file', createdAt=NOW())
                 (folder / 'meta.json').write_text(json.dumps(meta, ensure_ascii=False), encoding='utf-8')
                 return self.respond(201, meta)
             if len(parts) == 4 and parts[:2] == ['api', 'groups'] and parts[3] == 'files' and self.command == 'POST' and not self.device:

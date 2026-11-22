@@ -147,6 +147,7 @@ class Intros:
             needs_status = 'autoStatus' not in store.data or not choice and why in ('最近沒能確認是訂閱帳號', '還沒確認是訂閱帳號')
         if needs_status and 'autoStatus' not in store.data: refresh_auto_status(store, wait=True)  # which sign-ins are subscriptions: outside the lock
         elif needs_status: auto_recheck(store, intro_keys(store, bot))  # asked of the CLI now, as before any reply
+        else: auto_recheck(store, [k for k in intro_keys(store, bot) if auto_unwatched(k)])  # a sign-in Zook cannot watch: asked every time
         with store.lock:
             bot = store.find('bots', bot_id)
             if not bot or intro_source(bot) != source: return
