@@ -233,21 +233,51 @@ class RoundThreeTest(unittest.TestCase):
         bot = dict(id='a', provider='claude', account='')
         with mock.patch.object(m, 'provider_env', return_value=env):
             self.assertEqual(m.claude_scope(store, 'claude', bot, 'full', Path.home(), work), ('workspace', work))
-            mark, before = m.claude_gate_mark(store, env)
-            m.claude_gate_after(store, env, mark, before, used_tools=False)
+            gate = m.claude_gate_env(store, dict(env), ['Read'], 'full', Path.home(), work)
+            m.claude_gate_after(store, env, gate, used_tools=False)
             self.assertEqual(m.claude_scope(store, 'claude', bot, 'full', Path.home(), work), ('workspace', work))  # nothing seen yet
-            Path(mark).write_text(''); os.utime(mark, (before + 5, before + 5))
-            self.assertTrue(m.claude_gate_after(store, env, mark, before, used_tools=True))
+            Path(gate[0]).write_text('someone-else\n')  # another program writing the file is not this CLI's hook
+            self.assertFalse(m.claude_gate_after(store, env, gate, used_tools=True))
+            with open(gate[0], 'a') as f: f.write(gate[1] + '\n')  # this CLI's own word
+            self.assertTrue(m.claude_gate_after(store, env, gate, used_tools=True))
             self.assertEqual(m.claude_scope(store, 'claude', bot, 'full', Path.home(), work)[0], 'full')
-            mark, before = m.claude_gate_mark(store, env)
-            self.assertFalse(m.claude_gate_after(store, env, mark, before, used_tools=True))  # a tool ran without the hook
-            self.assertEqual(m.claude_scope(store, 'claude', bot, 'full', Path.home(), work)[0], 'workspace')
-        settings = json.loads(m.claude_gate_settings(600))['hooks']
-        self.assertIn('SessionStart', settings)
-        env = {}; m.claude_gate_env(store, env, [], 'workspace', work, work)
-        self.assertEqual((json.loads(env['ZOOK_GATE_ROOTS']), env['ZOOK_GATE_DEFER']), ([str(work / 'attachments')], '1'))
+            self.assertFalse(m.claude_gate_after(store, env, gate, used_tools=True))  # the next turn of a kept CLI: an old line proves nothing
+            self.assertEqual(m.claude_scope(store, 'claude', bot, 'full', Path.home(), work)[0], 'workspace')  # a tool ran without the hook: taken back
+            other = m.claude_gate_env(store, dict(env), ['Read'], 'full', Path.home(), work)
+            self.assertNotEqual((other[0], other[1]), (gate[0], gate[1]))  # every CLI start has its own file and word
+        self.assertIn('SessionStart', json.loads(m.claude_gate_settings(600))['hooks'])
+        files = [str(work / 'attachments/1a2b3c4d-報告.pdf')]
+        env = {}; m.claude_gate_env(store, env, [], 'workspace', work, work, files)
+        self.assertEqual((json.loads(env['ZOOK_GATE_ROOTS']), env['ZOOK_GATE_DEFER']), (files, '1'))  # this reply's files one by one, not the folder
         env = {}; m.claude_gate_env(store, env, ['Read'], 'full', Path.home(), work)
         self.assertNotIn('ZOOK_GATE_ROOTS', env)
+
+    def test_records_say_who_allowed_and_whether_it_worked(self):
+        m = self.m
+        job = dict(approvals=[dict(name='zook_native_gate', status='approved', arguments=dict(toolUseId='t1')), dict(name='zook_native_gate', status='denied', arguments=dict(toolUseId='t2'))])
+        a = m.native_record(job, dict(name='native_command', arguments={}, _ref='t1', status='completed'))
+        b = m.native_record(job, dict(name='native_command', arguments={}, _ref='t3', status='completed'))
+        c = m.native_record(job, dict(name='native_command', arguments={}, _ref='t2', status='denied'))
+        self.assertEqual([(x['approvedBy'], x['autoApproved'], x['status']) for x in (a, b, c)], [('user', False, 'completed'), ('auto', True, 'completed'), ('auto', False, 'denied')])
+        self.assertNotIn('_ref', a)
+        page = ''.join(p.read_text(encoding='utf-8') for p in sorted((ROOT / 'frontend/js').glob('*.js')))
+        self.assertIn("c.approvedBy === 'user' ? '你允許後完成'", page)
+
+    def test_unwatched_sign_ins_are_asked_of_the_cli_before_use(self):
+        m, store = self.m, self.store
+        store.data['autoStatus']['claude']['checkedAt'] -= 120  # two minutes ago: Claude's sign-in may have changed in the Keychain since
+        self.assertEqual(m.auto_billing_problem(store, 'claude', ''), '最近沒能確認是訂閱帳號')
+        self.assertEqual(m.auto_billing_problem(store, 'codex', ''), '')
+        store.data['autoStatus']['codex']['checkedAt'] -= 120
+        self.assertEqual(m.auto_billing_problem(store, 'codex', ''), '')  # its sign-in file is watched: the usual ten minutes
+        with mock.patch.object(m, 'auto_status', return_value=dict(signedIn=True, billed=True)):  # switched to Console billing
+            m.auto_recheck(store, ['claude'])
+        self.assertEqual(m.auto_billing_problem(store, 'claude', ''), 'API 計費不會被自動選用')
+        with mock.patch.object(m, 'auto_status', return_value=dict(signedIn=None, billed=False)):  # the CLI could not say
+            m.auto_recheck(store, ['claude'])
+        self.assertTrue(m.auto_billing_problem(store, 'claude', ''))
+        bot = dict(id='g', name='g', provider='claude', account='')
+        self.assertEqual(m.intro_keys(store, bot), ['claude'])
 
     def test_billing_is_checked_again_when_a_sign_in_changes(self):
         m, store = self.m, self.store
@@ -315,6 +345,12 @@ class CardTest(unittest.TestCase):
         self.assertEqual({tuple(e['arguments']) for e in self.events}, {('path',)})
         tool = __import__('importlib').util  # the group's shared files use the same judgement
         self.assertTrue(runtime.secret_name('credentials.json')); self.assertTrue(runtime.secret_name('a/.env.local')); self.assertFalse(runtime.secret_name('報告.md'))
+        (self.root / 'workspace/attachments').mkdir(); (self.root / 'workspace/attachments/1a2b3c4d-credentials.json').write_text('{"k": "hunter3"}')
+        self.assertEqual(s.classify('zook_workspace_read', {'path': 'attachments/1a2b3c4d-credentials.json'}), 'danger')  # by the name it was uploaded with
+        (self.root / 'workspace/notes.txt').symlink_to(self.root / 'workspace/.env')
+        self.assertEqual(s.classify('zook_workspace_read', {'path': 'notes.txt'}), 'danger')  # by what the link really is
+        self.events.clear(); s.call('zook_workspace_read', {'path': 'attachments/1a2b3c4d-credentials.json'})
+        self.assertNotIn('hunter3', json.dumps(self.events, ensure_ascii=False))  # the record is masked by the same judgement
 
 
 if __name__ == '__main__': unittest.main()

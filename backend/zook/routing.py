@@ -356,6 +356,21 @@ def auto_status_forget(store, provider):
             if (key == provider or key.startswith(provider + '@')) and isinstance(state, dict): state.pop('checkedAt', None)
 
 
+def auto_recheck(store, keys):
+    """Ask each CLI now which sign-in (and so which billing) these keys use. Runs the CLIs: never with the lock held. A key whose CLI
+    cannot say is left unchecked, so it is not used."""
+    for key in dict.fromkeys(keys):
+        provider, _, account_id = key.partition('@')
+        with store.lock: account = dict(find_account(account_id, provider) or {}) if account_id else None
+        try: state = auto_account_status(account) if account else auto_status(provider) if not account_id else dict(signedIn=None, billed=True)
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError): state = dict(signedIn=None, billed=True)
+        if state.get('signedIn') is not None: state.update(checkedAt=time.time(), signIn=auth_fingerprint(key))
+        with store.lock:
+            status = store.data.setdefault('autoStatus', {})
+            if state.get('signedIn') is None: (status.get(key) or {}).pop('checkedAt', None)  # could not say: not used until it can
+            else: status[key] = state
+
+
 def auto_billing_keys(store, bot, chain):
     """Lock held. The sign-ins a fixed Bot's tries really use, as autoStatus keys."""
     keys = []
@@ -372,9 +387,16 @@ def auto_billing_stale(store, keys):
     return any(_auto_stale(status.get(k) or {}, k) for k in keys)
 
 
+# CLIs whose sign-in Zook cannot watch on disk (Claude keeps it in the Keychain; Cursor and Antigravity in their own stores): their
+# billing is asked of the CLI itself right before each use, so only a check from the last AUTO_LIVE seconds counts.
+UNWATCHED = ('claude', 'cursor', 'antigravity')
+AUTO_LIVE = 60
+
+
 def _auto_stale(state, key):
-    """Not checked in the last AUTO_FRESH seconds, or its sign-in files changed since (a sign-in switched outside Zook)."""
-    if not isinstance(state.get('checkedAt'), (int, float)) or time.time() - state['checkedAt'] > AUTO_FRESH: return True
+    """Not checked recently enough, or its sign-in files changed since (a sign-in switched outside Zook)."""
+    limit = AUTO_LIVE if provider_kind(str(key).partition('@')[0]) in UNWATCHED else AUTO_FRESH
+    if not isinstance(state.get('checkedAt'), (int, float)) or time.time() - state['checkedAt'] > limit: return True
     return 'signIn' in state and state['signIn'] != auth_fingerprint(key)
 
 

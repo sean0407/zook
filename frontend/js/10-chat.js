@@ -264,7 +264,7 @@
     if (c.status === 'running' || c.status === 'pending') return ['run', '進行中'];
     if (c.status === 'denied') return ['bad', '你沒有允許'];
     if (c.status === 'error' || c.status === 'failed') return ['bad', humanError(c.error)];
-    return ['ok', c.autoApproved ? '已自動完成' : '完成'];
+    return ['ok', c.approvedBy === 'user' ? '你允許後完成' : c.autoApproved ? '已自動完成' : '完成'];  // who allowed it, apart from whether it worked
   }
   const EFFORT_WORDS = {fast: '快速', low: '快速', standard: '標準', medium: '標準', deep: '深入', high: '深入'};
   const scheduleLabel = id => String((state.data?.schedules || []).find(x => x.id === id)?.content || '排程').slice(0, 40);

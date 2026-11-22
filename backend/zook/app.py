@@ -471,8 +471,8 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             if budget_blocks(store, chain[0][0]) == 'stop':
                 job.update(status='failed', error='這個月的用量預算已用完。可到「各模型使用量」調整上限。', finishedAt=NOW())
                 store.finish_message(job, '', 'failed'); store.save(); return
-            stale = fixed and auto_billing_stale(store, auto_billing_keys(store, bot, chain))
-        if stale: refresh_auto_status(store, wait=True)  # sign-ins not checked recently: checked now, before anything runs
+            billing_keys = auto_billing_keys(store, bot, chain) if fixed else []; stale = auto_billing_stale(store, billing_keys)
+        if stale: auto_recheck(store, [k for k in billing_keys if auto_billing_stale(store, [k])])  # asked of each CLI now, before anything runs
         why, compacted = skipped.get(first), False
         for index, (p, m, a, check) in enumerate(chain):
             final = index == len(chain) - 1
@@ -680,7 +680,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 if claude_tools and scope == 'full': args += ['--add-dir', '/']
                 # Every built-in tool, reads too, goes through the gate (gate.py): it blocks when it fails, and nothing is allowed in advance.
                 if claude_tools or attach_read: args += ['--permission-mode', 'manual', '--settings', claude_gate_settings(wait)]
-                gate_before = claude_gate_env(store, env, claude_tools, scope, root, workspace)  # the hook's mark, and the folders it holds Claude to
+                gate_before = claude_gate_env(store, env, claude_tools, scope, root, workspace, job.get('attachments') or [], bot['id'] if job.get('groupFiles') else None)
                 if attach_read or (job.get('groupFiles') and scope == 'folder'): args += ['--add-dir', str(workspace / 'attachments')]  # its working folder may be elsewhere
                 if selected:
                     args += ['--mcp-config', json.dumps({'mcpServers': {'zook': {'command': sys.executable, 'args': [adapter]}}}), '--allowedTools', ','.join(['mcp__zook__'+tool['name'] for tool in tools] + (['WebSearch', 'WebFetch'] if web and hooks_ok else []))]
@@ -737,7 +737,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             self.note_skipped(job, session)
             if resume and proc.returncode != 0 and session_lost((stderr or b'').decode('utf-8', 'replace')):
                 with store.lock: job['resumeGone'] = True
-            if kind == 'claude' and 'ZOOK_GATE_MARK' in env: claude_gate_after(store, env, env['ZOOK_GATE_MARK'], gate_before, any(w.get('_ref') for w in parsed.get('web') or []))
+            if kind == 'claude' and 'ZOOK_GATE_MARK' in env: claude_gate_after(store, env, getattr(kept, 'gate', None) or gate_before, any(w.get('_ref') for w in parsed.get('web') or []))
             if native and cli_used_tools(kind, output.decode('utf-8', errors='replace')):
                 with store.lock: job['mayHaveActed'] = True  # these CLIs do not always report what their tools did when they fail
             parsed['web'] = (parsed.get('web') or []) + feature_events(kind, output.decode('utf-8', errors='replace'), features, cli_cwd, started_at)
@@ -755,7 +755,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 with store.lock:
                     job = store.find('jobs', job_id)
                     if job:
-                        job.setdefault('toolCalls', []).extend(dict(dict(category='external_read', status='completed'), id=ID(), createdAt=NOW(), autoApproved=w.get('status', 'completed') == 'completed', **{k: v for k, v in w.items() if k != '_ref'}) for w in parsed['web'][:max(80, len(acts))])  # refused or failed: recorded as such
+                        job.setdefault('toolCalls', []).extend(native_record(job, w) for w in parsed['web'][:max(80, len(acts))])  # who allowed it, and whether it worked
             if proc.returncode != 0 or parsed['isError']:
                 # What the CLI itself reported: its error field and its error output. For a CLI whose output Zook cannot take apart,
                 # the end of that output too. The Bot's own words in a structured reply are never searched for error phrases.

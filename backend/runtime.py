@@ -35,8 +35,9 @@ def _load_gate():
 _GATE = _load_gate()
 
 
-def secret_name(path):
-    return bool(_GATE.CREDENTIAL_NAMES.match(Path(str(path or '')).name))
+def secret_name(path, original=None):
+    """zook_gate.secret_name: the name asked for, what it really is after links, and an attachment's uploaded name."""
+    return _GATE.secret_name(str(path or ''), original) if path else False
 
 
 SECRET_TOOLS = {'zook_workspace_read': 'path', 'zook_workspace_write': 'path', 'zook_group_file_read': 'name'}
@@ -657,7 +658,7 @@ class RuntimeSession:
             argv = args.get('argv') or []
             if any(Path(str(a)).name in DANGER_COMMANDS for a in argv) or any(re.search(r'\brm\s+-|sudo\b', str(a)) for a in argv): return 'danger'
             return 'code'
-        if name in SECRET_TOOLS and secret_name(args.get(SECRET_TOOLS[name])): return 'danger'  # .env, keys, sign-ins: always asked
+        if self._secret(name, args): return 'danger'  # .env, keys, sign-ins: always asked
         if name == 'zook_workspace_write':
             try: target = self._path(self.workspace, str(args.get('path') or ''))
             except RuntimeError: return 'internal'  # refused when it runs
@@ -697,8 +698,15 @@ class RuntimeSession:
             raise RuntimeError('File is unavailable or exceeds the 128 KiB read limit.')
         return path.read_text(encoding='utf-8')
 
+    def _secret(self, name, args):
+        """Whether this call of Zook's own file tools reads or writes a key file, judged by the real file in the workspace."""
+        if name not in SECRET_TOOLS or not isinstance(args, dict) or not isinstance(args.get(SECRET_TOOLS[name]), str): return False
+        given = args[SECRET_TOOLS[name]]
+        if name == 'zook_group_file_read': return secret_name(given)
+        return secret_name(str(Path(self.workspace) / given)) or secret_name(given)
+
     def _event(self, call_id, name, source, status, args, **kwargs):
-        if name in SECRET_TOOLS and isinstance(args, dict) and secret_name(args.get(SECRET_TOOLS[name])):  # the action and the file name only
+        if isinstance(args, dict) and self._secret(name, args):  # the action and the file name only: the same judgement as the approval
             args = {SECRET_TOOLS[name]: args.get(SECRET_TOOLS[name])}; kwargs.pop('resultSummary', None)
             if status == 'error': kwargs['error'] = '讀寫這個檔案失敗。'
         event = {'id': call_id, 'name': name, 'source': source, 'status': status, 'arguments': self.redactor.value(args),
@@ -726,6 +734,7 @@ class RuntimeSession:
             lines.append({'kind': item['kind'], 'title': title})
         title = lines[0]['title'] if len(lines) == 1 else '%s 等 %d 件事' % (lines[0]['title'], len(lines))
         frozen = {'title': title, 'actions': lines}
+        if isinstance(params.get('toolUseId'), str) and re.fullmatch(r'[\w-]{1,100}', params['toolUseId']): frozen['toolUseId'] = params['toolUseId']  # which call of the CLI's this is
         where = dict(category='danger', label=title, sourceLabel='CLI 內建工具')
         if self.closed or getattr(self, 'read_only', False):
             self._event(call_id, self.NATIVE_GATE, 'builtin:native', 'denied', frozen, error='這一則只能讀。', **where)

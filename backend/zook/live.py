@@ -261,7 +261,7 @@ def live_mark(args, cwd, env, origin, extra=''):
         if skip: skip = False; continue
         if a in ('--resume', '--conversation'): skip = True; continue
         kept.append(a)
-    return hashlib.sha256(json.dumps([kept, str(cwd), origin, extra, sorted((k, v) for k, v in env.items() if k not in ('ZOOK_WORKER_URL', 'ZOOK_WORKER_TOKEN'))], ensure_ascii=False).encode('utf-8', 'replace')).hexdigest()
+    return hashlib.sha256(json.dumps([kept, str(cwd), origin, extra, sorted((k, v) for k, v in env.items() if k not in ('ZOOK_WORKER_URL', 'ZOOK_WORKER_TOKEN', 'ZOOK_GATE_MARK', 'ZOOK_GATE_NONCE'))], ensure_ascii=False).encode('utf-8', 'replace')).hexdigest()
 
 
 def live_close(app, cli, wait=0):
@@ -293,6 +293,7 @@ def live_turn(app, job, provider, kind, args, cwd, env, resume, prompt, on_outpu
             ident = 'live-' + secrets.token_hex(12); token = secrets.token_urlsafe(32)
             started = list(args) + (['--input-format', 'stream-json', '--replay-user-messages'] if kind == 'claude' else [])  # Antigravity's run already reads messages this way
             cli = LiveCli(key, started, cwd, dict(env, ZOOK_WORKER_URL='http://127.0.0.1:%d/api/worker/%s' % (app.server_address[1], ident), ZOOK_WORKER_TOKEN=token), mark, ident, token, kind)
+            cli.gate = [env.get('ZOOK_GATE_MARK'), env.get('ZOOK_GATE_NONCE'), 0] if env.get('ZOOK_GATE_NONCE') else None  # its own word (gate.py)
             lives[key] = cli; ids[ident] = cli
         else: job['kept'] = True  # this reply did not have to start the CLI
         return cli.begin(job['id'], prompt, MAX_CLI_OUTPUT, on_output)

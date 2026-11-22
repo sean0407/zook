@@ -73,18 +73,10 @@ def claude_gate_settings(wait):
 
 
 # The whole Mac only after the hook was seen running in this Claude setup (its settings folder): the hook leaves a mark (ZOOK_GATE_MARK)
-# when Claude starts and before each tool. Until then, and again whenever Claude used a tool without leaving it, a Claude Bot works in
+# with a random word only this CLI was given, when Claude starts and before each tool. Until then, and again whenever Claude used a tool without leaving it, a Claude Bot works in
 # its workspace. A policy that turns hooks off for the first time in the very reply that starts cannot be seen in advance.
 def claude_gate_key(env):
     return str((env or {}).get('CLAUDE_CONFIG_DIR') or pathlib.Path.home() / '.claude')
-
-
-def claude_gate_mark(store, env):
-    folder = store.dir / 'tools' / 'claude-gate'; folder.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path = folder / hashlib.sha256(claude_gate_key(env).encode()).hexdigest()[:24]
-    try: before = path.stat().st_mtime
-    except OSError: before = 0
-    return str(path), before
 
 
 def claude_gate_seen(store, env):
@@ -98,28 +90,38 @@ def claude_scope(store, provider, bot, scope, root, workspace):
     return (scope, root) if scope != 'full' or seen else ('workspace', workspace)
 
 
-def claude_gate_env(store, env, tools, scope, root, workspace):
-    """The hook's environment for this reply; returns the mark's time before it. Without the whole Mac, the hook checks every path
-    against the folders (ZOOK_GATE_ROOTS); a reply that only reads what was attached never gets an allow (ZOOK_GATE_DEFER)."""
-    mark, before = claude_gate_mark(store, env); env['ZOOK_GATE_MARK'] = mark
-    if not (tools and scope == 'full'): env['ZOOK_GATE_ROOTS'] = json.dumps([str(root), str(workspace)] if tools else [str(pathlib.Path(workspace) / 'attachments')])
-    if not tools: env['ZOOK_GATE_DEFER'] = '1'
-    return before
+def claude_gate_env(store, env, tools, scope, root, workspace, files=(), group_bot=None):
+    """The hook's environment for this reply: a new random word and a new file for its mark (claude_gate_after), and, without the whole
+    Mac, what it may reach (ZOOK_GATE_ROOTS). A reply that only reads what was attached gets this reply's own files, one by one (and
+    its group's shared files), never the whole attachments folder, and never an allow (ZOOK_GATE_DEFER). Returns the mark to check."""
+    folder = store.dir / 'tools' / 'claude-gate'; folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for old in folder.iterdir():  # marks of replies long done
+        try:
+            if time.time() - old.stat().st_mtime > 86400: old.unlink()
+        except OSError: pass
+    gate = [str(folder / secrets.token_hex(12)), secrets.token_hex(16), 0]
+    env['ZOOK_GATE_MARK'], env['ZOOK_GATE_NONCE'] = gate[0], gate[1]
+    if tools and scope != 'full': env['ZOOK_GATE_ROOTS'] = json.dumps([str(root), str(workspace)])
+    if not tools:
+        env['ZOOK_GATE_ROOTS'] = json.dumps([str(f) for f in files] + ([str(group_copy_folder(store, group_bot))] if group_bot else []))
+        env['ZOOK_GATE_DEFER'] = '1'
+    return gate
 
 
-def claude_gate_after(store, env, mark, before, used_tools):
-    """After a Claude reply: the mark proves the hook ran; a built-in tool that ran without it means it did not."""
-    with store.lock: return _claude_gate_after(store, env, mark, before, used_tools)
-
-
-def _claude_gate_after(store, env, mark, before, used_tools):
-    try: ran = os.stat(mark).st_mtime > before
-    except OSError: ran = False
-    seen = store.data.setdefault('claudeGate', {}); key = claude_gate_key(env)
-    if ran: seen[key] = True
-    elif used_tools:
-        seen[key] = False
-        log_activity(store, 'tool', 'Claude 用了內建工具，但 Zook 的安全檢查沒有執行（可能被管理政策關掉）。之後 Claude 的 Bot 先只在工作資料夾裡做事。', by='Zook')
+def claude_gate_after(store, env, gate, used_tools):
+    """After a Claude reply. gate is [mark file, this CLI's word, how much of the file was read before]: only new lines with this CLI's
+    own word prove its hook ran in this reply. A built-in tool that ran without them means it did not: the whole Mac is taken back."""
+    try:
+        with open(gate[0], 'rb') as f: f.seek(gate[2]); new = f.read(1 << 20)
+    except OSError: new = b''
+    gate[2] += len(new)
+    ran = gate[1].encode() in new.split(b'\n')
+    with store.lock:
+        seen = store.data.setdefault('claudeGate', {}); key = claude_gate_key(env)
+        if ran: seen[key] = True
+        elif used_tools:
+            seen[key] = False
+            log_activity(store, 'tool', 'Claude 用了內建工具，但這一次 Zook 的安全檢查沒有執行（可能被管理政策關掉）。之後 Claude 的 Bot 先只在工作資料夾裡做事，直到再看到安全檢查生效。', by='Zook')
     return ran
 
 
@@ -163,3 +165,13 @@ def worker_gate(server, conn, worker, job_id, params):
     threading.Thread(target=watch, daemon=True).start()
     try: return worker['session'].gate(params, call_id)
     finally: done.set()
+
+
+def native_record(job, w):
+    """Lock held. The activity record of one built-in tool call the CLI reported: who allowed it (the user on an approval card, or
+    nobody had to) and whether it worked, as two separate things."""
+    ref = w.get('_ref'); status = w.get('status', 'completed')
+    by_user = bool(ref) and any(a.get('name') == 'zook_native_gate' and a.get('status') == 'approved' and (a.get('arguments') or {}).get('toolUseId') == ref for a in job.get('approvals') or [])
+    out = dict(dict(category='external_read'), id=ID(), createdAt=NOW(), **{k: v for k, v in w.items() if k != '_ref'})
+    out.update(status=status, approvedBy='user' if by_user else 'auto', autoApproved=not by_user and status == 'completed')
+    return out

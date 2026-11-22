@@ -21,7 +21,7 @@ import json, os, re, shlex, shutil, sys, urllib.error, urllib.parse, urllib.requ
 MAX_INPUT = 4 * 1024 * 1024
 HOME = os.path.expanduser('~')
 HERE = os.path.dirname(os.path.realpath(__file__))
-LABELS = {'delete': '刪除檔案', 'send': '對外送出', 'secret': '動到金鑰或密碼', 'install': '安裝軟體', 'system': '改系統設定',
+LABELS = {'split': '一次做了好幾次傳送', 'delete': '刪除檔案', 'send': '對外送出', 'secret': '動到金鑰或密碼', 'install': '安裝軟體', 'system': '改系統設定',
           'guard': '改動 Zook 的安全檢查', 'unclear': '執行無法判讀的指令'}
 KINDS = tuple(LABELS)
 MAX_ACTIONS = 10   # what one card shows in full; more than this, or a line too long to show whole, is refused: the Bot does them one at a time
@@ -110,9 +110,23 @@ def _accounts_folder():
 
 def _secret_path(path):
     if not isinstance(path, str) or not path.strip(): return False
-    name = os.path.basename(_expand(path).rstrip('/'))
     if (os.path.normpath(_abs(path)) + os.sep).startswith(os.path.join(HOME, '.grok', 'bin') + os.sep): return False  # the program itself, not its sign-in
-    return _under(path, SECRET_DIRS + CREDENTIALS + _accounts_folder()) or bool(CREDENTIAL_NAMES.match(name))
+    return _under(path, SECRET_DIRS + CREDENTIALS + _accounts_folder()) or secret_name(path)
+
+
+ATTACHED = re.compile(r'^[0-9A-Za-z]{8}-(.+)$')  # an attachment is kept as 「8 characters of its id」-「the name it was uploaded with」
+
+
+def secret_name(path, original=None):
+    """Whether a file is a key, password or sign-in by its name: the name asked for, the name of what it really is (after links), and
+    an attachment's name as the user uploaded it. The one judgement for the CLIs' tools and Zook's own file tools (runtime.py)."""
+    names = [os.path.basename(_expand(path).rstrip('/'))]
+    try: full = os.path.realpath(_abs(path)); names.append(os.path.basename(full))
+    except (OSError, ValueError): full = ''
+    if original: names.append(os.path.basename(str(original)))
+    if 'attachments' in os.path.normpath(_abs(path)).split(os.sep) + full.split(os.sep):
+        names += [m.group(1) for m in map(ATTACHED.match, list(names)) if m]
+    return any(CREDENTIAL_NAMES.match(n) for n in names if n)
 
 
 def _system_path(path):
@@ -175,6 +189,13 @@ def _host(arg):
     if arg.startswith('-'): return ''
     m = re.match(r'^(?:[^@/\s]+@)?([\w.-]+)(?::|$)', arg)
     return m.group(1) if m else ''
+
+
+def _destination(url):
+    """Where one send goes: its site and path, never a password or the query in the address."""
+    try: parts = urllib.parse.urlsplit(url if '://' in url else 'https://' + url)
+    except ValueError: return _host(url)
+    return (parts.hostname or '') + (parts.path if parts.path not in ('', '/') else '')
 
 
 def _url_hosts(args):
@@ -429,7 +450,10 @@ def _argv_boundaries(argv, whole, depth):
         files = [a for i, a in enumerate(args) if i and args[i - 1] in ('-T', '--upload-file')]
         files += [v[1:].split(';')[0] for i, a in enumerate(args) for v in [a.split('=', 1)[1] if a.startswith('--') and '=' in a and a.split('=', 1)[0] in CURL_SEND else args[i + 1] if a in CURL_SEND and i + 1 < len(args) else '']
                   if '@' in v and v.split('=', 1)[-1].startswith('@') for v in [v.split('=', 1)[-1]]]
-        if sends: found.append(_hit('send', '%s到 %s' % (('檔案 %s ' % _names(files)) if files else '', _url_hosts(args) or '網路')))
+        urls = [a for a in args if '://' in a or re.fullmatch(r'[\w-]+(\.[\w-]+)+(:\d+)?(/\S*)?', a)]
+        if sends and (len(urls) > 1 or len(files) > 1 or '--next' in args or '-:' in args):  # several sends in one call: each must be shown on its own
+            found.append(('split', '一個 curl 指令裡有多次傳送（%d 個目的地、%d 個檔案）' % (len(urls), len(files))))
+        elif sends: found.append(_hit('send', '%s到 %s' % (('檔案 %s ' % _names(files)) if files else '', _destination(urls[0]) if urls else '網路')))
     if name == 'wget' and any(a.startswith(WGET_SEND) for a in args): found.append(_hit('send', '到 %s' % (_url_hosts(args) or '網路')))
     if name in COPY_OUT and (name in ('sftp', 'ftp') or any(_remote(a) for a in plain)):
         local = [a for a in plain if not _remote(a)] if name in ('scp', 'rsync') else []
@@ -544,7 +568,7 @@ def ask(actions):
     try: wait = max(30, int(os.environ.get('ZOOK_TOOL_WAIT') or 660))
     except ValueError: wait = 660
     items = [{'kind': k, 'title': t} for k, t in actions]
-    body = json.dumps({'method': 'gate', 'params': {'actions': items}}).encode()
+    body = json.dumps({'method': 'gate', 'params': dict({'actions': items}, **({'toolUseId': _TOOL_USE[0]} if _TOOL_USE[0] else {}))}).encode()
     req = urllib.request.Request(url, data=body, headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
     try:
         with urllib.request.urlopen(req, timeout=wait) as response:
@@ -577,6 +601,8 @@ def decide(tool, data, home=''):
     if away: return False, '這一則只能動到 Zook 允許的資料夾（例如附件），%s 不在裡面，所以擋下了。直接告訴使用者。' % (_names([p for p in away if not p.startswith('（')]) or away[0])
     raw = boundaries(tool, data, home)
     if not raw: return True, ''
+    split = [t for k, t in raw if k == 'split']
+    if split: return False, '%s。請拆成幾個指令，每次一個檔案、一個目的地，讓使用者逐一確認。' % split[0]
     found = merged(raw)
     if len(raw) > MAX_ACTIONS or any(len(t) > MAX_TITLE for _, t in found):  # one card could not show all of it: never approved as a batch
         return False, '這一步同時要做 %d 件需要核准的事，或目標太長，一張核准卡放不下。請分成幾個較小的步驟，一次一件，讓使用者逐一確認。' % len(raw)
@@ -584,13 +610,18 @@ def decide(tool, data, home=''):
     return False, '使用者沒有允許：%s。不要改用其他方法做這件事，直接告訴使用者沒有做。' % '；'.join(t for _, t in found)
 
 
+_TOOL_USE = ['']
+
+
 def _mark():
-    """Leave Zook a sign that this hook really runs in this CLI (ZOOK_GATE_MARK): Zook gives Claude the whole Mac only after seeing it."""
-    mark = os.environ.get('ZOOK_GATE_MARK')
-    if not mark: return
+    """Leave Zook a sign that this hook really runs in this very CLI: the random word Zook gave this CLI when it started
+    (ZOOK_GATE_NONCE), added to its file (ZOOK_GATE_MARK). Nothing else knows the word, so no other Bot or program can leave it."""
+    mark, nonce = os.environ.get('ZOOK_GATE_MARK'), os.environ.get('ZOOK_GATE_NONCE')
+    if not mark or not nonce: return
     try:
-        with open(mark, 'a'): pass
-        os.utime(mark)
+        fd = os.open(mark, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+        try: os.write(fd, (nonce + '\n').encode())
+        finally: os.close(fd)
     except OSError: pass
 
 
@@ -605,6 +636,7 @@ def main():
         _mark()
         if event.get('hook_event_name') == 'SessionStart': return 0
         data = event.get('tool_input') if isinstance(event.get('tool_input'), dict) else {}
+        _TOOL_USE[0] = str(event.get('tool_use_id') or '')[:100]  # so the record of this call can say the user allowed it
         allowed, why = decide(event.get('tool_name'), data, str(event.get('cwd') or ''))
         if allowed and os.environ.get('ZOOK_GATE_DEFER') == '1': return 0  # a read-only reply: Claude's own rules decide what is inside the folders
         print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'allow' if allowed else 'deny',
