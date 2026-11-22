@@ -244,6 +244,7 @@
         render(true);
         if (y) $('.page') && ($('.page').scrollTop = y);
       });
+      state.usageAuto = null; api('quota/auto').then(v => { if (state.usageLoad === seq) state.usageAuto = v; }).catch(() => {});  // 自動偵測 as the Mac has it now
       render();
       fill('quota', api('quota?auto=1')); fill('botUsage', api('usage/bots')); fill('usage', api('usage')); fill('overview', api('usage/overview?days=' + (state.overviewDays || 30)));
       loadAccounts().catch(e => toast(e.message));

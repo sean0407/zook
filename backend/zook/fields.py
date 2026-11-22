@@ -105,6 +105,10 @@ def update(target, body, kind):
     if kind == 'settings' and 'autoUpdateCheck' in body:
         if not isinstance(body['autoUpdateCheck'], bool): raise ValueError('autoUpdateCheck 無效。')
         changes['autoUpdateCheck'] = body['autoUpdateCheck']
+    if kind == 'settings' and 'usageDetectEvery' in body:
+        value = body['usageDetectEvery']
+        if isinstance(value, bool) or value not in USAGE_DETECT_CHOICES: raise ValueError('自動偵測的間隔無效。')
+        changes['usageDetectEvery'] = int(value)
     if kind == 'settings' and 'scheduleNotify' in body:
         if not isinstance(body['scheduleNotify'], bool): raise ValueError('scheduleNotify 無效。')
         changes['scheduleNotify'] = body['scheduleNotify']

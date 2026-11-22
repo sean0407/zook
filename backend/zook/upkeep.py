@@ -99,6 +99,7 @@ def backup_restore(app, name):
         if keep_remote is not None: data['settings']['remote'] = keep_remote
         browser_keep_local(store.data, data)  # a copy never turns the browser on
         task_keep_local(store.data, data)  # nor 任務引擎, nor work that starts by itself
+        usage_detect_keep_local(store.data, data)  # nor 自動偵測使用量
         with store.path.open('w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False)
         Store.keep_aside = True  # the conversations that are there now stay in chats.old until the copy is known to be in place
         try: fresh = Store(store.dir, recover=False)  # runs the same upgrades an old data file gets at startup
@@ -220,7 +221,7 @@ def drop_removed_providers(store):
 
 
 SETTING_NAMES = {'permissionMode': '主動性', 'webSearch': '上網搜尋', 'browserAutomation': '排程與觸發可用內建瀏覽器', 'provider': '預設提供者', 'model': '預設模型', 'fallbacks': '備用模型', 'access': '存取範圍', 'accessFolder': '存取範圍',
-                 'features': '功能開關', 'effort': '思考強度', 'remote': '手機連線', 'autoUpdateCheck': '自動檢查更新', 'scheduleNotify': '通知', 'sharedMcp': '共用連接器', 'disabledSkills': 'Skills 開關',
+                 'features': '功能開關', 'effort': '思考強度', 'remote': '手機連線', 'autoUpdateCheck': '自動檢查更新', 'usageDetectEvery': '自動偵測使用量', 'scheduleNotify': '通知', 'sharedMcp': '共用連接器', 'disabledSkills': 'Skills 開關',
                  'disabledPlugins': '插件開關', 'autoModels': '自動選擇的模型', 'autoAccounts': '自動選擇的帳號', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步', 'voiceLang': '語音輸入語言', 'streamReplies': '回覆逐字顯示', 'queueWhenBusy': 'Bot 忙碌時排隊', 'busySend': '回覆中送出的訊息', 'keepCli': '保持 CLI 開啟', 'autoCompact': '對話過長時自動整理'}
 BOT_FIELD_NAMES = {'name': '名稱', 'persona': '人格檔案', 'instructions': '工作指示', 'provider': '模型', 'model': '模型', 'account': '帳號', 'permissionMode': '主動性', 'access': '存取範圍', 'accessFolder': '存取範圍',
                    'fallbacks': '備用模型', 'features': '功能開關', 'effort': '思考強度', 'isAdmin': '管理員身分', 'enabledMcp': '連接器', 'scripts': '允許本機腳本'}
@@ -286,6 +287,9 @@ def describe_request(method, parts, body, hint, result):
         if n == 4 and parts[2] == 'devices' and method == 'DELETE': return 'device', '移除已配對的裝置'
         return None
     if area == 'providers' and method in ('POST', 'DELETE', 'PATCH'): return 'setting', '變更模型或帳號設定'
+    if area == 'quota' and parts[2:] == ['auto'] and method == 'POST':
+        every = result.get('usageDetectEvery', body.get('every'))
+        return 'setting', '變更設定：自動偵測使用量（%s）' % USAGE_DETECT_NAMES.get(every, every)
     if area == 'update' and parts[2:] == ['apply']: return 'setting', '安裝更新'
     return None
 

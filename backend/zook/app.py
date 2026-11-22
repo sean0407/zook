@@ -295,14 +295,9 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
         wait = float(os.environ.get('ZOOK_SCHEDULE_TICK') or 15)
         while True:
             time.sleep(wait)
-            try: self.run_schedules()
-            except Exception: pass
-            try: self.run_triggers()
-            except Exception: pass
-            try: self.sync_tick()
-            except Exception: pass
-            try: live_tidy(self)
-            except Exception: pass
+            for step in (self.run_schedules, self.run_triggers, self.sync_tick, lambda: live_tidy(self), lambda: usage_detect_tick(self)):  # 自動偵測使用量: usagewatch.py
+                try: step()
+                except Exception: pass
             try:
                 with self.store.lock:
                     backup_daily(self.store)
@@ -937,18 +932,9 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
     CLAUDE_PROBE_MIN_GAP = 10 * 60  # never probe more often than this
 
     def auto_claude_quota(self):
-        """Keep the Claude snapshot fresh without the user pressing refresh. One tiny haiku request at most every 10 minutes."""
-        with self.store.lock: snap = self.store.data.get('quota', {}).get('claude') or {}
-        try: age = time.time() - datetime.datetime.fromisoformat(snap['updatedAt']).timestamp()
-        except (KeyError, ValueError, TypeError): age = float('inf')
-        last = getattr(self, 'claude_probe_at', 0)
-        if age < self.CLAUDE_QUOTA_STALE or time.time() - last < self.CLAUDE_PROBE_MIN_GAP: return
-        account = account_status('claude')
-        if account['status'] != 'logged_in' or account['method'] == 'Anthropic Console': return
-        self.claude_probe_at = time.time()
-        try:
-            self.record_quota('claude', claude_quota_probe())
-            with self.store.lock: self.store.data['quota']['claude']['source'] = 'auto'; self.store.save()
+        """Keep the Claude snapshot fresh when the usage page opens, without the user pressing refresh. One tiny haiku request at most every
+        10 minutes, never alongside 偵測使用量 (usagewatch.py)."""
+        try: claude_probe_default(self, 'auto')
         except (RuntimeError, OSError, subprocess.TimeoutExpired): pass
 
     def live_permission(self, bot_id, job_id=None):
