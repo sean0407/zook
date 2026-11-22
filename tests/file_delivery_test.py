@@ -12,7 +12,7 @@ class FileDelivery(unittest.TestCase):
     def test_every_bot_hears_it(self):
         m._active['data'] = {'settings': {}, 'rules': []}
         text = m.identity_block(dict(name='業務小幫'))
-        self.assertIn('完整路徑', text); self.assertIn('xlsxwriter', text); self.assertIn('轉成圖片', text)
+        self.assertIn('完整路徑', text); self.assertIn('xlsxwriter', text); self.assertIn('轉成圖片', text); self.assertIn('qlmanage', text); self.assertIn('暫存程式', text); self.assertIn('【待確認', text)
 
 
 if __name__ == '__main__': unittest.main()
