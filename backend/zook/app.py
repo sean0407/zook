@@ -376,7 +376,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             if item is None:
                 item = {'id': event.get('id', ID()), 'createdAt': NOW()}; calls.append(item)
             if job_id in self.__dict__.get('job_activity', {}): self.job_activity[job_id] = time.monotonic()  # using a tool is a sign of work
-            if event.get('autoApproved') and not item.get('autoApproved') and event.get('category', item.get('category')) in ('external_write', 'danger'):
+            if event.get('autoApproved') and not item.get('autoApproved') and event.get('category', item.get('category')) in ('external_write', 'danger', 'code'):  # a program run without asking is noted too
                 log_activity(self.store, 'tool', '未詢問即執行：%s（%s）' % (describe_call(dict(item, **event)), self.target_name('bot', job['botId'])), by='Zook')
             for key in ('name', 'source', 'status', 'arguments', 'resultSummary', 'error', 'label', 'sourceLabel', 'category', 'autoApproved'):
                 if key in event: item[key] = event[key]

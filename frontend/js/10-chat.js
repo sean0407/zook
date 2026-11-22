@@ -251,6 +251,7 @@
       case 'native_skill': return `使用 Skill「${String(a.name || 'Skill').slice(0, 60)}」`;
       case 'web_fetch': return `讀取網頁「${(String(a.url || '').match(/^https?:\/\/([^/]+)/) || [, a.url || '網頁'])[1]}」`;
     }
+    if (c.category === 'code' && c.sourceLabel) return `執行一段程式（${c.sourceLabel}）`;  // a connector that runs code: say so plainly
     return `使用「${c.sourceLabel || '外部服務'}」${c.label ? '的' + humanWords(c.label) + '功能' : ''}`;
   }
   const ERROR_WORDS = [[/denied|cancel/i, '你沒有允許這個動作'], [/Paths must remain|Symlinks|outside/i, '這個檔案不在 Bot 的工作區內'],

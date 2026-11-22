@@ -412,6 +412,22 @@ class ProtocolClient:
             pass
 
 
+CODE_WORDS = {'js', 'javascript', 'node', 'nodejs', 'python', 'py', 'eval', 'exec', 'execute', 'repl', 'shell', 'bash', 'sh', 'zsh', 'applescript',
+              'osascript', 'script', 'code', 'jupyter', 'notebook', 'kernel', 'sandbox', 'interpreter'}
+
+
+def _words(name):
+    """「runCode」, 「javascript_tool」, 「node-repl」 → its words, so 「replica」 is not 「repl」."""
+    spaced = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', str(name or ''))
+    return {w for w in re.split(r'[^A-Za-z0-9]+', spaced.lower()) if w}
+
+
+def is_code_runner(server, tool):
+    """A connector tool that runs the code it is given (e.g. node_repl's js): it is treated as running a program, whatever its
+    read-only hint says. Judged by the words of the tool's name and of the connector's registered name; a false match only asks more."""
+    return bool((_words(tool) | _words(server)) & CODE_WORDS)
+
+
 def _schema(name, description, properties, required=(), read_only=True):
     return {'name': name, 'description': description, 'inputSchema': {'type': 'object', 'properties': properties,
             'required': list(required), 'additionalProperties': False},
@@ -617,6 +633,7 @@ class RuntimeSession:
             original = self.routes[name][1]
             if is_dangerous_name(original) or 'send' in str(original).lower(): return 'danger'  # sendmail, sendMessage, send_email…
             if self.annotations.get(name, {}).get('alwaysApprove') is True: return 'danger'  # the connector itself says: always ask
+            if is_code_runner(self._connector_name(self.routes[name][0]), original): return 'code'  # it runs whatever code it is given: not a read, whatever it says
             return 'external_read' if self.annotations.get(name, {}).get('readOnlyHint') is True else 'external_write'
         if name == 'zook_run_skill_helper':
             argv = args.get('argv') or []
