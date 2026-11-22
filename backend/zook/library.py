@@ -120,9 +120,11 @@ def forget_discovered():
     _discovered.clear()
 
 
-def inventory_for(store):
-    """Discovered Skills/MCP minus anything from disabled plugins (also removed from the private config)."""
+def inventory_for(store, tokens=True):
+    """Discovered Skills/MCP minus anything from disabled plugins (also removed from the private config). tokens=False leaves out the
+    sign-ins that may have to be renewed over the network: enough to check a Bot's choices, not to run a reply (marked '_light')."""
     data = discovered()
+    if not tokens: data['_light'] = True
     with store.lock: own = copy.deepcopy(store.data.get('connectors') or []); gmail = dict(store.data['settings'].get('gmail') or {})
     # Built-in Gmail: listed always, usable once an address and app password have been saved.
     item = {'id': GMAIL_ID, 'name': 'Gmail', 'source': 'builtin', 'transport': 'stdio', 'status': 'configured', 'gmail': True, 'address': gmail.get('address', ''),
@@ -134,10 +136,10 @@ def inventory_for(store):
     else: item['needsSetup'] = True
     data['mcp'].insert(1, item)
     with store.lock: google = dict(store.data['settings'].get('google') or {})
-    access = google_access(store) if google else ''
+    access = (google_access(store) if tokens else 'light') if google else ''
     data['mcp'].insert(2, {'id': GOOGLE_ID, 'name': 'Google（Gmail、行事曆、雲端硬碟）', 'source': 'builtin', 'transport': 'stdio', 'status': 'configured', 'google': True,
                            'address': google.get('email', ''), 'write': bool(google.get('write')), 'needsSetup': not access, 'needsLogin': bool(google) and google_needs_login(store), 'accounts': google_accounts(store)})
-    if access:
+    if access and tokens:
         data['_private']['mcp'][GOOGLE_ID] = dict(transport='stdio', command=sys.executable, args=[str(pathlib.Path(__file__).with_name('google_mcp.py'))],
                                                   env=dict({'ZOOK_GOOGLE_TOKEN': access, 'ZOOK_GOOGLE_WRITE': '1' if google.get('write') else '0'},
                                                            **({'ZOOK_GOOGLE_API': os.environ['ZOOK_GOOGLE_API']} if os.environ.get('ZOOK_GOOGLE_API') else {})))
@@ -150,7 +152,7 @@ def inventory_for(store):
         else:
             config = dict(transport='http', url=record['url'], headers=dict(record.get('headers') or {}))
             if secret: config['headers']['Authorization'] = 'Bearer ' + secret
-            elif record.get('oauth'):
+            elif record.get('oauth') and tokens:
                 access = oauth_access(store, record)
                 if access: config['headers']['Authorization'] = 'Bearer ' + access
             config['noCredentials'] = 'Authorization' not in config['headers']  # nothing to be refused: it has simply never been signed in

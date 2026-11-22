@@ -129,7 +129,7 @@ class Interject(Base):
     def test_changes_the_reply_that_is_running(self):
         self.wait(self.send('first')[1]['jobId'])  # the conversation's CLI is open from here on
         job_id = self.send('HOLD do the long job')[1]['jobId']; self.running(job_id)
-        status, sent = self.send('make it shorter', interject=True)
+        status, sent = self.send('make it shorter')
         self.assertEqual((status, sent.get('interjected'), sent.get('jobId')), (202, True, job_id))
         job = self.wait(job_id)
         self.assertEqual((job['status'], job['content']), ('completed', 'changed course: make it shorter'))
@@ -143,7 +143,7 @@ class Interject(Base):
     def test_read_only_after_the_answer_is_still_part_of_the_reply(self):
         self.wait(self.send('first')[1]['jobId'])
         job_id = self.send('HOLD ALONE the long job')[1]['jobId']; self.running(job_id)
-        self.assertTrue(self.send('and add a title', interject=True)[1].get('interjected'))
+        self.assertTrue(self.send('and add a title')[1].get('interjected'))
         job = self.wait(job_id)
         self.assertEqual(job['content'], 'long job part one\n\nthen: and add a title')
         self.assertEqual((job['usage']['input'], job['usage']['output'], round(job['usage']['costUsd'], 4)), (10, 4, 0.03))
@@ -155,31 +155,47 @@ class Interject(Base):
         self.req('PATCH', '/api/settings', {'keepCli': False})
         job_id = self.send('HOLD the long job')[1]['jobId']
         time.sleep(0.5)
-        status, sent = self.send('wait, one more thing', interject=True)
+        status, sent = self.send('wait, one more thing')
         self.assertEqual((status, sent.get('queued')), (202, True)); self.assertIn('排在後面', sent['notice'])
         self.wait(job_id)
         end = time.time() + 20  # the message that waited in line is sent and answered
         while time.time() < end and (len(self.said()) < 2 or any(j['status'] == 'running' for j in self.req('GET', '/api/state?full=1')[1]['jobs'])): time.sleep(0.1)
         self.req('PATCH', '/api/settings', {'queueWhenBusy': False})
         job_id = self.send('HOLD again')[1]['jobId']; time.sleep(0.5)
-        status, sent = self.send('and now', interject=True)
+        status, sent = self.send('and now')
         self.assertEqual(status, 409); self.assertIn('無法在回覆途中', sent['error'])
 
     def test_with_nothing_running_it_is_an_ordinary_message(self):
-        status, sent = self.send('hello', interject=True)
+        status, sent = self.send('hello')
         self.assertEqual(status, 202); self.assertNotIn('interjected', sent)
         self.assertEqual(self.wait(sent['jobId'])['status'], 'completed')
 
     def test_attachments_wait(self):
         self.wait(self.send('first')[1]['jobId'])
         job_id = self.send('HOLD the long job')[1]['jobId']; self.running(job_id)
-        status, sent = self.send('look', interject=True, plan=True)
+        status, sent = self.send('look', plan=True)
         self.assertEqual((status, sent.get('queued')), (202, True)); self.assertIn('先規劃', sent['notice'])
         self.wait(job_id)
 
-    def test_setting(self):
-        self.assertEqual(self.req('PATCH', '/api/settings', {'busySend': 'later'})[0], 400)
-        self.assertEqual(self.req('PATCH', '/api/settings', {'busySend': 'now'})[1]['busySend'], 'now')
+    def test_something_new_waits_its_turn(self):
+        # No switch any more: Zook decides. A new request is not a correction of the running reply, so it waits in line.
+        self.wait(self.send('first')[1]['jobId'])
+        job_id = self.send('HOLD do the long job')[1]['jobId']; self.running(job_id)
+        status, sent = self.send('請幫我另外整理一份下個月展覽活動的完整企劃書給大家參考')
+        self.assertEqual((status, sent.get('queued'), sent.get('interjected'), sent.get('notice')), (202, True, None, None))
+        self.assertEqual(self.wait(job_id)['content'], 'finished the long job')  # the running reply never heard it
+        end = time.time() + 20
+        while time.time() < end and not any(m['role'] == 'user' and '展覽' in m['content'] and m.get('queued') for m in self.messages()): time.sleep(0.1)
+        said = next(m for m in self.messages() if '展覽' in m['content'])
+        self.assertEqual((said.get('queued'), bool(said.get('interjected'))), (True, False))  # shown as 排在後面
+
+    def test_the_old_switch_is_gone(self):
+        self.req('PATCH', '/api/settings', {'busySend': 'now'})
+        self.assertNotIn('busySend', self.req('GET', '/api/state')[1]['settings'])
+        self.wait(self.send('first')[1]['jobId'])
+        job_id = self.send('HOLD do the long job')[1]['jobId']; self.running(job_id)
+        self.assertTrue(self.send('寫一份完整的年度報告，包含每一季的營收、成本與明年的計畫', interject=True)[1].get('queued'))  # an old client's flag decides nothing
+        self.wait(job_id)
 
 
 class Antigravity(Base):
@@ -197,7 +213,7 @@ class Antigravity(Base):
     def test_cannot_be_told_midway(self):
         self.wait(self.send('hello')[1]['jobId'])
         job_id = self.send('HOLD think')[1]['jobId']; time.sleep(0.3)
-        status, sent = self.send('stop', interject=True)
+        status, sent = self.send('stop')
         self.assertEqual((status, sent.get('queued')), (202, True)); self.assertIn('無法在回覆途中', sent['notice'])
         self.assertEqual(self.wait(job_id)['status'], 'completed')
         end = time.time() + 15
@@ -213,6 +229,15 @@ class Units(unittest.TestCase):
     def setUpClass(cls):
         import importlib.util
         spec = importlib.util.spec_from_file_location('zook_interject', SERVER); cls.z = importlib.util.module_from_spec(spec); spec.loader.exec_module(cls.z)
+
+    def test_which_messages_join_the_running_reply(self):
+        joins = ['等等，先不要寄', '不要用表格', '改成三點就好', '另外加一段結論', '還有記得附上來源', '順便檢查錯字', '對了，用英文', '停', '短一點',
+                 'make it shorter', 'wait, one more thing', 'stop', 'actually use the second file', '把剛剛那段改成條列，並且把每一點的說明都寫得更完整一些',
+                 '@Gamma 預算改成五萬', '@Alpha 好']
+        waits = ['請幫我另外整理一份下個月展覽活動的完整企劃書給大家參考', '台北明天天氣如何', '這是什麼？', '幫我查一下最近有哪些新的 AI 工具可以用在行銷上面',
+                 'write a short summary of the quarterly report for the whole team', '@Beta 幫我寫一份完整的新產品上市計畫書給業務部門使用', '', '@Alpha']
+        self.assertEqual([t for t in joins if not self.z.interject_wanted(t, ['Alpha', 'Beta', 'Gamma'])], [])
+        self.assertEqual([t for t in waits if self.z.interject_wanted(t, ['Alpha', 'Beta', 'Gamma'])], [])
 
     def cli(self, args):
         cli = self.z.LiveCli(('b', 'c'), args, tempfile.gettempdir(), dict(os.environ), 'm', 'live-x', 't')

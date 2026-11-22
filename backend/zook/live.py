@@ -330,7 +330,33 @@ def live_interject(app, job, text):
     return turn.add(text)
 
 
-def interject_on(store): return store.data['settings'].get('busySend') == 'now'
+# Sent while a Bot is answering: Zook decides by rule, without asking a model, whether the message changes the reply that is
+# running (插話) or is something new that waits its turn (排在後面). A correction or an addition to the current work joins it:
+# a short message that is not a new question, one that starts with words like 等等、不要、改成、另外, or one that clearly points
+# at what is being done. Anything else waits.
+INTERJECT_STARTS = ('等等', '等一下', '等下', '不要', '別', '改成', '改用', '改', '換成', '另外', '還有', '順便', '對了', '停', '先停', '暫停', '補充',
+                    '剛剛', '剛才', '其實', '不對', '錯了', '再加', '加上', '也要', '記得', '但是', '可是', '不過', '算了')
+INTERJECT_STARTS_EN = ('wait', 'stop', 'actually', 'also', 'and ', 'but ', 'no ', 'no,', "don't", 'dont', 'instead', 'oops', 'make it', 'change ', 'skip', 'plus ')
+INTERJECT_POINTS = ('改成', '換成', '改用', '不要用', '別用', '剛剛', '剛才', '上面那', '你正在', '目前這', '這份', '這段', '這一步', '這裡的')
+INTERJECT_SHORT = 12  # units: one per Chinese character, two per word in other languages
+
+
+def interject_wanted(text, names=()):
+    """Whether a message sent while a reply runs should join that reply. names: group members, so @mentions are left out."""
+    if not isinstance(text, str): return False
+    s = text.strip()
+    for _ in range(5):  # leading @mentions say who answers, not what is said
+        lead = next((n for n in sorted(names, key=len, reverse=True) if n and s.lower().startswith('@' + n.lower())), None)
+        if lead: s = s[len(lead) + 1:].lstrip(' ，,：:')
+        elif s.startswith('@'): s = re.sub(r'^@\S+\s*', '', s)
+        else: break
+    if not s: return False
+    low = s.lower().lstrip('，,。.!！ ')
+    if low.startswith(INTERJECT_STARTS) or low.startswith(INTERJECT_STARTS_EN): return True
+    if any(p in s for p in INTERJECT_POINTS): return True
+    units = len(re.findall(r'[㐀-鿿豈-﫿]', s)) + 2 * len(re.findall(r'[A-Za-z0-9]+', s))
+    question = bool(re.search(r'[?？]\s*$|[嗎呢]\s*$|如何|什麼|為什麼|怎麼|哪裡|哪個|哪些', s))
+    return units <= INTERJECT_SHORT and not question
 
 
 def interject_send(app, bot, body, by=''):

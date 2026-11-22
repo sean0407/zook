@@ -185,6 +185,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
         if author: asked['author'] = author
         if attachments: asked['attachments'] = attachments
         if plan: asked['plan'] = True
+        if queue_id and origin == 'user': asked['queued'] = True  # sent while it was answering and waited its turn: shown as 排在後面
         messages.extend([asked, msg])
         chat = next(c for c in bot['chats'] if c['id'] == chat_id)
         chat['updatedAt'] = NOW()
@@ -423,7 +424,11 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                     self.store.save()
 
     def run_job(self, job_id, prompt, provider, model, bot=None, inventory=None):
-        try: self._run_job(job_id, prompt, provider, model, bot, inventory)
+        try:
+            if inventory and inventory.get('_light'):  # the message is already on screen; connector sign-ins are renewed here, off the request
+                try: inventory = inventory_for(self.store)
+                except Exception: inventory = None  # each try reads it again
+            self._run_job(job_id, prompt, provider, model, bot, inventory)
         finally:
             self.finish_session(job_id)
             with self.store.lock:

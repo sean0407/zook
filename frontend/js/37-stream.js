@@ -40,7 +40,7 @@
   function queuedView(b) {
     const started = new Set([...(state.data.jobs || []), ...Object.values(state.jobDetails || {})].map(j => j.queueId).filter(Boolean));  // already being answered
     const waiting = (b.queue || []).filter(e => e.chatId === b.chatId && !started.has(e.id));
-    return waiting.map(e => `<div class="message user queued" data-qid="${esc(e.id)}"><div class="bubble">${esc(e.content)}</div><div class="queued-note"><span>排隊中，Bot 回覆完就會送出</span><button class="link" data-queue-cancel="${esc(e.id)}">取消</button></div></div>`).join('');
+    return waiting.map(e => `<div class="message user queued" data-qid="${esc(e.id)}"><div class="bubble">${esc(e.content)}</div><div class="queued-note"><span>排在後面・Bot 回覆完就會送出</span><button class="link" data-queue-cancel="${esc(e.id)}">取消</button></div></div>`).join('');
   }
   document.addEventListener('click', async e => {
     const el = e.target.closest?.('[data-queue-cancel]');

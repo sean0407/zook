@@ -113,7 +113,7 @@ def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, 
 def group_settle_interjections(group):
     """插話 stops waiting: the user sent something new or stopped the discussion, so nothing is answered for it later."""
     for m in group['messages']: m.pop('waiting', None)
-    for key in ('interjectNext', 'interjectUnseen', 'interjectAll'): group.pop(key, None)
+    for key in ('interjectNext', 'interjectUnseen', 'interjectAll', 'interjectQueued'): group.pop(key, None)
 
 
 def group_stopped(store, group):
@@ -258,17 +258,27 @@ class GroupRuns:
         if not isinstance(content, str) or not content.strip() or len(content) > 30000: raise ValueError('訊息內容無效。')
         members = [b for b in (self.store.find('bots', x) for x in group['botIds']) if b]
         open_run = group.get('runKind') == 'free'
-        message = dict(id=ID(), role='user', content=content.strip(), createdAt=NOW(), interjected=True)
-        if not open_run: message['waiting'] = True  # shown as 這輪結束後回覆; turns of this round do not read it
+        joins = open_run and interject_wanted(content, [b['name'] for b in members])  # the same rule as with one Bot: a correction joins, anything new waits
+        message = dict(id=ID(), role='user', content=content.strip(), createdAt=NOW())
         group['messages'].append(message)
-        everyone = group_everyone(content, members)
-        named = [] if everyone else group_mentions(content, members)
+        if joins: self._join_run(group, message, members); log_activity(self.store, 'group', '在討論途中插話（%s）' % group.get('name', ''))
+        else:  # 排在後面: turns of this round do not read it; it is answered in a round of its own when this one ends
+            message.update(waiting=True, queued=True); group.setdefault('interjectQueued', []).append(message['id'])
+            log_activity(self.store, 'group', '討論途中傳送，排在這輪後面（%s）' % group.get('name', ''))
+        named = [] if group_everyone(content, members) else group_mentions(content, members)
+        return dict(runId=group.get('runId'), interjected=joins, queued=not joins, waiting=not joins, next=[(self.store.find('bots', x) or {}).get('name') for x in named] if joins else [])
+
+    def _join_run(self, group, message, members):
+        """Lock held. 插話 into the open discussion that is running: every later turn reads it; a member it @-mentions answers next."""
+        message['interjected'] = True
+        for key in ('waiting', 'queued'): message.pop(key, None)
+        group['interjectQueued'] = [x for x in group.get('interjectQueued') or [] if x != message['id']]
+        everyone = group_everyone(message['content'], members)
+        named = [] if everyone else group_mentions(message['content'], members)
         nxt = group.setdefault('interjectNext', [])
         nxt.extend(x for x in named if x not in nxt)
         if everyone: group['interjectAll'] = True
         group['interjectUnseen'] = message['id']
-        log_activity(self.store, 'group', '在討論途中插話（%s）' % group.get('name', ''))
-        return dict(runId=group.get('runId'), interjected=True, waiting=not open_run, next=[(self.store.find('bots', x) or {}).get('name') for x in named])
 
     def start_group(self, group, targets, broadcast, resume=None):
         run_id = ID(); group.update(status='running', runId=run_id, activeJobId=None, runKind='steps')  # run_group opens it to 插話 once it knows it is an open discussion
@@ -404,11 +414,14 @@ class GroupRuns:
         """Lock held. 插話 that no turn read is answered in a new round, the way the same message sent now would be."""
         unseen, named, everyone = group.pop('interjectUnseen', None), [x for x in group.pop('interjectNext', None) or [] if x in group['botIds']], group.pop('interjectAll', False)
         said = next((m for m in group['messages'] if m['id'] == unseen), None) if unseen else None
+        line = set(group.pop('interjectQueued', None) or []); queued = [m for m in group['messages'] if m['id'] in line]  # 排在後面: every one of them, in order
         members = [b for b in (self.store.find('bots', x) for x in group['botIds']) if b]
-        if not members or not (said or named or everyone): return
+        if not members or not (said or named or everyone or queued): return
         group['runMode'] = group.get('mode') or 'free'
         if group['runMode'] == 'auto' and not task_on(self.store): group['runMode'] = 'free'
-        targets = [] if everyone else named or group_mentions((said or {}).get('content', ''), members)
+        texts = [m['content'] for m in queued + ([said] if said else [])]
+        everyone = everyone or any(group_everyone(t, members) for t in texts)
+        targets = [] if everyone else named or list(dict.fromkeys(x for t in texts for x in group_mentions(t, members)))
         self.start_group(group, targets or [b['id'] for b in members], not targets)
 
     def _pause_group(self, group, limit, paused):
@@ -495,8 +508,10 @@ class GroupRuns:
             engine = mode == 'auto' and not resume and broadcast and len(members) > 1 and task_on(store)
             if group.get('runId') == run_id:
                 group['runKind'] = 'free' if not engine and planned is None else 'steps'  # 插話 joins only an open discussion
-                if group['runKind'] == 'free':
-                    for m in group['messages']: m.pop('waiting', None)  # sent while it was getting ready
+                if group['runKind'] == 'free':  # sent while it was getting ready: a correction joins after all, anything new keeps waiting
+                    for m in [m for m in group['messages'] if m.get('waiting') and m['id'] in (group.get('interjectQueued') or []) and interject_wanted(m.get('content'), [x['name'] for x in members])]: self._join_run(group, m, members)
+                    for m in group['messages']:
+                        if m['id'] not in (group.get('interjectQueued') or []): m.pop('waiting', None)
         # With a host in the group and no specific Bot named, the host states the goal and assigns work,
         # members answer independently and at the same time, then respond to each other when the host asks,
         # and the host closes with conclusions, decisions for the user, action items and open questions.

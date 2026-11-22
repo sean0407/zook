@@ -29,6 +29,50 @@ def usage_rings(store):
     return out
 
 
+
+# ---- The order of the cards under 剩餘額度: dragged by the user (自訂), or most left first (自動). The phone lists its accounts in
+# the same order. A card is known by its CLI ('codex') or its CLI and extra account ('codex::<id>'); cards that are not in the saved
+# order (an account added since) come after the others, and saved keys whose account is gone are simply skipped.
+USAGE_CARD_SORTS = ('custom', 'auto')
+
+
+def usage_card_fields(body, changes):
+    """Checks the two settings. Used by upkeep_fields."""
+    if 'usageCardSort' in body:
+        if body['usageCardSort'] not in USAGE_CARD_SORTS: raise ValueError('排序方式無效。')
+        changes['usageCardSort'] = body['usageCardSort']
+    if 'usageCardOrder' in body:
+        order = body['usageCardOrder']
+        if not isinstance(order, list) or len(order) > 200 or any(not isinstance(k, str) or not k or len(k) > 120 for k in order): raise ValueError('卡片順序無效。')
+        changes['usageCardOrder'] = list(dict.fromkeys(order))
+
+
+def usage_card_focus(item, now=None):
+    """(rank, percent left) for one card in 自動: rank 0 has figures, 1 has none, 2 is used up, 3 is not signed in. The percent is
+    that of the limit worth watching now: the five-hour one when there is one, otherwise the weekly one."""
+    if item.get('status') != 'logged_in': return 3, 0.0
+    snap = item.get('quota') if isinstance(item.get('quota'), dict) else {}
+    now = time.time() if now is None else now
+    rows = [(str(w.get('label') or ''), _left(w, snap, now)) for w in snap.get('windows') or [] if isinstance(w, dict)]
+    rows = [r for r in rows if r[1] is not None]
+    if limit_reached_now(snap) or any(left <= 0 for _, left in rows): return 2, 0.0
+    if not rows or item.get('apiBilling'): return 1, 0.0
+    focus = next((r for r in rows if '小時' in r[0]), None) or next((r for r in rows if '週' in r[0]), None) or rows[0]
+    return 0, focus[1]
+
+
+def usage_card_sort(settings, items, key=lambda x: x['id']):
+    """items in the order the usage page shows them."""
+    saved = settings.get('usageCardOrder') if isinstance(settings.get('usageCardOrder'), list) else []
+    place = {k: i for i, k in enumerate(saved)}
+    custom = sorted(range(len(items)), key=lambda i: (place.get(key(items[i]), len(saved)), i))
+    if settings.get('usageCardSort') != 'auto': return [items[i] for i in custom]
+    rank = {i: n for n, i in enumerate(custom)}
+    def auto(i):
+        level, left = usage_card_focus(items[i])
+        return level, -left, rank[i]
+    return [items[i] for i in sorted(custom, key=auto)]
+
 # ---- The overview on the usage page: what the replies would have cost at API prices, per day and per model, and where the tokens went.
 # A subscription is not charged these amounts; the page says so. A CLI's own figure is used when it reports one (Claude, Grok);
 # otherwise the price list in backend/prices.json is applied, and a model that is not on the list has no price at all.

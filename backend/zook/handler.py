@@ -62,6 +62,8 @@ class Handler(BaseHTTPRequestHandler):
                 for a in item['profiles']:
                     account = a.pop('_account')
                     if item['id'] in AUTO_MODELS: a.update(autoOn=auto_account_on(store, account), autoBilled=account.get('type') == 'key' or auto_known_billed(known.get(auto_account_key(account))))
+        if phone:
+            with store.lock: result = usage_card_sort(store.data['settings'], result)  # the same order as the cards on the Mac
         return {'providers': result, 'usageDetectEvery': usage_detect_every(store)}
 
     def detect_usage(self):
@@ -646,7 +648,7 @@ class Handler(BaseHTTPRequestHandler):
                 with store.lock: return self.respond(201, self.server.create_team(body))
             inventory = None
             if (path in ('/api/chat', '/api/chat/redo') and self.command == 'POST') or (parts[:2] == ['api', 'bots'] and self.command in ('POST', 'PATCH')) or (len(parts) == 4 and parts[:2] == ['api', 'schedules']):
-                inventory = inventory_for(store)
+                inventory = inventory_for(store, tokens=path not in ('/api/chat', '/api/chat/redo'))  # a message only checks its Bot's choices; the reply signs in to connectors itself
             with store.lock:
                 if self.command == 'GET' and path == '/api/state':
                     for b in store.data['bots']: ensure_chats(b)  # Bots added by an import, too
@@ -692,7 +694,8 @@ class Handler(BaseHTTPRequestHandler):
                     once = send_key('bot:' + bot['id'], body); sent = send_seen(self.server, once)
                     if sent: return self.respond(202, dict(sent, duplicate=True))  # the same message again: its answer was lost on the way
                     notice = ''
-                    if body.get('interject') is True:  # 現在就告訴它: into the reply that is running, when its CLI can take it
+                    busy = any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs'])
+                    if busy and interject_wanted(body.get('content')):  # a correction or addition: into the reply that is running, when its CLI can take it
                         joined, why = interject_send(self.server, bot, body, by=('手機：' + str(self.device.get('name') or '已配對裝置')) if self.device else '')
                         if joined:
                             sent = {'jobId': joined['id'], 'interjected': True}; send_remember(self.server, once, sent)

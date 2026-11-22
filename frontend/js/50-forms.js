@@ -246,38 +246,16 @@
         if (pendingList().some(f => f.uploading)) { toast('檔案還在上傳，請稍等'); return; }
         const attachments = pendingList().map(f => f.id);
         if (!content && !attachments.length) return;
-        // One id per message. Sending the same text again after a failed attempt reuses it, so a send whose answer was lost is not answered twice.
-        const sendFor = effortKey(), last = (state.sendIds = state.sendIds || {})[sendFor];
-        const clientId = last && last.content === content ? last.id : (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2, 12));
-        state.sendIds[sendFor] = {content, id: clientId};
         const g = activeGroup();
-        if (g) {
-          if (g.status === 'running' && attachments.length) { toast('討論進行中只能傳文字；附件請等這輪結束或先停止'); return; }
-          const sent = await post('groups/' + encodeURIComponent(g.id) + '/messages', {content, attachments, effort: pickedEffort(), mode: currentGroupMode(g), clientId});
-          if (sent?.interjected) toast(sent.waiting ? '這種討論方式不中途改變，這輪結束後就回覆你這則' : sent.next?.length ? `已加入討論，${sent.next.join('、')} 接著回覆` : '已加入討論，接下來發言的成員都會看到');
-          delete state.sendIds[sendFor];
-          input.value = ''; updateInputMirror(); pendingList().length = 0; delete state.groupMode[g.id]; state.groupEstimate = null;
-          await refresh();
-          pollGroup(g.id);
-          return;
-        }
-        let botId = state.selected;
-        let result = await post('chat', {
-          botId,
-          content,
-          attachments,
-          effort: pickedEffort(),
-          plan: !!state.plan[botId],
-          long: !!state.long[botId],
-          interject: interjectNow(botId),
-          clientId
-        });
-        if (result.notice) toast(result.notice);
-        else if (result.interjected) toast('已告訴它，它會在下一步調整');
-        delete state.sendIds[sendFor];
-        input.value = ''; updateInputMirror(); pendingList().length = 0; state.plan[botId] = false; state.long[botId] = false;
-        await refresh();
-        if (result.jobId) poll(result.jobId, botId);  // a message that is waiting in line has no reply yet; it is picked up when its turn comes
+        if (g && g.status === 'running' && attachments.length) { toast('討論進行中只能傳文字；附件請等這輪結束或先停止'); return; }
+        // Shown at once; the reply, the refresh and anything slow on the Mac come after. Each message has its own id.
+        const botId = state.selected, b = activeBot();
+        const sending = g ? sendingAdd(g.id, 'groups/' + encodeURIComponent(g.id) + '/messages', {content, attachments, effort: pickedEffort(), mode: currentGroupMode(g)}, g.id)
+          : sendingAdd(botId + '/' + (b?.chatId || ''), 'chat', {botId, content, attachments, effort: pickedEffort(), plan: !!state.plan[botId], long: !!state.long[botId]});
+        pendingList().length = 0; input.value = ''; updateInputMirror();
+        if (g) { delete state.groupMode[g.id]; state.groupEstimate = null; } else { state.plan[botId] = false; state.long[botId] = false; }
+        render(true); $('#chat-input')?.focus();
+        await sendingSend(sending);
       } else if (form.id === 'bot-form') {
         let d = new FormData(form),
           id = form.dataset.id;

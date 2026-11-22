@@ -14,7 +14,7 @@ s = sys.stdin.read()
 name = re.search(r'現在輪到你（(.+?)）回覆', s); name = name.group(1) if name else 'solo'
 slow = os.environ['SLOW_MARK']
 if name == 'Alpha' and os.path.exists(slow): os.remove(slow); time.sleep(2.5)  # long enough for the user to speak
-open(os.environ['GROUP_LOG'], 'a').write(json.dumps(dict(name=name, saw='預算改成五萬' in s)) + '\n')
+open(os.environ['GROUP_LOG'], 'a').write(json.dumps(dict(name=name, saw='五萬' in s)) + '\n')
 text = name + ' 好'
 if kind == 'claude': print(json.dumps({'type': 'result', 'result': text, 'is_error': False}))
 else: print(json.dumps({'type': 'item.completed', 'item': {'type': 'agent_message', 'text': text}})); print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 10, 'output_tokens': 5}}))
@@ -91,7 +91,7 @@ class GroupInterject(unittest.TestCase):
         runs = self.runs()
         self.assertEqual([r['saw'] for r in runs[:3]], [False, False, False])  # 輪流 went on as planned
         self.assertTrue(runs[3:] and all(r['saw'] for r in runs[3:]))  # then the members answered it
-        said = next(m for m in found['messages'] if m.get('interjected'))
+        said = next(m for m in found['messages'] if m.get('queued'))
         self.assertNotIn('waiting', said)
 
     def test_stop_leaves_nothing_waiting(self):
@@ -103,10 +103,39 @@ class GroupInterject(unittest.TestCase):
         time.sleep(3)  # the stopped round would have answered it by now
         found = self.req('GET', '/api/groups/' + g['id'])[1]['group']
         self.assertEqual(found['status'], 'idle')
-        self.assertNotIn('waiting', next(m for m in found['messages'] if m.get('interjected')))
+        self.assertNotIn('waiting', next(m for m in found['messages'] if m.get('queued')))
         self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '@Alpha 繼續'})
         self.settle(g)
         self.assertTrue(self.runs()[-1]['saw'] and self.runs()[-1]['name'] == 'Alpha')  # read like any message; Beta was not called by the old @
+
+    def test_something_new_waits_for_the_end_of_the_round(self):
+        # The same rule as with one Bot: a new request in an open discussion is not read by this round's turns.
+        g = self.group(('Alpha', 'Beta', 'Gamma')); self.slow.write_text('1')
+        self.assertEqual(self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '大家討論活動'})[0], 202)
+        self.wait(lambda: not self.slow.exists(), 'Alpha did not start')
+        status, body = self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '請幫我寫一份下個月展覽活動的完整企劃書，總預算是五萬元，給整個團隊參考'})
+        self.assertEqual(status, 202, body); self.assertEqual((body['interjected'], body['queued'], body['waiting']), (False, True, True))
+        found = self.settle(g)
+        runs = self.runs()
+        self.assertEqual([(r['name'], r['saw']) for r in runs[:3]], [('Alpha', False), ('Beta', False), ('Gamma', False)])  # the round went on as it was
+        self.assertTrue(runs[3:] and all(r['saw'] for r in runs[3:]))  # then it was answered
+        said = next(m for m in found['messages'] if '展覽' in m['content'])
+        self.assertTrue(said.get('queued')); self.assertNotIn('waiting', said)  # shown as 排在後面
+
+    def test_a_correction_after_a_queued_message_does_not_drop_it(self):
+        g = self.group(('Alpha', 'Beta', 'Gamma')); self.slow.write_text('1')
+        self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '大家討論活動'})
+        self.wait(lambda: not self.slow.exists(), 'Alpha did not start')
+        a = self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '@Beta 請另外寫一份下個月展覽活動的完整企劃書，總預算是五萬元'})[1]
+        b = self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '@Gamma 請寫一份給客戶的完整說明信，說明報價的計算方式'})[1]
+        c = self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '等等，短一點'})[1]
+        self.assertEqual([x['queued'] for x in (a, b, c)], [True, True, False])
+        found = self.settle(g)
+        names = [r['name'] for r in self.runs()]
+        self.assertEqual(names[:3], ['Alpha', 'Beta', 'Gamma'])  # the round, with the correction read on the way
+        self.assertEqual(sorted(names[3:]), ['Beta', 'Gamma'])  # then both waiting messages, each to the member it named
+        self.assertTrue(all(r['saw'] for r in self.runs()[3:]))
+        self.assertFalse(any(m.get('waiting') for m in found['messages']))
 
     def test_files_wait_for_the_end_of_the_discussion(self):
         g = self.group(('Alpha', 'Beta')); self.slow.write_text('1')

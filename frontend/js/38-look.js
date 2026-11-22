@@ -72,20 +72,35 @@
     if (!input.value.trim()) { e.preventDefault(); e.stopImmediatePropagation(); hideSlash(); render(true); $('#chat-input')?.focus(); }
   }, true);
 
-// Sending while a Bot is still answering: wait in line, or tell it now (only a CLI that can take a message mid-reply; the others fall back to the line).
+// Sending: the message shows at once and is marked when the Mac has it; a failure is shown on the message itself, and 重新傳送
+// sends that same message again (same conversation, same files, same id, so the Mac never answers it twice). While a Bot is
+// answering, Zook decides by rule whether a message joins the running reply (已插話) or waits its turn (排在後面).
 (() => {
-  const BUSY_SENDS = [{id: 'queue', name: '排在後面', hint: '等它回覆完再送出'}, {id: 'now', name: '現在就告訴它', hint: '插進正在跑的回覆；做不到的模型會改成排隊'}];
-  state.interject = state.interject || {};
-  window.interjectNow = botId => botId in state.interject ? !!state.interject[botId] : state.data?.settings?.busySend === 'now';
-  window.busySendBar = b => {
-    const now = interjectNow(b.id), queue = state.data.settings.queueWhenBusy !== false;
-    return `<label class="interject-pick" title="Bot 還在回覆時，這則要現在告訴它還是排在後面">${toggle('data-interject', now, '現在就告訴它')}<span>${now ? '下一則：插話' : '下一則：排後面'}</span></label>${now || queue ? `<button class="send" type="submit" aria-label="${now ? '現在告訴它' : '排在後面傳送'}" title="${now ? '插進正在跑的回覆' : 'Bot 還在回覆，這則會排在後面'}">↑</button>` : ''}`;
+  state.sending = state.sending || [];
+  const newId = () => crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2, 12);
+  // where: 'bot/chat' or the group's id. path and body are the request, sent again unchanged by 重新傳送.
+  window.sendingAdd = (where, path, body, group) => { const s = {id: newId(), where, path, body: {...body, clientId: newId()}, group, at: Date.now()}; state.sending.push(s); return s; };
+  const forget = s => { state.sending = state.sending.filter(x => x !== s); };
+  // Drawn until the conversation itself has it, so it never blinks out between the answer and the refresh, and never shows twice.
+  const arrived = (s, messages, waiting) => [...messages.filter(m => m.role === 'user'), ...waiting].some(m => m.content === s.body.content && Date.parse(m.createdAt) >= s.at - 2000);
+  window.sendingView = (where, messages, waiting = []) => state.sending.filter(s => s.where === where && !(!s.error && arrived(s, messages, waiting))).map(s => `<div class="message user sending" data-sending="${esc(s.id)}"><div class="bubble">${esc(s.body.content || '（請看附件）')}</div>${s.error ? `<div class="interject-note error-text">沒有送出：${esc(s.error)}<button class="link" data-sending-retry="${esc(s.id)}">重新傳送</button><button class="link" data-sending-drop="${esc(s.id)}">移除</button></div>` : `<div class="interject-note">${s.done ? '已送出' : '傳送中…'}</div>`}</div>`).join('');
+  window.sendingSend = async s => {
+    s.error = ''; s.done = false;
+    let result;
+    try { result = await post(s.path, s.body); }
+    catch (err) { s.error = err.message || '沒有送出'; render(true); return null; }
+    s.done = true;
+    try { await refresh(); forget(s); } catch (_) { render(true); }  // kept (as 已送出) until a later refresh shows it
+    if (s.group) pollGroup(s.group);
+    else if (result.jobId) poll(result.jobId, s.body.botId);  // a message that is waiting in line has no reply yet; it is picked up when its turn comes
+    return result;
   };
-  window.busySendSection = () => settingRow('回覆中送出的訊息', 'Bot 還在回覆時送出的訊息預設怎麼處理；送出時也能在輸入框旁臨時切換', dropdown('busySend', state.data.settings.busySend || 'queue', BUSY_SENDS, 'data-busy-send'));
-  document.addEventListener('change', async e => {
-    if (e.target.dataset.interject !== undefined) { state.interject[state.selected] = e.target.checked; render(true); return; }
-    if (e.target.dataset.busySend === undefined) return;
-    try { state.data.settings = await post('settings', {busySend: e.target.value}, 'PATCH'); state.interject = {}; toast(e.target.value === 'now' ? '回覆中送出的訊息會現在告訴它' : '回覆中送出的訊息會排在後面'); }
-    catch (err) { toast(err.message); }
+  window.sentNote = m => m.queued ? (m.waiting ? '排在後面・這輪結束後回覆' : '排在後面') : m.interjected ? '已插話' : '';
+  document.addEventListener('click', e => {
+    const el = e.target.closest?.('[data-sending-retry], [data-sending-drop]');
+    const s = el && state.sending.find(x => x.id === (el.dataset.sendingRetry || el.dataset.sendingDrop));
+    if (!s) return;
+    if (el.dataset.sendingRetry) { sendingSend(s); render(true); return; }
+    forget(s); render(true);
   });
 })();

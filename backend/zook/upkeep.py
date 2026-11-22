@@ -222,7 +222,7 @@ def drop_removed_providers(store):
 
 SETTING_NAMES = {'permissionMode': '主動性', 'webSearch': '上網搜尋', 'browserAutomation': '排程與觸發可用內建瀏覽器', 'provider': '預設提供者', 'model': '預設模型', 'fallbacks': '備用模型', 'access': '存取範圍', 'accessFolder': '存取範圍',
                  'features': '功能開關', 'effort': '思考強度', 'remote': '手機連線', 'autoUpdateCheck': '自動檢查更新', 'usageDetectEvery': '自動偵測使用量', 'scheduleNotify': '通知', 'sharedMcp': '共用連接器', 'disabledSkills': 'Skills 開關',
-                 'disabledPlugins': '插件開關', 'autoModels': '自動選擇的模型', 'autoAccounts': '自動選擇的帳號', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步', 'voiceLang': '語音輸入語言', 'streamReplies': '回覆逐字顯示', 'queueWhenBusy': 'Bot 忙碌時排隊', 'busySend': '回覆中送出的訊息', 'keepCli': '保持 CLI 開啟', 'autoCompact': '對話過長時自動整理'}
+                 'disabledPlugins': '插件開關', 'autoModels': '自動選擇的模型', 'autoAccounts': '自動選擇的帳號', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步', 'voiceLang': '語音輸入語言', 'streamReplies': '回覆逐字顯示', 'queueWhenBusy': 'Bot 忙碌時排隊', 'usageCardSort': '剩餘額度排序', 'usageCardOrder': '剩餘額度排序', 'keepCli': '保持 CLI 開啟', 'autoCompact': '對話過長時自動整理'}
 BOT_FIELD_NAMES = {'name': '名稱', 'persona': '人格檔案', 'instructions': '工作指示', 'provider': '模型', 'model': '模型', 'account': '帳號', 'permissionMode': '主動性', 'access': '存取範圍', 'accessFolder': '存取範圍',
                    'fallbacks': '備用模型', 'features': '功能開關', 'effort': '思考強度', 'isAdmin': '管理員身分', 'enabledMcp': '連接器', 'scripts': '允許本機腳本'}
 
@@ -377,9 +377,7 @@ def upkeep_fields(data, body, changes):
     if 'recoveredSeen' in body:
         if body['recoveredSeen'] is not True: raise ValueError('recoveredSeen 無效。')
         changes['recovered'] = None
-    if 'busySend' in body:
-        if body['busySend'] not in ('queue', 'now'): raise ValueError('busySend 無效。')
-        changes['busySend'] = body['busySend']
+    usage_card_fields(body, changes)
     if 'queueWhenBusy' in body:
         if not isinstance(body['queueWhenBusy'], bool): raise ValueError('queueWhenBusy 無效。')
         changes['queueWhenBusy'] = body['queueWhenBusy']

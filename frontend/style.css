@@ -1567,6 +1567,11 @@ button.run-row:hover { background: #f1f1f1; }
 .usage-auto { display: grid; grid-template-columns: auto auto; align-items: center; gap: 2px 8px; }
 .usage-auto .dd { width: auto; min-width: 128px; }
 .usage-auto-label { font-size: 13px; color: #555; }
+.card-sort { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.card-sort .dd { width: auto; min-width: 190px; }
+.account-card[draggable="true"] { cursor: grab; }
+.account-card.drop-before { box-shadow: -3px 0 0 #2585f6; }
+.account-card.drop-after { box-shadow: 3px 0 0 #2585f6; }
 .usage-auto small { grid-column: 1 / -1; font-size: 11px; text-align: right; }
 .model-intro { margin: 0 0 16px; max-width: 760px; }
 .model-card .quota-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1866,8 +1871,8 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .work-none { color:var(--muted); font-size:12.5px; }
 .group-estimate { text-align:left; margin:5px 6px 0 16px; }
 /* Sending while a Bot is answering: 插話 or 排隊 */
-.interject-pick { display:inline-flex; align-items:center; gap:6px; font-size:12px; color:#666; white-space:nowrap; margin:0 2px; }
-.interject-pick .switch { transform:scale(.8); margin:0; }
+.message.sending .bubble { opacity:.75; }
+.interject-note .link { margin-left:8px; font-size:11px; }
 .interject-note { font-size:11px; color:#8a8a8a; text-align:right; margin-top:3px; }
 
 /* 剩餘額度: one card per account, all the same size */
