@@ -6,6 +6,12 @@ OUTPUT_PREVIEW = {'.txt': 'text', '.md': 'markdown', '.markdown': 'markdown', '.
 _OUTPUT_SKIP = ('attachments', 'node_modules', '__pycache__')
 
 
+def scratch_name(name):
+    """Office lock files (~$報告.pptx, .~lock.報告.odp#), temporary files and Finder's .DS_Store are never something a Bot handed over."""
+    low = str(name).lower()
+    return low.startswith(('~$', '.')) or low.endswith(('.tmp', '.temp', '.crdownload')) or low in ('thumbs.db', 'desktop.ini')
+
+
 def _output_kind(name):
     suffix = pathlib.Path(name).suffix.lower()
     return 'image' if suffix in IMAGE_TYPES else OUTPUT_PREVIEW.get(suffix, 'file')
@@ -41,7 +47,7 @@ def bot_outputs(store, bot):
         try: info = os.lstat(path)
         except OSError: return
         name = os.path.basename(path)
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or name.startswith('.') or path in found: return  # hard links could show another file
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or scratch_name(name) or path in found: return  # hard links could show another file
         if since is not None and not since <= info.st_mtime <= until: return
         found[path] = dict(id=hashlib.sha256(path.encode()).hexdigest()[:20], name=name, path=path, size=info.st_size, kind=_output_kind(name),
                            at=datetime.datetime.fromtimestamp(info.st_mtime, datetime.timezone.utc).isoformat())

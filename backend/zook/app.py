@@ -590,7 +590,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 env['MCP_TOOL_TIMEOUT'] = str(wait * 1000)  # Claude Code, in milliseconds
                 env['ZOOK_WORKER_URL'] = 'http://127.0.0.1:%d/api/worker/%s' % (self.server_address[1], job_id)
                 descriptions = ['- %s（%s）：%s' % (x['name'], x['id'], (x.get('description') or '')[:150].replace('\n', ' ')) for x in inventory['skills'] if x['id'] in skill_ids]
-                if descriptions and not resume: prompt += '\n共用 Skills（符合任務時，先用 zook_read_skill 讀取完整指示再照做）：\n' + '\n'.join(descriptions)
+                if descriptions and not resume: prompt += '\n共用 Skills（任務明確是它寫的用途時，才用 zook_read_skill 讀取完整指示再照做；只是輸出格式相同不算，例如一般報表不用海報或藝術設計的 Skill）：\n' + '\n'.join(descriptions)
                 if bot.get('isAdmin') and not resume: prompt += '\n你是團隊總管：可以用 zook_list_team 查看所有 Bot 和群組，用 zook_create_bot 新增 Bot，用 zook_create_group 把 Bot 拉成群組，用 zook_start_group_discussion 在群組發起討論。新增前先確認沒有重複的 Bot。'
                 if not resume: prompt += feature_note(features, kind)
                 if not planning and not resume: prompt += schedule_instructions()

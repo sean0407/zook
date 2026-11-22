@@ -10,10 +10,10 @@ def group_files_dir(store, group_id):
 
 
 def _plain_files(folder):
-    """Ordinary visible files directly in this folder; links and folders are ignored."""
+    """Ordinary visible files directly in this folder; links, folders, lock and temporary files are ignored."""
     try:
         with os.scandir(str(folder)) as found:
-            return sorted([e for e in found if e.is_file(follow_symlinks=False) and not e.name.startswith('.')], key=lambda e: e.name)
+            return sorted([e for e in found if e.is_file(follow_symlinks=False) and not scratch_name(e.name)], key=lambda e: e.name)
     except OSError: return []
 
 
@@ -125,8 +125,8 @@ def sync_group_files_out(store, group_id, bot_name, bot_id, seen):
     saved, skipped = [], []
     try:
         for entry_name in sorted(os.listdir(folder_fd)):
-            if entry_name.startswith('.'): continue
-            temp = shared / ('.incoming-' + ID())
+            if scratch_name(entry_name): continue  # e.g. PowerPoint's ~$ lock file is not a shared file
+            temp =shared / ('.incoming-' + ID())
             try:
                 try: copied = _read_bot_file(folder_fd, entry_name, temp)
                 except OSError: skipped.append(_short_name(entry_name)); continue

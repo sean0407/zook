@@ -43,6 +43,14 @@ class GroupFileSafety(unittest.TestCase):
         (copy / 'a.txt').write_text('a'); (copy / 'drafts').mkdir(); (copy / 'z.txt').write_text('z')
         self.assertEqual(server.sync_group_files_out(self.store, 'g1', 'B', 'b1', seen)[0], ['a.txt', 'z.txt'])
 
+    def test_lock_and_temporary_files_are_not_shared(self):
+        """巡檢 #25: PowerPoint's ~$ lock file showed up as a group file with download and 「請其他成員查核」."""
+        seen = server.sync_group_files_in(self.store, 'g1', 'b1'); copy = server.group_copy_folder(self.store, 'b1')
+        for name in ('提案.pptx', '~$提案.pptx', '.~lock.提案.odp#', 'draft.TMP', '.DS_Store', 'Thumbs.db'): (copy / name).write_text('x')
+        self.assertEqual(server.sync_group_files_out(self.store, 'g1', 'B', 'b1', seen)[0], ['提案.pptx'])
+        (self.shared / '~$keep.txt').write_text('lock')  # one already there from before is not listed either
+        self.assertEqual([e.name for e in server._plain_files(self.shared)], ['keep.txt', '提案.pptx'])
+
     def test_hidden_answers_are_not_copied_to_later_members(self):
         (self.shared / 'other.txt').write_text('answer')
         self.assertEqual(list(server.sync_group_files_in(self.store, 'g1', 'b1', {'other.txt'})), ['keep.txt'])

@@ -28,6 +28,10 @@ class OutputsTest(unittest.TestCase):
         (self.work / 'attachments').mkdir(); (self.work / 'attachments/in.txt').write_text('x'); outside = self.root / 'private.txt'; outside.write_text('private'); (self.work / 'leak.txt').symlink_to(outside)
         found = {o['name']: o for o in self.outputs()}; self.assertEqual(sorted(found), ['data.csv', 'report.md']); self.assertEqual(found['report.md']['kind'], 'markdown')
 
+    def test_lock_and_temporary_files_are_not_outputs(self):
+        for name in ('deck.pptx', '~$deck.pptx', 'save.tmp', '.DS_Store'): (self.work / name).write_text('x')
+        self.assertEqual([o['name'] for o in self.outputs()], ['deck.pptx'])
+
     def test_recorded_writes_count_only_when_the_file_really_changed_and_is_no_link(self):
         import time
         secret = self.root / 'id_rsa'; secret.write_text('private'); os.utime(str(secret), (time.time() - 9000, time.time() - 9000))
