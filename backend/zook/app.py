@@ -452,6 +452,8 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 used_up = quota_exhausted(store, p + '@' + (a or own['id'])) if a or own else quota_exhausted(store, p)
                 reason = '尚未安裝' if not find_cli(p) else '額度已用完' if used_up else '用量預算已用完' if budget_blocks(store, p) else None  # 'stop' too: a backup that is over its own budget must not answer instead
                 if reason and len(chain) > 1: skipped[x] = reason; chain.remove(x)
+            keep = 1 if chain and chain[0] == first else 0  # the chosen model keeps its place; when it was skipped, every backup is sorted
+            chain = chain[:keep] + backups_with_room(store, bot, chain[keep:])  # backups nearly used up go last (使用者 2026-11-22)
             if budget_blocks(store, chain[0][0]) == 'stop':
                 job.update(status='failed', error='這個月的用量預算已用完。可到「各模型使用量」調整上限。', finishedAt=NOW())
                 store.finish_message(job, '', 'failed'); store.save(); return
