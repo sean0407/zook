@@ -553,9 +553,13 @@ def limit_locally(bot):
     if had or provider_kind(_bot_provider(bot)) in GATED_KINDS: bot['localLimit'] = True
 
 
-def local_choice(before, after, body):
+def local_choice(before, after, body, local=True):
     """Saving a Bot on this Mac. Only a model the user picks here (another CLI than before) sets the whole-Mac permission; a name or
-    persona edit does not. Choosing a model, 主動性 or 存取範圍 here ends a limit set by sync or a backup."""
+    persona edit does not. Choosing a model, 主動性 or 存取範圍 here ends a limit set by sync, a backup or another Bot.
+    local: the request came from this Mac's own window, not a paired phone; anything else never widens what the Bot may reach."""
+    if not local:
+        if (body.get('provider') or '') != (before.get('provider') or '') and 'provider' in body: limit_locally(after)
+        return
     if any(k in body and (body[k] or '') != (before.get(k) or '') for k in ('provider', 'account')): after.pop('syncedModel', None)  # picked here
     if 'provider' in body and (body['provider'] or '') != (before.get('provider') or ''):
         set_gate_full(after); after.pop('localLimit', None)
@@ -581,9 +585,11 @@ def set_access_after_match(bot, grant):
 
 
 def hold_in(bot):
-    """A Bot not set up by the user on this Mac: no whole Mac; a Claude or Cursor one keeps to its workspace and 謹慎."""
-    bot.pop('gateFull', None)
-    if provider_kind(_bot_provider(bot)) in GATED_KINDS and bot.get('provider') != 'auto': bot['localLimit'] = True
+    """A Bot the user did not set up on this Mac (made by another Bot, arrived from another Mac, or from a copy this Mac never had):
+    its workspace and 謹慎, never the whole Mac, 管理員 or local scripts, whatever its model or the defaults in 設定. Recorded on the
+    Bot, so 自動選擇 and re-matching keep it (set_access_after_match, auto_on_edit) until the user changes it here (local_choice)."""
+    bot.pop('gateFull', None); bot.pop('accessFolder', None)
+    bot.update(localLimit=True, access='workspace', permissionMode='manual', isAdmin=False, scripts=False)
 
 
 def set_gate_full(bot):

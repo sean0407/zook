@@ -100,6 +100,7 @@ def backup_restore(app, name):
         browser_keep_local(store.data, data)  # a copy never turns the browser on
         task_keep_local(store.data, data)  # nor 任務引擎, nor work that starts by itself
         usage_detect_keep_local(store.data, data)  # nor 自動偵測使用量
+        restore_keep_access(store.data, data)  # what this Mac allows each Bot is what it allows now (gate.py)
         with store.path.open('w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False)
         Store.keep_aside = True  # the conversations that are there now stay in chats.old until the copy is known to be in place
         try: fresh = Store(store.dir, recover=False)  # runs the same upgrades an old data file gets at startup

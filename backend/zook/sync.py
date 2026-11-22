@@ -158,6 +158,7 @@ def sync_put(store, key, value, gone=()):
         if bot and bot['id'] in busy: return False
         if not bot:
             bot = dict(id=parts[1], messages=[], chats=[], chatId=None, enabledSkills=[], enabledMcp=[], allowCommands=True, webSearch=False)
+            hold_in(bot)  # never set up on this Mac: its workspace and 謹慎 until the user changes it here, never the defaults in 設定
             store.data['bots'].append(bot)
             if store.data.get('deletedBots'): store.data['deletedBots'] = [b for b in store.data['deletedBots'] if b.get('id') != parts[1]]  # back from another Mac: it is no longer a Bot kept aside
         if not value['provider'] and bot.get('provider') and bot['provider'] not in SYNC_PROVIDERS: value = dict(value, provider=bot['provider'], model=bot.get('model') or '')  # this Mac's own model for it stays

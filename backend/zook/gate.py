@@ -156,6 +156,31 @@ def _local_migrate(store):
     if changed: store.save()
 
 
+# What this Mac allows a Bot. Never taken from a copy put back: a backup holds what was allowed then, maybe on another Mac.
+LOCAL_GRANTS = ('access', 'accessFolder', 'permissionMode', 'isAdmin', 'scripts', 'gateFull', 'localLimit')
+
+
+def restore_keep_access(old, new):
+    """A copy put back (backup_restore). The defaults in 設定 and each Bot's 存取範圍, 主動性, 管理員 and local scripts are what this
+    Mac has now. A Bot this Mac has never had keeps to its workspace and 謹慎 (hold_in) until the user changes it here; a Bot whose
+    model in the copy is another CLI than here loses the whole-Mac permission, as when another Mac changes it (limit_locally)."""
+    for key in ('access', 'accessFolder', 'permissionMode'):
+        if key in old['settings']: new['settings'][key] = copy.deepcopy(old['settings'][key])
+        else: new['settings'].pop(key, None)
+    listed = lambda data: [b for b in (data.get('bots') or []) + (data.get('deletedBots') or []) if isinstance(b, dict)]
+    here = {b.get('id'): b for b in listed(old)}
+    kind = lambda bot, data: provider_kind(bot.get('provider') or (data.get('settings') or {}).get('provider', 'codex'))
+    for bot in listed(new):
+        mine = here.get(bot.get('id'))
+        if mine is None: hold_in(bot); continue
+        for key in LOCAL_GRANTS:
+            if key in mine: bot[key] = copy.deepcopy(mine[key])
+            else: bot.pop(key, None)
+        if kind(bot, new) != kind(mine, old):
+            had = bot.pop('gateFull', None)
+            if had or kind(bot, new) in GATED_KINDS: bot['localLimit'] = True
+
+
 def worker_gate(server, conn, worker, job_id, params):
     """The worker's 'gate' request (handler.py): ask on the approval card while the CLI's hook waits. When the hook stops waiting
     (its CLI gave up or ended it), the card is taken down rather than left for an answer that can no longer reach anything."""

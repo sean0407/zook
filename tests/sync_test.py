@@ -135,7 +135,7 @@ class SyncTest(unittest.TestCase):
         self.assertIn('權限測試', bots)  # a time far in the future is refused, for the change and for the deletion
         self.assertNotIn('路徑', bots)
         new = bots['外來的']
-        self.assertEqual((new.get('permissionMode'), new.get('access'), new['isAdmin'], new['provider'], new['enabledMcp']), (None, None, False, '', []))
+        self.assertEqual((new['permissionMode'], new['access'], new['localLimit'], new['isAdmin'], new['provider'], new['enabledMcp']), ('manual', 'workspace', True, False, '', []))  # held in here, never the file's
         self.assertEqual(new['messages'], [])  # the conversation with a made-up role was refused whole
         self.assertNotEqual(self.b.state()['settings'].get('rules'), 'x' * 20000)
         # Stopping removes this Mac's file and leaves its data alone.

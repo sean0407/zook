@@ -888,7 +888,7 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) == 3 and parts[:2] == ['api', 'bots'] and self.command == 'PATCH':
                     bot = store.find('bots', parts[2])
                     if not bot: return self.error(404, '找不到機器人。')
-                    body = self.body(); candidate = copy.deepcopy(bot); update(candidate, body, 'bot'); validate_selection(candidate, inventory); local_choice(bot, candidate, body); notice = auto_on_edit(store, bot, candidate, body); bot.clear(); bot.update(candidate); store.save(); watch_auto_status(store, bot)
+                    body = self.body(); candidate = copy.deepcopy(bot); update(candidate, body, 'bot'); validate_selection(candidate, inventory); local_choice(bot, candidate, body, local=not self.via_bridge and self.device is None); notice = auto_on_edit(store, bot, candidate, body); bot.clear(); bot.update(candidate); store.save(); watch_auto_status(store, bot)
                     if 'permissionMode' in body: self.server.release_approvals()
                     if (bot.get('intro') or {}).get('source') != intro_source(bot): bot.pop('intro', None); store.save(); self.server.want_intro(bot['id'])  # what it is changed: a new greeting
                     return self.respond(200, dict(bot, **({'autoNotice': notice} if notice else {})))
