@@ -85,7 +85,7 @@
   const usageAutoNow = () => state.usageAuto?.usageDetectEvery ?? (state.quota && !state.quota.error ? state.quota.usageDetectEvery : undefined) ?? state.data?.settings?.usageDetectEvery ?? 0;
   function usageAutoPick() {
     const every = String(usageAutoNow() || 0);
-    return `<div class="usage-auto"><span class="usage-auto-label">自動偵測</span>${dropdown('usageDetectEvery', every, USAGE_AUTO, 'data-usage-auto')}<small class="muted">自動偵測時，Claude 每次會用到一點點額度</small></div>`;
+    return `<div class="usage-auto"><span class="usage-auto-label">自動偵測</span>${dropdown('usageDetectEvery', every, USAGE_AUTO, 'data-usage-auto')}</div>`;
   }
   document.addEventListener('change', async e => {
     if (e.target.dataset.usageAuto === undefined) return;
