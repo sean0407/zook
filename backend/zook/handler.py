@@ -147,12 +147,17 @@ class Handler(BaseHTTPRequestHandler):
                 logins.pop(login_key, None)
                 with store.lock:
                     store.data['accounts'] = [a for a in store.data['accounts'] if a['id'] != account['id']]
-                    for b in store.data['bots']:
-                        if b.get('account') == account['id']: b['account'] = ''  # back to the CLI's own sign-in
+                    users = [b for b in store.data['bots'] if b.get('account') == account['id']]
+                    for b in users: b['account'] = ''  # back to the CLI's own sign-in
                     (store.data.get('accountInfo') or {}).pop(login_key, None); (store.data.get('quota') or {}).pop(login_key, None); store.save()
                 secret_delete(account['id'])
-                if provider == 'antigravity': agy_keychain_forget(account['id'])  # the account's keychain password; the keychain goes with the folder
-                shutil.rmtree(str(_active['dir'] / 'accounts' / account['id']), ignore_errors=True)
+                problem = agy_account_remove(self.server, account['id']) if provider == 'antigravity' else shutil.rmtree(str(_active['dir'] / 'accounts' / account['id']), ignore_errors=True)
+                if problem:  # its agy keychain could not be cleared: the account stays, so removing it can be tried again
+                    with store.lock:
+                        store.data['accounts'].append(account)
+                        for b in users: b['account'] = account['id']
+                        store.save()
+                    return self.error(500, problem)
                 return self.respond(200, {'ok': True})
             if action == 'add':
                 with self.server.store.lock:

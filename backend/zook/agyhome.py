@@ -26,7 +26,14 @@ AGY_NEVER = ('.ssh', '.config', '.aws', '.gnupg', '.docker', '.kube', 'Library/K
 
 def agy_account_home(account_id, home=None):
     """The folder agy uses as home for one extra account, with the user's everyday folders linked in. A real folder agy made at
-    one of those names is left alone; a link pointing anywhere else is put back."""
+    one of those names is left alone; a link pointing anywhere else is put back. Also the account's own keychain (agykeychain.py).
+    An account that was just removed is not made again."""
+    with agy_account_lock(account_id):
+        if not find_account(account_id, 'antigravity'): raise RuntimeError('找不到這個帳號。')
+        return _agy_account_home(account_id, home)
+
+
+def _agy_account_home(account_id, home):
     folder = account_dir(account_id); home = pathlib.Path(home or pathlib.Path.home())
     if folder.is_symlink() or folder.parent.is_symlink(): raise RuntimeError('帳號資料夾不正確，請移除這個帳號後重新新增。')
     library = folder / 'Library'
@@ -41,92 +48,6 @@ def agy_account_home(account_id, home=None):
         if target: os.symlink(str(target), str(link))
     agy_keychain(account_id, folder)
     return folder
-
-
-# agy saves its sign-in through /usr/bin/security into the default keychain, which macOS looks up under $HOME as
-# Library/Keychains/login.keychain-db. The account's home has none, so macOS asks "a keychain cannot be found". Each extra account
-# gets its own keychain there instead; its random password lives in the user's own login keychain and only ever reaches `security`
-# on stdin (`security -i`), never on a command line, in the environment, a file or a log. The user's search list and default
-# keychain are never touched: every `security` call on the account keychain runs with HOME set to the account's folder.
-# A keychain file named login.keychain-db cannot be unlocked with a password, so the real file has another name and
-# login.keychain-db is a link to it, which is still what the default lookup finds.
-AGY_KEYCHAIN_SERVICE = 'Zook Antigravity keychain'
-AGY_KEYCHAIN = 'zook-agy.keychain-db'
-_agy_keychain_cache = {}
-
-
-def _agy_security(command, home):
-    """One `security -i` command read from stdin, so nothing secret is on a command line. True when it worked."""
-    env = dict(os.environ, HOME=str(home))
-    try: p = subprocess.run(['/usr/bin/security', '-i'], input=(command + '\n').encode(), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
-    except (OSError, subprocess.TimeoutExpired): return False
-    return p.returncode == 0
-
-
-def _agy_secret_file(account_id):
-    folder = os.environ.get('ZOOK_SECRETS_DIR')  # tests: a file instead of the user's keychain
-    return pathlib.Path(folder) / ('agy-keychain-' + account_id) if folder else None
-
-
-def _agy_keychain_password(account_id, new=None):
-    """The account keychain's password from the user's login keychain; with `new`, store it first."""
-    file = _agy_secret_file(account_id)
-    if new is not None:
-        _agy_keychain_cache.pop(account_id, None)
-        if file:
-            fd = os.open(str(file), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, 'w') as f: f.write(new)
-        elif not _agy_security('add-generic-password -U -s %s -a %s -w %s' % (shlex.quote(AGY_KEYCHAIN_SERVICE), account_id, new), pathlib.Path.home()): return ''
-    if account_id in _agy_keychain_cache: return _agy_keychain_cache[account_id]
-    if file:
-        try: value = file.read_text().strip()
-        except OSError: value = ''
-    else:
-        try: p = subprocess.run(['/usr/bin/security', 'find-generic-password', '-s', AGY_KEYCHAIN_SERVICE, '-a', account_id, '-w'],
-                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20)
-        except (OSError, subprocess.TimeoutExpired): return ''
-        value = p.stdout.decode('utf-8', 'replace').strip() if p.returncode == 0 else ''
-    if value: _agy_keychain_cache[account_id] = value
-    return value
-
-
-def agy_keychain(account_id, folder):
-    """Make sure the account's own keychain exists, is the default one under its home, and is unlocked with no auto-lock.
-    An account made before this (or whose password went missing) gets a new one. Problems are not fatal: agy then falls back
-    to its own files, as it did before."""
-    keychains = folder / 'Library' / 'Keychains'
-    try:
-        if keychains.is_symlink() or (os.path.lexists(str(keychains)) and not keychains.is_dir()): keychains.unlink()
-        keychains.mkdir(mode=0o700, parents=True, exist_ok=True)
-        real, link = keychains / AGY_KEYCHAIN, keychains / 'login.keychain-db'
-        if real.is_symlink(): real.unlink()
-        password = _agy_keychain_password(account_id) if real.is_file() else ''
-        if not password:
-            for path in (real, link):
-                if os.path.lexists(str(path)): path.unlink()
-            password = secrets.token_hex(32)
-            if not _agy_keychain_password(account_id, password): return False
-            if not _agy_security('create-keychain -p %s %s' % (password, shlex.quote(str(real))), folder): return False
-        if not link.is_symlink() or os.readlink(str(link)) != AGY_KEYCHAIN:
-            if os.path.lexists(str(link)): link.unlink()
-            os.symlink(AGY_KEYCHAIN, str(link))
-        target = shlex.quote(str(real))
-        return _agy_security('unlock-keychain -p %s %s' % (password, target), folder) and _agy_security('set-keychain-settings ' + target, folder)
-    except OSError: return False
-
-
-def agy_keychain_forget(account_id):
-    """When an extra account is removed, its keychain password goes too; the keychain file goes with the account's folder."""
-    _agy_keychain_cache.pop(account_id, None)
-    if not ACCOUNT_ID.fullmatch(account_id or ''): return
-    file = _agy_secret_file(account_id)
-    if file:
-        try: file.unlink()
-        except OSError: pass
-        return
-    try: subprocess.run(['/usr/bin/security', 'delete-generic-password', '-s', AGY_KEYCHAIN_SERVICE, '-a', account_id],
-                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
-    except (OSError, subprocess.TimeoutExpired): pass
 
 
 def can_add_login(provider):

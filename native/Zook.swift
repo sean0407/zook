@@ -166,6 +166,7 @@ final class ZookApp: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNaviga
             task.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
             task.arguments = [script.path, "--port", "0", "--data-dir", dataDir.path, "--assets", resources.appendingPathComponent("frontend").path]
             var env = ProcessInfo.processInfo.environment
+            env.removeValue(forKey: "ZOOK_SECRETS_DIR")  // a test setting: keys always go to the Keychain in the App
             env["PYTHONUNBUFFERED"] = "1"
             env["PYTHONDONTWRITEBYTECODE"] = "1"
             env["PATH"] = "\(NSHomeDirectory())/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
