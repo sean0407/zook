@@ -97,8 +97,7 @@ def pack_import(store, raw):
             with store.lock:
                 if any(same_name(c['name']) == same_name(record['name']) for c in store.data['connectors']): result['skipped'].append(record['name']); continue
                 store.data['connectors'].append(record)
-                if item.get('on') is True and not waiting:
-                    st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + ['zook:' + record['id']]))
+                # A pack never turns a connector on: it can start a program, so the user turns it on here (Skills 與連接器).
                 store.save()
             result['connectors'].append(record['name'])
             if waiting: result['needKeys'].append(record['name'])

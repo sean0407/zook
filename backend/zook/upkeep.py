@@ -59,6 +59,11 @@ def backup_check(data):
     for key in ('bots', 'groups', 'knowledge', 'memories', 'schedules', 'jobs', 'skills', 'connectors', 'accounts'):
         if not isinstance(data.get(key, []), list) or any(not isinstance(x, dict) or not isinstance(x.get('id'), str) for x in data.get(key, [])): raise ValueError('備份檔的內容不完整。')
     if any(not isinstance(b.get('name'), str) for b in data['bots']): raise ValueError('備份檔的內容不完整。')
+    # Ids name folders (a Bot's workspace, conversation files): only the shape Zook makes.
+    trash = data.get('deletedBots') or []
+    if not isinstance(trash, list) or any(not isinstance(b, dict) or not SYNC_ID.fullmatch(str(b.get('id') or '')) for b in trash): raise ValueError('備份檔的內容不完整。')
+    if any(not SYNC_ID.fullmatch(b['id']) for b in data['bots'] + (data.get('groups') or [])): raise ValueError('備份檔的內容不完整。')
+    if any(not isinstance(c, dict) or not SYNC_ID.fullmatch(str(c.get('id') or '')) for b in data['bots'] + trash for c in (b.get('chats') if isinstance(b.get('chats'), list) else [])): raise ValueError('備份檔的內容不完整。')
     for g in data.get('groups') or []:
         if 'taskRun' in g and not task_run_ok(g['taskRun']): g.pop('taskRun')  # 任務引擎's books, only in the shape Zook writes
     task_settings_clean(data['settings'])
@@ -101,6 +106,7 @@ def backup_restore(app, name):
         task_keep_local(store.data, data)  # nor 任務引擎, nor work that starts by itself
         usage_detect_keep_local(store.data, data)  # nor 自動偵測使用量
         restore_keep_access(store.data, data)  # what this Mac allows each Bot is what it allows now (gate.py)
+        here = copy.deepcopy(store.data)
         with store.path.open('w', encoding='utf-8') as f: json.dump(data, f, ensure_ascii=False)
         Store.keep_aside = True  # the conversations that are there now stay in chats.old until the copy is known to be in place
         try: fresh = Store(store.dir, recover=False)  # runs the same upgrades an old data file gets at startup
@@ -115,6 +121,7 @@ def backup_restore(app, name):
         except OSError: pass
         raise ValueError('這份備份無法讀取，資料沒有變動。')
     shutil.rmtree(str(aside), ignore_errors=True)
+    restore_keep_access(here, fresh.data)  # and after the upgrades the loaded file got
     store.data = fresh.data; _active['data'] = store.data
     store.chat_forget()  # the files on disk are the copy's now
     store.save(everything=True)
@@ -144,6 +151,9 @@ def recover_data(store):
             store.data = backup_check(backup_read(backup_dir(store) / backup['name']))
         except (OSError, ValueError, UnicodeError, RecursionError, EOFError): continue
         for bot in store.data['bots']: bot.pop('queue', None)
+        # Nothing on this Mac says what it allows now, and the copy may be from before something was taken back: every Bot is held in,
+        # no connector or custom CLI is on, and phones pair again.
+        restore_keep_access(NOTHING_HERE(), store.data); store.data['remoteDevices'] = []
         log_activity(store, 'backup', '資料檔無法讀取，改用備份 %s（損壞的檔案留存為 %s）' % (backup['name'], kept or '無法留存'), by='Zook')
         return dict(at=NOW(), backup=backup['name'], backupAt=backup['at'], kept=kept)
     log_activity(store, 'backup', '資料檔無法讀取，也沒有可用的備份，從全新狀態開始（損壞的檔案留存為 %s）' % (kept or '無法留存'), by='Zook')
@@ -547,7 +557,8 @@ def restore_bot(store, bot_id):
     trash = store.data.get('deletedBots') or []
     kept = next((b for b in trash if b.get('id') == bot_id), None)
     if not kept or store.find('bots', bot_id): raise ValueError('找不到可以喚回的 Bot。')
-    bot = copy.deepcopy(kept); bot.pop('deletedAt', None); bot.pop('recovered', None)
+    bot = copy.deepcopy(kept); bot.pop('deletedAt', None)
+    if bot.pop('recovered', None): hold_in(bot)  # found in an old copy, not deleted here
     if bot.get('provider') in REMOVED_PROVIDERS: bot.update(provider=AUTO, model='', account='')  # set to a CLI Zook no longer has
     if bot.get('isAdmin') and any(b.get('isAdmin') for b in store.data['bots']): bot['isAdmin'] = False  # there is one 管理員
     bot.setdefault('isAdmin', False); bot['pinned'] = False; bot['scripts'] = False  # local scripts are switched on again on purpose, if at all
@@ -582,6 +593,7 @@ def recover_deleted_bots(store):
         for bot in (old.get('bots') if isinstance(old, dict) and isinstance(old.get('bots'), list) else []):
             if isinstance(bot, dict) and bot.get('id') in wanted and isinstance(bot.get('name'), str) and bot['name'].strip():
                 wanted.discard(bot['id'])
-                store.data.setdefault('deletedBots', []).append(dict(copy.deepcopy(bot), deletedAt='', recovered=path.name))
+                found = dict(copy.deepcopy(bot), deletedAt='', recovered=path.name); hold_in(found)  # an old copy is not what this Mac allows now
+                store.data.setdefault('deletedBots', []).append(found)
     del store.data.get('deletedBots', [])[:-TRASH_KEEP]
     return True

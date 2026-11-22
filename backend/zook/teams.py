@@ -77,7 +77,8 @@ def tool_bot_fields(store, args):
     fields, notes = {}, []
     provider = str(args.get('provider') or '').strip()
     if provider:
-        if provider != AUTO and not P.spec(store.data, provider): notes.append('找不到模型「%s」，改用自動選擇。' % provider)
+        if provider.startswith(P.CUSTOM_PREFIX): notes.append('Bot 新增的 Bot 不能用自訂 CLI「%s」，改用自動選擇；要用請在 Mac 上設定。' % provider)
+        elif provider != AUTO and not P.spec(store.data, provider): notes.append('找不到模型「%s」，改用自動選擇。' % provider)
         else: fields['provider'] = provider
     if args.get('model'):
         if fields.get('provider', AUTO) == AUTO: notes.append('自動選擇的 Bot 每則訊息自己挑模型，沒有套用「%s」。' % args['model'])

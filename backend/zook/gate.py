@@ -149,6 +149,7 @@ def _local_migrate(store):
     if not settings.get('gateFullSet'):
         for bot in store.data['bots']: set_gate_full(bot)
         settings['gateFullSet'] = True; changed = True
+    if held_in_migrate(store): changed = True
     if not settings.get('scriptsOff'):
         for bot in store.data['bots'] + (store.data.get('deletedBots') or []):
             if bot.get('scripts') is not False: bot['scripts'] = False
@@ -158,27 +159,61 @@ def _local_migrate(store):
 
 # What this Mac allows a Bot. Never taken from a copy put back: a backup holds what was allowed then, maybe on another Mac.
 LOCAL_GRANTS = ('access', 'accessFolder', 'permissionMode', 'isAdmin', 'scripts', 'gateFull', 'localLimit')
+NOTHING_HERE = lambda: dict(settings={}, bots=[], deletedBots=[], customProviders=[], connectors=[])  # recover_data: nothing on this Mac to go by
 
 
 def restore_keep_access(old, new):
-    """A copy put back (backup_restore). The defaults in 設定 and each Bot's 存取範圍, 主動性, 管理員 and local scripts are what this
-    Mac has now. A Bot this Mac has never had keeps to its workspace and 謹慎 (hold_in) until the user changes it here; a Bot whose
-    model in the copy is another CLI than here loses the whole-Mac permission, as when another Mac changes it (limit_locally)."""
-    for key in ('access', 'accessFolder', 'permissionMode'):
-        if key in old['settings']: new['settings'][key] = copy.deepcopy(old['settings'][key])
-        else: new['settings'].pop(key, None)
+    """A copy put back (backup_restore, recover_data). Nothing in it widens what this Mac allows or starts a program this Mac has not
+    set up: the defaults in 設定, each Bot's 存取範圍, 主動性, 管理員 and local scripts, the custom CLIs, the connectors that are on and
+    Claude's checked hook are what this Mac has now. A Bot this Mac has never had keeps to its workspace and 謹慎 (hold_in) until the
+    user changes it here; a Bot whose model in the copy is another CLI than here loses the whole-Mac permission (limit_locally), and
+    every schedule in the copy is off until the user turns it on here. Runs again on the loaded data, after the upgrades a file gets."""
+    settings, here_settings = new['settings'], old.get('settings') or {}
+    for key in ('access', 'accessFolder', 'permissionMode', 'sharedMcp'):
+        if key in here_settings: settings[key] = copy.deepcopy(here_settings[key])
+        else: settings.pop(key, None)
+    settings.setdefault('sharedMcp', []); settings['abilitiesV2'] = True  # nor does an upgrade pick a 管理員 by name (core.py)
+    new['customProviders'] = copy.deepcopy(P.custom_list(old))
+    mine = {c.get('id') for c in new['customProviders']}
+    unknown = lambda p: isinstance(p, str) and p.startswith(P.CUSTOM_PREFIX) and p not in mine
+    if unknown(settings.get('provider')): settings['provider'] = here_settings.get('provider') if not unknown(here_settings.get('provider')) else 'codex'
+    local_connectors = [c for c in old.get('connectors') or [] if isinstance(c, dict)]
+    known = {c.get('id') for c in local_connectors}
+    new['connectors'] = copy.deepcopy(local_connectors) + [c for c in new.get('connectors') or [] if isinstance(c, dict) and c.get('id') not in known]  # off: not in sharedMcp
+    if isinstance(old.get('claudeGate'), dict): new['claudeGate'] = copy.deepcopy(old['claudeGate'])
+    else: new.pop('claudeGate', None)
+    for item in new.get('schedules') or []:
+        if isinstance(item, dict): item['on'] = False
     listed = lambda data: [b for b in (data.get('bots') or []) + (data.get('deletedBots') or []) if isinstance(b, dict)]
     here = {b.get('id'): b for b in listed(old)}
     kind = lambda bot, data: provider_kind(bot.get('provider') or (data.get('settings') or {}).get('provider', 'codex'))
     for bot in listed(new):
-        mine = here.get(bot.get('id'))
-        if mine is None: hold_in(bot); continue
+        if unknown(bot.get('provider')): bot.update(provider='', model='')
+        if isinstance(bot.get('fallbacks'), list): bot['fallbacks'] = [x for x in bot['fallbacks'] if not unknown(x)]
+        was = here.get(bot.get('id'))
+        if was is None: hold_in(bot); continue
         for key in LOCAL_GRANTS:
-            if key in mine: bot[key] = copy.deepcopy(mine[key])
+            if key in was: bot[key] = copy.deepcopy(was[key])
             else: bot.pop(key, None)
-        if kind(bot, new) != kind(mine, old):
+        if kind(bot, new) != kind(was, old):
             had = bot.pop('gateFull', None)
-            if had or kind(bot, new) in GATED_KINDS: bot['localLimit'] = True
+            if had or kind(bot, new) in GATED_KINDS: hold_scope(bot)
+
+
+def held_in_migrate(store):
+    """Once per data folder: Bots from before the hold that the user did not set up here, made by another Bot (its 新增 Bot call is
+    still in a reply's record) or arrived from another Mac (synced here, and without 'pinned', which sync never brings), keep to their
+    workspace and 謹慎."""
+    settings = store.data['settings']
+    if settings.get('heldInSet'): return False
+    synced = set(sync_marks(store)['stamps']) if (store.dir / 'sync-marks.json').exists() else set()
+    made = {str((c.get('arguments') or {}).get('name') or '').strip().lower() for j in store.data.get('jobs') or [] for c in j.get('toolCalls') or []
+            if str(c.get('name') or '').endswith('zook_create_bot')} - {''}
+    for bot in store.data['bots']:
+        if bot.get('localLimit'): continue
+        if ('pinned' not in bot and 'bots:' + str(bot.get('id')) in synced) or str(bot.get('name') or '').strip().lower() in made: hold_in(bot)
+    settings['heldInSet'] = True
+    return True
 
 
 def worker_gate(server, conn, worker, job_id, params):

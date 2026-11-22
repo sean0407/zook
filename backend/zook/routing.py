@@ -315,12 +315,12 @@ def auto_assign(store, bot, instructions=True, grant=False):
     try: provider, account = auto_choices(store, task, AUTO_TASKS[task][1])[0]
     except ValueError: return ''
     reason = '%s，配 %s' % (AUTO_WORK[task], auto_choice_name(provider, account))
-    model = auto_known_model(store, provider, account)
+    model = auto_known_model(store, provider, account); was = _bot_provider(bot, store.data)
     bot.update(provider=provider, account=account, model=model, autoAssigned=True, autoReason=reason)
     for key in ('autoPending', 'syncedModel', 'autoRematch'): bot.pop(key, None)
     if model: bot.pop('autoModelPending', None)
     else: bot['autoModelPending'] = True  # the CLI's own default is not known yet: the model of its first reply is kept (app.py)
-    set_access_after_match(bot, grant)
+    set_access_after_match(bot, grant, was)
     return reason
 
 
@@ -514,7 +514,7 @@ def auto_rematch(store, bot):
     trial = dict(bot)
     if not auto_assign(store, trial): return None  # nothing can be picked right now: it keeps the model it has
     bot.pop('autoRematch', None); bot['autoReason'] = trial['autoReason']
-    for key in ('gateFull', 'localLimit'):  # a re-match never widens it: held in when it moves off the gate (set_access_after_match)
+    for key in ('gateFull', 'localLimit', 'access', 'accessFolder', 'permissionMode'):  # a re-match never widens it: held in when it moves off the gate (set_access_after_match)
         if key in trial: bot[key] = trial[key]
         else: bot.pop(key, None)
     if (trial['provider'], trial['account']) == (bot.get('provider'), bot.get('account') or ''): return None  # same model: it keeps it

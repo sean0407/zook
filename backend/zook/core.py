@@ -550,7 +550,12 @@ def limit_locally(bot):
     """A Bot that lost this Mac's whole-Mac permission (another Mac changed its model, or it came from a backup): its workspace and
     謹慎 until the user changes it here, never the 主動性 and 存取範圍 it had before the gate."""
     had = bot.pop('gateFull', None)
-    if had or provider_kind(_bot_provider(bot)) in GATED_KINDS: bot['localLimit'] = True
+    if had or provider_kind(_bot_provider(bot)) in GATED_KINDS: hold_scope(bot)
+
+
+def hold_scope(bot):
+    """Held to its workspace and 謹慎, with what it had before cleared too: lifting one of them here never brings back another."""
+    bot.pop('accessFolder', None); bot.update(localLimit=True, access='workspace', permissionMode='manual')
 
 
 def local_choice(before, after, body, local=True):
@@ -558,6 +563,9 @@ def local_choice(before, after, body, local=True):
     persona edit does not. Choosing a model, 主動性 or 存取範圍 here ends a limit set by sync, a backup or another Bot.
     local: the request came from this Mac's own window, not a paired phone; anything else never widens what the Bot may reach."""
     if not local:
+        for key in ('access', 'accessFolder', 'permissionMode', 'isAdmin', 'scripts', 'gateFull', 'localLimit'):
+            if key in before: after[key] = copy.deepcopy(before[key])
+            else: after.pop(key, None)
         if (body.get('provider') or '') != (before.get('provider') or '') and 'provider' in body: limit_locally(after)
         return
     if any(k in body and (body[k] or '') != (before.get(k) or '') for k in ('provider', 'account')): after.pop('syncedModel', None)  # picked here
@@ -570,26 +578,27 @@ def held_backups(bot, provider, chain):
     """A Claude or Cursor Bot, or one held in by this Mac, is never answered by a custom CLI as a backup: its own arguments cannot be
     held to the workspace and 謹慎."""
     if provider_kind(provider) not in GATED_KINDS and not bot.get('localLimit'): return chain
-    return chain[:1] + [x for x in chain[1:] if not str(x[0]).startswith(P.CUSTOM_PREFIX)]
+    custom = lambda x: str(x[0]).startswith(P.CUSTOM_PREFIX)
+    if bot.get('localLimit'): return [x for x in chain if not custom(x)]  # not even as its own model: [] stops the reply (app.py)
+    return chain[:1] + [x for x in chain[1:] if not custom(x)]
 
 
-def set_access_after_match(bot, grant):
+def set_access_after_match(bot, grant, before=None):
     """自動選擇 just set this Bot's model. Only the user, on this Mac, right now (grant) gives the whole Mac. Otherwise a Bot that had it
     keeps it only while its model is still Claude or Cursor, and is held to its workspace and 謹慎 when it moves elsewhere; a Bot that
     lands on Claude or Cursor without it is held in too."""
     had = bot.pop('gateFull', None)
     gated = provider_kind(_bot_provider(bot)) in GATED_KINDS
     if grant and not bot.get('localLimit'): set_gate_full(bot)
-    elif had and gated: bot['gateFull'] = True
-    elif had or gated: bot['localLimit'] = True
+    elif had and gated and (before is None or provider_kind(before) == provider_kind(_bot_provider(bot))): bot['gateFull'] = True  # never carried to another CLI
+    elif had or gated: hold_scope(bot)
 
 
 def hold_in(bot):
     """A Bot the user did not set up on this Mac (made by another Bot, arrived from another Mac, or from a copy this Mac never had):
     its workspace and 謹慎, never the whole Mac, 管理員 or local scripts, whatever its model or the defaults in 設定. Recorded on the
     Bot, so 自動選擇 and re-matching keep it (set_access_after_match, auto_on_edit) until the user changes it here (local_choice)."""
-    bot.pop('gateFull', None); bot.pop('accessFolder', None)
-    bot.update(localLimit=True, access='workspace', permissionMode='manual', isAdmin=False, scripts=False)
+    bot.pop('gateFull', None); hold_scope(bot); bot.update(isAdmin=False, scripts=False)
 
 
 def set_gate_full(bot):
@@ -845,7 +854,9 @@ def mobile_create_bot(store, body):
     if shape is not None:
         if not isinstance(shape, str) or not re.fullmatch(r'\d|1[0-2]', shape): raise ValueError('形狀無效。')
         bot['shape'] = shape
+    if str(body.get('provider') or '').startswith(P.CUSTOM_PREFIX): raise ValueError('手機上不能選自訂 CLI，請在 Mac 上設定。')
     update(bot, {k: body[k] for k in ('instructions', 'provider') if k in body}, 'bot')
+    hold_in(bot)  # made on the phone: its workspace and 謹慎 until the user widens it on the Mac
     ensure_chats(bot); store.data['bots'].append(bot); store.save()
     return bot
 
