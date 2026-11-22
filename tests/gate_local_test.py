@@ -134,7 +134,7 @@ class LocalRulesTest(unittest.TestCase):
                 d = dict(id='d', name='寫程式', provider='auto', instructions='你是工程師'); m.auto_on_create(store, d)
             self.assertEqual((d['provider'], d['model']), ('codex', 'gpt-5.6'))  # the CLI's own default model
             store.data['jobs'].clear(); store.data['autoStatus']['claude'] = dict(signedIn=True, billed=False)
-            c = dict(id='c', name='新的', provider='auto', persona='細心的分析師'); m.auto_on_create(store, c)
+            c = dict(id='c', name='新的', provider='auto', persona='細心的分析師'); m.auto_on_create(store, c, grant=True)  # made by the user here
             self.assertEqual((c['provider'], c['model'], c['autoModelPending'], c['gateFull']), ('claude', '', True, True))
             store.data['bots'].append(c)
             m.auto_pin_model(store, 'c', 'claude', dict(model='claude-opus-5-5'))
@@ -195,6 +195,84 @@ class LocalRulesTest(unittest.TestCase):
         self.assertIn('盡力攔下', page)  # the limit of reading commands is said plainly
 
 
+class RoundThreeTest(unittest.TestCase):
+    """Nothing automatic widens what a Bot may reach; reads are checked against real paths; one judgement of key files; billing checks."""
+    def setUp(self):
+        self.m = load(); self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name)
+        self.store = self.m.Store(self.root / 'data'); self.store.data['bots'].clear()
+        self.store.data['settings'].update(permissionMode='bypass', access='full', autoModels=['codex', 'claude'])
+        now = __import__('time').time()
+        self.store.data['autoStatus'] = {p: dict(signedIn=True, billed=False, checkedAt=now) for p in ('codex', 'claude')}
+        self.patches = [mock.patch.object(self.m, 'find_cli', return_value='/bin/true'), mock.patch.object(self.m, 'ability_on', return_value=True),
+                        mock.patch.object(self.m, 'codex_default_model', return_value=''), mock.patch.object(self.m, 'log_activity')]
+        for p in self.patches: p.start()
+
+    def tearDown(self):
+        for p in self.patches: p.stop()
+        self.temp.cleanup()
+
+    def test_matching_never_widens(self):
+        m, store = self.m, self.store
+        had = dict(id='a', name='a', provider='claude', account='', gateFull=True, autoAssigned=True, instructions='幫忙寫報告', permissionMode='bypass', access='full')
+        after = dict(had, instructions='你是工程師，負責寫程式'); m.auto_on_edit(store, had, after, dict(instructions=after['instructions']))
+        self.assertEqual((after['provider'], after.get('gateFull'), after['localLimit']), ('codex', None, True))  # moved off the gate: held in
+        self.assertEqual((m.permission_mode(store, after, 'codex'), m.bot_scope(after, 'codex')), ('manual', ('workspace', '')))
+        waiting = dict(id='b', name='b', provider='auto', persona='細心的分析師', autoPending=True); store.data['bots'].append(waiting)
+        m.auto_retry(store)  # in the background, after a restore or at start
+        self.assertEqual((waiting['provider'], waiting.get('gateFull'), waiting['localLimit']), ('claude', None, True))
+        made = dict(id='c', name='c', provider='auto', persona='細心的分析師'); m.auto_on_create(store, made, grant=True)  # the user, here, now
+        self.assertEqual((made['provider'], made['gateFull']), ('claude', True))
+        restored = dict(id='d', name='d', provider='auto', persona='細心的分析師', localLimit=True); m.auto_on_create(store, restored, grant=True)
+        self.assertNotIn('gateFull', restored)  # a limit from a restore lasts until the user changes it
+        tool = dict(id='e', name='e', provider='claude'); m.hold_in(tool)
+        self.assertEqual((tool.get('gateFull'), tool['localLimit']), (None, True))  # made by another Bot
+
+    def test_claude_gets_the_whole_mac_only_after_its_hook_was_seen(self):
+        m, store = self.m, self.store
+        env = {'CLAUDE_CONFIG_DIR': str(self.root / 'claude')}; work = self.root / 'ws'
+        bot = dict(id='a', provider='claude', account='')
+        with mock.patch.object(m, 'provider_env', return_value=env):
+            self.assertEqual(m.claude_scope(store, 'claude', bot, 'full', Path.home(), work), ('workspace', work))
+            mark, before = m.claude_gate_mark(store, env)
+            m.claude_gate_after(store, env, mark, before, used_tools=False)
+            self.assertEqual(m.claude_scope(store, 'claude', bot, 'full', Path.home(), work), ('workspace', work))  # nothing seen yet
+            Path(mark).write_text(''); os.utime(mark, (before + 5, before + 5))
+            self.assertTrue(m.claude_gate_after(store, env, mark, before, used_tools=True))
+            self.assertEqual(m.claude_scope(store, 'claude', bot, 'full', Path.home(), work)[0], 'full')
+            mark, before = m.claude_gate_mark(store, env)
+            self.assertFalse(m.claude_gate_after(store, env, mark, before, used_tools=True))  # a tool ran without the hook
+            self.assertEqual(m.claude_scope(store, 'claude', bot, 'full', Path.home(), work)[0], 'workspace')
+        settings = json.loads(m.claude_gate_settings(600))['hooks']
+        self.assertIn('SessionStart', settings)
+        env = {}; m.claude_gate_env(store, env, [], 'workspace', work, work)
+        self.assertEqual((json.loads(env['ZOOK_GATE_ROOTS']), env['ZOOK_GATE_DEFER']), ([str(work / 'attachments')], '1'))
+        env = {}; m.claude_gate_env(store, env, ['Read'], 'full', Path.home(), work)
+        self.assertNotIn('ZOOK_GATE_ROOTS', env)
+
+    def test_billing_is_checked_again_when_a_sign_in_changes(self):
+        m, store = self.m, self.store
+        self.assertEqual(m.auto_billing_problem(store, 'codex', ''), '')
+        m.auto_status_forget(store, 'codex')  # signing in or out in Zook
+        self.assertEqual(m.auto_billing_problem(store, 'codex', ''), '最近沒能確認是訂閱帳號')
+        self.assertEqual(m.auto_billing_problem(store, 'claude', ''), '')
+        store.data['autoStatus']['claude']['signIn'] = [['/x', 1.0]]  # its sign-in files changed outside Zook since the check
+        self.assertEqual(m.auto_billing_problem(store, 'claude', ''), '最近沒能確認是訂閱帳號')
+        bot = dict(id='g', name='g', provider='codex', account='')
+        self.assertEqual(m.intro_blocked(store, bot, 'codex', ''), '最近沒能確認是訂閱帳號')  # a greeting is a request too
+        store.data['autoStatus']['codex'].update(checkedAt=__import__('time').time())
+        store.data['autoStatus']['codex'].pop('signIn', None)
+        self.assertEqual(m.intro_blocked(store, bot, 'codex', ''), '')
+
+    def test_group_files_use_the_same_judgement(self):
+        need = self.m.group_file_tool(self.store, 'g', runtime)[2]
+        self.assertEqual((need({'name': 'credentials.json'}), need({'name': '.env'}), need({'name': '報告.md'})), ('always', 'always', False))
+
+    def test_form_keeps_an_explicit_empty_backup_list(self):
+        page = ''.join(p.read_text(encoding='utf-8') for p in sorted((ROOT / 'frontend/js').glob('*.js')))
+        self.assertIn("b.fallbacks.length ? b.fallbacks[0] : '__none';", page)
+        self.assertIn("{id: '__none', name: '不自動換'}, ...providerList()]", page)
+
+
 class CardTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name); (self.root / 'workspace').mkdir()
@@ -230,6 +308,13 @@ class CardTest(unittest.TestCase):
         self.assertEqual(s.classify('zook_workspace_write', {'path': '報告.md', 'content': '  '}), 'danger')
         self.assertEqual(s.classify('zook_workspace_write', {'path': '新的.md', 'content': ''}), 'internal')
         self.asked.clear(); s.call('zook_workspace_read', {'path': '.env'}); self.assertEqual(len(self.asked), 1)  # asked even when everything else is allowed
+        self.assertEqual(s.classify('zook_workspace_write', {'path': '.env', 'content': 'KEY=2'}), 'danger')  # writing keys asks too
+        self.asked.clear(); self.events.clear(); s.call('zook_workspace_write', {'path': '.env', 'content': 'KEY=hunter2'}); s.call('zook_workspace_read', {'path': '.env'})
+        self.assertEqual(len(self.asked), 2)
+        self.assertNotIn('hunter2', json.dumps(self.events, ensure_ascii=False))  # the record keeps the action and the file name only
+        self.assertEqual({tuple(e['arguments']) for e in self.events}, {('path',)})
+        tool = __import__('importlib').util  # the group's shared files use the same judgement
+        self.assertTrue(runtime.secret_name('credentials.json')); self.assertTrue(runtime.secret_name('a/.env.local')); self.assertFalse(runtime.secret_name('報告.md'))
 
 
 if __name__ == '__main__': unittest.main()

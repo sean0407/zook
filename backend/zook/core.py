@@ -535,6 +535,23 @@ def held_backups(bot, provider, chain):
     return chain[:1] + [x for x in chain[1:] if not str(x[0]).startswith(P.CUSTOM_PREFIX)]
 
 
+def set_access_after_match(bot, grant):
+    """自動選擇 just set this Bot's model. Only the user, on this Mac, right now (grant) gives the whole Mac. Otherwise a Bot that had it
+    keeps it only while its model is still Claude or Cursor, and is held to its workspace and 謹慎 when it moves elsewhere; a Bot that
+    lands on Claude or Cursor without it is held in too."""
+    had = bot.pop('gateFull', None)
+    gated = provider_kind(_bot_provider(bot)) in GATED_KINDS
+    if grant and not bot.get('localLimit'): set_gate_full(bot)
+    elif had and gated: bot['gateFull'] = True
+    elif had or gated: bot['localLimit'] = True
+
+
+def hold_in(bot):
+    """A Bot not set up by the user on this Mac: no whole Mac; a Claude or Cursor one keeps to its workspace and 謹慎."""
+    bot.pop('gateFull', None)
+    if provider_kind(_bot_provider(bot)) in GATED_KINDS and bot.get('provider') != 'auto': bot['localLimit'] = True
+
+
 def set_gate_full(bot):
     """On this Mac: a Bot made or edited into Claude or Cursor may use the whole Mac behind the gate; any other Bot may not."""
     if provider_kind(_bot_provider(bot)) in GATED_KINDS and bot.get('provider') != 'auto': bot['gateFull'] = True

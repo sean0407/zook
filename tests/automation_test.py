@@ -16,6 +16,8 @@ here = os.path.dirname(sys.argv[0])
 ask = prompt.strip().splitlines()[-1]
 time.sleep(float(open(os.path.join(here, 'delay')).read()))
 call = os.path.join(here, 'call.json')
+if '--settings' in sys.argv:  # Claude runs its SessionStart hook when it starts: Zook sees that its gate really runs
+    subprocess.run(json.loads(sys.argv[sys.argv.index('--settings') + 1])['hooks']['SessionStart'][0]['hooks'][0]['command'], shell=True, input='{"hook_event_name": "SessionStart"}', text=True)
 if '刪掉舊檔' in ask:  # Claude runs Zook's boundary gate (its PreToolUse hook) before its own Bash tool
     hook = json.loads(sys.argv[sys.argv.index('--settings') + 1])['hooks']['PreToolUse'][0]['hooks'][0]['command']
     done = subprocess.run(hook, shell=True, input=json.dumps({'tool_name': 'Bash', 'tool_input': {'command': 'rm ~/Desktop/腳本的舊檔.xlsx'}}), capture_output=True, text=True)
@@ -125,6 +127,7 @@ class AutomationTest(unittest.TestCase):
 
     def test_cannot_approve_and_is_told_to_wait_for_the_user(self):
         # A Claude Bot asks only at the safety boundaries (2026-11-22); deleting a file is one, and a script cannot answer for the user.
+        self.script('POST', '/v1/agents/%s/messages' % self.open['id'], {'content': '先打個招呼', 'wait': 20})  # the first reply shows Zook its gate runs
         status, out = self.script('POST', '/v1/agents/%s/messages' % self.open['id'], {'content': '刪掉舊檔', 'wait': 20})
         self.assertEqual((status, out['status']), (200, 'needs_approval'), out)
         code, text, err = self.cli('status', '文件整理員', out['id'])

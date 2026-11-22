@@ -550,6 +550,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             workspace = store.dir / 'workspaces' / bot['id']; workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
             # The access scope applies to every CLI. Grok and plain CLIs cannot ask before each action, so with 主動性 謹慎 they stay in the workspace.
             scope, root = bot_access(bot, workspace, kind) if native or kind in ('codex', 'claude') or (kind == 'cursor' and planning) else ('workspace', workspace)
+            if kind == 'claude': scope, root = claude_scope(store, provider, bot, scope, root, workspace)  # the whole Mac once its hook was seen running
             # Grok reads Zook's tool settings from the folder it starts in, and its sandbox keeps it inside that folder. So for a chosen
             # folder it starts there (Zook's settings go into a .grok folder that is removed afterwards); otherwise in the workspace.
             cli_cwd = root if kind == 'grok' and scope == 'folder' else workspace if kind in ('grok', 'antigravity', 'cursor') else root
@@ -672,15 +673,14 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 if keep_session: args.remove('--ephemeral')
                 args += ['resume', resume, '-'] if resume else ['-']
             else:
-                # With access to the whole Mac, Claude also gets Bash and its file tools may leave the starting folder.
                 hooks_ok = claude_hooks_allowed(env=env)  # a policy may turn Zook's hook off: then no built-in tool at all, and nothing allowed in advance
                 claude_tools = (CLAUDE_NATIVE_TOOLS + (['Bash'] if scope == 'full' else []) + (['Task'] if 'multi' in features else [])) if native and selected and hooks_ok else []
                 attach_read = ['Read'] if hooks_ok and (job.get('attachments') or job.get('groupFiles')) and 'Read' not in claude_tools else []  # just to look at what was attached
                 args = [binary, '--print', '--restricted' if selected else '--safe-mode', '--strict-mcp-config', '--no-session-persistence', '--tools', ','.join(claude_tools + attach_read + (['WebSearch', 'WebFetch'] if web and hooks_ok else [])), '--output-format', 'stream-json', '--verbose'] + (['--include-partial-messages'] if streaming else [])
                 if claude_tools and scope == 'full': args += ['--add-dir', '/']
-                # Every built-in tool, reads too, goes through the boundary gate (gate.py): the hook blocks when it fails, and no built-in tool is
-                # allowed in advance, so a tool runs only when the hook itself answers allow.
+                # Every built-in tool, reads too, goes through the gate (gate.py): it blocks when it fails, and nothing is allowed in advance.
                 if claude_tools or attach_read: args += ['--permission-mode', 'manual', '--settings', claude_gate_settings(wait)]
+                gate_before = claude_gate_env(store, env, claude_tools, scope, root, workspace)  # the hook's mark, and the folders it holds Claude to
                 if attach_read or (job.get('groupFiles') and scope == 'folder'): args += ['--add-dir', str(workspace / 'attachments')]  # its working folder may be elsewhere
                 if selected:
                     args += ['--mcp-config', json.dumps({'mcpServers': {'zook': {'command': sys.executable, 'args': [adapter]}}}), '--allowedTools', ','.join(['mcp__zook__'+tool['name'] for tool in tools] + (['WebSearch', 'WebFetch'] if web and hooks_ok else []))]
@@ -737,6 +737,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             self.note_skipped(job, session)
             if resume and proc.returncode != 0 and session_lost((stderr or b'').decode('utf-8', 'replace')):
                 with store.lock: job['resumeGone'] = True
+            if kind == 'claude' and 'ZOOK_GATE_MARK' in env: claude_gate_after(store, env, env['ZOOK_GATE_MARK'], gate_before, any(w.get('_ref') for w in parsed.get('web') or []))
             if native and cli_used_tools(kind, output.decode('utf-8', errors='replace')):
                 with store.lock: job['mayHaveActed'] = True  # these CLIs do not always report what their tools did when they fail
             parsed['web'] = (parsed.get('web') or []) + feature_events(kind, output.decode('utf-8', errors='replace'), features, cli_cwd, started_at)
@@ -854,7 +855,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 new = dict(id=ID(), name=name, color=args.get('color') or colors_for(len(store.data['bots'])), shape=str(len(store.data['bots']) % 13), instructions='', persona='', provider=AUTO, model='', pinned=False, section='團隊', messages=[], enabledSkills=[], enabledMcp=[], allowCommands=True, isAdmin=False)
                 chosen, notes = tool_bot_fields(store, args)  # the account by name and the thinking level too; what cannot be set is said
                 update(new, dict({k: args[k] for k in ('name', 'jobTitle', 'persona', 'instructions', 'color') if args.get(k)}, **chosen), 'bot')
-                set_gate_full(new)
+                hold_in(new)  # made by a Bot, not by the user: never the whole Mac
                 auto_on_create(store, new); ensure_chats(new); store.data['bots'].append(new); store.save(); watch_auto_status(store, new)  # 自動選擇: its model is fixed now
             self.want_intro(new['id'])  # its greeting, from the persona just written
             done = dict(provider=new.get('provider') or AUTO, model=new.get('model') or '', account=(find_account(new.get('account')) or {}).get('name') or '預設帳號', effort=new.get('effort') or '預設')

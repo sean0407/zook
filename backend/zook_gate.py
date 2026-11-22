@@ -263,14 +263,32 @@ def command_boundaries(command, depth=0):
     if depth > 4: return [_hit('unclear', '（指令包了太多層）')]
     found = []
     for inner in _inner(command): found += command_boundaries(inner, depth + 1)
-    parts, clear = _split(command)
+    parts, clear = _split(_without_inner(command))  # what runs inside $( … ) was read above, and is counted once
     if not clear: found.append(_hit('unclear', '（引號沒有成對）'))
     for argv in parts:
         words, read, written = _redirects(argv)
         stripped = _strip(words)
         found += _redirect_hits(read, written, empty=not stripped or os.path.basename(stripped[0]) in (':', 'true') and len(stripped) == 1 and not read or stripped[:2] == ['cat', '/dev/null'])
         found += _argv_boundaries(_strip(words), command, depth)
-    return list(dict.fromkeys(found))
+    return found
+
+
+def _without_inner(command):
+    out, i = re.sub(r'`[^`]*`', ' _ ', command), 0
+    while True:
+        start = out.find('$(', i)
+        if start < 0: return out
+        depth, j = 1, start + 2
+        while j < len(out) and depth:
+            depth += {'(': 1, ')': -1}.get(out[j], 0); j += 1
+        out = out[:start] + ' _ ' + out[j:]; i = start
+
+
+def merged(found):
+    """One line for each different action, and how many times one is done: two uploads of the same file to the same site are 「共 2 次」."""
+    counts = {}
+    for hit in found: counts[hit] = counts.get(hit, 0) + 1
+    return [(k, t if n == 1 else '%s（共 %d 次）' % (t, n)) for (k, t), n in counts.items()]
 
 
 def command_boundary(command, depth=0):
@@ -408,10 +426,14 @@ def _argv_boundaries(argv, whole, depth):
                 method = (a.split('=', 1)[1] if '=' in a else args[i + 1] if i + 1 < len(args) else '').upper()
                 if method not in ('GET', 'HEAD', ''): sends = True
             elif key in CURL_SEND or (re.fullmatch(r'-[a-zA-Z]*[dFTK][a-zA-Z]*', a) and not a.startswith('--')): sends = True
-        if sends: found.append(_hit('send', '到 %s' % (_url_hosts(args) or '網路')))
+        files = [a for i, a in enumerate(args) if i and args[i - 1] in ('-T', '--upload-file')]
+        files += [v[1:].split(';')[0] for i, a in enumerate(args) for v in [a.split('=', 1)[1] if a.startswith('--') and '=' in a and a.split('=', 1)[0] in CURL_SEND else args[i + 1] if a in CURL_SEND and i + 1 < len(args) else '']
+                  if '@' in v and v.split('=', 1)[-1].startswith('@') for v in [v.split('=', 1)[-1]]]
+        if sends: found.append(_hit('send', '%s到 %s' % (('檔案 %s ' % _names(files)) if files else '', _url_hosts(args) or '網路')))
     if name == 'wget' and any(a.startswith(WGET_SEND) for a in args): found.append(_hit('send', '到 %s' % (_url_hosts(args) or '網路')))
     if name in COPY_OUT and (name in ('sftp', 'ftp') or any(_remote(a) for a in plain)):
-        found.append(_hit('send', '到 %s' % ('、'.join(dict.fromkeys(_host(a) for a in plain if _remote(a) or name in ('sftp', 'ftp'))) or '其他電腦')))
+        local = [a for a in plain if not _remote(a)] if name in ('scp', 'rsync') else []
+        found.append(_hit('send', '%s到 %s' % (('檔案 %s ' % _names(local)) if local else '', '、'.join(dict.fromkeys(_host(a) for a in plain if _remote(a) or name in ('sftp', 'ftp'))) or '其他電腦')))
     if name in CONNECT and plain: found.append(_hit('send', '連到 %s' % (_host(plain[0]) or '其他電腦')))
     if name in MAIL_COMMANDS: found.append(_hit('send', '寄信給 %s' % ('、'.join(a for a in plain if re.fullmatch(r'[^@\s]+@[\w.-]+', a)) or '收件人')))
     if name == 'security': found.append(_hit('secret', '（鑰匙圈）security %s' % _word(plain[0] if plain else '')))
@@ -445,7 +467,7 @@ def _argv_boundaries(argv, whole, depth):
 
 def command_summary(command):
     """What the activity record keeps of a command: the same lines as an approval card, or the programs it runs; never the command."""
-    found = command_boundaries(command)
+    found = merged(command_boundaries(command))
     if found: return '；'.join(t for _, t in found)[:600]
     parts, _ = _split(command if isinstance(command, str) else '')
     names = [n for n in (_word(os.path.basename(_strip(_redirects(p)[0])[0])) for p in parts if _strip(_redirects(p)[0])) if n]
@@ -505,7 +527,7 @@ def boundaries(tool, data, home=''):
             if _guard_path(p): found.append(_hit('guard', '修改 ' + _names([p])))
             elif _system_path(p): found.append(_hit('system', '修改 ' + _names([p])))
             if _emptied(p, data, low): found.append(_hit('delete', '清空 %s 的內容' % _names([p])))
-    return list(dict.fromkeys(found))
+    return found
 
 
 def boundary(tool, data, home=''):
@@ -532,14 +554,44 @@ def ask(actions):
     return isinstance(answer, dict) and answer.get('approved') is True
 
 
+def outside_roots(tool, data, home=''):
+    """When Zook limits this reply to some folders (ZOOK_GATE_ROOTS): the paths this call would reach outside them. A command line
+    cannot be held to folders, so any command is outside."""
+    try: roots = json.loads(os.environ.get('ZOOK_GATE_ROOTS') or 'null')
+    except ValueError: return ['（設定無法讀取）']
+    if roots is None: return []
+    low = str(tool or '').lower(); data = data if isinstance(data, dict) else {}
+    if low.startswith('mcp') or low in ('task', 'agent', 'todowrite'): return []
+    _CWD[0] = home or os.getcwd()
+    if low in SHELL_TOOLS or isinstance(data.get('command'), str): return ['（指令）']
+    paths = [_abs(p) for p in _paths(data)]
+    if low == 'glob' and isinstance(data.get('pattern'), str): paths.append(data['pattern'] if os.path.isabs(_expand(data['pattern'])) else os.path.join(paths[0] if paths else _CWD[0], data['pattern']))
+    if low in ('grep', 'glob', 'ls', 'listdir', 'list_dir') and not paths: paths = [_CWD[0]]  # its default: where it started
+    if not paths and low not in READ_TOOLS | WRITE_TOOLS | {'delete'}: return []
+    return [p for p in (paths or ['（沒有路徑）']) if not (isinstance(roots, list) and _under(re.split(r'[*?\[{]', p)[0] or '/', [str(r) for r in roots if isinstance(r, str) and r]))]
+
+
 def decide(tool, data, home=''):
     """(allowed, why) for one tool call."""
-    found = boundaries(tool, data, home)
-    if not found: return True, ''
-    if len(found) > MAX_ACTIONS or any(len(t) > MAX_TITLE for _, t in found):  # one card could not show all of it: never approved as a batch
-        return False, '這一步同時要做 %d 件需要核准的事，或目標太長，一張核准卡放不下。請分成幾個較小的步驟，一次一件，讓使用者逐一確認。' % len(found)
+    away = outside_roots(tool, data, home)
+    if away: return False, '這一則只能動到 Zook 允許的資料夾（例如附件），%s 不在裡面，所以擋下了。直接告訴使用者。' % (_names([p for p in away if not p.startswith('（')]) or away[0])
+    raw = boundaries(tool, data, home)
+    if not raw: return True, ''
+    found = merged(raw)
+    if len(raw) > MAX_ACTIONS or any(len(t) > MAX_TITLE for _, t in found):  # one card could not show all of it: never approved as a batch
+        return False, '這一步同時要做 %d 件需要核准的事，或目標太長，一張核准卡放不下。請分成幾個較小的步驟，一次一件，讓使用者逐一確認。' % len(raw)
     if ask(found): return True, ''
     return False, '使用者沒有允許：%s。不要改用其他方法做這件事，直接告訴使用者沒有做。' % '；'.join(t for _, t in found)
+
+
+def _mark():
+    """Leave Zook a sign that this hook really runs in this CLI (ZOOK_GATE_MARK): Zook gives Claude the whole Mac only after seeing it."""
+    mark = os.environ.get('ZOOK_GATE_MARK')
+    if not mark: return
+    try:
+        with open(mark, 'a'): pass
+        os.utime(mark)
+    except OSError: pass
 
 
 def main():
@@ -550,8 +602,11 @@ def main():
         if len(raw) > MAX_INPUT: raise ValueError('too large')
         event = json.loads(raw.decode('utf-8'))
         if not isinstance(event, dict): raise ValueError('not an object')
+        _mark()
+        if event.get('hook_event_name') == 'SessionStart': return 0
         data = event.get('tool_input') if isinstance(event.get('tool_input'), dict) else {}
         allowed, why = decide(event.get('tool_name'), data, str(event.get('cwd') or ''))
+        if allowed and os.environ.get('ZOOK_GATE_DEFER') == '1': return 0  # a read-only reply: Claude's own rules decide what is inside the folders
         print(json.dumps({'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'allow' if allowed else 'deny',
                                                  'permissionDecisionReason': 'Zook 的安全檢查允許了這次動作。' if allowed else why}}, ensure_ascii=False))
         return 0

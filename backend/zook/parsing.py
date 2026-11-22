@@ -209,7 +209,7 @@ def parse_cli_output(provider, text, model=''):
             elif isinstance(block, dict) and block.get('type') == 'tool_use' and block.get('name') in ('Read', 'Grep', 'Glob', 'LS'):
                 inp = block.get('input') if isinstance(block.get('input'), dict) else {}
                 where = inp.get('file_path') or inp.get('path') or (inp.get('pattern') if block.get('name') == 'Glob' else '')  # a search phrase is not kept
-                out['web'].append(dict(name='native_read', category='read', arguments={'path': hide_command_secrets(str(where or ''))[:300]}))
+                out['web'].append(dict(name='native_read', category='read', arguments={'path': hide_command_secrets(str(where or ''))[:300]}, _ref=block.get('id'), status='error'))  # done when its result says so
             elif isinstance(block, dict) and block.get('type') == 'tool_use' and block.get('name') == 'Skill':
                 inp = block.get('input') if isinstance(block.get('input'), dict) else {}
                 out['web'].append(dict(name='native_skill', category='read', arguments={'name': hide_command_secrets(str(inp.get('skill') or inp.get('name') or ''))[:120]}))
@@ -219,9 +219,9 @@ def parse_cli_output(provider, text, model=''):
                 else: out['web'].append(dict(name='web_search', arguments={'query': str(inp.get('query') or '')[:200]}))
             elif isinstance(block, dict) and block.get('type') == 'tool_use' and block.get('name') in ('Edit', 'Write', 'MultiEdit', 'NotebookEdit'):
                 inp = block.get('input') if isinstance(block.get('input'), dict) else {}
-                out['web'].append(dict(native_action('write', inp.get('file_path') or inp.get('notebook_path') or ''), _ref=block.get('id')))
+                out['web'].append(dict(native_action('write', inp.get('file_path') or inp.get('notebook_path') or ''), _ref=block.get('id'), status='error'))
             elif isinstance(block, dict) and block.get('type') == 'tool_use' and block.get('name') == 'Bash':
-                out['web'].append(dict(native_action('command', (block.get('input') or {}).get('command') if isinstance(block.get('input'), dict) else ''), _ref=block.get('id')))
+                out['web'].append(dict(native_action('command', (block.get('input') or {}).get('command') if isinstance(block.get('input'), dict) else ''), _ref=block.get('id'), status='error'))
         if d.get('type') == 'user' and isinstance(d.get('message'), dict):  # what each tool call came back with: a refusal is an error result
             for block in d['message'].get('content') or []:
                 if isinstance(block, dict) and block.get('type') == 'tool_result':

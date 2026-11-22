@@ -24,9 +24,22 @@ import uuid
 
 MAX_MESSAGE = 2 * 1024 * 1024
 MAX_TEXT = 128 * 1024
-# Files that hold keys, passwords or sign-ins: reading one with Zook's workspace tool always asks (zook_gate.py asks the same of a CLI).
-SECRET_FILE = re.compile(r'(?i)^(?:\.env(?:\..*)?|\.netrc|\.npmrc|\.pypirc|\.git-credentials|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?|.*\.(?:pem|p12|pfx|key|keychain|keychain-db)|'
-                         r'credentials(?:\.json)?|\.credentials\.json|oauth_creds\.json|auth\.json|client_secret.*\.json|service[-_]account.*\.json)$')
+# Files that hold keys, passwords or sign-ins: the one judgement zook_gate.py makes for the CLIs' own tools. Reading or writing one with
+# Zook's file tools always asks, and the activity record keeps only the action and the file name, never what is in it.
+def _load_gate():
+    spec = importlib.util.spec_from_file_location('zook_gate_for_runtime', str(Path(__file__).with_name('zook_gate.py')))
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    return module
+
+
+_GATE = _load_gate()
+
+
+def secret_name(path):
+    return bool(_GATE.CREDENTIAL_NAMES.match(Path(str(path or '')).name))
+
+
+SECRET_TOOLS = {'zook_workspace_read': 'path', 'zook_workspace_write': 'path', 'zook_group_file_read': 'name'}
 # The folders a CLI loads its hooks and settings from: Zook writes them for each reply, and a Bot never does (zook_gate.py asks the same).
 CLI_SETTING_FOLDERS = {'.claude', '.cursor', '.codex', '.grok', '.gemini', '.antigravity'}
 MAX_TOOLS = 512
@@ -644,7 +657,7 @@ class RuntimeSession:
             argv = args.get('argv') or []
             if any(Path(str(a)).name in DANGER_COMMANDS for a in argv) or any(re.search(r'\brm\s+-|sudo\b', str(a)) for a in argv): return 'danger'
             return 'code'
-        if name == 'zook_workspace_read' and SECRET_FILE.match(Path(str(args.get('path') or '')).name): return 'danger'  # .env, keys, sign-ins
+        if name in SECRET_TOOLS and secret_name(args.get(SECRET_TOOLS[name])): return 'danger'  # .env, keys, sign-ins: always asked
         if name == 'zook_workspace_write':
             try: target = self._path(self.workspace, str(args.get('path') or ''))
             except RuntimeError: return 'internal'  # refused when it runs
@@ -685,6 +698,9 @@ class RuntimeSession:
         return path.read_text(encoding='utf-8')
 
     def _event(self, call_id, name, source, status, args, **kwargs):
+        if name in SECRET_TOOLS and isinstance(args, dict) and secret_name(args.get(SECRET_TOOLS[name])):  # the action and the file name only
+            args = {SECRET_TOOLS[name]: args.get(SECRET_TOOLS[name])}; kwargs.pop('resultSummary', None)
+            if status == 'error': kwargs['error'] = '讀寫這個檔案失敗。'
         event = {'id': call_id, 'name': name, 'source': source, 'status': status, 'arguments': self.redactor.value(args),
                  'label': self.routes[name][1] if name in self.routes else name,
                  'sourceLabel': next((x['name'] for k in ('mcp', 'skills') for x in self.inventory.get(k, []) if x['id'] == source), source)}

@@ -137,8 +137,8 @@ def refresh_auto_status(store, wait=False):
             if find_cli(account['provider']):
                 try: found[auto_account_key(account)] = auto_account_status(account)
                 except (OSError, ValueError, RuntimeError): pass
-        for state in found.values():
-            if state.get('signedIn') is not None: state['checkedAt'] = time.time()  # a check that finished; one that did not keeps the old time
+        for key, state in found.items():
+            if state.get('signedIn') is not None: state.update(checkedAt=time.time(), signIn=auth_fingerprint(key))  # a check that finished
         with store.lock:
             store.data['autoStatus'] = merge_auto_status(store.data.get('autoStatus') or {}, found)
             try: store.save()
@@ -296,8 +296,10 @@ def bot_work(bot, instructions=True):
     return found if found in ('code', 'analysis') else 'quick'
 
 
-def auto_assign(store, bot, instructions=True):
-    """Lock held. Fix a model for the Bot from what it is for. Returns the reason (「寫程式多，配 Codex」), or '' when none could be picked."""
+def auto_assign(store, bot, instructions=True, grant=False):
+    """Lock held. Fix a model for the Bot from what it is for. Returns the reason (「寫程式多，配 Codex」), or '' when none could be picked.
+    grant: the user is making or setting this Bot on this Mac right now. Anything else (a match in the background, a re-match after an
+    edit, a Bot made by another Bot) never widens what it may reach (set_access_after_match in core.py)."""
     if 'autoStatus' not in store.data: return ''
     task = bot_work(bot, instructions)
     try: allowed, usable = auto_candidates(store, task, AUTO_TASKS[task][1])
@@ -310,7 +312,7 @@ def auto_assign(store, bot, instructions=True):
     bot.pop('autoPending', None); bot.pop('syncedModel', None)
     if model: bot.pop('autoModelPending', None)
     else: bot['autoModelPending'] = True  # the CLI's own default is not known yet: the model of its first reply is kept (app.py)
-    set_gate_full(bot)  # matched on this Mac
+    set_access_after_match(bot, grant)
     return reason
 
 
@@ -343,8 +345,15 @@ def auto_billing_problem(store, provider, account_id):
     else: key = provider
     state = (store.data.get('autoStatus') or {}).get(key) or {}
     if auto_known_billed(state): return 'API 計費不會被自動選用'
-    if not isinstance(state.get('checkedAt'), (int, float)) or time.time() - state['checkedAt'] > AUTO_FRESH: return '最近沒能確認是訂閱帳號'
+    if _auto_stale(state, key): return '最近沒能確認是訂閱帳號'
     return '' if state.get('signedIn') is True and state.get('billed') is False else '還沒確認是訂閱帳號'
+
+
+def auto_status_forget(store, provider):
+    """A sign-in of this CLI (its own or an extra account) is being changed in Zook: its billing is checked again before the next use."""
+    with store.lock:
+        for key, state in (store.data.get('autoStatus') or {}).items():
+            if (key == provider or key.startswith(provider + '@')) and isinstance(state, dict): state.pop('checkedAt', None)
 
 
 def auto_billing_keys(store, bot, chain):
@@ -360,13 +369,37 @@ def auto_billing_keys(store, bot, chain):
 def auto_billing_stale(store, keys):
     """Lock held. Whether any of these sign-ins was not checked recently."""
     status = store.data.get('autoStatus') or {}
-    return any(not isinstance((status.get(k) or {}).get('checkedAt'), (int, float)) or time.time() - status[k]['checkedAt'] > AUTO_FRESH for k in keys)
+    return any(_auto_stale(status.get(k) or {}, k) for k in keys)
 
 
-def auto_on_create(store, bot, instructions=True):
+def _auto_stale(state, key):
+    """Not checked in the last AUTO_FRESH seconds, or its sign-in files changed since (a sign-in switched outside Zook)."""
+    if not isinstance(state.get('checkedAt'), (int, float)) or time.time() - state['checkedAt'] > AUTO_FRESH: return True
+    return 'signIn' in state and state['signIn'] != auth_fingerprint(key)
+
+
+def auth_fingerprint(key):
+    """When the files a CLI keeps its sign-in in last changed, for a sign-in Zook can see on disk (Claude keeps its own in the Keychain)."""
+    provider, _, account_id = str(key).partition('@')
+    account = find_account(account_id, provider) if account_id else None
+    if account_id:  # an extra account signs in inside its own folder; a key account has nothing on disk to watch
+        try: files = [account_dir(account['id'])] if account and account.get('type') == 'login' and provider in ACCOUNT_HOME else []
+        except ValueError: files = []
+    else: files = [pathlib.Path(os.path.expanduser(p)) for p in AUTH_FILES.get(provider_kind(provider) or '', ())]
+    out = []
+    for f in files:
+        try: out.append([str(f), max([f.stat().st_mtime] + [c.stat().st_mtime for c in f.iterdir()] if f.is_dir() else [f.stat().st_mtime])])
+        except OSError: out.append([str(f), 0])
+    return out
+
+
+AUTH_FILES = {'codex': ('~/.codex/auth.json',), 'grok': ('~/.grok',), 'generic': ('~/.gemini/oauth_creds.json',), 'claude': ('~/.claude/.credentials.json',)}
+
+
+def auto_on_create(store, bot, instructions=True, grant=False):
     """Lock held. A new Bot on 自動選擇 gets its model now; when none can be picked, it stays on 自動選擇 (each message picks)."""
     for key in ('autoAssigned', 'autoReason', 'autoPending', 'autoModelPending'): bot.pop(key, None)
-    return auto_assign(store, bot, instructions) if bot.get('provider') == AUTO else ''
+    return auto_assign(store, bot, instructions, grant) if bot.get('provider') == AUTO else ''
 
 
 def auto_on_edit(store, before, after, body):
@@ -374,7 +407,7 @@ def auto_on_edit(store, before, after, body):
     matched automatically and whose work changed is matched again. Returns what to tell the user, or ''."""
     if after.get('provider') == AUTO:
         if body.get('provider') != AUTO: return ''
-        reason = auto_on_create(store, after)
+        reason = auto_on_create(store, after, grant=True)  # the user chose 自動選擇 here, now
         return '已自動配好：' + reason if reason else ''
     if not before.get('autoAssigned'): return ''
     if not after.get('model') and after.get('provider') == before.get('provider'): after['model'] = before.get('model') or ''  # 「預設」 in the form: the model it was matched with
@@ -387,7 +420,9 @@ def auto_on_edit(store, before, after, body):
     after.update({k: trial[k] for k in ('provider', 'account', 'model', 'autoAssigned', 'autoReason')})
     if 'autoModelPending' in trial: after['autoModelPending'] = True
     else: after.pop('autoModelPending', None)
-    if not (before.get('gateFull') and provider_kind(trial['provider']) in GATED_KINDS): after.pop('gateFull', None)  # a re-match never grants it
+    for key in ('gateFull', 'localLimit'):  # a re-match never widens it: held in when it moves off the gate (set_access_after_match)
+        if key in trial: after[key] = trial[key]
+        else: after.pop(key, None)
     if (trial['provider'], trial['account']) == (before.get('provider'), before.get('account') or ''): return ''
     log_activity(store, 'bot', 'Bot「%s」的工作內容改了，改配 %s' % (after.get('name', ''), trial['autoReason']), by='Zook')
     return '工作內容改了，改配 ' + auto_choice_name(trial['provider'], trial['account']) + '（' + trial['autoReason'] + '）'

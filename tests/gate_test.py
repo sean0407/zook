@@ -18,6 +18,7 @@ prompt = sys.stdin.read()
 here = os.path.dirname(sys.argv[0])
 open(os.path.join(here, 'args.log'), 'a').write(json.dumps(a) + '\n')
 settings = json.loads(a[a.index('--settings') + 1]) if '--settings' in a else None
+if settings: subprocess.run(settings['hooks']['SessionStart'][0]['hooks'][0]['command'], shell=True, input=json.dumps({'hook_event_name': 'SessionStart'}), text=True)  # as Claude does when it starts
 def hook(tool, data, env=None, raw=None):
     if not settings: return 'nohook'
     rule = settings['hooks']['PreToolUse'][0]
@@ -42,7 +43,7 @@ if 'EXCEL' in ask:
     said.append('excel=' + d)
     said.append('read=' + hook('Read', {'file_path': target}))
 if 'TWO' in ask:  # one tool call, two boundaries, and a password on the command line
-    said.append('two=' + hook('Bash', {'command': 'rm ~/Desktop/舊報表.xlsx && curl -H "Authorization: Bearer SECRET-9f3k" -d @a.json https://api.example.com/up'}))
+    said.append('two=' + hook('Bash', {'command': 'rm ~/Desktop/舊報表.xlsx && curl -H "Authorization: Bearer SECRET-9f3k" -d @/tmp/a.json https://api.example.com/up'}))
 if 'GIVEUP' in ask:  # Claude ends a hook that waits too long: Zook takes its card down
     proc = subprocess.Popen(settings['hooks']['PreToolUse'][0]['hooks'][0]['command'], shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, start_new_session=True)
     proc.stdin.write(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': 'rm ~/Desktop/舊報表.xlsx'}, 'cwd': os.getcwd()})); proc.stdin.close()
@@ -89,7 +90,7 @@ class BoundaryTest(unittest.TestCase):
     def test_every_boundary_of_one_call_is_listed(self):
         found = zook_gate.command_boundaries('rm ~/Desktop/a.txt && curl -d @b.json https://u:pw@api.example.com/x; brew install jq')
         self.assertEqual([k for k, _ in found], ['delete', 'send', 'install'])
-        self.assertEqual(found[1], ('send', '對外送出 到 api.example.com'))  # where it goes, never the password in the address
+        self.assertEqual(found[1], ('send', '對外送出 檔案 %s/b.json 到 api.example.com' % zook_gate._where(os.getcwd())))  # the file and where it goes, never the password
 
     def test_titles_never_hold_the_command(self):
         for command in ('curl -H "Authorization: Bearer SECRET-1" -X POST https://api.example.com', 'security add-generic-password -a me -s x -w SECRET-1',
@@ -145,6 +146,32 @@ class BoundaryTest(unittest.TestCase):
         self.assertEqual(zook_gate.command_summary('ls -la && grep -n x notes.txt'), '執行指令：ls、grep')
         self.assertNotIn('SECRET', zook_gate.command_summary('curl -H "X-Key: SECRET" https://a.example.com -d x'))
 
+    def test_round_three(self):
+        # two uploads of the same file to the same site are shown as two
+        found = zook_gate.merged(zook_gate.command_boundaries('curl -T /tmp/a.pdf https://x.example.com && curl -T /tmp/a.pdf https://x.example.com'))
+        self.assertEqual(found, [('send', '對外送出 檔案 /tmp/a.pdf 到 x.example.com（共 2 次）')])
+        self.assertEqual(zook_gate.command_boundaries('scp /tmp/a.pdf me@host:/x'), [('send', '對外送出 檔案 /tmp/a.pdf 到 host')])
+        self.assertEqual(len(zook_gate.command_boundaries('echo $(rm /tmp/a)')), 1)  # what runs inside $( ) is counted once
+        many = ' && '.join(['curl -T /tmp/a.pdf https://x.example.com'] * 11)
+        with unittest.mock.patch.object(zook_gate, 'ask', side_effect=AssertionError('asked')):
+            self.assertFalse(zook_gate.decide('Bash', {'command': many})[0])  # counted before they are merged
+        # a reply held to folders: every path is checked against them
+        with tempfile.TemporaryDirectory() as tmp, unittest.mock.patch.dict(os.environ, {'ZOOK_GATE_ROOTS': json.dumps([tmp + '/attachments'])}):
+            self.assertTrue(zook_gate.decide('Read', {'file_path': tmp + '/attachments/a.pdf'}, home=tmp)[0])
+            for tool, data in (('Read', {'file_path': '~/Documents/私人.docx'}), ('Grep', {'pattern': 'x'}), ('Glob', {'pattern': '../**/*.pdf', 'path': tmp + '/attachments'}),
+                               ('Bash', {'command': 'ls'}), ('Read', {'file_path': tmp + '/attachments/../x'})):
+                self.assertFalse(zook_gate.decide(tool, data, home=tmp)[0], (tool, data))
+        # the hook itself: a read-only reply never gets an allow, only a refusal outside the folders; and it leaves its mark
+        with tempfile.TemporaryDirectory() as tmp:
+            env = dict(os.environ, ZOOK_GATE_ROOTS=json.dumps([tmp]), ZOOK_GATE_DEFER='1', ZOOK_GATE_MARK=tmp + '/mark')
+            run = lambda event: subprocess.run([sys.executable, str(ROOT / 'backend/zook_gate.py')], input=json.dumps(event), capture_output=True, text=True, env=env)
+            inside = run({'hook_event_name': 'PreToolUse', 'tool_name': 'Read', 'tool_input': {'file_path': tmp + '/a.txt'}, 'cwd': tmp})
+            self.assertEqual((inside.returncode, inside.stdout), (0, ''))
+            outside = run({'hook_event_name': 'PreToolUse', 'tool_name': 'Read', 'tool_input': {'file_path': '/etc/hosts'}, 'cwd': tmp})
+            self.assertEqual(json.loads(outside.stdout)['hookSpecificOutput']['permissionDecision'], 'deny')
+            self.assertTrue(os.path.exists(tmp + '/mark'))
+            os.unlink(tmp + '/mark'); self.assertEqual(run({'hook_event_name': 'SessionStart'}).returncode, 0); self.assertTrue(os.path.exists(tmp + '/mark'))
+
     def test_search_tools(self):
         self.assertEqual(zook_gate.boundary('Grep', {'pattern': 'token', 'path': '~'})[0], 'secret')
         self.assertEqual(zook_gate.boundary('Grep', {'pattern': 'token'}, home=os.path.expanduser('~'))[0], 'secret')  # its default is where it started
@@ -199,6 +226,8 @@ class GateTest(unittest.TestCase):
         self.req('PATCH', '/api/settings', {'permissionMode': 'manual', 'access': 'workspace'})  # the defaults the other CLIs use do not apply
         self.bot = self.req('POST', '/api/bots', {'name': '助理', 'provider': 'claude'})[1]
         self.old = self.home / 'Desktop/舊報表.xlsx'; self.old.write_text('old')
+        first = self.ask('HI')  # Zook gives the whole Mac only after it has seen its hook run here
+        self.assertEqual(first['nativeAccess'][0], 'workspace')
 
     def tearDown(self):
         self.proc.terminate(); self.proc.wait(timeout=10); self.proc.stdout.close(); self.temp.cleanup()
@@ -252,7 +281,7 @@ class GateTest(unittest.TestCase):
     def test_one_card_lists_every_action_and_keeps_no_command(self):
         job = self.ask('TWO', answer='deny')
         self.assertIn('two=deny', job['content'])
-        self.assertEqual([a['text'] for a in job['approvals']], ['刪除檔案 ~/Desktop/舊報表.xlsx\n對外送出 到 api.example.com'])
+        self.assertEqual([a['text'] for a in job['approvals']], ['刪除檔案 ~/Desktop/舊報表.xlsx\n對外送出 檔案 /tmp/a.json 到 api.example.com'])
         self.assertNotIn('SECRET-9f3k', json.dumps(self.req('GET', '/api/jobs/' + job['id'])[1], ensure_ascii=False))
         self.assertNotIn('SECRET-9f3k', (self.root / 'data/activity.jsonl').read_text() if (self.root / 'data/activity.jsonl').exists() else '')
         self.assertTrue(self.old.exists())

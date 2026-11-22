@@ -137,8 +137,8 @@ class Handler(BaseHTTPRequestHandler):
         if body.get('account'):
             account = find_account(body['account'], provider) if isinstance(body['account'], str) else None
             if not account: return self.error(404, '找不到這個帳號。')
-        login_key = provider + ('@' + account['id'] if account else '')
-        flow = logins.get(login_key)
+        login_key = provider + ('@' + account['id'] if account else ''); flow = logins.get(login_key)
+        if action not in ('install/cancel', 'login/cancel'): auto_status_forget(store, provider)  # a sign-in may change: billing is checked again first
         try:
             if action == 'profiles':
                 name, kind, key = body.get('name'), body.get('type'), body.get('key')
@@ -860,7 +860,7 @@ class Handler(BaseHTTPRequestHandler):
                     body = self.body(); name = body.get('name', '')
                     if not isinstance(name, str) or not name.strip() or len(name)>100: raise ValueError('名稱無效。')
                     bot = dict(id=ID(), name=name, color='#8275f4', shape='circle', instructions='', persona='', provider='', model='', pinned=False, section='團隊', messages=[], enabledSkills=[], enabledMcp=[], allowCommands=True)
-                    update(bot, body, 'bot'); validate_selection(bot, inventory); set_gate_full(bot); auto_on_create(store, bot); ensure_chats(bot); store.data['bots'].append(bot); store.save(); watch_auto_status(store, bot); self.server.want_intro(bot['id']); return self.respond(201, bot)
+                    update(bot, body, 'bot'); validate_selection(bot, inventory); set_gate_full(bot); auto_on_create(store, bot, grant=True); ensure_chats(bot); store.data['bots'].append(bot); store.save(); watch_auto_status(store, bot); self.server.want_intro(bot['id']); return self.respond(201, bot)
                 if path == '/api/bots/arrange' and self.command == 'POST':
                     body = self.body(); arrange_bots(store, body); store.save()
                     return self.respond(200, dict(bots=[dict(id=b['id'], section=b.get('section'), pinned=b.get('pinned')) for b in store.data['bots']], sections=store.data['settings']['sections']))

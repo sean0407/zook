@@ -68,7 +68,59 @@ def claude_gate_settings(wait):
     script = str(pathlib.Path(__file__).with_name('zook_gate.py'))  # __file__ is backend/server.py in this namespace
     command = '%s %s || exit 2' % (shlex.quote(gate_python()), shlex.quote(script))
     hook = {'type': 'command', 'command': command, 'timeout': int(wait) + 60, 'onFailure': 'block'}
-    return json.dumps({'hooks': {'PreToolUse': [{'matcher': CLAUDE_GATED_TOOLS, 'hooks': [hook]}]}}, ensure_ascii=False)
+    start = {'type': 'command', 'command': command, 'timeout': 30}  # only leaves the sign that the hooks run (claude_gate_seen)
+    return json.dumps({'hooks': {'PreToolUse': [{'matcher': CLAUDE_GATED_TOOLS, 'hooks': [hook]}], 'SessionStart': [{'hooks': [start]}]}}, ensure_ascii=False)
+
+
+# The whole Mac only after the hook was seen running in this Claude setup (its settings folder): the hook leaves a mark (ZOOK_GATE_MARK)
+# when Claude starts and before each tool. Until then, and again whenever Claude used a tool without leaving it, a Claude Bot works in
+# its workspace. A policy that turns hooks off for the first time in the very reply that starts cannot be seen in advance.
+def claude_gate_key(env):
+    return str((env or {}).get('CLAUDE_CONFIG_DIR') or pathlib.Path.home() / '.claude')
+
+
+def claude_gate_mark(store, env):
+    folder = store.dir / 'tools' / 'claude-gate'; folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = folder / hashlib.sha256(claude_gate_key(env).encode()).hexdigest()[:24]
+    try: before = path.stat().st_mtime
+    except OSError: before = 0
+    return str(path), before
+
+
+def claude_gate_seen(store, env):
+    """Lock held. Whether Zook has seen its hook run in this Claude setup, and not seen a tool run without it since."""
+    return (store.data.get('claudeGate') or {}).get(claude_gate_key(env)) is True
+
+
+def claude_scope(store, provider, bot, scope, root, workspace):
+    """(scope, folder) for a Claude reply: the whole Mac only once its hook was seen running in this Claude setup."""
+    with store.lock: seen = claude_gate_seen(store, provider_env(provider, find_account(bot.get('account'), provider)))
+    return (scope, root) if scope != 'full' or seen else ('workspace', workspace)
+
+
+def claude_gate_env(store, env, tools, scope, root, workspace):
+    """The hook's environment for this reply; returns the mark's time before it. Without the whole Mac, the hook checks every path
+    against the folders (ZOOK_GATE_ROOTS); a reply that only reads what was attached never gets an allow (ZOOK_GATE_DEFER)."""
+    mark, before = claude_gate_mark(store, env); env['ZOOK_GATE_MARK'] = mark
+    if not (tools and scope == 'full'): env['ZOOK_GATE_ROOTS'] = json.dumps([str(root), str(workspace)] if tools else [str(pathlib.Path(workspace) / 'attachments')])
+    if not tools: env['ZOOK_GATE_DEFER'] = '1'
+    return before
+
+
+def claude_gate_after(store, env, mark, before, used_tools):
+    """After a Claude reply: the mark proves the hook ran; a built-in tool that ran without it means it did not."""
+    with store.lock: return _claude_gate_after(store, env, mark, before, used_tools)
+
+
+def _claude_gate_after(store, env, mark, before, used_tools):
+    try: ran = os.stat(mark).st_mtime > before
+    except OSError: ran = False
+    seen = store.data.setdefault('claudeGate', {}); key = claude_gate_key(env)
+    if ran: seen[key] = True
+    elif used_tools:
+        seen[key] = False
+        log_activity(store, 'tool', 'Claude 用了內建工具，但 Zook 的安全檢查沒有執行（可能被管理政策關掉）。之後 Claude 的 Bot 先只在工作資料夾裡做事。', by='Zook')
+    return ran
 
 
 def gate_access_note(note, kind):
