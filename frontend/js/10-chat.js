@@ -15,6 +15,7 @@
     let s = esc(text).replace(/`([^`\n]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`);
     s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => `<a href="${u}" rel="noopener noreferrer">${t}</a>`)
       .replace(/\[([^\]\n]+)\]\(((?:file:\/\/)?\/[^\s)]+)\)/g, (_, t, u) => `<a href="${u}" class="local-link" title="${u}">${t}</a>`)
+      .replace(/\[([^\]\n]+)\]\(([^\s)]+\.[A-Za-z0-9]{1,8})\)/g, '$1')  // a link to a bare file name cannot open here: just its words
       .replace(/(^|[\s(（])(https?:\/\/[^\s<)）]+)/g, (_, p, u) => `${p}<a href="${u}" rel="noopener noreferrer">${u}</a>`)
       .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<strong>$1</strong>')
       .replace(/__(?=\S)([\s\S]*?\S)__/g, '<strong>$1</strong>')
@@ -368,7 +369,7 @@
   }
   const groupFileMark = g => { const all = g.messages || []; return all.length + ':' + all.filter(m => m.status === 'completed' || m.role === 'system').length + ':' + (all[all.length - 1]?.id || ''); };
   // A member's copy of the group's files lives inside Zook's own data; the person only needs the file's name.
-  const hideInnerPaths = text => String(text).replace(/(?:…|\.\.\.)?(?:\/[^\s`'"<>()（）「」，、：]*)?\/workspaces\/[0-9a-f]{32}\/(?:[^\s`'"<>()（）「」，、]*\/)?([^\s`'"<>()（）「」，、\/]+)/g, '$1（群組檔案）');
+  const hideInnerPaths = text => String(text).replace(/\[([^\]\n]+)\]\((?:file:\/\/|file:)?[^)\s]*\/workspaces\/[0-9a-f]{32}\/[^)\s]*\)/g, '$1（群組檔案）').replace(/(?:…|\.\.\.)?(?:\/[^\s`'"<>()（）「」，、：]*)?\/workspaces\/[0-9a-f]{32}\/(?:[^\s`'"<>()（）「」，、]*\/)?([^\s`'"<>()（）「」，、\/]+)/g, '$1（群組檔案）');
   function groupMessage(g, m) {
     if (m.compacted && !m.checkOf) return '<div class="compact-line"><span>前面的討論已整理成摘要，成員從這裡接續</span></div>' + groupMessage(g, Object.assign({}, m, {compacted: false}));
     if (m.checkOf) return '';
@@ -384,7 +385,7 @@
     const b = state.data.bots.find(x => x.id === m.botId) || {name: '已刪除的 Bot', color: '#959595'};
     if (m.content) m = Object.assign({}, m, {content: hideInnerPaths(m.content)});
     const text = m.status==='running' ? '正在思考…' : m.status==='cancelled'&&!m.content ? '已停止回覆' : m.status==='failed'&&!m.content ? (Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。') : m.content;
-    return `<div class="message assistant" data-mid="${esc(m.id)}">${avatar(b)}<div class="speaker-wrap"><div class="speaker">${esc(b.name)}${m.taskId ? ` <span class="muted">· 任務 ${esc(String((g.taskRun?.tasks || []).find(t => t.id === m.taskId)?.n || ''))}${m.taskCheck ? ' 驗收' : ''}</span>` : ''}</div>${m.card&&m.status==='completed'?groupCardView(m):partialFor(m)?`<div class="bubble md streaming">${tag(markdown(partialFor(m)))}</div>`:m.content&&m.status!=='running'?`<div class="bubble md">${withAutoMark(tag(markdown(m.content)), m)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(text)}</div>`}${m.content&&m.status!=='running'?messageFiles(m.content, groupSharedFiles(g, fileMark).concat(botFiles(m.botId, 'g:' + fileMark))):''}${groupChecks(g, m)}</div>${groupVerifyButton(g, m)}</div>`;
+    return `<div class="message assistant" data-mid="${esc(m.id)}">${avatar(b)}<div class="speaker-wrap"><div class="speaker">${esc(b.name)}${m.taskId ? ` <span class="muted">· 任務 ${esc(String((g.taskRun?.tasks || []).find(t => t.id === m.taskId)?.n || ''))}${m.taskCheck ? ' 驗收' : ''}</span>` : ''}</div>${m.card&&m.status==='completed'?groupCardView(m):partialFor(m)?`<div class="bubble md streaming">${tag(markdown(partialFor(m)))}</div>`:m.content&&m.status!=='running'?`<div class="bubble md">${withAutoMark(tag(markdown(m.content)), m)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(text)}</div>`}${m.content&&m.status!=='running'?messageFiles(m.content, groupSharedFiles(g, fileMark).concat(botFiles(m.botId, 'g:' + fileMark).filter(f => !groupSharedFiles(g, fileMark).some(x => x.name === f.name && x.size === f.size)))):''}${groupChecks(g, m)}</div>${groupVerifyButton(g, m)}</div>`;
   }
   function groupChat() {
     const g = activeGroup(), members = groupMembers(g), running = g.status === 'running';
