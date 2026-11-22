@@ -538,7 +538,7 @@ class RuntimeSession:
                 raise RuntimeError(self.redactor.text(exc))
 
     def _connector_name(self, ident):
-        return next((label for label, i in self.lazy.items() if i == ident), None) or next((x['name'] for x in self.inventory.get('mcp', []) if x['id'] == ident), ident)
+        return next((label for label, i in getattr(self, 'lazy', {}).items() if i == ident), None) or next((x['name'] for x in (getattr(self, 'inventory', None) or {}).get('mcp', []) if x['id'] == ident), ident)
 
     def _free_label(self, ident):
         """A name no other connector in this reply has: two called Notion become Notion and Notion（Codex）."""
