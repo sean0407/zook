@@ -92,7 +92,7 @@ if sys.argv[1:] == ['auth', 'status']:
  print(json.dumps({'loggedIn':False}))
  sys.exit(1)
 assert ('--safe-mode' in sys.argv or '--restricted' in sys.argv) and '--strict-mcp-config' in sys.argv
-assert sys.argv[sys.argv.index('--tools')+1] == ''
+assert '--settings' in sys.argv  # a Claude Bot has its own tools behind Zook's boundary gate (2026-11-22)
 sys.stdin.read()
 print(json.dumps({'result':'personal response'}))
 ''')

@@ -281,7 +281,7 @@ class Handler(BaseHTTPRequestHandler):
                 if method == 'tools/list': return self.respond(200, {'tools': worker['tools']})
                 if method == 'tools/call' and isinstance(params, dict) and isinstance(params.get('name'), str) and isinstance(params.get('arguments', {}), dict):
                     return self.respond(200, worker['session'].call(params['name'], params.get('arguments', {})))
-                return self.error(400, '無效的工具要求。')
+                return self.respond(200, {'approved': worker_gate(self.server, self.connection, worker, job['id'], params)}) if method == 'gate' else self.error(400, '無效的工具要求。')  # gate: zook_gate.py
             except (ValueError, RuntimeError): return self.error(400, '工具要求失敗。')
         if path == '/oauth/callback' and self.command == 'GET':
             # The browser returning from a connector's sign-in page. It has no Zook session, so the one-time state is what proves it.
@@ -860,7 +860,7 @@ class Handler(BaseHTTPRequestHandler):
                     body = self.body(); name = body.get('name', '')
                     if not isinstance(name, str) or not name.strip() or len(name)>100: raise ValueError('名稱無效。')
                     bot = dict(id=ID(), name=name, color='#8275f4', shape='circle', instructions='', persona='', provider='', model='', pinned=False, section='團隊', messages=[], enabledSkills=[], enabledMcp=[], allowCommands=True)
-                    update(bot, body, 'bot'); validate_selection(bot, inventory); ensure_chats(bot); store.data['bots'].append(bot); store.save(); watch_auto_status(store, bot); self.server.want_intro(bot['id']); return self.respond(201, bot)
+                    update(bot, body, 'bot'); validate_selection(bot, inventory); set_gate_full(bot); auto_on_create(store, bot); ensure_chats(bot); store.data['bots'].append(bot); store.save(); watch_auto_status(store, bot); self.server.want_intro(bot['id']); return self.respond(201, bot)
                 if path == '/api/bots/arrange' and self.command == 'POST':
                     body = self.body(); arrange_bots(store, body); store.save()
                     return self.respond(200, dict(bots=[dict(id=b['id'], section=b.get('section'), pinned=b.get('pinned')) for b in store.data['bots']], sections=store.data['settings']['sections']))
@@ -897,10 +897,10 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) == 3 and parts[:2] == ['api', 'bots'] and self.command == 'PATCH':
                     bot = store.find('bots', parts[2])
                     if not bot: return self.error(404, '找不到機器人。')
-                    body = self.body(); candidate = copy.deepcopy(bot); update(candidate, body, 'bot'); validate_selection(candidate, inventory); bot.update(candidate); store.save(); watch_auto_status(store, bot)
+                    body = self.body(); candidate = copy.deepcopy(bot); update(candidate, body, 'bot'); validate_selection(candidate, inventory); local_choice(bot, candidate, body); notice = auto_on_edit(store, bot, candidate, body); bot.clear(); bot.update(candidate); store.save(); watch_auto_status(store, bot)
                     if 'permissionMode' in body: self.server.release_approvals()
                     if (bot.get('intro') or {}).get('source') != intro_source(bot): bot.pop('intro', None); store.save(); self.server.want_intro(bot['id'])  # what it is changed: a new greeting
-                    return self.respond(200, bot)
+                    return self.respond(200, dict(bot, **({'autoNotice': notice} if notice else {})))
                 if len(parts) == 3 and parts[:2] == ['api', 'bots'] and self.command == 'DELETE':
                     bot = store.find('bots', parts[2])
                     if not bot: return self.error(404, '找不到機器人。')
@@ -957,15 +957,15 @@ def main():
     threading.Thread(target=app.schedule_loop, daemon=True).start()
     for job in app.store.data['jobs']:  # activity saved by earlier versions
         for call in job.get('toolCalls') or []:
-            if call.get('name') == 'native_command' and isinstance((call.get('arguments') or {}).get('command'), str): call['arguments']['command'] = hide_command_secrets(call['arguments']['command'])
+            if call.get('name') == 'native_command' and isinstance((call.get('arguments') or {}).get('command'), str): call['arguments'] = {'summary': command_summary(call['arguments']['command'])}  # older records: the summary only
     trim_jobs(app.store); recover_deleted_bots(app.store)
     app.store.save()
     try: app.script_api = ScriptApi(app)  # for scripts on this Mac; every Bot starts with it switched off
     except OSError: app.script_api = None
     later = threading.Timer(2.0, app.queue_drain_all); later.daemon = True; later.start()  # messages that were waiting when Zook was closed
     app.auto_refreshed = time.time()
-    live_learn(app)
-    if any(b.get('provider') == AUTO for b in app.store.data['bots']): threading.Thread(target=refresh_auto_status, args=(app.store,), daemon=True).start()
+    live_learn(app); local_migrate(app.store)  # this Mac's own settings for Bots from before (gate.py)
+    threading.Thread(target=auto_migrate, args=(app.store,), daemon=True).start()  # Bots on 自動選擇 from before get their model once (routing.py)
     try: app.serve_forever()
     except KeyboardInterrupt: pass
     finally:

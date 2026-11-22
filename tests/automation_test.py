@@ -16,6 +16,10 @@ here = os.path.dirname(sys.argv[0])
 ask = prompt.strip().splitlines()[-1]
 time.sleep(float(open(os.path.join(here, 'delay')).read()))
 call = os.path.join(here, 'call.json')
+if '刪掉舊檔' in ask:  # Claude runs Zook's boundary gate (its PreToolUse hook) before its own Bash tool
+    hook = json.loads(sys.argv[sys.argv.index('--settings') + 1])['hooks']['PreToolUse'][0]['hooks'][0]['command']
+    done = subprocess.run(hook, shell=True, input=json.dumps({'tool_name': 'Bash', 'tool_input': {'command': 'rm ~/Desktop/腳本的舊檔.xlsx'}}), capture_output=True, text=True)
+    print(json.dumps({'type': 'result', 'result': 'GATE:' + done.stdout.strip(), 'is_error': False})); sys.exit(0)
 if os.path.exists(call) and ('請建立排程' in ask or '建一個 Bot' in ask):  # only the message that asks for it uses the tool
     config = json.loads(sys.argv[sys.argv.index('--mcp-config') + 1])['mcpServers']['zook']
     proc = subprocess.Popen([config['command']] + config['args'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
@@ -120,16 +124,52 @@ class AutomationTest(unittest.TestCase):
         self.assertTrue(all(j.get('chatId') == jobs[0]['chatId'] for j in jobs))  # both in the scripts' own conversation
 
     def test_cannot_approve_and_is_told_to_wait_for_the_user(self):
-        self.req('PATCH', '/api/settings', {'permissionMode': 'manual'})
-        self.req('PATCH', '/api/bots/' + self.open['id'], {'isAdmin': True})
-        (self.root / 'bin/call.json').write_text(json.dumps(dict(name='zook_create_bot', arguments=dict(name='腳本想建的 Bot', persona='認真', instructions='幫忙'))))
-        status, out = self.script('POST', '/v1/agents/%s/messages' % self.open['id'], {'content': '建一個 Bot', 'wait': 20})
+        # A Claude Bot asks only at the safety boundaries (2026-11-22); deleting a file is one, and a script cannot answer for the user.
+        status, out = self.script('POST', '/v1/agents/%s/messages' % self.open['id'], {'content': '刪掉舊檔', 'wait': 20})
         self.assertEqual((status, out['status']), (200, 'needs_approval'), out)
         code, text, err = self.cli('status', '文件整理員', out['id'])
         self.assertEqual(code, 3); self.assertIn('等你在 Zook 核准', err)
         job = self.req('GET', '/api/jobs/' + out['id'])[1]
+        self.assertEqual(job['approvals'][0]['text'], '刪除檔案 ~/Desktop/腳本的舊檔.xlsx')
         self.req('POST', '/api/approvals/' + job['approvals'][0]['id'], {'decision': 'deny'})
+        for _ in range(100):
+            job = self.req('GET', '/api/jobs/' + out['id'])[1]
+            if job['status'] != 'running': break
+            time.sleep(.1)
+        self.assertIn('"permissionDecision": "deny"', job['content'])
+
+    def test_a_script_turn_still_asks_before_zook_tools(self):
+        # A Claude Bot's Zook tools are on 自動 (2026-11-22), but a turn a script started always asks, as before.
+        self.req('PATCH', '/api/bots/' + self.open['id'], {'isAdmin': True})
+        (self.root / 'bin/call.json').write_text(json.dumps(dict(name='zook_create_bot', arguments=dict(name='腳本想建的 Bot', persona='認真', instructions='幫忙'))))
+        status, out = self.script('POST', '/v1/agents/%s/messages' % self.open['id'], {'content': '建一個 Bot', 'wait': 20})
+        self.assertEqual((status, out['status']), (200, 'needs_approval'), out)
+        job = self.req('GET', '/api/jobs/' + out['id'])[1]
+        self.req('POST', '/api/approvals/' + job['approvals'][0]['id'], {'decision': 'deny'})
+        for _ in range(100):
+            if self.req('GET', '/api/jobs/' + out['id'])[1]['status'] != 'running': break
+            time.sleep(.1)
         self.assertNotIn('腳本想建的 Bot', [b['name'] for b in self.req('GET', '/api/state')[1]['bots']])
+
+    def test_scripts_off_means_no_script_reaches_the_bot(self):
+        self.req('PATCH', '/api/bots/' + self.open['id'], {'scripts': False})
+        self.assertEqual(self.script('GET', '/v1/agents'), (200, {'agents': []}))
+        self.assertEqual(self.script('POST', '/v1/agents/%s/messages' % self.open['id'], {'content': 'hi'})[0], 404)
+        self.assertEqual(self.script('GET', '/v1/agents/%s/deliveries/x' % self.open['id'])[0], 404)
+        self.assertEqual(self.cli('list')[1], '')
+        self.assertNotEqual(self.cli('run', '文件整理員', 'hi')[0], 0)
+
+    def test_scripts_from_before_are_switched_off_once(self):
+        self.proc.terminate(); self.proc.wait(timeout=5); self.proc.stdout.close(); self.proc.stderr.close()
+        path = self.root / 'data/swarmr.json'; data = json.loads(path.read_text())
+        data['settings'].pop('scriptsOff', None); path.write_text(json.dumps(data))
+        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', ZOOK_SCHEDULE_TICK='3600', ZOOK_SHELL_ENV='0')
+        self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')],
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
+        self.assertEqual([b.get('scripts') for b in self.req('GET', '/api/state')[1]['bots']], [False] * len(self.req('GET', '/api/state')[1]['bots']))
+        self.url = (self.folder / 'url').read_text().strip(); self.sport = int(self.url.rsplit(':', 1)[1]); self.auth = (self.folder / 'headers').read_text().strip().split(': ', 1)[1]
+        self.assertEqual(self.script('GET', '/v1/agents'), (200, {'agents': []}))
 
     def test_command_line_tool(self):
         self.assertEqual(self.cli('list'), (0, '%s\t文件整理員' % self.open['id'], ''))

@@ -292,8 +292,7 @@
           model: d.get('model'),
           section: d.get('section'),
           pinned: d.has('pinned'),
-          scripts: d.has('scripts'),
-          fallbacks: d.get('fallbackChoice') === '__none' ? [] : !d.get('fallbackChoice') || d.get('fallbackChoice') === '__default' ? null : [d.get('fallbackChoice')], permissionMode: d.get('permissionMode') || '', effort: d.get('effort') || '', features: Object.fromEntries([['multi', d.get('featureMulti')], ['image', d.get('featureImage')], ['browser', d.get('featureBrowser')]].filter(x => x[1]).map(x => [x[0], x[1] === 'on'])),
+          fallbacks: d.get('fallbackChoice') === '__none' ? [] : !d.get('fallbackChoice') || d.get('fallbackChoice') === '__default' ? null : [d.get('fallbackChoice')], effort: d.get('effort') || '', features: Object.fromEntries([['multi', d.get('featureMulti')], ['image', d.get('featureImage')], ['browser', d.get('featureBrowser')]].filter(x => x[1]).map(x => [x[0], x[1] === 'on'])),
           account: d.has('providerChoice') ? String(d.get('providerChoice')).split('::')[1] || '' : d.get('account') || '',
           access: d.get('access') || '', accessFolder: d.get('access') === 'folder' ? d.get('accessFolder') || '' : ''
         };
@@ -307,7 +306,7 @@
           state.page = 'chat';
           render()
         }
-        toast(id ? '已儲存 Bot' : '已建立 Bot')
+        toast(id ? (result.autoNotice ? '已儲存 Bot。' + result.autoNotice : '已儲存 Bot') : result.autoReason ? '已建立 Bot，自動配好：' + result.autoReason : '已建立 Bot')
       } else if (form.id === 'mcp-bots-form') {
         const id = form.dataset.id, chosen = new Set(new FormData(form).getAll('bots'));
         for (const b of state.data.bots) {

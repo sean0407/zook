@@ -111,7 +111,7 @@
   document.addEventListener('click', e => { const el = e.target.closest?.('[data-member-older]'); if (el && state.memberWork) { const g = state.data.groups.find(x => x.id === state.memberWork.group), b = state.data.bots.find(x => x.id === state.memberWork.bot); if (g && b) loadMemberTurns(g, b, true); } });
   // Everything one member did for one turn, in order: Skills, connectors, tools, pages and files it looked at.
   function workSteps(calls, running) {
-    return `<ol class="work-list">${calls.slice(0, 200).map(c => { let [cls, label] = callStatus(c); if ((cls === 'wait' || cls === 'run') && !running) [cls, label] = ['bad', '已中斷']; return `<li class="tool-event ${cls}" title="${esc(label + (c.name === 'native_command' && c.arguments?.command ? '：' + c.arguments.command : ''))}"><span class="ev-dot ${cls}" role="img" aria-label="${esc(label)}"></span><span class="ev-text">${esc(describeCall(c))}</span></li>`; }).join('')}</ol>`;
+    return `<ol class="work-list">${calls.slice(0, 200).map(c => { let [cls, label] = callStatus(c); if ((cls === 'wait' || cls === 'run') && !running) [cls, label] = ['bad', '已中斷']; return `<li class="tool-event ${cls}" title="${esc(label + (c.name === 'native_command' && (c.arguments?.summary || c.arguments?.command) ? '：' + (c.arguments.summary || c.arguments.command) : ''))}"><span class="ev-dot ${cls}" role="img" aria-label="${esc(label)}"></span><span class="ev-text">${esc(describeCall(c))}</span></li>`; }).join('')}</ol>`;
   }
   function memberWork(b, g) {
     const jobs = {}; for (const j of Object.values(state.jobDetails)) if (j.groupId === g.id && j.botId === b.id) jobs[j.messageId] = j;

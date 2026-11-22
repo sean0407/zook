@@ -125,8 +125,11 @@ def auto_known_billed(state):
     return bool(state) and state.get('signedIn') is True and bool(state.get('billed'))
 
 
-def refresh_auto_status(store):
-    if not _auto_checking.acquire(blocking=False): return  # one check at a time
+AUTO_FRESH = 600  # seconds a sign-in check counts as current, for a Bot whose fixed model must not run on API billing
+
+
+def refresh_auto_status(store, wait=False):
+    if not _auto_checking.acquire(blocking=wait): return  # one check at a time; wait=True waits for the one under way
     try:
         found = {p: auto_status(p) for p in AUTO_MODELS if P.spec(store.data, p) and find_cli(p)}
         with store.lock: extras = [dict(a) for a in auto_accounts(store) if P.spec(store.data, a['provider'])]
@@ -134,10 +137,14 @@ def refresh_auto_status(store):
             if find_cli(account['provider']):
                 try: found[auto_account_key(account)] = auto_account_status(account)
                 except (OSError, ValueError, RuntimeError): pass
+        for state in found.values():
+            if state.get('signedIn') is not None: state['checkedAt'] = time.time()  # a check that finished; one that did not keeps the old time
         with store.lock:
             store.data['autoStatus'] = merge_auto_status(store.data.get('autoStatus') or {}, found)
             try: store.save()
             except OSError: pass  # kept in memory; the next save writes it
+            try: auto_retry(store)  # Bots that could not be matched before
+            except OSError: pass
     finally: _auto_checking.release()
 
 
@@ -238,19 +245,8 @@ def pick_auto(store, content, names=(), plan=False, bot=None, taken=None, keep=N
     if 'autoStatus' not in store.data:  # billing is not known yet, so nothing can be picked safely
         threading.Thread(target=refresh_auto_status, args=(store,), daemon=True).start()
         raise ValueError('正在確認各模型的登入狀態，請幾秒後再送一次。')
-    status = store.data['autoStatus']; main = auto_allowed(store)
-    ready = lambda key: auto_ready(store, key)
-    allowed = []  # (provider, account id); '' is the CLI's own sign-in, which comes before that CLI's extra accounts
-    for p in order:
-        if not (P.spec(store.data, p) and find_cli(p)): continue
-        if task == 'image' and not ability_on(store, p, 'images'): continue
-        if plan and not (provider_kind(p) in PLAN_KINDS and ability_on(store, p, 'plan')): continue
-        if p in main and ready(p): allowed.append((p, ''))
-        allowed += [(p, a['id']) for a in auto_accounts(store, p) if auto_account_on(store, a) and ready(auto_account_key(a))]
-    if not allowed: raise ValueError('自動選擇目前沒有可用的模型。請到「各模型使用量」開啟至少一個已登入的模型。')
+    allowed, usable = auto_candidates(store, task, order, plan)
     name = lambda c: auto_choice_name(*c)
-    usable = [c for c in allowed if not auto_quota_low(store, *c)]
-    if not usable: raise ValueError('可自動選用的模型額度都低於 10%%：%s。Zook 不會自動改用付費方式，請等額度重置，或指定其他模型。' % '、'.join(name(c) for c in allowed))
     settings = store.data['settings']
     best, spread = usable[0], False
     kept = next((c for c in usable if c[0] == keep), None)
@@ -264,3 +260,161 @@ def pick_auto(store, content, names=(), plan=False, bot=None, taken=None, keep=N
     elif usable[0] != best: why = '這一輪討論沿用一開始的 %s' % name(usable[0])
     elif best != allowed[0]: why += '（%s 額度不足）' % name(allowed[0])
     return chain, dict(auto='%s %s' % (name(usable[0]), AUTO_MARKS[task]), autoWhy=why)
+
+
+def auto_candidates(store, task, order, plan=False):
+    """Lock held. (signed-in subscriptions that may be picked, in order; those of them with quota left). Raises ValueError when none."""
+    main = auto_allowed(store)
+    ready = lambda key: auto_ready(store, key)
+    allowed = []  # (provider, account id); '' is the CLI's own sign-in, which comes before that CLI's extra accounts
+    for p in order:
+        if not (P.spec(store.data, p) and find_cli(p)): continue
+        if task == 'image' and not ability_on(store, p, 'images'): continue
+        if plan and not (provider_kind(p) in PLAN_KINDS and ability_on(store, p, 'plan')): continue
+        if p in main and ready(p): allowed.append((p, ''))
+        allowed += [(p, a['id']) for a in auto_accounts(store, p) if auto_account_on(store, a) and ready(auto_account_key(a))]
+    if not allowed: raise ValueError('自動選擇目前沒有可用的模型。請到「各模型使用量」開啟至少一個已登入的模型。')
+    usable = [c for c in allowed if not auto_quota_low(store, *c)]
+    if not usable: raise ValueError('可自動選用的模型額度都低於 10%%：%s。Zook 不會自動改用付費方式，請等額度重置，或指定其他模型。' % '、'.join(auto_choice_name(*c) for c in allowed))
+    return allowed, usable
+
+
+# 自動選擇 decides when a Bot is made (2026-11-22): its model is fixed from what it is for, and it answers with that model from then
+# on. A Bot whose work changes (persona or work instructions) is matched again when it is saved. A Bot stays on 自動選擇 (each
+# message picks) only when no model could be picked: sign-ins not known yet, none turned on, or none with quota left.
+AUTO_WORK = dict(code='寫程式多', analysis='分析和寫報告多', image='常要看圖', quick='一般問答和文書為主')
+
+
+def bot_work(bot, instructions=True):
+    """'code', 'analysis' or 'quick': what a Bot is for, from its job title, name and persona, then its work instructions."""
+    role = auto_role(bot)
+    if role: return role
+    text = str(bot.get('instructions') or '')[:3000] if instructions else ''
+    if _ROLE_CODE.search(text): return 'code'
+    if _ROLE_ANALYSIS.search(text): return 'analysis'
+    found = auto_task(' '.join([str(bot.get('persona') or '')[:3000], text]))
+    return found if found in ('code', 'analysis') else 'quick'
+
+
+def auto_assign(store, bot, instructions=True):
+    """Lock held. Fix a model for the Bot from what it is for. Returns the reason (「寫程式多，配 Codex」), or '' when none could be picked."""
+    if 'autoStatus' not in store.data: return ''
+    task = bot_work(bot, instructions)
+    try: allowed, usable = auto_candidates(store, task, AUTO_TASKS[task][1])
+    except ValueError: return ''
+    reason = '%s，配 %s' % (AUTO_WORK[task], auto_choice_name(*usable[0]))
+    if usable[0] != allowed[0]: reason += '（%s 額度不足）' % auto_choice_name(*allowed[0])
+    provider, account = usable[0]
+    model = auto_known_model(store, provider, account)
+    bot.update(provider=provider, account=account, model=model, autoAssigned=True, autoReason=reason)
+    bot.pop('autoPending', None); bot.pop('syncedModel', None)
+    if model: bot.pop('autoModelPending', None)
+    else: bot['autoModelPending'] = True  # the CLI's own default is not known yet: the model of its first reply is kept (app.py)
+    set_gate_full(bot)  # matched on this Mac
+    return reason
+
+
+def auto_known_model(store, provider, account=''):
+    """Lock held. The CLI's default model, as this Mac sets it: the default model in 設定 for the default CLI, or Codex's own setting.
+    '' when it is not written anywhere (Claude, Cursor, Grok, Antigravity): then the model of the Bot's own first reply is kept. Never
+    a model another Bot or an earlier reply used."""
+    settings = store.data['settings']
+    if provider == settings.get('provider', 'codex') and clean_model(settings.get('model')): return settings['model']
+    if provider_kind(provider) == 'codex':
+        return clean_model(codex_default_model(provider_env(provider, find_account(account, provider) if account else None))) or ''
+    return ''
+
+
+def auto_pin_model(store, bot_id, provider, usage):
+    """Lock held. A Bot matched automatically whose model was not known keeps the model its first reply reported."""
+    bot = store.find('bots', bot_id)
+    if not bot or not bot.get('autoModelPending') or bot.get('provider') != provider or not clean_model((usage or {}).get('model')): return
+    bot['model'] = usage['model']; bot.pop('autoModelPending', None)
+
+
+def auto_billing_problem(store, provider, account_id):
+    """Lock held. For a Bot matched automatically: why the account it really runs on may cost money now, or ''. Checked before
+    its model and each backup run, since an account can be removed, signed out or switched to API billing after the match."""
+    if account_id:
+        account = find_account(account_id, provider)
+        if not account: return '帳號已移除'
+        if account.get('type') == 'key': return 'API 計費不會被自動選用'
+        key = auto_account_key(account)
+    else: key = provider
+    state = (store.data.get('autoStatus') or {}).get(key) or {}
+    if auto_known_billed(state): return 'API 計費不會被自動選用'
+    if not isinstance(state.get('checkedAt'), (int, float)) or time.time() - state['checkedAt'] > AUTO_FRESH: return '最近沒能確認是訂閱帳號'
+    return '' if state.get('signedIn') is True and state.get('billed') is False else '還沒確認是訂閱帳號'
+
+
+def auto_billing_keys(store, bot, chain):
+    """Lock held. The sign-ins a fixed Bot's tries really use, as autoStatus keys."""
+    keys = []
+    for p, _, a, _ in chain:
+        acct = a if a is not None else (find_account(bot.get('account'), p) or {}).get('id', '')
+        account = find_account(acct, p) if acct else None
+        keys.append(auto_account_key(account) if account else p)
+    return keys
+
+
+def auto_billing_stale(store, keys):
+    """Lock held. Whether any of these sign-ins was not checked recently."""
+    status = store.data.get('autoStatus') or {}
+    return any(not isinstance((status.get(k) or {}).get('checkedAt'), (int, float)) or time.time() - status[k]['checkedAt'] > AUTO_FRESH for k in keys)
+
+
+def auto_on_create(store, bot, instructions=True):
+    """Lock held. A new Bot on 自動選擇 gets its model now; when none can be picked, it stays on 自動選擇 (each message picks)."""
+    for key in ('autoAssigned', 'autoReason', 'autoPending', 'autoModelPending'): bot.pop(key, None)
+    return auto_assign(store, bot, instructions) if bot.get('provider') == AUTO else ''
+
+
+def auto_on_edit(store, before, after, body):
+    """Lock held. Saving a Bot: choosing 自動選擇 matches it again; a model chosen by hand ends the automatic match; a Bot that was
+    matched automatically and whose work changed is matched again. Returns what to tell the user, or ''."""
+    if after.get('provider') == AUTO:
+        if body.get('provider') != AUTO: return ''
+        reason = auto_on_create(store, after)
+        return '已自動配好：' + reason if reason else ''
+    if not before.get('autoAssigned'): return ''
+    if not after.get('model') and after.get('provider') == before.get('provider'): after['model'] = before.get('model') or ''  # 「預設」 in the form: the model it was matched with
+    if any((after.get(k) or '') != (before.get(k) or '') for k in ('provider', 'account', 'model')):
+        for key in ('autoAssigned', 'autoReason', 'autoModelPending'): after.pop(key, None)
+        return ''  # the user picked a model: it stays
+    if all(after.get(k) == before.get(k) for k in ('persona', 'instructions', 'jobTitle', 'name')): return ''
+    trial = dict(after)
+    if not auto_assign(store, trial): return ''  # nothing can be picked right now: it keeps the model it has
+    after.update({k: trial[k] for k in ('provider', 'account', 'model', 'autoAssigned', 'autoReason')})
+    if 'autoModelPending' in trial: after['autoModelPending'] = True
+    else: after.pop('autoModelPending', None)
+    if not (before.get('gateFull') and provider_kind(trial['provider']) in GATED_KINDS): after.pop('gateFull', None)  # a re-match never grants it
+    if (trial['provider'], trial['account']) == (before.get('provider'), before.get('account') or ''): return ''
+    log_activity(store, 'bot', 'Bot「%s」的工作內容改了，改配 %s' % (after.get('name', ''), trial['autoReason']), by='Zook')
+    return '工作內容改了，改配 ' + auto_choice_name(trial['provider'], trial['account']) + '（' + trial['autoReason'] + '）'
+
+
+def auto_migrate(store):
+    """At start: every Bot on 自動選擇 from before 2026-11-22 is marked to be matched, once per data folder; then every Bot waiting
+    to be matched gets its model now if one can be picked (auto_retry). Sign-ins are checked first."""
+    with store.lock:
+        if not store.data['settings'].get('autoFixed'):
+            for bot in store.data['bots']:
+                if bot.get('provider') == AUTO: bot['autoPending'] = True
+            store.data['settings']['autoFixed'] = True; store.save()
+        waiting = any(b.get('provider') == AUTO for b in store.data['bots'])
+    if waiting: refresh_auto_status(store)  # runs each CLI; never with the lock held; ends with auto_retry
+
+
+def auto_retry(store):
+    """Lock held. Bots still waiting to be matched (no model could be picked before) get one now if one can; each is recorded by
+    itself, so a Bot left waiting is tried again after the next sign-in check, and one that is matched is told once."""
+    changed = False
+    for bot in store.data['bots']:
+        if bot.get('provider') != AUTO or not bot.get('autoPending'): continue
+        reason = auto_assign(store, bot)
+        if reason: changed = True; log_activity(store, 'bot', 'Bot「%s」原本用自動選擇，現在固定配好：%s。可以在編輯 Bot 改。' % (bot['name'], reason), by='Zook')
+        elif not bot.get('autoPendingTold'):
+            bot['autoPendingTold'] = True; changed = True
+            log_activity(store, 'bot', 'Bot「%s」用自動選擇，目前沒有能配的模型，先維持每則訊息自動挑；帳號可用時會再配。' % bot['name'], by='Zook')
+        if reason: bot.pop('autoPendingTold', None)
+    if changed: store.save()

@@ -139,7 +139,7 @@ class Teams:
         for i, role in enumerate(cleaned):
             bot = dict(id=ID(), name=role['name'], color=colors_for(at + i), shape=str((at + i) % 13), instructions='', persona='', provider=AUTO, model='', pinned=False, section=team, messages=[], enabledSkills=[], enabledMcp=[], allowCommands=True, isAdmin=False)
             update(bot, dict(name=role['name'], jobTitle=role['jobTitle'], persona=role['persona'], instructions=team_instructions(role, team, goal, lead, cleaned)), 'bot')
-            ensure_chats(bot); bots.append(bot)
+            auto_on_create(store, bot, instructions=False); ensure_chats(bot); bots.append(bot)  # the team's shared instructions would make every member look alike
         group = dict(id=ID(), name='', botIds=[], messages=[], status='idle', runId=None, activeJobId=None, createdAt=NOW())
         store.data['bots'].extend(bots)
         try: set_group_fields(store, group, dict(botIds=[b['id'] for b in bots], name=team, hostId=bots[0]['id']), creating=True)

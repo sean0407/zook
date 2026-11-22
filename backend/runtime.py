@@ -24,6 +24,11 @@ import uuid
 
 MAX_MESSAGE = 2 * 1024 * 1024
 MAX_TEXT = 128 * 1024
+# Files that hold keys, passwords or sign-ins: reading one with Zook's workspace tool always asks (zook_gate.py asks the same of a CLI).
+SECRET_FILE = re.compile(r'(?i)^(?:\.env(?:\..*)?|\.netrc|\.npmrc|\.pypirc|\.git-credentials|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?|.*\.(?:pem|p12|pfx|key|keychain|keychain-db)|'
+                         r'credentials(?:\.json)?|\.credentials\.json|oauth_creds\.json|auth\.json|client_secret.*\.json|service[-_]account.*\.json)$')
+# The folders a CLI loads its hooks and settings from: Zook writes them for each reply, and a Bot never does (zook_gate.py asks the same).
+CLI_SETTING_FOLDERS = {'.claude', '.cursor', '.codex', '.grok', '.gemini', '.antigravity'}
 MAX_TOOLS = 512
 TIMEOUT = 30
 PROTOCOL = '2025-06-18'
@@ -639,7 +644,13 @@ class RuntimeSession:
             argv = args.get('argv') or []
             if any(Path(str(a)).name in DANGER_COMMANDS for a in argv) or any(re.search(r'\brm\s+-|sudo\b', str(a)) for a in argv): return 'danger'
             return 'code'
-        if name == 'zook_workspace_write': return 'internal'
+        if name == 'zook_workspace_read' and SECRET_FILE.match(Path(str(args.get('path') or '')).name): return 'danger'  # .env, keys, sign-ins
+        if name == 'zook_workspace_write':
+            try: target = self._path(self.workspace, str(args.get('path') or ''))
+            except RuntimeError: return 'internal'  # refused when it runs
+            content = args.get('content')
+            if isinstance(content, str) and not content.strip() and target.is_file() and target.stat().st_size > 0: return 'danger'  # emptying a file is deleting it
+            return 'internal'
         if name in self.extras:
             need = self.extras[name][2]
             if callable(need): need = need(args)  # depends on the arguments (a web address that carries data)
@@ -680,6 +691,33 @@ class RuntimeSession:
         event.update(self.redactor.value(kwargs))
         if self.event_callback:
             self.event_callback(event)
+
+    NATIVE_GATE = 'zook_native_gate'
+    GATE_KINDS = ('delete', 'send', 'secret', 'install', 'system', 'guard', 'unclear')
+
+    def gate(self, params, call_id=None):
+        """A CLI's own tool reached safety boundaries (zook_gate.py): ask the user, always, whatever 主動性 says.
+        Every boundary of that one tool call is on the one card, a line each. Only what is done and where is kept, never the command.
+        It is not offered to the CLI as a tool; only the gate script calls it. True only when the user allowed it."""
+        call_id = call_id or uuid.uuid4().hex
+        actions = params.get('actions') if isinstance(params, dict) else None
+        if not isinstance(actions, list) or not 1 <= len(actions) <= 10: return False  # more than one card shows in full is never asked as one
+        lines = []
+        for item in actions:
+            if not isinstance(item, dict) or item.get('kind') not in self.GATE_KINDS or not isinstance(item.get('title'), str) or not item['title'].strip(): return False
+            title = ' '.join(item['title'].split())
+            if len(title) > 200: return False  # cut short, the card would not show the whole target
+            lines.append({'kind': item['kind'], 'title': title})
+        title = lines[0]['title'] if len(lines) == 1 else '%s 等 %d 件事' % (lines[0]['title'], len(lines))
+        frozen = {'title': title, 'actions': lines}
+        where = dict(category='danger', label=title, sourceLabel='CLI 內建工具')
+        if self.closed or getattr(self, 'read_only', False):
+            self._event(call_id, self.NATIVE_GATE, 'builtin:native', 'denied', frozen, error='這一則只能讀。', **where)
+            return False
+        self._event(call_id, self.NATIVE_GATE, 'builtin:native', 'waiting_approval', frozen, **where)
+        approved = bool(self.approval_callback and self.approval_callback(call_id, self.NATIVE_GATE, copy.deepcopy(frozen), 'builtin:native')) and not self.closed
+        self._event(call_id, self.NATIVE_GATE, 'builtin:native', 'completed' if approved else 'denied', frozen, **dict(where, **({} if approved else {'error': '使用者沒有允許。'})))
+        return approved
 
     def call(self, name, args):
         call_id = uuid.uuid4().hex
@@ -773,6 +811,8 @@ class RuntimeSession:
                 path = self._path(self.workspace, frozen['path'], True)
                 if any(part.lower() == '.git' for part in path.relative_to(self.workspace.resolve()).parts):
                     raise RuntimeError('Files under .git are managed by git and cannot be written; use zook_git_commit to commit.')
+                if any(part.lower() in CLI_SETTING_FOLDERS for part in path.relative_to(self.workspace.resolve()).parts):
+                    raise RuntimeError('This folder holds the CLI settings and hooks Zook writes for each reply, and cannot be written.')
                 path.parent.mkdir(parents=True, exist_ok=True)
                 # Recheck containment after mkdir; O_NOFOLLOW rejects final symlinks.
                 path = self._path(self.workspace, frozen['path'], True)

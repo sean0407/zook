@@ -8,8 +8,12 @@ What the Bot may reach comes from ZOOK_CURSOR_GUARD (JSON, set by Zook for this 
   read / write: folders, or null for anywhere; shell, task: whether commands and subagents may run.
 Web search and web fetch never come here; Zook turns those off with Cursor's own switch.
 Only tools known to be file tools, or known to touch nothing, are allowed; any other tool is refused.
+What is allowed then still stops at the safety boundaries (zook_gate.py): deleting, sending out, keys and passwords, installing
+and system settings wait for the user's answer in Zook, and are refused when there is none.
 """
 import json, os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import zook_gate  # noqa: E402  (next to this file)
 
 READING = {'read', 'grep', 'glob', 'ls', 'listdir', 'list_dir', 'semanticsearch', 'codebasesearch', 'filesearch', 'readlints'}
 WRITING = {'write', 'edit', 'strreplace', 'str_replace', 'multiedit', 'delete', 'editnotebook', 'notebookedit', 'applypatch', 'apply_patch'}
@@ -89,6 +93,9 @@ def main():
     roots = event.get('workspace_roots') if isinstance(event.get('workspace_roots'), list) else []
     home = str(roots[0]) if roots and isinstance(roots[0], str) else os.getcwd()
     allowed, why = decide(rule, event.get('tool_name'), data, home)
+    if allowed:
+        try: allowed, why = zook_gate.decide(event.get('tool_name'), data, home)
+        except Exception: allowed, why = False, 'Zook 的安全檢查出錯，所以擋下了。'
     print(json.dumps({'permission': 'allow'} if allowed else {'permission': 'deny', 'user_message': why, 'agent_message': why + ' 請不要改用其他方法繞過，直接告訴使用者。'}, ensure_ascii=False))
 
 

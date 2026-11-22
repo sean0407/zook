@@ -1,6 +1,8 @@
 # Settings, the data store, and helpers shared by everything else. Loaded by backend/server.py into one shared namespace.
 import argparse
 import socket
+import getpass
+import select
 import base64
 import calendar
 import contextlib
@@ -485,9 +487,63 @@ CLAUDE_NATIVE_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write']
 ACCESS_SCOPES = ('full', 'folder', 'workspace')
 
 
-def bot_access(bot, workspace):
+# Claude and Cursor Bots have the whole Mac and ask only at the safety boundaries (zook_gate.py), with Zook's tools on 自動.
+# Whether this Mac lets a Bot do so is bot['gateFull'], kept on this Mac only (never synced): set when the Bot is made or edited
+# into Claude or Cursor here, or for such Bots from before (handler.py), never by a file from another Mac. Their own 主動性 and
+# 存取範圍 (kept in the data) are not used while they run on Claude or Cursor; on a backup model of another CLI, which has no such
+# gate, that one reply stays in the Bot's workspace and asks first (謹慎), whatever they say.
+GATED_KINDS = ('claude', 'cursor')
+
+
+def _bot_provider(bot, data=None):
+    settings = ((data or _active.get('data') or {}).get('settings') or {})
+    return (bot or {}).get('provider') or settings.get('provider', 'codex')
+
+
+def gated_bot(bot, kind=None, data=None):
+    """Whether this Bot runs under the boundary gate: this Mac allowed it, its own model is Claude or Cursor, and so is the CLI answering (when known)."""
+    provider = _bot_provider(bot, data)
+    return (bot or {}).get('gateFull') is True and provider != 'auto' and provider_kind(provider) in GATED_KINDS and (kind is None or kind in GATED_KINDS)
+
+
+def gated_fallback(bot, kind=None, data=None):
+    """A Claude or Cursor Bot answered this time by a backup CLI that has no gate."""
+    provider = _bot_provider(bot, data)
+    return kind is not None and kind not in GATED_KINDS and provider != 'auto' and provider_kind(provider) in GATED_KINDS
+
+
+def limit_locally(bot):
+    """A Bot that lost this Mac's whole-Mac permission (another Mac changed its model, or it came from a backup): its workspace and
+    謹慎 until the user changes it here, never the 主動性 and 存取範圍 it had before the gate."""
+    had = bot.pop('gateFull', None)
+    if had or provider_kind(_bot_provider(bot)) in GATED_KINDS: bot['localLimit'] = True
+
+
+def local_choice(before, after, body):
+    """Saving a Bot on this Mac. Only a model the user picks here (another CLI than before) sets the whole-Mac permission; a name or
+    persona edit does not. Choosing a model, 主動性 or 存取範圍 here ends a limit set by sync or a backup."""
+    if any(k in body and (body[k] or '') != (before.get(k) or '') for k in ('provider', 'account')): after.pop('syncedModel', None)  # picked here
+    if 'provider' in body and (body['provider'] or '') != (before.get('provider') or ''):
+        set_gate_full(after); after.pop('localLimit', None)
+    elif any(k in body and (body[k] or '') != (before.get(k) or '') for k in ('access', 'accessFolder', 'permissionMode')): after.pop('localLimit', None)
+
+
+def held_backups(bot, provider, chain):
+    """A Claude or Cursor Bot, or one held in by this Mac, is never answered by a custom CLI as a backup: its own arguments cannot be
+    held to the workspace and 謹慎."""
+    if provider_kind(provider) not in GATED_KINDS and not bot.get('localLimit'): return chain
+    return chain[:1] + [x for x in chain[1:] if not str(x[0]).startswith(P.CUSTOM_PREFIX)]
+
+
+def set_gate_full(bot):
+    """On this Mac: a Bot made or edited into Claude or Cursor may use the whole Mac behind the gate; any other Bot may not."""
+    if provider_kind(_bot_provider(bot)) in GATED_KINDS and bot.get('provider') != 'auto': bot['gateFull'] = True
+    else: bot.pop('gateFull', None)
+
+
+def bot_access(bot, workspace, kind=None):
     """(scope, folder the CLI starts in). A Bot whose chosen folder has gone away is stopped rather than given more room."""
-    scope, chosen = bot_scope(bot)
+    scope, chosen = bot_scope(bot, kind)
     if scope == 'workspace': return scope, pathlib.Path(workspace)
     if scope == 'full': return scope, pathlib.Path.home()
     folder = pathlib.Path(chosen or '')
@@ -496,8 +552,10 @@ def bot_access(bot, workspace):
     return scope, folder
 
 
-def bot_scope(bot):
+def bot_scope(bot, kind=None):
     """(access scope, chosen folder). A Bot without its own choice follows the default in 設定."""
+    if gated_bot(bot, kind): return 'full', ''
+    if gated_fallback(bot, kind) or bot.get('localLimit'): return 'workspace', ''
     if bot.get('access') in ACCESS_SCOPES: return bot['access'], bot.get('accessFolder') or ''
     settings = _active['data'].get('settings') or {}
     return (settings['access'], settings.get('accessFolder') or '') if settings.get('access') in ACCESS_SCOPES else ('full', '')
@@ -594,7 +652,9 @@ def colors_for(index):
     return ['#2585f6', '#13bf78', '#f59a0a', '#ed2f9b', '#14b8a6', '#ff6d0c', '#9254ff', '#a47545'][index % 8]
 
 
-def permission_mode(store, bot):
+def permission_mode(store, bot, kind=None):
+    if gated_bot(bot, kind, store.data): return 'auto'
+    if gated_fallback(bot, kind, store.data) or bot.get('localLimit'): return 'manual'
     mode = bot.get('permissionMode') or store.data['settings'].get('permissionMode') or 'manual'
     return mode if mode in ('manual', 'auto', 'bypass') else 'manual'
 
@@ -632,7 +692,7 @@ def describe_call(call):
     if name == 'native_write': return '修改檔案「%s」' % base(a.get('path'))
     if name == 'native_command': return '在工作資料夾執行指令'
     fixed = {'zook_read_skill': '閱讀 Skill「%s」的說明' % (call.get('sourceLabel') or 'Skill'), 'zook_read_skill_resource': '查看 Skill 的參考資料「%s」' % base(a.get('path')),
-             'zook_run_skill_helper': '執行 Skill 附帶的小程式', 'zook_workspace_list': '查看工作區裡有哪些檔案', 'zook_group_file_read': '讀取群組共用檔案「%s」' % (a.get('name') or ''), 'zook_workspace_read': '讀取檔案「%s」' % base(a.get('path')),
+             'zook_run_skill_helper': '執行 Skill 附帶的小程式', 'zook_native_gate': str(a.get('title') or '做需要核准的動作')[:200], 'zook_workspace_list': '查看工作區裡有哪些檔案', 'zook_group_file_read': '讀取群組共用檔案「%s」' % (a.get('name') or ''), 'zook_workspace_read': '讀取檔案「%s」' % base(a.get('path')),
              'zook_workspace_write': '把內容存成檔案「%s」' % base(a.get('path')), 'zook_list_team': '查看團隊裡有哪些 Bot 和群組', 'zook_create_bot': '新增 Bot「%s」' % (a.get('name') or ''),
              'zook_create_group': '建立群組「%s」' % (a.get('name') or '、'.join(a.get('bot_names') or [])), 'zook_start_group_discussion': '在群組「%s」發起討論' % (a.get('group_name') or ''),
              'zook_feature': '使用%s' % str(a.get('feature') or '特色功能'), 'zook_remember': '記住一件事：「%s」' % str(a.get('content') or '')[:60], 'zook_ask_user': '問你：「%s」' % str(a.get('question') or '')[:60], 'zook_list_schedules': '查看排程',

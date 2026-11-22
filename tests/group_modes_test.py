@@ -174,12 +174,12 @@ class GroupModes(unittest.TestCase):
         self.assertFalse((self.root / 'data/evil.txt').exists())
 
     def test_member_output_comes_back_only_when_allowed(self):
-        g = self.group(('Alpha', 'Beta'), hostId='')
-        self.req('PATCH', '/api/bots/' + self.bots['Alpha']['id'], {'permissionMode': 'auto'}); self.req('PATCH', '/api/bots/' + self.bots['Beta']['id'], {'permissionMode': 'manual'})
+        g = self.group(('Alpha', 'Gamma'), hostId='')  # both Codex: 主動性 still applies to them (a Claude Bot always may, 2026-11-22)
+        self.req('PATCH', '/api/bots/' + self.bots['Alpha']['id'], {'permissionMode': 'auto'}); self.req('PATCH', '/api/bots/' + self.bots['Gamma']['id'], {'permissionMode': 'manual'})
         found = self.say(g, 'WRITEFILE', mode='turns')
         self.assertEqual([f['name'] for f in self.req('GET', '/api/groups/%s/files' % g['id'])[1]['files']], ['Alpha.txt'])
         self.assertTrue(any('Alpha 存了共用檔案' in (m.get('content') or '') for m in found['messages']))
-        self.assertTrue(next(r for r in self.runs() if r['name'] == 'Beta')['readonly'])
+        self.assertTrue(next(r for r in self.runs() if r['name'] == 'Gamma')['readonly'])
 
 
 if __name__ == '__main__': unittest.main()
