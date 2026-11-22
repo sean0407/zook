@@ -83,15 +83,82 @@
     const auto = q?.autoOn === undefined ? '' : `<label class="auto-pick small-switch">${toggle(`${a ? `data-auto-account="${esc(a.id)}"` : `data-auto-model="${esc(p.id)}"`} ${q.autoBilled ? 'disabled' : ''}`, q.autoOn, '自動選用')}<span>${q.autoBilled ? 'API 計費，不會自動選用' : lv.level === 'out' ? '自動選用・現在會被跳過' : '自動選用'}</span></label>`;
     const add = !a && p.installed && (p.canAddLogin || p.canAddKey) ? `<button class="secondary small-btn" data-action="profile-add" data-id="${esc(p.id)}">＋ 帳號</button>` : '';
     const warn = p.issue || (p.changed || []).length ? `<p class="error-text small">${esc(p.issue || '這個版本有變動，暫時關閉：' + p.changed.join('、'))}</p>` : '';
-    return `<article class="left-card account-card ${lv.level ? 'quota-' + lv.level : ''}"><header class="account-head"><div class="account-title"><h3>${esc(cliShort(p))}${p.custom ? ' <span class="pill">自訂</span>' : ''}</h3><span title="${esc(line)}">${esc(line)}</span></div>${p.version?.updateAvailable ? `<span class="new-version" title="有新版 ${esc(p.version.latest)}">有新版</span>` : ''}</header><div class="account-body">${warn}${levelLine}${cardBody(p, a, q)}</div><footer class="account-foot">${auto}<div class="card-actions">${add}<button class="secondary small-btn" data-action="account-detail" data-id="${esc(p.id)}" data-account="${esc(a ? a.id : '')}">詳細</button></div></footer></article>`;
+    return `<article class="left-card account-card ${lv.level ? 'quota-' + lv.level : ''}" draggable="true" data-card-key="${esc(cardKey(p, a))}" title="拖動可以調整順序"><header class="account-head"><div class="account-title"><h3>${esc(cliShort(p))}${p.custom ? ' <span class="pill">自訂</span>' : ''}</h3><span title="${esc(line)}">${esc(line)}</span></div>${p.version?.updateAvailable ? `<span class="new-version" title="有新版 ${esc(p.version.latest)}">有新版</span>` : ''}</header><div class="account-body">${warn}${levelLine}${cardBody(p, a, q)}</div><footer class="account-foot">${auto}<div class="card-actions">${add}<button class="secondary small-btn" data-action="account-detail" data-id="${esc(p.id)}" data-account="${esc(a ? a.id : '')}">詳細</button></div></footer></article>`;
+  }
+  // The order of the cards: dragged by the user (自訂), or most left first (自動); kept in the settings so the phone lists them the same way.
+  const cardKey = (p, a) => a ? p.id + '::' + a.id : p.id;
+  const CARD_SORTS = [{id: 'custom', name: '自訂（可拖動）'}, {id: 'auto', name: '自動（剩最多的在前）'}];
+  // 自動: [rank, percent] like the Mac's usage_card_focus. 0 has figures, 1 none, 2 used up, 3 not signed in. The percent is that of
+  // the limit worth watching now: the five-hour one when there is one, otherwise the weekly one.
+  function cardFocus(p, a) {
+    if ((a || p).status !== 'logged_in') return [3, 0];
+    const q = quotaFor(p.id, a ? a.id : undefined), s = q?.quota, rows = (s?.windows || []).filter(w => typeof w.usedPercent === 'number').map(w => ({label: String(w.label || ''), left: windowLeft(w)}));  // a limit without a figure is skipped, as on the Mac
+    if (limitNow(s) || rows.some(r => r.left <= 0)) return [2, 0];
+    if (!rows.length || q?.apiBilling || (a && a.type === 'key')) return [1, 0];
+    const focus = rows.find(r => r.label.includes('小時')) || rows.find(r => r.label.includes('週')) || rows[0];
+    return [0, focus.left];
+  }
+  function orderedCards(shown) {
+    const cards = shown.flatMap(p => [{p, a: null}, ...(p.profiles || []).map(a => ({p, a}))]).map((c, i) => ({...c, key: cardKey(c.p, c.a), i}));
+    const saved = Array.isArray(state.data?.settings?.usageCardOrder) ? state.data.settings.usageCardOrder : [];
+    const place = k => { const n = saved.indexOf(k); return n < 0 ? saved.length : n; };
+    cards.sort((x, y) => place(x.key) - place(y.key) || x.i - y.i);  // new accounts after the saved ones; removed ones are simply gone
+    if (state.data?.settings?.usageCardSort !== 'auto') return cards;
+    cards.forEach((c, n) => { c.n = n; c.f = cardFocus(c.p, c.a); });
+    return cards.sort((x, y) => x.f[0] - y.f[0] || y.f[1] - x.f[1] || x.n - y.n);
+  }
+  async function saveCardOrder(change) {
+    const before = {...state.data.settings};
+    Object.assign(state.data.settings, change); render(true);
+    try { state.data.settings = await post('settings', change, 'PATCH'); }
+    catch (err) { state.data.settings = before; render(true); toast(err.message); }
   }
   function accountCards() {
     const list = state.accounts?.providers;
     if (!list) return `<section class="usage-block"><h2>剩餘額度</h2>${loadingBlock('正在讀取登入狀態…')}</section>`;
     const shown = list.filter(p => p.installed || p.install?.state === 'running');  // a failed install is retried from ＋ 新增模型
     const waiting = list.length - shown.length;
-    return `<section class="usage-block"><h2>剩餘額度</h2>${shown.length ? `<div class="left-grid account-grid">${shown.map(p => accountCard(p) + (p.profiles || []).map(a => accountCard(p, a)).join('')).join('')}</div>` : '<div class="blank">還沒有安裝任何模型，按右上角「＋ 新增模型」。</div>'}${waiting ? `<p class="muted small">另有 ${waiting} 個已加入但尚未安裝的模型，可在「＋ 新增模型」安裝。</p>` : ''}</section>`;
+    const sort = `<div class="card-sort"><span class="usage-auto-label">排序</span>${dropdown('usageCardSort', state.data?.settings?.usageCardSort === 'auto' ? 'auto' : 'custom', CARD_SORTS, 'data-card-sort')}</div>`;
+    return `<section class="usage-block"><div class="overview-head"><h2>剩餘額度</h2>${shown.length ? sort : ''}</div>${shown.length ? `<div class="left-grid account-grid">${orderedCards(shown).map(c => accountCard(c.p, c.a || undefined)).join('')}</div>` : '<div class="blank">還沒有安裝任何模型，按右上角「＋ 新增模型」。</div>'}${waiting ? `<p class="muted small">另有 ${waiting} 個已加入但尚未安裝的模型，可在「＋ 新增模型」安裝。</p>` : ''}</section>`;
   }
+  document.addEventListener('change', e => {
+    if (e.target.dataset?.cardSort === undefined) return;
+    saveCardOrder({usageCardSort: e.target.value === 'auto' ? 'auto' : 'custom'});
+    toast(e.target.value === 'auto' ? '剩餘額度依剩下多少自動排序' : '剩餘額度照你拖動的順序');
+  });
+  // Dragging a card: it goes before or after the card it is dropped on, and the order becomes 自訂.
+  let draggingCard = null;
+  const clearCardMarks = () => document.querySelectorAll('.account-card.drop-before, .account-card.drop-after').forEach(el => el.classList.remove('drop-before', 'drop-after'));
+  const cardDrop = e => { const el = draggingCard && e.target.closest?.('[data-card-key]'); if (!el || el.dataset.cardKey === draggingCard) return null; const r = el.getBoundingClientRect(); return {el, after: e.clientX > r.left + r.width / 2}; };
+  document.addEventListener('dragstart', e => {
+    const card = e.target.closest?.('[data-card-key]');
+    if (!card || e.target.closest('button, input, a, .dd')) return;
+    draggingCard = card.dataset.cardKey; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', draggingCard);
+    requestAnimationFrame(() => card.classList.add('dragging'));
+  });
+  document.addEventListener('dragend', () => { draggingCard = null; clearCardMarks(); document.querySelectorAll('.account-card.dragging').forEach(el => el.classList.remove('dragging')); });
+  document.addEventListener('dragover', e => {
+    const t = cardDrop(e);
+    if (!t) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+    const cls = t.after ? 'drop-after' : 'drop-before';
+    if (!t.el.classList.contains(cls)) { clearCardMarks(); t.el.classList.add(cls); }
+  });
+  document.addEventListener('drop', e => {
+    const t = cardDrop(e), moving = draggingCard;
+    clearCardMarks();
+    if (!t) return;
+    e.preventDefault(); draggingCard = null;
+    window.moveUsageCard(moving, t.el.dataset.cardKey, t.after);
+  });
+  // Also what the drop above does; usable without a mouse (and by the browser tests).
+  window.moveUsageCard = (moving, target, after) => {
+    const keys = [...document.querySelectorAll('[data-card-key]')].map(el => el.dataset.cardKey).filter(k => k !== moving);
+    const at = keys.indexOf(target);
+    if (at < 0 || !moving) return;
+    keys.splice(after ? at + 1 : at, 0, moving);
+    saveCardOrder({usageCardOrder: keys, usageCardSort: 'custom'});
+  };
   // 詳細: everything about one account that is not about what is left.
   function accountDetail(id, account) {
     const p = (state.accounts?.providers || []).find(x => x.id === id);
