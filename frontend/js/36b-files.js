@@ -30,7 +30,7 @@
     const url = '/api/groups/' + encodeURIComponent(groupId) + '/files/' + encodeURIComponent(name);
     let body = '<p class="muted">這種檔案無法在這裡預覽，可以下載。</p>';
     if (f.kind === 'image') body = `<div class="image-view"><img src="${esc(url)}" alt="${esc(name)}"></div>`;
-    else if (f.kind === 'pdf') body = `<iframe class="output-pdf" src="${esc(url)}" title="${esc(name)}"></iframe>`;
+    else if (f.kind === 'pdf') body = pdfFrame(url, name);
     else if (f.kind === 'text' || f.kind === 'markdown') {
       try {
         const res = await fetch(url); if (!res.ok) throw Error('讀取失敗');
@@ -39,6 +39,7 @@
       } catch (error) { body = `<p class="error-text">${esc(error.message)}</p>`; }
     }
     modal(name, `<div class="modal-body">${body}</div><div class="modal-foot"><a class="secondary" href="${esc(url)}" download="${esc(name)}">下載</a><button type="button" class="primary" data-action="close-modal">關閉</button></div>`, '', true);
+    showPdfWhenReady();
   }
   document.addEventListener('click', e => {
     const el = e.target.closest?.('[data-group-file]');

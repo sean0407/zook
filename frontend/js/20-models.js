@@ -305,7 +305,7 @@
   async function loadModels(form, force = false) {
     if (!form || !form.isConnected) return;
     form.modelRequest?.abort();
-    if (form.elements.provider.value === 'auto') return;
+    if (form.elements.provider.value === 'auto') { form.querySelector('.model-note').textContent = '先在上面選一家模型與帳號，這裡才會列出能選的型號。'; return; }
     const controller = new AbortController();
     form.modelRequest = controller;
     const provider = form.elements.provider.value || state.data.settings.provider || 'codex';
@@ -319,7 +319,7 @@
       const wasCustom = select.value === '__custom__';
       const models = Array.isArray(data.models) ? data.models : [];
       const st = state.data.settings, named = provider === (st.provider || 'codex') && st.model ? (models.find(m => m.id === st.model)?.name || st.model) : '';
-      select.innerHTML = `<option value="">${esc(form.id === 'bot-form' ? (named || '各家建議的模型') + '（預設）' : '各家建議的模型')}</option>` + models.map(m => `<option value="${esc(m.id)}">${esc(m.name||m.id)}${m.source==='alias'?'（別名）':m.source==='cache'?'（快取）':''}</option>`).join('') + '<option value="__custom__">自訂模型…</option>';
+      select.innerHTML = `<option value="">${esc(form.id === 'bot-form' ? (named || '這一家建議的型號') + '（預設）' : '各家建議的型號')}</option>` + models.map(m => `<option value="${esc(m.id)}">${esc(m.name||m.id)}${m.source==='alias'?'（別名）':m.source==='cache'?'（快取）':''}</option>`).join('') + '<option value="__custom__">自訂模型…</option>';
       const known = models.some(m => m.id === current);
       const custom = form.elements.modelCustom;
       if ((current && !known) || wasCustom) {
@@ -327,7 +327,7 @@
       } else {
         select.value = current || ''; custom.hidden = true;
       }
-      note.textContent = (data.note || (models.length ? '模型清單已更新。' : '未偵測到模型，可使用預設或自行輸入。')) + (form.dataset.providerChanged ? ' 提供者已變更，模型已切換為預設。' : '');
+      note.textContent = (form.dataset.providerChanged ? '換了一家，型號已改回它建議的版本，需要時可以再選。' : '') + (data.note || (models.length ? '' : '這一家沒有列出可選的型號，會用它建議的；也可以選「自訂模型」自己輸入。'));
       delete form.dataset.providerChanged;
     } catch (error) {
       if (error.name === 'AbortError' || !form.isConnected || form.modelRequest !== controller) return;
@@ -446,6 +446,7 @@
       if (cursor !== null) { $('#chat-input').focus(); $('#chat-input').setSelectionRange(cursor[0], cursor[1]); }
     }
     updateMentionMenu();
+    if (state.page === 'chat' && state.lastRestored) { try { localStorage.setItem('zook-last-chat', JSON.stringify({bot: state.selected || '', group: state.groupId || ''})); } catch (_) {} }
     if (localOpen && $('.usage-local')) $('.usage-local').open = true;
     if (pageY && $('.page')) $('.page').scrollTop = pageY;
     if (state.page === 'usage') drawOverviewChart();  // sized to its column, so it is drawn after the page is in place
@@ -482,6 +483,21 @@
     if (folder) folder.hidden = gated || form.elements.access?.value !== 'folder';
     const hint = form.querySelector('[data-auto-hint]');
     if (hint) hint.hidden = !auto;
+    const warn = form.querySelector('[data-quota-warn]'), said = warn ? quotaWarnText(choice) : '';
+    if (warn) { warn.textContent = said; warn.hidden = !said; }
+    sameFallback(form, auto ? '' : id);
+  }
+  // 備用模型 never switches to the Bot's own CLI, so that choice is left out; a Bot that already has it sees why it does nothing.
+  function sameFallback(form, id) {
+    const dd = form.querySelector('input[name="fallbackChoice"]')?.closest('.dd');
+    if (!dd) return;
+    dd.querySelectorAll('.dd-opt').forEach(o => {
+      const base = o.dataset.base || (o.dataset.base = o.dataset.label), same = !!id && o.dataset.value === id, chosen = o.classList.contains('selected');
+      o.hidden = same && !chosen;
+      o.dataset.label = same ? base + '（同一家，不會切換）' : base;
+      o.querySelector('strong').textContent = o.dataset.label;
+      if (chosen) dd.querySelector('.dd-label').textContent = o.dataset.label;
+    });
   }
 
   function closeModal() {
@@ -504,12 +520,18 @@
     const fallbackDefault = (st.fallbacks || []).length ? (st.fallbacks || []).map(providerShort).join(' → ') : '不自動換';
     const fallbackValue = !Array.isArray(b.fallbacks) ? '' : b.fallbacks.length ? b.fallbacks[0] : '__none';  // 「不自動換」 set on this Bot stays its own
     const autoNote = b.autoAssigned && b.autoReason ? `<small class="muted field-hint" data-auto-reason>自動配好：${esc(b.autoReason)}。改成別的模型就不再自動配。</small>` : '';
-    modal(editing ? '編輯 Bot' : '新增 Bot', `<form id="bot-form"><div class="modal-body">${editing ? '' : teamLink()}<div class="bot-preview"><button type="button" class="avatar-edit" data-action="avatar-pick" aria-label="選擇形狀和顏色" title="選擇形狀和顏色">${avatar({color:c,shape},'hero')}</button><span class="bot-names"><input name="name" required maxlength="80" placeholder="為 Bot 命名" value="${esc(b.name||'')}"><input name="jobTitle" maxlength="12" placeholder="職稱（選填，例如：行銷企劃）" aria-label="職稱" value="${esc(b.jobTitle||'')}"></span><label class="pin-toggle" title="釘選在左側最上方"><input type="checkbox" name="pinned" ${b.pinned ? 'checked' : ''} aria-label="釘選"><span aria-hidden="true">📌</span></label></div><div class="avatar-panel" hidden><div class="shapes">${Array.from({length:13},(_,i)=>`<button type="button" class="shape-btn ${shape===i?'selected':''}" data-action="shape" data-id="${i}" aria-label="形狀 ${i+1}">${avatar({color:c,shape:i})}</button>`).join('')}</div><div class="swatches">${colors.map(x=>`<button type="button" class="swatch ${c===x?'selected':''}" style="background:${x}" data-action="color" data-id="${x}" aria-label="顏色 ${x}"></button>`).join('')}</div></div><input type="hidden" name="shape" value="${shape}"><input type="hidden" name="color" value="${c}"><label class="field persona-field">人格檔案${editing ? '' : '（必填）'}<textarea name="persona" ${editing ? '' : 'required'} maxlength="20000" rows="5" placeholder="個性、語氣、擅長的事。例如：冷靜直接的資深工程師，先給結論，不確定就說不確定。">${esc(b.persona||'')}</textarea></label><label class="field">工作指示（選填）<textarea name="instructions" placeholder="負責的工作和做法。例如：審查程式碼，只列出會出錯的問題。">${esc(b.instructions||'')}</textarea></label><div class="form-grid"><label class="field">模型與帳號<select name="providerChoice">${choiceOptions(editing ? b.provider || '' : 'auto', b.account || '')}</select><input type="hidden" name="provider" value="${esc(editing ? b.provider || '' : 'auto')}"><input type="hidden" name="account" value="${esc(b.account || '')}"><small class="muted field-hint" data-auto-hint hidden>依人格和工作指示配好一家，之後都用它；沒有可用的模型時，每則訊息自己挑。</small>${autoNote}<small class="muted field-hint">另一個帳號要先在「各模型使用量」新增。<button type="button" class="link" data-action="accounts-from-form">新增帳號</button></small></label>${modelPicker(b.model||'')}</div><div class="setting-list in-form">${settingRow('思考強度', '', dropdown('effort', EFFORTS.some(x => x.id === b.effort) ? b.effort : '', withDefault(EFFORTS, defaultEffort)))}${settingRow('分類', '', dropdown('section', b.section || sectionNames()[0] || '我的 Bots', [...new Set([...sectionNames(), b.section || '我的 Bots'])].map(x => ({id: x, name: x}))))}</div><details class="advanced"><summary>進階設定</summary><p class="muted small">預設跟著「設定」。只有這個 Bot 要不一樣時才改。</p><div class="setting-list in-form"><div data-access-row>${settingRow('存取範圍', '可以動到哪些檔案', dropdown('access', ownAccess, withDefault(ACCESS, defaultAccess)))}</div><div class="setting-row" data-access-folder ${ownAccess === 'folder' ? '' : 'hidden'}><div class="setting-copy"><strong>指定的資料夾</strong><span data-access-path>${esc(b.accessFolder || '尚未選擇')}</span></div><div class="setting-control"><input type="hidden" name="accessFolder" value="${esc(b.accessFolder || '')}"><button type="button" class="secondary" data-action="choose-folder">選擇資料夾…</button></div></div><div data-fixed-model>${settingRow('備用模型', '模型不能用時改用', dropdown('fallbackChoice', fallbackValue, [{id: '', name: fallbackDefault + '（預設）'}, {id: '__none', name: '不自動換'}, ...providerList()]))}</div><div data-feature-row="multi">${settingRow('多代理協作', '派子代理分工，用量較多', dropdown('featureMulti', featureChoice('multi'), featureOptions('multi')))}</div><div data-feature-row="image">${settingRow('圖片生成', '用 AI 生成圖片', dropdown('featureImage', featureChoice('image'), featureOptions('image')))}</div><div data-feature-row="browser">${settingRow('內建瀏覽器', '開網頁閱讀、截圖、在搜尋框輸入（每次先問你）；不能登入。要先開啟「上網搜尋」', dropdown('featureBrowser', featureChoice('browser'), featureOptions('browser')))}</div></div></details></div><div class="modal-foot">${editing?'<button type="button" class="link" data-action="delete-bot" style="margin-right:auto;color:#b55">刪除 Bot</button>':''}<button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">${editing?'儲存':'建立 Bot'}</button></div></form>`);
+    modal(editing ? '編輯 Bot' : '新增 Bot', `<form id="bot-form"><div class="modal-body">${editing ? '' : teamLink()}<div class="bot-preview"><button type="button" class="avatar-edit" data-action="avatar-pick" aria-label="選擇形狀和顏色" title="選擇形狀和顏色">${avatar({color:c,shape},'hero')}</button><span class="bot-names"><input name="name" required maxlength="80" placeholder="為 Bot 命名" value="${esc(b.name||'')}"><input name="jobTitle" maxlength="12" placeholder="職稱（選填，例如：行銷企劃）" aria-label="職稱" value="${esc(b.jobTitle||'')}"></span><label class="pin-toggle" title="釘選在左側最上方"><input type="checkbox" name="pinned" ${b.pinned ? 'checked' : ''} aria-label="釘選"><span aria-hidden="true">📌</span></label></div><div class="avatar-panel" hidden><div class="shapes">${Array.from({length:13},(_,i)=>`<button type="button" class="shape-btn ${shape===i?'selected':''}" data-action="shape" data-id="${i}" aria-label="形狀 ${i+1}">${avatar({color:c,shape:i})}</button>`).join('')}</div><div class="swatches">${colors.map(x=>`<button type="button" class="swatch ${c===x?'selected':''}" style="background:${x}" data-action="color" data-id="${x}" aria-label="顏色 ${x}"></button>`).join('')}</div></div><input type="hidden" name="shape" value="${shape}"><input type="hidden" name="color" value="${c}"><label class="field persona-field">人格檔案${editing ? '' : '（必填）'}<textarea name="persona" ${editing ? '' : 'required'} maxlength="20000" rows="5" placeholder="個性、語氣、擅長的事。例如：冷靜直接的資深工程師，先給結論，不確定就說不確定。">${esc(b.persona||'')}</textarea></label><label class="field">工作指示（選填）<textarea name="instructions" placeholder="負責的工作和做法。例如：審查程式碼，只列出會出錯的問題。">${esc(b.instructions||'')}</textarea></label><div class="form-grid"><label class="field">模型與帳號<select name="providerChoice">${choiceOptions(editing ? b.provider || '' : 'auto', b.account || '')}</select><input type="hidden" name="provider" value="${esc(editing ? b.provider || '' : 'auto')}"><input type="hidden" name="account" value="${esc(b.account || '')}"><small class="field-hint quota-warn" data-quota-warn hidden></small><small class="muted field-hint" data-auto-hint hidden>依人格和工作指示配好一家，之後都用它；沒有可用的模型時，每則訊息自己挑。</small>${autoNote}<small class="muted field-hint">另一個帳號要先在「各模型使用量」新增。<button type="button" class="link" data-action="accounts-from-form">新增帳號</button></small></label>${modelPicker(b.model||'')}</div><div class="setting-list in-form">${settingRow('思考強度', '', dropdown('effort', EFFORTS.some(x => x.id === b.effort) ? b.effort : '', withDefault(EFFORTS, defaultEffort)))}${settingRow('分類', '', dropdown('section', b.section || sectionNames()[0] || '我的 Bots', [...new Set([...sectionNames(), b.section || '我的 Bots'])].map(x => ({id: x, name: x}))))}</div><details class="advanced"><summary>進階設定</summary><p class="muted small">預設跟著「設定」。只有這個 Bot 要不一樣時才改。</p><div class="setting-list in-form"><div data-access-row>${settingRow('存取範圍', '可以動到哪些檔案', dropdown('access', ownAccess, withDefault(ACCESS, defaultAccess)))}</div><div class="setting-row" data-access-folder ${ownAccess === 'folder' ? '' : 'hidden'}><div class="setting-copy"><strong>指定的資料夾</strong><span data-access-path>${esc(b.accessFolder || '尚未選擇')}</span></div><div class="setting-control"><input type="hidden" name="accessFolder" value="${esc(b.accessFolder || '')}"><button type="button" class="secondary" data-action="choose-folder">選擇資料夾…</button></div></div><div data-fixed-model>${settingRow('備用模型', '模型不能用時改用', dropdown('fallbackChoice', fallbackValue, [{id: '', name: fallbackDefault + '（預設）'}, {id: '__none', name: '不自動換'}, ...providerList()]))}</div><div data-feature-row="multi">${settingRow('多代理協作', '派子代理分工，用量較多', dropdown('featureMulti', featureChoice('multi'), featureOptions('multi')))}</div><div data-feature-row="image">${settingRow('圖片生成', '用 AI 生成圖片', dropdown('featureImage', featureChoice('image'), featureOptions('image')))}</div><div data-feature-row="browser">${settingRow('內建瀏覽器', '開網頁閱讀、截圖、在搜尋框輸入（每次先問你）；不能登入。要先開啟「上網搜尋」', dropdown('featureBrowser', featureChoice('browser'), featureOptions('browser')))}</div></div></details></div><div class="modal-foot">${editing?'<button type="button" class="link" data-action="delete-bot" style="margin-right:auto;color:#b55">刪除 Bot</button>':''}<button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">${editing?'儲存':'建立 Bot'}</button></div></form>`);
     const form = $('#bot-form');
     form.dataset.id = b.id || '';
     if (!b.id) restoreBotDraft(form);
     loadModels(form);
     syncFeatureRows(form);  // Claude and Cursor have nothing to choose about access
+    if (!state.quota) api('quota').then(q => {  // 已用完／剩不到 20% beside each account
+      state.quota = q;
+      if (!form.isConnected) return;
+      const sel = form.elements.providerChoice, v = sel.value;
+      sel.innerHTML = choiceOptions(form.elements.provider.value, form.elements.account.value); sel.value = v; syncFeatureRows(form);
+    }).catch(() => {});
     const selected = {enabledSkills: b.enabledSkills || [], enabledMcp: b.enabledMcp || []};
     if (!b.id) { try { const d = JSON.parse(sessionStorage.getItem('swarmr-new-bot-draft') || '{}'); selected.enabledSkills = d.enabledSkills || []; selected.enabledMcp = d.enabledMcp || []; } catch (_) {} }
   }
