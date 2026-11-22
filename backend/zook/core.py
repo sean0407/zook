@@ -526,8 +526,12 @@ NATURAL_REPLY_NOTE = ('回覆時像真人同事一樣，用自然、口語的方
 
 
 # Files a person can open as they are: real files, checked, Excel showing its numbers everywhere (Quick Look and phones do not recalculate).
-FILE_DELIVERY_NOTE = ('要交出檔案（Excel、Word、簡報、PDF、圖片）時：存成真的檔案，回覆裡寫出檔名與完整路徑；交付前自己打開或轉成圖片看過內容與版面。'
-                      'Excel 要保留公式（使用者改明細才會跟著變），並同時存入算好的值（例如 xlsxwriter 的 write_formula 帶入 value），不然預覽和手機會顯示 0。')
+FILE_DELIVERY_NOTE = ('要交出檔案（Excel、Word、簡報、PDF、圖片）時：存成真的檔案，回覆裡寫出檔名與完整路徑。要看版面時，在你能寫入的地方把它轉成圖片看過'
+                      '（macOS 內建：qlmanage -t -s 1600 -o 暫存資料夾 檔案；多頁的要看相關頁）；只能讀不能寫的時候就用現有預覽或讀內容，並說明哪些版面沒有看到。'
+                      'Excel 要保留公式（使用者改明細才會跟著變），並同時存入算好的值（例如 xlsxwriter 的 write_formula 帶入 value），不然預覽和手機會顯示 0。'
+                      '只有真的需要時才寫暫存程式，放在這次專用的暫存資料夾，交付前只刪掉你這次建立的暫存程式和預覽圖。')
+# Facts about the user's own company are not made up (巡檢 C01 twice: 「全系列通過嚴格檢驗」 that no one had said).
+FACTS_NOTE = '公司事實（政策、檢驗、保固、價格、承諾）只寫使用者給的或你從適用的可靠來源確認過的；缺了又必要的寫成【待確認：…】讓使用者補，不必要的就不寫。'
 
 
 def web_enabled():
@@ -538,7 +542,7 @@ def web_enabled():
 def identity_block(bot):
     """Who the Bot is: its own persona file, then its work instructions. Personal instruction files are not used."""
     now = datetime.datetime.now().astimezone()
-    parts = ['你是 %s%s。' % (bot['name'], '，職稱是「%s」' % bot['jobTitle'] if bot.get('jobTitle') else ''), '現在時間：%s（%s）。' % (now.strftime('%Y-%m-%d %H:%M'), now.tzname() or 'local'), ISOLATION_NOTE, NATURAL_REPLY_NOTE, FILE_DELIVERY_NOTE]
+    parts = ['你是 %s%s。' % (bot['name'], '，職稱是「%s」' % bot['jobTitle'] if bot.get('jobTitle') else ''), '現在時間：%s（%s）。' % (now.strftime('%Y-%m-%d %H:%M'), now.tzname() or 'local'), ISOLATION_NOTE, NATURAL_REPLY_NOTE, FILE_DELIVERY_NOTE, FACTS_NOTE]
     if web_enabled():
         parts.append('你可以上網搜尋與讀取網頁來取得最新資訊。涉及價格、新聞、日期等會變動的事實時，先查證再回答，並註明來源網站與資料時間。')
     else:
