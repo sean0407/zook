@@ -360,21 +360,36 @@ def place_attachments(store, bot_id, attachments):
             name = '%s-%s' % (a['id'][:8], a['name'])
             with open(store.dir / 'uploads' / a['id'] / 'file', 'rb') as source: write_into_folder(fd, name, source, keep=True)
             paths.append(folder / name)
-    remember_uploaded_names(folder.parent, {'%s-%s' % (a['id'][:8], a['name']): a.get('origName') or a['name'] for a in attachments})
+    remember_uploaded_names(store, bot_id, {'%s-%s' % (a['id'][:8], a['name']): a.get('origName') or a['name'] for a in attachments})
     return paths
 
 
-def remember_uploaded_names(folder, names):
-    """Keep, next to the attachments folder, the name each was uploaded with (zook_gate.secret_name reads it): .env stays known as .env."""
-    index = pathlib.Path(folder) / '.zook-uploads.json'
-    try: kept = json.loads(index.read_text(encoding='utf-8')) if index.is_file() and not index.is_symlink() else {}
-    except (OSError, ValueError): kept = {}
-    kept = dict(kept if isinstance(kept, dict) else {}, **names)
+UPLOAD_NAMES = '.zook-uploads.json'
+
+
+def remember_uploaded_names(store, bot_id, names):
+    """Keep, next to the Bot's attachments folder, the name each was uploaded with (zook_gate.secret_name reads it): .env stays known as
+    .env. The Bot controls its workspace, so the list is never written in place: a new file is made beside it (refusing links), then put
+    in its place in one step. What is there now is read only when it is a plain file of its own, and never waited on (a pipe)."""
     try:
-        if index.is_symlink(): index.unlink()
-        fd = os.open(str(index), os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_NOFOLLOW', 0), 0o600)
-        with os.fdopen(fd, 'w', encoding='utf-8') as f: json.dump(dict(list(kept.items())[-500:]), f, ensure_ascii=False)
-    except OSError: pass
+        with bot_folder(store, bot_id) as fd:
+            kept = {}
+            try:
+                old = os.open(UPLOAD_NAMES, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                with os.fdopen(old, 'rb') as f:
+                    info = os.fstat(f.fileno())
+                    if stat.S_ISREG(info.st_mode) and info.st_nlink == 1: kept = json.loads(f.read(1 << 20))
+            except (OSError, ValueError): kept = {}
+            kept = dict(kept if isinstance(kept, dict) else {}, **{str(k): str(v) for k, v in names.items()})
+            temp = '.zook-uploads-%s.tmp' % secrets.token_hex(8)
+            out = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=fd)
+            try:
+                with os.fdopen(out, 'w', encoding='utf-8') as f: json.dump(dict(list(kept.items())[-500:]), f, ensure_ascii=False)
+                os.rename(temp, UPLOAD_NAMES, src_dir_fd=fd, dst_dir_fd=fd)  # replaces the entry, never what a link or a second name points to
+            except OSError:
+                try: os.unlink(temp, dir_fd=fd)
+                except OSError: pass
+    except OSError: pass  # a folder that cannot be reached safely: the names are still judged as they are
 
 
 @contextlib.contextmanager

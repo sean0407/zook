@@ -175,3 +175,26 @@ def native_record(job, w):
     out = dict(dict(category='external_read'), id=ID(), createdAt=NOW(), **{k: v for k, v in w.items() if k != '_ref'})
     out.update(status=status, approvedBy='user' if by_user else 'auto', autoApproved=not by_user and status == 'completed')
     return out
+
+
+def billing_still_ok(store, job_id, bot, provider, account, fixed):
+    """Before a reply is sent again (its conversation could not be continued, or it was too long): a Bot whose model must not run on API
+    billing has its sign-in asked again, as before the first try. False, and the reply stops, when it is no longer a subscription."""
+    if not fixed: return True
+    auto_recheck_live(store, bot, provider, account)
+    with store.lock:
+        key_account = account if account is not None else (find_account(bot.get('account'), provider) or {}).get('id', '')
+        problem = auto_billing_problem(store, provider, key_account)
+        if problem:
+            stale = auto_billing_stale(store, auto_billing_keys(store, bot, [(provider, '', account, False)]))
+        else: return True
+    if stale:  # a watched sign-in not checked recently: checked now
+        auto_recheck(store, auto_billing_keys(store, bot, [(provider, '', account, False)]))
+        with store.lock: problem = auto_billing_problem(store, provider, key_account)
+        if not problem: return True
+    with store.lock:
+        job = store.find('jobs', job_id) or {}
+        if job.get('status') == 'running':
+            job.update(status='failed', error='%s 現在不能用（%s），所以沒有重送。請到「各模型使用量」確認。' % (auto_choice_name(provider, key_account), problem), finishedAt=NOW())
+            store.finish_message(job, '', 'failed'); store.save()
+    return False

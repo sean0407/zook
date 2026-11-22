@@ -182,7 +182,11 @@ class BoundaryTest(unittest.TestCase):
             with unittest.mock.patch.object(zook_gate, 'ask', side_effect=AssertionError('asked')):
                 allowed, why = zook_gate.decide('Bash', {'command': command})
             self.assertFalse(allowed, command); self.assertIn('每次一個檔案、一個目的地', why)
-        self.assertEqual(zook_gate.command_boundaries('curl -g -T /tmp/a.pdf "https://x.example.com/[1-3]"'), [('send', '對外送出 檔案 /tmp/a.pdf 到 x.example.com')])  # -g: taken as written
+        for command in ('curl -g -T /tmp/a.pdf "https://x.example.com/[1-3]"', 'curl --globoff -d @/tmp/a "https://x.example.com/{a}"', 'curl -T /tmp/a https://x.example.com/a]'):
+            with unittest.mock.patch.object(zook_gate, 'ask', side_effect=AssertionError('asked')):
+                self.assertFalse(zook_gate.decide('Bash', {'command': command})[0], command)  # any brace or bracket: refused, -g or not
+        found = zook_gate.merged(zook_gate.command_boundaries('curl -T /tmp/a.pdf https://x.example.com/T0KEN-9/credentials.json'))
+        self.assertNotIn('T0KEN', json.dumps(found, ensure_ascii=False)); self.assertIn('x.example.com', found[0][1])  # a key-like name at the end of an address: still the site only
         # a key file by the name it was uploaded with, and by what a link really points to
         with tempfile.TemporaryDirectory() as tmp:
             att = Path(tmp, 'workspaces/b/attachments'); att.mkdir(parents=True)

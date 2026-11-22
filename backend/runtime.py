@@ -703,20 +703,29 @@ class RuntimeSession:
     attachment_files = None
 
     def _attachment_ok(self, target, folder=False):
+        """Compared the way the Mac's disk compares names (case does not matter), and by the file itself (device and inode)."""
         if self.attachment_files is None: return True
-        box = (Path(self.workspace) / 'attachments').resolve()
+        same = lambda p: os.path.normcase(str(p)).casefold()
+        box = same((Path(self.workspace) / 'attachments').resolve())
         try: real = Path(target).resolve()
         except OSError: return False
-        if real != box and box not in real.parents: return True  # not an attachment
+        here = same(real)
+        if here != box and not here.startswith(box + os.sep): return True  # not an attachment
         allowed = [Path(f).resolve() for f in self.attachment_files]
-        if folder: return real == box or any(real == a or real in a.parents for a in allowed)  # a folder on the way to one of them
-        return any(real == a or a in real.parents for a in allowed)
+        if folder: return here == box or any(same(a) == here or same(a).startswith(here + os.sep) for a in allowed)  # a folder on the way to one of them
+        def ident(p):
+            try: info = os.stat(p); return (info.st_dev, info.st_ino)
+            except OSError: return None
+        mine = ident(real)
+        return any((mine is not None and ident(a) == mine) or here.startswith(same(a) + os.sep) for a in allowed)
 
     def _secret(self, name, args):
         """Whether this call of Zook's own file tools reads or writes a key file, judged by the real file in the workspace."""
         if name not in SECRET_TOOLS or not isinstance(args, dict) or not isinstance(args.get(SECRET_TOOLS[name]), str): return False
         given = args[SECRET_TOOLS[name]]
-        if name == 'zook_group_file_read': return secret_name(given)
+        if name == 'zook_group_file_read':  # the group tool knows the name each shared file was uploaded with
+            need = (self.extras.get(name) or (None, None, None))[2]
+            return secret_name(given) or (callable(need) and need(args) == 'always')
         return secret_name(str(Path(self.workspace) / given)) or secret_name(given)
 
     def _event(self, call_id, name, source, status, args, **kwargs):

@@ -323,6 +323,61 @@ class UploadNameTest(unittest.TestCase):
         self.assertEqual([p.name for p in placed[0].parent.iterdir()], [placed[0].name])  # nothing else among the attachments
 
 
+class FinalReviewTest(unittest.TestCase):
+    def setUp(self):
+        self.m = load(); self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name)
+        self.store = self.m.Store(self.root / 'data')
+
+    def tearDown(self): self.temp.cleanup()
+
+    def test_the_upload_list_is_never_written_through(self):
+        m, store = self.m, self.store
+        work = store.dir / 'workspaces' / 'b1'; work.mkdir(parents=True)
+        outside = self.root / 'outside.txt'; outside.write_text('keep me')
+        os.link(str(outside), str(work / '.zook-uploads.json'))  # a second name for a file outside
+        m.remember_uploaded_names(store, 'b1', {'1a2b3c4d-env': '.env'})
+        self.assertEqual(outside.read_text(), 'keep me')
+        self.assertEqual(json.loads((work / '.zook-uploads.json').read_text()), {'1a2b3c4d-env': '.env'})
+        (work / '.zook-uploads.json').unlink(); (work / '.zook-uploads.json').symlink_to(outside)
+        m.remember_uploaded_names(store, 'b1', {'x': 'y'}); self.assertEqual(outside.read_text(), 'keep me')
+        self.assertFalse((work / '.zook-uploads.json').is_symlink())
+        (work / '.zook-uploads.json').unlink(); os.mkfifo(str(work / '.zook-uploads.json'))
+        done = __import__('threading').Thread(target=m.remember_uploaded_names, args=(store, 'b1', {'a': 'b'}), daemon=True); done.start(); done.join(5)
+        self.assertFalse(done.is_alive())  # a pipe is never waited on
+        self.assertEqual(zook_gate_names(work / 'attachments/x'), {'a': 'b'})
+        self.assertEqual([p.name for p in work.iterdir()], ['.zook-uploads.json'])  # no leftover new file
+
+    def test_group_files_keep_the_name_they_were_uploaded_with(self):
+        m, store = self.m, self.store
+        group = dict(id='g1', name='g', botIds=[], messages=[]); store.data['groups'].append(group)
+        temp = self.root / 'up'; temp.write_text('K=secret')
+        name = m.add_group_file(store, group, '.env', temp, 8, '你')
+        self.assertEqual((name, group['fileInfo'][name]['origName']), ('env', '.env'))
+        need = m.group_file_tool(store, 'g1', runtime)[2]
+        self.assertEqual(need({'name': 'env'}), 'always')  # asked by the name it was uploaded with
+        events = []
+        s = runtime.RuntimeSession([], [], False, self.root, lambda *a: True, events.append, {'skills': [], 'mcp': []}, extra_tools=[m.group_file_tool(store, 'g1', runtime)])
+        s.tools(); s.call('zook_group_file_read', {'name': 'env'}); s.close()
+        self.assertNotIn('K=secret', json.dumps(events, ensure_ascii=False))
+
+    def test_a_reply_sent_again_is_checked_again(self):
+        m, store = self.m, self.store
+        bot = dict(id='b', name='b', provider='claude', account='', autoAssigned=True)
+        job = dict(id='j', botId='b', status='running', messageId='x'); store.data['jobs'].append(job)
+        with mock.patch.object(m, 'auto_status', return_value=dict(signedIn=True, billed=False)), mock.patch.object(m, 'find_cli', return_value='/bin/true'):
+            self.assertTrue(m.billing_still_ok(store, 'j', bot, 'claude', None, True))
+        with mock.patch.object(m, 'auto_status', return_value=dict(signedIn=True, billed=True)), mock.patch.object(m, 'find_cli', return_value='/bin/true'), \
+             mock.patch.object(store, 'finish_message'):
+            self.assertFalse(m.billing_still_ok(store, 'j', bot, 'claude', None, True))  # switched to API billing between the tries
+        self.assertEqual(job['status'], 'failed'); self.assertIn('沒有重送', job['error'])
+        self.assertTrue(m.billing_still_ok(store, 'j', dict(bot, autoAssigned=False), 'claude', None, False))
+
+
+def zook_gate_names(path):
+    import zook_gate
+    return zook_gate._uploaded_names(str(path))
+
+
 class CardTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name); (self.root / 'workspace').mkdir()
@@ -381,6 +436,8 @@ class CardTest(unittest.TestCase):
         self.assertFalse(s.call('zook_workspace_read', {'path': '報告.md'}).get('isError'))  # the Bot's own work stays readable
         listed = json.loads(s.call('zook_workspace_list', {'path': 'attachments'})['content'][0]['text'])['entries']
         self.assertEqual([e['name'] for e in listed], ['mine.txt'])
+        self.assertTrue(s.call('zook_workspace_read', {'path': 'ATTACHMENTS/other.txt'}).get('isError'))  # the disk ignores case, and so does the check
+        self.assertFalse(s.call('zook_workspace_read', {'path': 'Attachments/MINE.txt'}).get('isError'))  # the same file, by the file itself
 
 
 if __name__ == '__main__': unittest.main()

@@ -50,14 +50,21 @@ def free_group_file_name(folder, name, owner=''):
 
 
 def add_group_file(store, group, name, source, size, by):
-    """Move an uploaded temporary file into the group's files."""
+    """Move an uploaded temporary file into the group's files. The name it was uploaded with is kept (origName): a key file stays known."""
+    original = upload_original(name)
     if size > MAX_UPLOAD: raise ValueError('單一檔案不能超過 20 MB。')
     with _group_files_lock:
         if group_files_size(store, group['id']) + size > GROUP_FILES_TOTAL: raise ValueError('這個群組的檔案已達 200 MB 上限，請先刪除一些。')
         folder = group_files_dir(store, group['id']); folder.mkdir(parents=True, exist_ok=True, mode=0o700)
         name = free_group_file_name(folder, name); os.replace(str(source), str(folder / name))
-    group.setdefault('fileInfo', {})[name] = dict(by=by)
+    group.setdefault('fileInfo', {})[name] = dict(by=by, **({'origName': original} if original and original != name else {}))
     return name
+
+
+def group_original(store, group_id, name):
+    """Lock held. The name a shared file was uploaded with, when it differs from the name kept."""
+    group = next((g for g in ((getattr(store, 'data', None) or {}).get('groups') or []) if isinstance(g, dict) and g.get('id') == group_id), {})
+    return ((group.get('fileInfo') or {}).get(name) or {}).get('origName') or ''
 
 
 def group_file_path(store, group, name):
@@ -88,6 +95,7 @@ def sync_group_files_in(store, group_id, bot_id, skip=()):
             if entry.name in skip: continue
             with open(entry.path, 'rb') as source: write_into_folder(fd, entry.name, source)
             seen[entry.name] = _file_hash(entry.path)
+    remember_uploaded_names(store, bot_id, {n: group_original(store, group_id, n) for n in seen if group_original(store, group_id, n)})  # for the key-file check
     return seen
 
 
@@ -145,4 +153,4 @@ def group_file_tool(store, group_id, runtime):
         if found.stat().st_size > runtime.MAX_TEXT: raise RuntimeError('這個檔案超過 128 KB。謹慎模式讀不到，請把這個 Bot 的主動性改成自動後再試。')
         try: return {'name': args['name'], 'content': found.read_text(encoding='utf-8')}
         except UnicodeDecodeError: raise RuntimeError('這個檔案不是文字檔。謹慎模式讀不到，請把這個 Bot 的主動性改成自動後再試。')
-    return (runtime._schema('zook_group_file_read', "Read a text file from this group's shared files by its exact name.", {'name': {'type': 'string', 'description': 'Exact file name'}}, ['name']), read, lambda args: 'always' if runtime.secret_name(args.get('name')) else False)  # keys and sign-ins: always asked
+    return (runtime._schema('zook_group_file_read', "Read a text file from this group's shared files by its exact name.", {'name': {'type': 'string', 'description': 'Exact file name'}}, ['name']), read, lambda args: 'always' if runtime.secret_name(args.get('name'), group_original(store, group_id, args.get('name'))) else False)  # keys and sign-ins, by the uploaded name too

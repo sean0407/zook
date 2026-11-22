@@ -16,7 +16,7 @@ timeout) is a refusal.
 
 This is a careful reading of what the CLI asked for, not a sandbox: a program written to a file and run later is not read.
 """
-import json, os, re, shlex, shutil, sys, urllib.error, urllib.parse, urllib.request
+import json, os, re, shlex, shutil, stat, sys, urllib.error, urllib.parse, urllib.request
 
 MAX_INPUT = 4 * 1024 * 1024
 HOME = os.path.expanduser('~')
@@ -118,12 +118,17 @@ ATTACHED = re.compile(r'^[0-9A-Za-z]{8}-(.+)$')  # an attachment is kept as 「8
 
 
 def _uploaded_names(path):
-    """The list Zook keeps next to a Bot's attachments folder (.zook-uploads.json): each attachment's name as the user uploaded it."""
+    """The list Zook keeps next to a Bot's attachments folder (.zook-uploads.json): each attachment's name as the user uploaded it.
+    Read only when it is a plain file of its own: never through a link, never a pipe that could keep the check waiting."""
     parts = os.path.normpath(path).split(os.sep)
     if 'attachments' not in parts: return {}
     base = os.sep.join(parts[:len(parts) - 1 - parts[::-1].index('attachments')]) or os.sep
     try:
-        with open(os.path.join(base, '.zook-uploads.json'), encoding='utf-8') as f: found = json.load(f)
+        fd = os.open(os.path.join(base, '.zook-uploads.json'), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as f:
+            info = os.fstat(f.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1: return {}
+            found = json.loads(f.read(1 << 20))
     except (OSError, ValueError): return {}
     return {str(k): str(v) for k, v in found.items()} if isinstance(found, dict) else {}
 
@@ -179,7 +184,8 @@ def _short(text, most=60):
 
 
 def _where(path):
-    """Where a file is, whole, so two files of the same name are told apart: ~/… inside the home folder."""
+    """Where a file is, whole, so two files of the same name are told apart: ~/… inside the home folder. A web address: its site only."""
+    if '://' in str(path): return _host(path) or '網址'
     full = os.path.normpath(_abs(path))
     if full == HOME: return '家目錄'
     return '~' + full[len(HOME):] if full.startswith(HOME + os.sep) else full
@@ -463,7 +469,7 @@ def _argv_boundaries(argv, whole, depth):
         files += [v[1:].split(';')[0] for i, a in enumerate(args) for v in [a.split('=', 1)[1] if a.startswith('--') and '=' in a and a.split('=', 1)[0] in CURL_SEND else args[i + 1] if a in CURL_SEND and i + 1 < len(args) else '']
                   if '@' in v and v.split('=', 1)[-1].startswith('@') for v in [v.split('=', 1)[-1]]]
         urls = [a for a in args if '://' in a or re.fullmatch(r'[\w-]+(\.[\w-]+)+(:\d+)?(/\S*)?', a)]
-        globbed = '-g' not in args and '--globoff' not in args and any(re.search(r'\{[^}]*,[^}]*\}|\[[^\]]*-[^\]]*\]', u) for u in urls)  # curl turns one pattern into many addresses
+        globbed = any(set(u) & set('{}[]') for u in urls)  # curl may turn it into many addresses; -g can be undone by a later option
         if sends and any(a in ('-K', '--config') or a.startswith('--config=') or re.fullmatch(r'-[a-zA-Z]*K.*', a) and not a.startswith('--') for a in args):
             found.append(('split', '這個 curl 指令從設定檔讀取要傳的內容和目的地，看不出會傳幾次、傳到哪裡'))
         elif sends and globbed: found.append(('split', '這個 curl 的網址是一個樣式（例如 {a,b} 或 [1-3]），會展開成好幾個目的地'))
@@ -499,7 +505,7 @@ def _argv_boundaries(argv, whole, depth):
     if any(_guard_path(t) for t in targets): found.append(_hit('guard', '修改 ' + _names([t for t in targets if _guard_path(t)])))
     elif name not in DELETE_COMMANDS and any(_system_path(t) for t in targets) and name not in ('touch', 'mkdir'): found.append(_hit('system', '寫入 ' + _names([t for t in targets if _system_path(t)])))
     if name in DELETE_COMMANDS and any(_guard_path(t) for t in plain): found.append(_hit('guard', '刪除 ' + _names([t for t in plain if _guard_path(t)])))
-    touched = [a for a in args if a.startswith(('/', '~', '$HOME', '${HOME}', '.', '@')) or '/' in a or os.path.basename(a).startswith('.env')]
+    touched = [a for a in args if '://' not in a and (a.startswith(('/', '~', '$HOME', '${HOME}', '.', '@')) or '/' in a or os.path.basename(a).startswith('.env'))]  # a web address is not a file here
     touched += [a.split('=', 1)[1] for a in args if a.startswith('--') and '=' in a]
     if not any(k == 'secret' for k, _ in found) and any(_secret_path(a) for a in touched): found.append(_hit('secret', _names([a for a in touched if _secret_path(a)])))
     return found

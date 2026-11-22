@@ -494,12 +494,12 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 acted = any(c.get('category') not in ('read', 'external_read') for c in (job.get('toolCalls') or [])[before:])
                 retry = job.get('status') == 'running' and job.get('resumed') and job.get('resumeGone') and not acted
                 if retry: job.update(noResume=True, resumeLost=True, resumed=False, resumeGone=False); self.attempt_errors.pop(job_id, None)
-            if retry: self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)  # the CLI could not continue: use the conversation Zook saved
+            if retry and billing_still_ok(store, job_id, bot, p, a, fixed): self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)  # the CLI could not continue: the saved conversation
             with store.lock:
                 job = store.find('jobs', job_id) or {}
                 tidy = job.get('status') == 'running' and job.get('errorKind') == 'context' and not job.get('compactTried') and not acted and can_compact(store, job)
                 if tidy: job.update(compactTried=True); job.pop('errorKind', None); self.attempt_errors.pop(job_id, None)
-            if tidy:  # the CLI says the conversation is too long: turn the earlier part into a summary and try this reply once more
+            if tidy and billing_still_ok(store, job_id, bot, p, a, fixed):  # too long: the earlier part becomes a summary, and this reply is tried once more
                 prompt = self.compact_chat(job_id, prompt, (p, m), run_bot, inventory)
                 self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)
             with store.lock:
