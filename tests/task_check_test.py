@@ -220,7 +220,8 @@ class TaskCheckTest(base.TaskEngineTest):
         self.assertEqual(self.req('PATCH', '/api/groups/' + self.group['id'], {'mode': 'auto'})[0], 200)
         made = self.req('POST', '/api/schedules', {'groupId': self.group['id'], 'content': '每天整理', 'time': '00:00', 'repeat': 'daily', 'on': False})[1]
         self.req('POST', '/api/schedules/%s/run' % made['id'], {})
-        time.sleep(0.5)
+        end = time.time() + 20  # the schedule starts the discussion on its own thread: wait until it has begun, however busy the machine is
+        while time.time() < end and (self.req('GET', '/api/groups/' + self.group['id'])[1]['group'].get('taskRun') or {}).get('origin') != 'schedule': time.sleep(0.1)
         run = self.wait_group()['taskRun']
         self.assertEqual(run['origin'], 'schedule')
         worker = self.runs_of('=== 工作')[0]
