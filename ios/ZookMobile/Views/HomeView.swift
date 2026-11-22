@@ -352,10 +352,24 @@ struct UsageView: View {
     @EnvironmentObject var model: AppModel
     @State private var quota: QuotaView?
     @State private var problem: String?
+    @State private var autoWanted: Int?          // chosen here and not yet confirmed by the Mac
+    @State private var autoProblem: String?
+    @State private var autoChain: Task<Void, Never>?  // choices are sent one after another, so the last one chosen is the one that stays
+    @State private var detectDone: Double?
 
     var body: some View {
         List {
             if let quota = quota {
+                Section {
+                    Picker("自動偵測", selection: Binding(get: { autoWanted ?? quota.usageDetectEvery ?? 0 }, set: { every in setAuto(every) })) {
+                        ForEach(UsageView.autoChoices, id: \.0) { choice in Text(choice.1).tag(choice.0) }
+                    }.pickerStyle(.menu)
+                } footer: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let autoProblem = autoProblem { Text(autoProblem).foregroundStyle(.red) }
+                        Text("自動偵測時，Claude 每次會用到一點點額度。")
+                    }
+                }
                 ForEach(quota.providers) { provider in
                     Section(provider.name.components(separatedBy: "（").first ?? provider.name) {
                         if provider.status != "logged_in" { Text("尚未登入").foregroundStyle(.secondary) }
@@ -373,6 +387,37 @@ struct UsageView: View {
             else { HStack { Spacer(); ProgressView("正在讀取額度…"); Spacer() } }
         }
         .navigationTitle("用量").navigationBarTitleDisplayMode(.inline)
-        .task { do { quota = try await model.api?.quota() } catch { problem = error.localizedDescription } }
+        .task {
+            do { quota = try await model.api?.quota() } catch { problem = error.localizedDescription }
+            // While this page is open: read the figures again after each detection on the Mac, and keep 自動偵測 on what the Mac has.
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard !Task.isCancelled, let status = try? await model.api?.usageDetectStatus() else { continue }
+                if autoWanted == nil { quota?.usageDetectEvery = status.usageDetectEvery }
+                if !status.running, status.doneAt > 0, let seen = detectDone, seen != status.doneAt, let fresh = try? await model.api?.quota() {
+                    quota = autoWanted == nil ? fresh : QuotaView(providers: fresh.providers, usageDetectEvery: quota?.usageDetectEvery)
+                }
+                detectDone = status.doneAt
+            }
+        }
+    }
+
+    static let autoChoices: [(Int, String)] = [(0, "關閉"), (15, "每 15 分鐘"), (30, "每 30 分鐘"), (60, "每 1 小時"), (180, "每 3 小時")]
+
+    private func setAuto(_ every: Int) {
+        autoWanted = every; autoProblem = nil
+        let before = autoChain, api = model.api
+        autoChain = Task { @MainActor in
+            _ = await before?.value  // the earlier choice reaches the Mac first
+            do {
+                guard let api = api else { throw LinkError.macOffline }
+                try await api.setUsageDetect(every: every)
+                quota?.usageDetectEvery = every
+                if autoWanted == every { autoWanted = nil }
+            } catch {
+                autoProblem = "自動偵測沒有改成功：" + error.localizedDescription
+                if autoWanted == every { autoWanted = nil }  // show what the Mac still has
+            }
+        }
     }
 }

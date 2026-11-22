@@ -62,27 +62,11 @@ class Handler(BaseHTTPRequestHandler):
                 for a in item['profiles']:
                     account = a.pop('_account')
                     if item['id'] in AUTO_MODELS: a.update(autoOn=auto_account_on(store, account), autoBilled=account.get('type') == 'key' or auto_known_billed(known.get(auto_account_key(account))))
-        return {'providers': result}
+        return {'providers': result, 'usageDetectEvery': usage_detect_every(store)}
 
     def detect_usage(self):
-        """偵測使用量: read fresh limits for every signed-in account. Claude only reports them with a reply, so each subscription gets one tiny request."""
-        store, app = self.server.store, self.server
-        app.__dict__.setdefault('codex_quota_caches', {}).clear()
-        targets = []
-        if 'claude' in P.active_ids(store.data):
-            main = account_status('claude')
-            if main['status'] == 'logged_in' and main['method'] != 'Anthropic Console': targets.append(None)
-            for extra in [a for a in store.data.get('accounts') or [] if a.get('provider') == 'claude' and a.get('type') == 'login']:
-                view = account_view(extra)
-                if view['status'] == 'logged_in' and view['method'] != 'Anthropic Console': targets.append(extra)
-        def probe(extra):
-            try: app.record_quota('claude', claude_quota_probe(provider_env('claude', extra) if extra else None), extra['id'] if extra else '', 'probe')
-            except (RuntimeError, OSError, subprocess.TimeoutExpired): pass
-        threads = [threading.Thread(target=probe, args=(x,), daemon=True) for x in targets]
-        for t in threads: t.start()
-        for t in threads: t.join(100)
-        app.claude_probe_at = time.time()
-        return self.quota()
+        """偵測使用量 (usagewatch.py, shared with 自動偵測), then the fresh figures."""
+        detect_usage_now(self.server); return self.quota()
 
     def accounts(self, parts):
         logins = self.server.logins
@@ -409,12 +393,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, self.quota())
             if path == '/api/quota/detect' and self.command == 'POST' and not self.device:
                 self.body(); return self.respond(200, self.detect_usage())
+            if path == '/api/quota/auto' and self.command == 'POST': return self.respond(200, set_usage_detect(store, self.body().get('every')))  # 自動偵測, also from a paired phone
+            if path == '/api/quota/auto' and self.command == 'GET': return self.respond(200, usage_detect_status(self.server))  # an open usage page asks whether to read again
             if path == '/api/quota/claude/refresh' and self.command == 'POST':
                 self.body()
-                self.server.claude_probe_at = time.time()
-                try: self.server.record_quota('claude', claude_quota_probe())
+                try: claude_probe_default(self.server, 'probe')  # shares 偵測使用量's lock (usagewatch.py)
                 except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc: return self.error(409, str(exc) if isinstance(exc, RuntimeError) else '無法查詢 Claude 額度。')
-                with store.lock: store.data['quota']['claude']['source'] = 'probe'; store.save()
                 return self.respond(200, self.quota())
             if path == '/api/usage/overview' and self.command == 'GET':
                 try: span = int((parse_qs(urlsplit(self.path).query).get('days') or ['30'])[0])

@@ -55,7 +55,9 @@ struct ProviderQuota: Codable, Equatable { var windows: [QuotaWindow]? }
 struct ProviderUsage: Codable, Identifiable, Equatable {
     var id: String, name: String, status: String?, email: String?, quota: ProviderQuota?
 }
-struct QuotaView: Codable, Equatable { var providers: [ProviderUsage] }
+struct QuotaView: Codable, Equatable { var providers: [ProviderUsage]; var usageDetectEvery: Int? }
+/// 自動偵測使用量 as the Mac has it now, and when its last detection ended (no CLI runs to answer).
+struct UsageDetectStatus: Codable, Equatable { var usageDetectEvery: Int; var doneAt: Double; var running: Bool }
 
 struct ProviderOption: Codable, Identifiable, Equatable { var id: String, name: String, installed: Bool }
 
@@ -91,6 +93,9 @@ struct ZookAPI {
     func bot(_ id: String) async throws -> BotConversation { try await get("/api/mobile/bots/" + id) }
     func group(_ id: String) async throws -> GroupConversation { try await get("/api/mobile/groups/" + id) }
     func quota() async throws -> QuotaView { try await get("/api/quota") }
+    /// 自動偵測使用量: minutes between detections on the Mac, 0 is off.
+    func setUsageDetect(every: Int) async throws { try await post("/api/quota/auto", ["every": every]) }
+    func usageDetectStatus() async throws -> UsageDetectStatus { try await get("/api/quota/auto") }
     func send(toBot id: String, _ text: String, photos: [String] = [], clientId: String = UUID().uuidString) async throws { try await post("/api/chat", ["botId": id, "content": text, "attachments": photos, "clientId": clientId]) }
     /// Sends one photo (already made small) to the Mac and returns its id, to attach to the next message.
     func upload(photo: Data) async throws -> String {

@@ -79,6 +79,36 @@
     try { state.overview = await api('usage/overview?days=' + (state.overviewDays || 30)); } catch (e) { state.overview = {error: e.message}; }
     if (state.page === 'usage') { const y = $('.page')?.scrollTop; render(true); if (y && $('.page')) $('.page').scrollTop = y; }
   }
+  // 自動偵測: how often Zook does what 偵測使用量 does on its own. Off unless chosen.
+  const USAGE_AUTO = [{id: '0', name: '關閉'}, {id: '15', name: '每 15 分鐘'}, {id: '30', name: '每 30 分鐘'}, {id: '60', name: '每 1 小時'}, {id: '180', name: '每 3 小時'}];
+  // What the Mac has now (the phone may have changed it), not this window's copy of the settings.
+  const usageAutoNow = () => state.usageAuto?.usageDetectEvery ?? (state.quota && !state.quota.error ? state.quota.usageDetectEvery : undefined) ?? state.data?.settings?.usageDetectEvery ?? 0;
+  function usageAutoPick() {
+    const every = String(usageAutoNow() || 0);
+    return `<div class="usage-auto"><span class="usage-auto-label">自動偵測</span>${dropdown('usageDetectEvery', every, USAGE_AUTO, 'data-usage-auto')}<small class="muted">自動偵測時，Claude 每次會用到一點點額度</small></div>`;
+  }
+  document.addEventListener('change', async e => {
+    if (e.target.dataset.usageAuto === undefined) return;
+    const every = Number(e.target.value) || 0;
+    try {
+      const saved = await post('quota/auto', {every});
+      state.data.settings = Object.assign(state.data.settings || {}, saved); state.usageAuto = Object.assign(state.usageAuto || {}, saved);
+      if (state.quota && !state.quota.error) state.quota.usageDetectEvery = saved.usageDetectEvery;
+      toast(saved.usageDetectEvery ? '已開啟自動偵測使用量' : '已關閉自動偵測使用量');
+    } catch (err) { toast(err.message); }
+    render(true);
+  });
+  // While the usage page is open: when a detection (by the timer, the phone or another window) has ended, read the figures again,
+  // and keep the dropdown on what the Mac has. Asking costs nothing: no CLI runs for it.
+  setInterval(async () => {
+    if (!state.data || state.page !== 'usage' || document.hidden || state.usageBusy || document.querySelector('.dd.open')) return;
+    let now;
+    try { now = await api('quota/auto'); } catch (_) { return; }
+    const before = state.usageAuto; state.usageAuto = now;
+    if (state.page !== 'usage') return;
+    if (before && !now.running && now.doneAt && now.doneAt !== before.doneAt) { refreshQuota(); return; }
+    if (before && before.usageDetectEvery !== now.usageDetectEvery) render(true);
+  }, 20000);
   document.addEventListener('change', e => {
     if (e.target.dataset.overviewMetric !== undefined) { state.overviewMetric = e.target.value; render(true); return; }
     if (e.target.dataset.overviewDays === undefined) return;

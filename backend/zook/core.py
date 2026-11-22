@@ -738,7 +738,7 @@ MAX_REMOTE_DEVICES = 10
 # What a paired device may do. Everything else can only be done on the Mac itself.
 DEVICE_ALLOWED = [('GET', r'/api/state'), ('GET', r'/api/jobs/[^/]+'), ('POST', r'/api/jobs/[^/]+/cancel'), ('POST', r'/api/approvals/[^/]+'), ('POST', r'/api/questions/[^/]+'),
                   ('POST', r'/api/chat'), ('DELETE', r'/api/bots/[^/]+/queue/[^/]+'), ('GET', r'/api/groups/[^/]+'), ('POST', r'/api/groups/[^/]+/messages'), ('POST', r'/api/groups/[^/]+/stop'),
-                  ('GET', r'/api/quota'), ('GET', r'/api/usage/bots'), ('GET', r'/api/integrations'), ('GET', r'/api/providers'), ('GET', r'/api/remote/me'),
+                  ('GET', r'/api/quota'), ('GET', r'/api/quota/auto'), ('POST', r'/api/quota/auto'), ('GET', r'/api/usage/bots'), ('GET', r'/api/integrations'), ('GET', r'/api/providers'), ('GET', r'/api/remote/me'),
                   ('GET', r'/api/mobile/home'), ('GET', r'/api/mobile/bots/[^/]+'), ('GET', r'/api/mobile/groups/[^/]+'), ('POST', r'/api/mobile/bots'), ('GET', r'/api/mobile/settings'),
                   ('GET', r'/api/mobile/schedules'), ('POST', r'/api/mobile/schedules/[^/]+'), ('POST', r'/api/mobile/photos'), ('POST', r'/api/mobile/bots/[^/]+/chats'), ('GET', r'/api/notifications')]
 
