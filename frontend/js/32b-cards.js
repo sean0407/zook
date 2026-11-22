@@ -50,7 +50,7 @@
   function loginButtons(p, a) {
     const acct = a ? a.id : '', signed = (a || p).status === 'logged_in';
     if (a && a.type !== 'login') return '';
-    if (!a && p.terminalLogin) return `<button class="${signed ? 'secondary' : 'primary'}" data-action="terminal-login" data-id="${esc(p.id)}">${signed ? '重新登入' : ['gemini', 'antigravity'].includes(p.id) ? '用 Google 帳號登入' : '在終端機登入'}</button>`;
+    if (p.terminalLogin && (!a || p.id === 'antigravity')) return `<button class="${signed ? 'secondary' : 'primary'}" data-action="terminal-login" data-id="${esc(p.id)}" data-account="${esc(acct)}">${signed ? '重新登入' : ['gemini', 'antigravity'].includes(p.id) ? '用 Google 帳號登入' : '在終端機登入'}</button>`;
     return (p.loginMethods || []).map((m, i) => `<button class="${i === 0 && !signed ? 'primary' : 'secondary'}" data-action="account-login" data-id="${esc(p.id)}" data-account="${esc(acct)}" data-method="${esc(m.id)}">${signed && i === 0 ? '重新登入' : esc(m.label)}</button>`).join('');
   }
   // Where the bars go: progress of an install or sign-in, a sign-in button, a line saying why there are no bars, or the bars.
