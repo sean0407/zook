@@ -40,7 +40,7 @@ def job_view(job):
 
 def partial_feeder(kind, job_id):
     """feed(bytes) for a CLI's output as it arrives. Returns None for a CLI whose progress cannot be read."""
-    if kind not in ('claude', 'antigravity', 'grok', 'codex', 'opencode', 'cursor'): return None
+    if kind not in ('claude', 'antigravity', 'grok', 'codex', 'cursor'): return None
     pending, state = bytearray(), dict(text='', mark=None, fresh=False)
 
     def put(text):
@@ -68,10 +68,6 @@ def partial_feeder(kind, job_id):
             if step.get('step_type') == 'agent_response': add(step.get('text_delta'), mark=step.get('step_index'))
         elif kind == 'grok':
             if d.get('type') == 'text': add(d.get('data'))
-        elif kind == 'opencode':  # whole paragraphs, as each one is finished
-            part = d.get('part') if isinstance(d.get('part'), dict) else {}
-            if d.get('type') == 'step_start': state['fresh'] = True
-            if d.get('type') == 'text': add(part.get('text'), mark=part.get('messageID'))
         elif kind == 'cursor':  # small pieces carry timestamp_ms; the whole message follows without it; a tool call starts a new message
             if d.get('type') == 'tool_call': state['fresh'] = True
             message = d.get('message') if d.get('type') == 'assistant' and isinstance(d.get('message'), dict) else {}

@@ -181,6 +181,41 @@ def activity_list(store, kind=''):
     return dict(items=out, kinds=[dict(id=k, name=v) for k, v in ACTIVITY_KINDS.items()])
 
 
+# ---- CLIs Zook no longer supports. Data from before (or a restored backup) may still name them.
+REMOVED_PROVIDERS = {'opencode': 'OpenCode', 'copilot': 'GitHub Copilot', 'kimi': 'Kimi'}
+
+
+def drop_removed_providers(store):
+    """Runs on every load, after a sync and when a deleted Bot comes back. A Bot set to a removed CLI switches to 自動選擇, and the settings
+    forget it; the activity record says what changed. Does nothing once no data names them. API keys already in the Keychain are left as they are."""
+    data, gone = store.data, set(REMOVED_PROVIDERS)
+    settings = data.get('settings') if isinstance(data.get('settings'), dict) else {}
+    named = lambda x: isinstance(x, str) and x in gone
+    dropped = {a.get('id') for a in data.get('accounts') or [] if isinstance(a, dict) and named(a.get('provider'))}
+    if dropped: data['accounts'] = [a for a in data.get('accounts') or [] if not (isinstance(a, dict) and named(a.get('provider')))]
+    default = named(settings.get('provider'))
+    moved, changed = [], bool(dropped)
+    for bot in list(data.get('bots') or []) + list(data.get('deletedBots') or []):
+        if not isinstance(bot, dict): continue
+        if named(bot.get('provider')) or (default and not bot.get('provider') and bot.get('model')):  # its own CLI, or 使用預設 with that CLI's model
+            bot.update(provider=AUTO, model='', account=''); changed = True
+            if any(b is bot for b in data.get('bots') or []): moved.append(str(bot.get('name') or '未命名'))
+        elif bot.get('account') in dropped: bot['account'] = ''; changed = True
+        if isinstance(bot.get('fallbacks'), list) and any(named(x) for x in bot['fallbacks']): bot['fallbacks'] = [x for x in bot['fallbacks'] if not named(x)]; changed = True
+    if default: settings.pop('provider'); settings.pop('model', None)
+    for key in ('fallbacks', 'autoModels', 'addedProviders', 'hiddenProviders'):
+        value = settings.get(key)
+        if isinstance(value, list) and any(named(x) for x in value):
+            settings[key] = [x for x in value if not named(x)]; changed = True
+            if key == 'autoModels' and not settings[key]: settings.pop(key)  # only removed CLIs were chosen: back to the usual choice, not to none at all
+    if isinstance(settings.get('autoAccounts'), dict) and dropped & set(settings['autoAccounts']): settings['autoAccounts'] = {k: v for k, v in settings['autoAccounts'].items() if k not in dropped}
+    names = '、'.join(REMOVED_PROVIDERS.values())
+    if moved: log_activity(store, 'bot', 'Zook 已不再支援 %s。這些 Bot 原本使用它們，已改成「自動選擇」：%s' % (names, '、'.join(moved)), by='Zook')
+    elif changed or default: log_activity(store, 'setting', 'Zook 已不再支援 %s，相關的帳號與設定已移除%s。' % (names, '，預設提供者改回 Codex' if default else ''), by='Zook')
+    if default and moved: log_activity(store, 'setting', 'Zook 已不再支援 %s。預設提供者原本是其中之一，已改回 Codex。' % names, by='Zook')
+    return moved
+
+
 SETTING_NAMES = {'permissionMode': '主動性', 'webSearch': '上網搜尋', 'browserAutomation': '排程與觸發可用內建瀏覽器', 'provider': '預設提供者', 'model': '預設模型', 'fallbacks': '備用模型', 'access': '存取範圍', 'accessFolder': '存取範圍',
                  'features': '功能開關', 'effort': '思考強度', 'remote': '手機連線', 'autoUpdateCheck': '自動檢查更新', 'scheduleNotify': '通知', 'sharedMcp': '共用連接器', 'disabledSkills': 'Skills 開關',
                  'disabledPlugins': '插件開關', 'autoModels': '自動選擇的模型', 'autoAccounts': '自動選擇的帳號', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步', 'voiceLang': '語音輸入語言', 'streamReplies': '回覆逐字顯示', 'queueWhenBusy': 'Bot 忙碌時排隊', 'busySend': '回覆中送出的訊息', 'keepCli': '保持 CLI 開啟', 'autoCompact': '對話過長時自動整理'}
@@ -507,6 +542,7 @@ def restore_bot(store, bot_id):
     kept = next((b for b in trash if b.get('id') == bot_id), None)
     if not kept or store.find('bots', bot_id): raise ValueError('找不到可以喚回的 Bot。')
     bot = copy.deepcopy(kept); bot.pop('deletedAt', None); bot.pop('recovered', None)
+    if bot.get('provider') in REMOVED_PROVIDERS: bot.update(provider=AUTO, model='', account='')  # set to a CLI Zook no longer has
     if bot.get('isAdmin') and any(b.get('isAdmin') for b in store.data['bots']): bot['isAdmin'] = False  # there is one 管理員
     bot.setdefault('isAdmin', False); bot['pinned'] = False
     for key, value in (('enabledSkills', []), ('enabledMcp', []), ('allowCommands', True), ('persona', ''), ('webSearch', False), ('messages', [])): bot.setdefault(key, value)

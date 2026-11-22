@@ -153,7 +153,7 @@ class CursorTest(unittest.TestCase):
 
     def test_status_and_models(self):
         p = {x['id']: x for x in self.req('GET', '/api/accounts')[1]['providers']}['cursor']
-        self.assertEqual((p['status'], p['email'], p['chat']), ('logged_in', 'someone@example.com', True))
+        self.assertEqual((p['status'], p['email']), ('logged_in', 'someone@example.com'))
         names = [m['name'] for m in self.req('GET', '/api/models?provider=cursor')[1]['models']]
         self.assertEqual(names, ['Auto（Cursor 自動選）', 'Composer 2.5', 'Grok 4.7  Low Fast'])
 

@@ -8,7 +8,7 @@ SYNC_FILE = re.compile(r'zook-sync-([0-9a-f]{16})\.json')
 MAX_SYNC_FILE = 100 * 1024 * 1024
 SYNC_BOT_TEXT = {'name': 100, 'color': 30, 'shape': 30, 'instructions': 10000, 'persona': 20000, 'provider': 20, 'model': 100, 'section': 100, 'jobTitle': 12}
 SYNC_ID = re.compile(r'[A-Za-z0-9_-]{1,64}')
-SYNC_PROVIDERS = ('', 'auto', 'codex', 'claude', 'grok', 'antigravity', 'opencode', 'cursor', 'gemini')  # the same on every Mac; custom ones are not
+SYNC_PROVIDERS = ('', 'auto', 'codex', 'claude', 'grok', 'antigravity', 'cursor', 'gemini')  # the same on every Mac; custom ones are not
 SYNC_MESSAGE_TEXT = {'createdAt': 40, 'status': 20, 'note': 300, 'auto': 100, 'autoWhy': 300, 'effort': 20, 'author': 100}
 _sync_unwritten = set()
 _sync_lock = threading.Lock()
@@ -92,7 +92,8 @@ def sync_clean(key, value):
         if any(not _text(value.get(k, ''), limit) for k, limit in SYNC_BOT_TEXT.items()) or not str(value.get('name') or '').strip(): return None
         out = {k: value.get(k, '') for k in SYNC_BOT_TEXT}
         out.update(pinned=value.get('pinned') is True, createdAt=value.get('createdAt') if _text(value.get('createdAt'), 40) else '')
-        if out['provider'] not in SYNC_PROVIDERS: out.update(provider='', model='')
+        if out['provider'] in REMOVED_PROVIDERS: out.update(provider=AUTO, model='')  # an older Mac still names it: the same change as here
+        elif out['provider'] not in SYNC_PROVIDERS: out.update(provider='', model='')
         return out
     if parts[0] == 'chats' and len(parts) == 3:
         messages = value.get('messages')

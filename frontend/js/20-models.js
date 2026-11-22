@@ -78,7 +78,7 @@
     if (!effortSupported()) return `<span class="effort-off" title="這個模型不支援調整思考強度">思考強度：這個模型不支援</span>`;
     return `<div class="effort-pick" title="思考強度">${dropdown('effort', currentEffort(), EFFORTS, 'data-effort')}</div>`;
   }
-  const providerList = () => (state.providers || [{id: 'codex', name: 'Codex'}, {id: 'claude', name: 'Claude'}]).filter(p => p.chat !== false).map(p => ({id: p.id, name: String(p.name).split('（')[0]}));  // a CLI not yet verified for replies cannot be picked
+  const providerList = () => (state.providers || [{id: 'codex', name: 'Codex'}, {id: 'claude', name: 'Claude'}]).map(p => ({id: p.id, name: String(p.name).split('（')[0]}));
   const providerShort = id => id === 'auto' ? '自動選擇' : providerList().find(p => p.id === id)?.name || id;
   const permissionName = id => PERMISSIONS.find(p => p.id === id)?.name || '謹慎';
   // Shared controls: every choice in the UI is a dropdown (with optional descriptions) or an on/off switch.
