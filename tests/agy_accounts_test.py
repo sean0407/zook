@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """Extra Antigravity accounts: agy only moves its sign-in with HOME, so each account gets its own home folder with the user's
 everyday folders linked in. Zook's own checks keep using the real home folder."""
-import http.client, importlib.util, json, os, shutil, subprocess, sys, tempfile, time, unittest
+import http.client, importlib.util, json, os, pwd, shutil, subprocess, sys, tempfile, time, unittest
+from unittest import mock
 from pathlib import Path
 
 SERVER = Path(__file__).resolve().parents[1] / 'backend/server.py'
@@ -36,25 +37,29 @@ def fake_home(root):
     return home
 
 
-class Units(unittest.TestCase):
+class Base(unittest.TestCase):
     def setUp(self):
         self.m = load(); self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name).resolve()
         self.home = fake_home(self.root); self.old_home = os.environ.get('HOME'); os.environ['HOME'] = str(self.home)
+        (self.root / 'secrets').mkdir(); os.environ['ZOOK_SECRETS_DIR'] = str(self.root / 'secrets')  # never the user's own keychain
         self.store = self.m.Store(self.root / 'data'); self.account = dict(id='a' * 32, provider='antigravity', name='工作', type='login')
         self.store.data['accounts'] = [self.account, dict(id='c' * 32, provider='codex', name='C', type='login')]
 
     def tearDown(self):
-        os.environ['HOME'] = self.old_home; self.temp.cleanup()
+        os.environ['HOME'] = self.old_home; os.environ.pop('ZOOK_SECRETS_DIR', None); self.temp.cleanup()
 
+
+class Units(Base):
     def test_home_links_everyday_folders_and_nothing_sensitive(self):
         folder = self.m.agy_account_home(self.account['id'])
         self.assertEqual(folder, self.root / 'data/accounts' / self.account['id'])
         for name in LINKED: self.assertEqual(os.readlink(str(folder / name)), str(self.home / name))
         self.assertTrue((folder / 'Library').is_dir() and not (folder / 'Library').is_symlink())  # never the whole Library
-        self.assertEqual([p.name for p in (folder / 'Library').iterdir()], ['Mobile Documents'])
+        self.assertEqual(sorted(p.name for p in (folder / 'Library').iterdir()), ['Keychains', 'Mobile Documents'])
         self.assertEqual(os.readlink(str(folder / 'Library/Mobile Documents')), str(self.home / 'Library/Mobile Documents'))
         self.assertEqual(sorted(p.name for p in folder.iterdir()), sorted(LINKED + ['Library']))
-        for name in ('.ssh', '.config', '.aws', 'Library/Keychains'): self.assertFalse(os.path.lexists(str(folder / name)))
+        for name in ('.ssh', '.config', '.aws'): self.assertFalse(os.path.lexists(str(folder / name)))
+        self.assertFalse((folder / 'Library/Keychains').is_symlink())  # its own keychain folder, never the user's
         self.assertEqual((folder / 'Desktop/keep.txt').read_text(), 'mine')  # ~/Desktop still means the user's own
         # A link pointed elsewhere is put back, a whole-Library link is replaced, a real folder agy made is left alone; a missing one is skipped.
         (folder / 'Desktop').unlink(); os.symlink(str(self.home / '.ssh'), str(folder / 'Desktop'))
@@ -71,7 +76,7 @@ class Units(unittest.TestCase):
         shutil.rmtree(str(self.home / 'Library/Mobile Documents')); shutil.rmtree(str(folder / 'Library')); os.symlink(str(self.home / 'Library'), str(folder / 'Library'))
         self.m.agy_account_home(self.account['id'])
         self.assertFalse(os.path.lexists(str(folder / 'Pictures'))); self.assertFalse((folder / 'Library').is_symlink())
-        self.assertEqual(list((folder / 'Library').iterdir()), [])
+        self.assertEqual([p.name for p in (folder / 'Library').iterdir()], ['Keychains'])
         # Removing the account removes the links, never what they point to.
         shutil.rmtree(str(folder)); self.assertEqual((self.home / 'Desktop/keep.txt').read_text(), 'mine'); self.assertTrue((self.home / '.ssh/id_ed25519').exists())
 
@@ -124,6 +129,53 @@ class Units(unittest.TestCase):
         self.assertTrue(text.rstrip().endswith('exec ' + str(cli)))
         self.assertNotIn('HOME', self.m.terminal_login_script('antigravity').read_text())  # the default sign-in: as before
         with self.assertRaises(ValueError): self.m.terminal_login_script('antigravity', dict(self.account, type='key'))
+
+
+def security(home, *args):
+    """`security` as agy runs it (agy saves its sign-in through /usr/bin/security); a timeout means macOS showed a dialog."""
+    return subprocess.run(['/usr/bin/security'] + list(args), env=dict(os.environ, HOME=str(home)), stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
+
+
+class Keychain(Base):
+    """Each extra account gets its own keychain, so agy's sign-in no longer makes macOS ask for a missing keychain."""
+    def user_keychains(self):
+        real = pwd.getpwuid(os.getuid()).pw_dir
+        return [security(real, *a).stdout for a in (['list-keychains', '-d', 'user'], ['default-keychain', '-d', 'user'])]
+
+    def test_own_keychain_made_unlocked_and_never_on_a_command_line(self):
+        before, calls, real_run = self.user_keychains(), [], subprocess.run
+        def run(args, *a, **k): calls.append((list(args), dict(k.get('env') or {}))); return real_run(args, *a, **k)
+        with mock.patch('subprocess.run', run): folder = self.m.agy_account_home(self.account['id'])
+        keychains = folder / 'Library/Keychains'; secret = (self.root / 'secrets' / ('agy-keychain-' + self.account['id'])).read_text()
+        self.assertEqual(len(secret), 64); self.assertTrue((keychains / 'zook-agy.keychain-db').is_file())
+        self.assertEqual(os.readlink(str(keychains / 'login.keychain-db')), 'zook-agy.keychain-db')
+        self.assertIn(str(keychains / 'zook-agy.keychain-db'), security(folder, 'default-keychain').stdout)
+        self.assertEqual(security(folder, 'show-keychain-info', str(keychains / 'zook-agy.keychain-db')).stderr.split()[-1], 'no-timeout')
+        self.assertEqual(security(folder, 'add-generic-password', '-U', '-s', 'antigravity', '-a', 'x', '-w', 'tok').returncode, 0)  # no dialog
+        self.assertTrue(calls)
+        for args, env in calls: self.assertFalse(any(secret in x for x in args + list(env.values())), args)  # stdin only
+        for path in folder.rglob('*'):
+            if path.is_file() and not path.is_symlink() and path.name != 'zook-agy.keychain-db': self.assertNotIn(secret, path.read_text(errors='ignore'))
+        self.assertFalse(any(secret in v for v in self.m.provider_env('antigravity', self.account).values()))  # never in agy's environment
+        self.assertEqual(self.user_keychains(), before)  # the user's search list and default keychain stay as they were
+        # Locked again (after a restart, say): the next run unlocks it, with the same password.
+        self.assertEqual(security(folder, 'lock-keychain', str(keychains / 'zook-agy.keychain-db')).returncode, 0)
+        self.m.provider_env('antigravity', self.account)
+        self.assertEqual(security(folder, 'find-generic-password', '-s', 'antigravity', '-a', 'x', '-w').stdout.strip(), 'tok')
+        self.assertEqual((self.root / 'secrets' / ('agy-keychain-' + self.account['id'])).read_text(), secret)
+
+    def test_older_accounts_get_one_and_removal_forgets_the_password(self):
+        saved = self.m._agy_keychain_password; self.m._agy_keychain_password = lambda *a: ''  # the keychain cannot be used: agy runs as before
+        folder = self.m.agy_account_home(self.account['id'])
+        self.assertFalse(os.path.lexists(str(folder / 'Library/Keychains/zook-agy.keychain-db')))
+        self.m._agy_keychain_password = saved  # an account made before this release: made on its next run
+        self.m.provider_env('antigravity', self.account)
+        file = self.root / 'secrets' / ('agy-keychain-' + self.account['id']); first = file.read_text()
+        self.assertTrue((folder / 'Library/Keychains/zook-agy.keychain-db').is_file())
+        file.unlink(); self.m._agy_keychain_cache.clear()  # the password went missing: a new keychain replaces the old one
+        self.m.agy_account_home(self.account['id']); self.assertNotEqual(file.read_text(), first)
+        self.assertEqual(security(folder, 'add-generic-password', '-U', '-s', 'antigravity', '-a', 'x', '-w', 'tok').returncode, 0)
+        self.m.agy_keychain_forget(self.account['id']); self.assertFalse(file.exists())
 
 
 class Server(unittest.TestCase):
@@ -183,8 +235,10 @@ class Server(unittest.TestCase):
         self.ask(bot['id']); self.assertEqual(json.loads((self.root / 'bin/run.json').read_text())['home'], str(self.home))
         # Removing the account removes its folder and links, never the user's files.
         self.assertTrue(os.path.islink(str(folder / 'Desktop')))
+        kept = self.root / 'secrets' / ('agy-keychain-' + work['id']); self.assertTrue(kept.exists())
         self.assertEqual(self.req('POST', '/api/accounts/antigravity/profiles/delete', {'account': work['id']})[0], 200)
         self.assertFalse(folder.exists()); self.assertEqual((self.home / 'Desktop/keep.txt').read_text(), 'mine')
+        self.assertFalse(kept.exists())  # its keychain password goes with it
 
 
 if __name__ == '__main__': unittest.main()

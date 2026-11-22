@@ -151,6 +151,7 @@ class Handler(BaseHTTPRequestHandler):
                         if b.get('account') == account['id']: b['account'] = ''  # back to the CLI's own sign-in
                     (store.data.get('accountInfo') or {}).pop(login_key, None); (store.data.get('quota') or {}).pop(login_key, None); store.save()
                 secret_delete(account['id'])
+                if provider == 'antigravity': agy_keychain_forget(account['id'])  # the account's keychain password; the keychain goes with the folder
                 shutil.rmtree(str(_active['dir'] / 'accounts' / account['id']), ignore_errors=True)
                 return self.respond(200, {'ok': True})
             if action == 'add':
