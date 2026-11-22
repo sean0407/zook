@@ -28,7 +28,7 @@
     const key = g.id + currentGroupMode(g) + ':' + (g.messages || []).length;
     try {
       const e = await post('groups/' + encodeURIComponent(g.id) + '/estimate', {content: $('#chat-input')?.value || '', mode: currentGroupMode(g)});
-      const text = `預計${e.upTo ? '最多 ' : ' '}${e.replies} 次回覆${e.tokens ? ` · 約 ${fmtN(e.tokens)} Token` : ''}`;
+      const text = `預計${e.upTo ? '最多 ' : ' '}${e.replies} 次回覆`;  // the token figure meant nothing to people and looked alarming
       state.groupEstimate = {key, text};
       const el = $('#group-estimate');
       if (el && activeGroup()?.id === g.id) el.textContent = text;
