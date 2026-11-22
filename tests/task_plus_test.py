@@ -117,7 +117,7 @@ class TaskPlusTest(base.TaskEngineTest):
 
     def test_no_helper_when_its_member_cannot_deliver(self):
         self.engine()
-        self.req('PATCH', '/api/bots/' + self.bots['乙']['id'], {'permissionMode': 'manual'})
+        self.req('PATCH', '/api/bots/' + self.bots['乙']['id'], {'provider': 'codex', 'permissionMode': 'manual'})  # 謹慎 is for the CLIs other than Claude and Cursor
         self.rules([{'match': PLAN, 'calls': [create(1, '甲')], 'reply': '分好了'},
                     {'match': '=== 工作 1', 'calls': [delegate('乙', changes='files'), delegate('甲'), done('自己做完了。')]}, {'match': WAKE, 'reply': SUMMARY}])
         run = self.send()['taskRun']

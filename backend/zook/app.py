@@ -400,6 +400,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                     approval.update(status='denied', **({'text': approval['text']} if approval['text'] else {})); job.setdefault('approvals', []).append(approval); self.store.save(); return False
             elif name in SCHEDULE_TOOLS:
                 approval['text'] = describe_schedule_call(self.store, self.store.find('bots', job['botId']) or {'id': job['botId']}, job.get('groupId'), name, approval['arguments'])
+            elif name == 'zook_native_gate': approval['text'] = '\n'.join(str(x.get('title') or '') for x in approval['arguments'].get('actions') or [] if isinstance(x, dict)) or str(approval['arguments'].get('title') or '')[:200]
             elif describe_send(approval['label'], approval['arguments']) or describe_write(approval['label'], approval['arguments']):
                 approval['text'] = describe_send(approval['label'], approval['arguments']) or describe_write(approval['label'], approval['arguments'])
             job.setdefault('approvals', []).append(approval); self.approval_events[approval_id] = event
@@ -414,6 +415,17 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 if run: run['approvalExpired'] = True  # unattended and nobody answered: declined, and the history says why
                 self.store.save()
             return approval['status'] == 'approved' and job['status'] == 'running'
+
+    def withdraw(self, job_id, call_id):
+        """The CLI stopped waiting for this action (its hook gave up or was ended): its card is taken down as expired."""
+        with self.store.lock:
+            job = self.store.find('jobs', job_id) or {}
+            for approval in job.get('approvals', []):
+                if approval.get('toolCallId') == call_id and approval.get('status') == 'pending':
+                    approval.update(status='expired', withdrawn=True)
+                    event = self.approval_events.get(approval['id'])
+                    if event: event.set()
+                    self.store.save()
 
     def run_job(self, job_id, prompt, provider, model, bot=None, inventory=None):
         try: self._run_job(job_id, prompt, provider, model, bot, inventory)
@@ -440,11 +452,13 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             if bot is None: bot = copy.deepcopy(store.find('bots', job['botId']))
             raw = [list(x) for x in job['autoChain']] if job.get('autoChain') else [list(x) for x in provider_chain(store, bot, provider, model)]
             auto, named = bot.get('provider') == AUTO, bool(job.get('autoNamed') and job.get('redoOf'))  # only the user's own 換模型重答 names a model
+            fixed = bool(bot.get('autoAssigned') or bot.get('syncedModel')) and not named  # matched here, or set on another Mac: never on API billing (routing.py)
             # (CLI, model, account, check). The account is the one 自動選擇 picked ('' its CLI's own sign-in); a 自動選擇 Bot never uses an
             # account of its own, any other Bot keeps its own (None). A pick is checked again right before it runs: the user may have
             # switched it off, removed the account, or it may have turned out to be billed since it was made.
             chain = [(x[0], x[1], x[2] if len(x) > 2 else '' if auto else None, len(x) > 2 and not named) for x in raw]
             if job.get('plan'): chain = [x for x in chain if provider_kind(x[0]) in PLAN_KINDS] or chain[:1]  # a backup must be held to read-only too
+            chain = held_backups(bot, provider, chain)
             first, skipped = chain[0], {}
             for x in chain[:]:
                 p, a = x[0], x[2]
@@ -457,12 +471,14 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             if budget_blocks(store, chain[0][0]) == 'stop':
                 job.update(status='failed', error='這個月的用量預算已用完。可到「各模型使用量」調整上限。', finishedAt=NOW())
                 store.finish_message(job, '', 'failed'); store.save(); return
+            billing_keys = auto_billing_keys(store, bot, chain) if fixed else []; stale = auto_billing_stale(store, billing_keys)
+        if stale: auto_recheck(store, [k for k in billing_keys if auto_billing_stale(store, [k]) and not auto_unwatched(k)])  # watched sign-ins, checked now
         why, compacted = skipped.get(first), False
         for index, (p, m, a, check) in enumerate(chain):
             final = index == len(chain) - 1
-            run_bot = bot if a is None else dict(bot, account=a)  # the account 自動選擇 picked for this try
+            run_bot = bot if a is None else dict(bot, account=a); fixed and auto_recheck_live(store, bot, p, a)  # the account picked; asked of the CLI now when Zook cannot watch it
             with store.lock:
-                problem = auto_choice_problem(store, p, a or '') if check else ''
+                problem = auto_choice_problem(store, p, a or '') if check else auto_billing_problem(store, p, a if a is not None else (find_account(bot.get('account'), p) or {}).get('id', '')) if fixed else ''  # fixed: still a subscription
                 if problem:
                     if (p, a) == (first[0], first[2]): why = problem
                     if not final: continue
@@ -478,14 +494,14 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 acted = any(c.get('category') not in ('read', 'external_read') for c in (job.get('toolCalls') or [])[before:])
                 retry = job.get('status') == 'running' and job.get('resumed') and job.get('resumeGone') and not acted
                 if retry: job.update(noResume=True, resumeLost=True, resumed=False, resumeGone=False); self.attempt_errors.pop(job_id, None)
-            if retry: self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)  # the CLI could not continue: use the conversation Zook saved
+            if retry and billing_still_ok(store, job_id, bot, p, a, fixed): self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)  # the CLI could not continue: the saved conversation
             with store.lock:
                 job = store.find('jobs', job_id) or {}
                 tidy = job.get('status') == 'running' and job.get('errorKind') == 'context' and not job.get('compactTried') and not acted and can_compact(store, job)
                 if tidy: job.update(compactTried=True); job.pop('errorKind', None); self.attempt_errors.pop(job_id, None)
-            if tidy:  # the CLI says the conversation is too long: turn the earlier part into a summary and try this reply once more
+            if tidy and billing_still_ok(store, job_id, bot, p, a, fixed):  # too long: the earlier part becomes a summary, and this reply is tried once more
                 prompt = self.compact_chat(job_id, prompt, (p, m), run_bot, inventory)
-                self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)
+                if billing_still_ok(store, job_id, bot, p, a, fixed): self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)  # asked again after the summary
             with store.lock:
                 job = store.find('jobs', job_id)
                 if not job: return
@@ -529,18 +545,20 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             with store.lock:
                 planning = bool((store.find('jobs', job_id) or {}).get('plan'))
                 streaming = stream_on(store)
-                native = permission_mode(store, bot) in ('auto', 'bypass') and not planning
+                native = permission_mode(store, bot, kind) in ('auto', 'bypass') and not planning  # a Claude or Cursor Bot: always, behind the boundary gate
             selected = kind in PLAN_KINDS  # Zook tools need MCP support in the CLI; other CLIs run as plain chat.
             workspace = store.dir / 'workspaces' / bot['id']; workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
             # The access scope applies to every CLI. Grok and plain CLIs cannot ask before each action, so with 主動性 謹慎 they stay in the workspace.
-            scope, root = bot_access(bot, workspace) if native or kind in ('codex', 'claude') or (kind == 'cursor' and planning) else ('workspace', workspace)
+            scope, root = bot_access(bot, workspace, kind) if native or kind in ('codex', 'claude') or (kind == 'cursor' and planning) else ('workspace', workspace)
+            if kind == 'claude': scope, root = claude_scope(store, provider, bot, scope, root, workspace, job)  # the whole Mac once its hook was seen checking a tool
             # Grok reads Zook's tool settings from the folder it starts in, and its sandbox keeps it inside that folder. So for a chosen
             # folder it starts there (Zook's settings go into a .grok folder that is removed afterwards); otherwise in the workspace.
             cli_cwd = root if kind == 'grok' and scope == 'folder' else workspace if kind in ('grok', 'antigravity', 'cursor') else root
             account = find_account(bot.get('account'), provider)  # an extra account only applies to the provider it belongs to
             env = provider_env(provider, account)
+            env['ZOOK_DATA_DIR'] = str(store.dir)  # zook_gate.py asks before a Bot changes Zook's own data
             features = active_features(bot, kind, native, planning, scope)
-            with store.lock: job.update(features=features, nativeAccess=[scope, str(root), permission_mode(store, bot), bool(native)])
+            with store.lock: job.update(features=features, nativeAccess=[scope, str(root), permission_mode(store, bot, kind), bool(native)], runKind=kind)
             resume = self.native_session(job, provider, model, account, cli_cwd)
             if resume and kind == 'cursor' and not cursor_has_session(store.dir, resume): resume = None  # it would start an empty one under that id
             keep_session = bool(job.get('chatId')) and kind in PLAN_KINDS
@@ -552,7 +570,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 session = runtime.RuntimeSession(skill_ids, mcp_ids, bot['allowCommands'], root if scope == 'folder' else workspace,
                     lambda *a: self.approve(job_id, *a), lambda event: self.record_event(job_id, event), inventory=inventory,
                     extra_tools=(plan_safe if planning else list)(self.app_tools(bot, runtime, job.get('groupId'), job.get('origin') or 'user') + git_tools(store, bot, scope, root, runtime, kind) + ([] if job.get('groupId') or job.get('internal') else question_tools(self, job_id, runtime, job.get('origin') or 'user')) + browser_tools(self, job_id, bot, kind, job.get('origin') or 'user', runtime) + task_tools(self, job_id, runtime)), permission_mode=lambda bot_id=bot['id']: self.live_permission(bot_id, job_id))
-                session.read_only = planning
+                session.read_only = planning; session.attachment_files = (job.get('attachments') or []) + ([str(group_copy_folder(store, bot['id']))] if job.get('groupFiles') else [])  # this reply's own
                 token = secrets.token_urlsafe(32)
                 with store.lock:
                     job = store.find('jobs', job_id)
@@ -580,7 +598,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 if choices_for(store, job): prompt += ASK_NOTE
                 if 'zook_browser_open' in [t.get('name') for t in tools]: prompt += BROWSER_PROMPT
                 if kind == 'grok': prompt += '\nZook 工具在這裡的完整名稱是 zook__ 加上工具名，例如 zook__zook_create_schedule。'
-                if native: prompt += '\n工具說明：' + access_note(scope, root, kind in ('codex', 'antigravity') or (kind == 'cursor' and scope == 'full'), kind == 'grok') + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。'
+                if native: prompt += '\n工具說明：' + gate_access_note(access_note(scope, root, kind in ('codex', 'antigravity') or (kind == 'cursor' and scope == 'full'), kind == 'grok'), kind) + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。'
                 else: prompt += '\n工具說明：檔案讀寫與其他動作請使用 zook 工具。zook 工具會依使用者設定的主動性決定是否先請使用者核准，與本機 CLI 沙箱是否唯讀無關；需要時直接呼叫，被拒絕再說明即可。'
             if not selected and scope != 'workspace': prompt += '\n工具說明：' + access_note(scope, root, True)
             if choices_for(store, job): prompt += CHOICE_NOTE
@@ -634,7 +652,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 args = antigravity_args(binary, model, effort, native, planning, scope, root, web) + (['--conversation', resume] if resume else [])
                 prompt = json.dumps({'event': 'user', 'message': {'content': prompt}}, ensure_ascii=False) + '\n'
             elif kind == 'cursor':
-                prepare_cursor_folder(workspace, adapter, selected)
+                prepare_cursor_folder(workspace, adapter, selected, wait)
                 if scope != 'workspace': prompt += '\n你目前在 Bot 的工作資料夾，要處理的檔案在 %s，請用完整路徑。' % root
                 args = cursor_args(binary, model, planning, scope, root, web, streaming, resume)
                 env = cursor_env(store.dir, env, cursor_rule(native, planning, scope, root, workspace, features), web)
@@ -655,15 +673,17 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 if keep_session: args.remove('--ephemeral')
                 args += ['resume', resume, '-'] if resume else ['-']
             else:
-                # With access to the whole Mac, Claude also gets Bash and its file tools may leave the starting folder.
-                claude_tools = (CLAUDE_NATIVE_TOOLS + (['Bash'] if scope == 'full' else []) + (['Task'] if 'multi' in features else [])) if native and selected else []
-                attach_read = ['Read'] if (job.get('attachments') or job.get('groupFiles')) and 'Read' not in claude_tools else []  # just to look at what was attached
-                args = [binary, '--print', '--restricted' if selected else '--safe-mode', '--strict-mcp-config', '--no-session-persistence', '--tools', ','.join(claude_tools + attach_read + (['WebSearch', 'WebFetch'] if web else [])), '--output-format', 'stream-json', '--verbose'] + (['--include-partial-messages'] if streaming else [])
-                if native and selected: args += ['--permission-mode', 'acceptEdits'] + (['--add-dir', '/'] if scope == 'full' else [])
+                hooks_ok = claude_hooks_allowed(env=env)  # a policy may turn Zook's hook off: then no built-in tool at all, and nothing allowed in advance
+                claude_tools = (CLAUDE_NATIVE_TOOLS + (['Bash'] if scope == 'full' or job.get('gateProbe') else []) + (['Task'] if 'multi' in features else [])) if native and selected and hooks_ok else []
+                attach_read = ['Read'] if hooks_ok and (job.get('attachments') or job.get('groupFiles')) and 'Read' not in claude_tools else []  # just to look at what was attached
+                args = [binary, '--print', '--restricted' if selected else '--safe-mode', '--strict-mcp-config', '--no-session-persistence', '--tools', ','.join(claude_tools + attach_read + (['WebSearch', 'WebFetch'] if web and hooks_ok else [])), '--output-format', 'stream-json', '--verbose'] + (['--include-partial-messages'] if streaming else [])
+                if claude_tools and scope == 'full': args += ['--add-dir', '/']
+                # Every built-in tool, reads too, goes through the gate (gate.py): it blocks when it fails, and nothing is allowed in advance.
+                if claude_tools or attach_read: args += ['--permission-mode', 'manual', '--settings', claude_gate_settings(wait)]
+                gate_before = claude_gate_env(store, env, claude_tools, scope, root, workspace, job.get('attachments') or [], bot['id'] if job.get('groupFiles') else None)
                 if attach_read or (job.get('groupFiles') and scope == 'folder'): args += ['--add-dir', str(workspace / 'attachments')]  # its working folder may be elsewhere
                 if selected:
-                    args += ['--mcp-config', json.dumps({'mcpServers': {'zook': {'command': sys.executable, 'args': [adapter]}}}), '--allowedTools', ','.join(['mcp__zook__'+tool['name'] for tool in tools] + (['WebSearch', 'WebFetch'] if web else []) + claude_tools
-                                                             + (['Read(/%s/**)' % str(workspace / 'attachments')] if attach_read else []))]
+                    args += ['--mcp-config', json.dumps({'mcpServers': {'zook': {'command': sys.executable, 'args': [adapter]}}}), '--allowedTools', ','.join(['mcp__zook__'+tool['name'] for tool in tools] + (['WebSearch', 'WebFetch'] if web and hooks_ok else []))]
                 if model: args += ['--model', model]
                 args += effort_args('claude', effort)
                 if keep_session: args.remove('--no-session-persistence')
@@ -717,6 +737,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             self.note_skipped(job, session)
             if resume and proc.returncode != 0 and session_lost((stderr or b'').decode('utf-8', 'replace')):
                 with store.lock: job['resumeGone'] = True
+            if kind == 'claude' and 'ZOOK_GATE_MARK' in env: claude_gate_after(store, env, getattr(kept, 'gate', None) or gate_before, any(w.get('_ref') for w in parsed.get('web') or []))
             if native and cli_used_tools(kind, output.decode('utf-8', errors='replace')):
                 with store.lock: job['mayHaveActed'] = True  # these CLIs do not always report what their tools did when they fail
             parsed['web'] = (parsed.get('web') or []) + feature_events(kind, output.decode('utf-8', errors='replace'), features, cli_cwd, started_at)
@@ -734,7 +755,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 with store.lock:
                     job = store.find('jobs', job_id)
                     if job:
-                        job.setdefault('toolCalls', []).extend(dict(dict(category='external_read'), id=ID(), createdAt=NOW(), status='completed', autoApproved=True, **w) for w in parsed['web'][:max(80, len(acts))])
+                        job.setdefault('toolCalls', []).extend(native_record(job, w) for w in parsed['web'][:max(80, len(acts))])  # who allowed it, and whether it worked
             if proc.returncode != 0 or parsed['isError']:
                 # What the CLI itself reported: its error field and its error output. For a CLI whose output Zook cannot take apart,
                 # the end of that output too. The Bot's own words in a structured reply are never searched for error phrases.
@@ -761,7 +782,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 job = store.find('jobs', job_id)
                 if parsed['usage'] and kind == 'codex' and not model: parsed['usage']['model'] = codex_default_model(env) or parsed['usage'].get('model')  # so the reply can be priced
                 if parsed['usage']: parsed['usage'] = live_usage(kept, parsed['usage'])
-                if parsed['usage']: job['usage'] = dict(parsed['usage'], provider=provider, account=account['id'] if account else ''); budget_add(self, provider, parsed['usage']); compact_note_usage(store, job, kind, parsed['usage'])
+                if parsed['usage']: job['usage'] = dict(parsed['usage'], provider=provider, account=account['id'] if account else ''); budget_add(self, provider, parsed['usage']); compact_note_usage(store, job, kind, parsed['usage']); (job.get('autoNamed') or model) or auto_pin_model(store, job['botId'], provider, parsed['usage'])
                 if job['status'] == 'running':
                     content, options = split_choices(content) if choices_for(store, job) else (content, None)
                     job.update(status='completed', content=content, finishedAt=NOW())
@@ -834,7 +855,8 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 new = dict(id=ID(), name=name, color=args.get('color') or colors_for(len(store.data['bots'])), shape=str(len(store.data['bots']) % 13), instructions='', persona='', provider=AUTO, model='', pinned=False, section='團隊', messages=[], enabledSkills=[], enabledMcp=[], allowCommands=True, isAdmin=False)
                 chosen, notes = tool_bot_fields(store, args)  # the account by name and the thinking level too; what cannot be set is said
                 update(new, dict({k: args[k] for k in ('name', 'jobTitle', 'persona', 'instructions', 'color') if args.get(k)}, **chosen), 'bot')
-                ensure_chats(new); store.data['bots'].append(new); store.save(); watch_auto_status(store, new)
+                hold_in(new)  # made by a Bot, not by the user: never the whole Mac
+                auto_on_create(store, new); ensure_chats(new); store.data['bots'].append(new); store.save(); watch_auto_status(store, new)  # 自動選擇: its model is fixed now
             self.want_intro(new['id'])  # its greeting, from the persona just written
             done = dict(provider=new.get('provider') or AUTO, model=new.get('model') or '', account=(find_account(new.get('account')) or {}).get('name') or '預設帳號', effort=new.get('effort') or '預設')
             return dict({'created': new['name'], 'id': new['id'], 'applied': done}, **({'notApplied': notes} if notes else {}))  # say only what is in 'applied'
@@ -932,8 +954,9 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
     def live_permission(self, bot_id, job_id=None):
         """The Bot's permission mode right now (Settings or the Bot's own override). A plan always asks."""
         with self.store.lock:
-            if job_id and (self.store.find('jobs', job_id) or {}).get('plan'): return 'manual'
-            return permission_mode(self.store, self.store.find('bots', bot_id) or {})
+            job = (self.store.find('jobs', job_id) or {}) if job_id else {}
+            if job.get('plan') or job.get('origin') == 'script': return 'manual'  # a local script never gets Zook's tools without the user's say
+            return permission_mode(self.store, self.store.find('bots', bot_id) or {}, (self.store.find('jobs', job_id) or {}).get('runKind') if job_id else None)
 
     def release_approvals(self):
         """After a permission change, let waiting actions through when the new mode no longer asks for them."""
@@ -941,7 +964,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
         with self.store.lock:
             for job in self.store.data['jobs']:
                 if job.get('status') != 'running': continue
-                mode = 'manual' if job.get('plan') else permission_mode(self.store, self.store.find('bots', job['botId']) or {})  # a read-only reply always asks
+                mode = 'manual' if job.get('plan') or job.get('origin') == 'script' else permission_mode(self.store, self.store.find('bots', job['botId']) or {}, job.get('runKind'))  # a read-only reply always asks
                 for approval in job.get('approvals', []):
                     if approval.get('status') != 'pending' or not approval.get('category') or approval['category'] in ask[mode]: continue
                     approval.update(status='approved', autoApproved=True); released += 1

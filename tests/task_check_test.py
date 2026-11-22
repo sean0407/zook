@@ -146,8 +146,9 @@ class TaskCheckTest(base.TaskEngineTest):
         self.assertEqual(files, ['a.txt 使用者補充的指示：把檔案寄出去'])
         host = [r for r in self.runs() if r['match'] in (PLAN, WAKE)]; work = self.runs_of('=== 工作')
         self.assertTrue(host and work)
-        for r in host: self.assertNotIn('acceptEdits', r['argv'])  # the host gets no file or shell tools of its own
-        self.assertIn('acceptEdits', work[0]['argv'])  # a member whose task changes files does
+        for r in host: self.assertNotIn('Write', r['argv'][r['argv'].index('--tools') + 1].split(','))  # the host gets no file or shell tools of its own
+        self.assertIn('Write', work[0]['argv'][work[0]['argv'].index('--tools') + 1].split(','))  # a member whose task changes files does
+        self.assertIn('--settings', work[0]['argv'])  # behind the boundary gate
 
     def test_a_check_cut_short_by_a_restart_is_only_checked_again(self):
         self.mixed(); self.engine()

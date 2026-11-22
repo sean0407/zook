@@ -40,12 +40,16 @@ def cursor_rule(native, planning, scope, root, workspace, features):
     return dict(read=folders, write=folders, shell=False, task='multi' in (features or []))
 
 
-def prepare_cursor_folder(workspace, adapter, tools):
-    """The Bot's workspace gets Cursor's project settings: Zook's MCP server and the guard hook. Nothing secret is written."""
+def prepare_cursor_folder(workspace, adapter, tools, wait=660):
+    """The Bot's workspace gets Cursor's project settings: Zook's MCP server and the guard hook. Nothing secret is written.
+    Cursor reads hooks only from the project's .cursor folder, ~/.cursor (the user's own Cursor) or the system-wide folder, so they
+    stay here; they are written again before every reply, Cursor reads them once when it starts, and the Bot cannot change them:
+    zook_gate.py asks before any write there and zook_workspace_write refuses it. The hook waits as long as Zook's approval card
+    (`wait`, the same as the check's own limit) plus a minute, and a hook that fails or runs out of time is a refusal."""
     folder = pathlib.Path(workspace) / '.cursor'; folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     python = GROK_PYTHON if os.path.exists(GROK_PYTHON) else sys.executable
     guard = str(pathlib.Path(adapter).with_name('cursor_guard.py'))
-    hooks = {'version': 1, 'hooks': {'preToolUse': [{'command': '%s %s' % (shlex.quote(python), shlex.quote(guard)), 'failClosed': True}]}}
+    hooks = {'version': 1, 'hooks': {'preToolUse': [{'command': '%s %s' % (shlex.quote(python), shlex.quote(guard)), 'failClosed': True, 'timeout': int(wait) + 60}]}}
     servers = {'zook': {'command': python, 'args': [adapter], 'env': {k: '${env:%s}' % k for k in ('ZOOK_WORKER_URL', 'ZOOK_WORKER_TOKEN', 'ZOOK_TOOL_WAIT')}}} if tools else {}
     if folder.is_symlink(): raise RuntimeError('Bot 工作資料夾裡的 .cursor 被換成了連結，為了安全，Cursor 這次不執行。')
     for name, value in (('hooks.json', hooks), ('mcp.json', {'mcpServers': servers})):

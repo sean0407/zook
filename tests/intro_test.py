@@ -33,7 +33,7 @@ class IntroParseTest(unittest.TestCase):
         temp = tempfile.TemporaryDirectory(); self.addCleanup(temp.cleanup)
         store = self.m.Store(Path(temp.name) / 'data'); self.m._active['data'] = store.data
         store.data['accounts'] = [dict(id='k' * 32, provider='codex', name='API', type='key')]
-        store.data['autoStatus'] = {'codex': dict(signedIn=True, billed=False), 'claude': dict(signedIn=True, billed=True)}
+        store.data['autoStatus'] = {'codex': dict(signedIn=True, billed=False, checkedAt=time.time()), 'claude': dict(signedIn=True, billed=True, checkedAt=time.time())}  # checked just now
         bot = dict(id='b', name='x')
         self.assertEqual(self.m.intro_blocked(store, bot, 'codex', ''), '')
         self.assertEqual(self.m.intro_blocked(store, bot, 'codex', 'k' * 32), 'API 計費')

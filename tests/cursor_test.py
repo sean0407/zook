@@ -41,6 +41,8 @@ if 'FILES' in prompt:
     for tool, data in (('Write', {'file_path': inside, 'content': 'A'}), ('Read', {'file_path': '/etc/hosts'}), ('Write', {'file_path': '/tmp/zook-cursor-outside.txt', 'content': 'B'}), ('Shell', {'command': 'date'})):
         out(type='tool_call', subtype='started', call_id='c', tool_call={'editToolCall' if tool == 'Write' else 'readToolCall' if tool == 'Read' else 'shellToolCall': {'args': {'path': data.get('file_path', ''), 'command': data.get('command', '')}}})
         results.append('%s %s=%s' % (tool, data.get('file_path') or data.get('command'), 'ok' if guard(tool, data) else 'denied'))
+if 'DELETE' in prompt:  # a boundary: Zook asks the user before Cursor's shell deletes a file
+    results.append('rm=%s' % ('ok' if guard('Shell', {'command': 'rm ~/Desktop/舊報表.xlsx'}) else 'denied'))
 if 'TOOL' in prompt:
     server = mcp['mcpServers']['zook']
     env = dict(os.environ, **{k: os.environ.get(v[6:-1], '') for k, v in server['env'].items()})
@@ -124,17 +126,20 @@ class CursorTest(unittest.TestCase):
         self.assertNotIn('--resume', third['args']); self.assertIn('第一則', third['prompt'])
 
     def test_guard_follows_the_bot(self):
-        self.req('PATCH', '/api/bots/' + self.bot['id'], {'permissionMode': 'auto', 'access': 'workspace'})
+        # A Cursor Bot has the whole Mac (2026-11-22): its 主動性 and 存取範圍 stay in the data but are not used.
+        self.req('PATCH', '/api/bots/' + self.bot['id'], {'permissionMode': 'manual', 'access': 'workspace'})
         job = self.ask('FILES')
-        self.assertIn('note.txt=ok', job['content'], self.hooklog()[:1500]); self.assertIn('/etc/hosts=denied', job['content'])
-        self.assertIn('zook-cursor-outside.txt=denied', job['content']); self.assertIn('date=denied', job['content'])
-        self.req('PATCH', '/api/bots/' + self.bot['id'], {'permissionMode': 'manual'})
-        job = self.ask('FILES')
-        self.assertIn('note.txt=denied', job['content'])  # 謹慎: only Zook's tools
-        self.req('PATCH', '/api/bots/' + self.bot['id'], {'permissionMode': 'auto', 'access': 'full'})
-        job = self.ask('FILES')
-        self.assertIn('/etc/hosts=ok', job['content']); self.assertIn('date=ok', job['content'])
+        self.assertIn('note.txt=ok', job['content'], self.hooklog()[:1500]); self.assertIn('/etc/hosts=ok', job['content'])
+        self.assertIn('zook-cursor-outside.txt=ok', job['content']); self.assertIn('date=ok', job['content'])
         self.assertIn('--sandbox', self.runs()[-1]['args'])
+        self.assertEqual(json.loads(self.runs()[-1]['guard'])['shell'], True)
+
+    def test_boundary_asks_first(self):
+        job = self.ask('DELETE', approve=False)
+        self.assertIn('rm=denied', job['content'], self.hooklog()[-1500:])
+        self.assertEqual([(a['text'], a['status']) for a in job['approvals']], [('刪除檔案 ~/Desktop/舊報表.xlsx', 'denied')])
+        job = self.ask('DELETE', approve=True)
+        self.assertIn('rm=ok', job['content'])
 
     def test_web_switch(self):
         self.req('PATCH', '/api/settings', dict(webSearch=True))
@@ -161,7 +166,7 @@ class CursorTest(unittest.TestCase):
 class GuardTest(unittest.TestCase):
     def run_guard(self, rule, tool, data, root='/w'):
         done = subprocess.run([sys.executable, str(GUARD)], input=json.dumps(dict(tool_name=tool, tool_input=data, workspace_roots=[root])), capture_output=True, text=True,
-                              env=dict(os.environ, ZOOK_CURSOR_GUARD=json.dumps(rule) if rule is not None else ''))
+                              env=dict(os.environ, ZOOK_CURSOR_GUARD=json.dumps(rule) if rule is not None else '', ZOOK_WORKER_URL='', ZOOK_WORKER_TOKEN=''))
         return json.loads(done.stdout)['permission']
 
     def test_rules(self):
@@ -178,6 +183,10 @@ class GuardTest(unittest.TestCase):
             self.assertEqual(self.run_guard(rule, 'MCP:zook_remember', {}), 'allow')
             self.assertEqual(self.run_guard(rule, 'MCP:other_tool', {}), 'deny')
             self.assertEqual(self.run_guard(dict(rule, write=[]), 'Write', {'content': 'no path given'}), 'deny')
+            everywhere = dict(read=None, write=None, shell=True, task=False)
+            self.assertEqual(self.run_guard(everywhere, 'Shell', {'command': 'ls -la'}), 'allow')
+            self.assertEqual(self.run_guard(everywhere, 'Shell', {'command': 'rm notes.txt'}), 'deny')  # a boundary, and no Zook to ask: refused
+            self.assertEqual(self.run_guard(everywhere, 'Read', {'file_path': os.path.expanduser('~/.ssh/id_rsa')}), 'deny')
             os.mkdir(w + '/in/.cursor')
             self.assertEqual(self.run_guard(rule, 'Write', {'file_path': w + '/in/.cursor/mcp.json'}), 'deny')  # would start any command next time
             self.assertEqual(self.run_guard(rule, 'Write', {'file_path': w + '/in/.claude/settings.json'}), 'deny')
@@ -198,7 +207,8 @@ class GuardTest(unittest.TestCase):
             self.assertEqual(self.run_guard(careful, 'Write', {'file_path': mine}, root=w + '/in'), 'allow')  # Cursor's own long results
             self.assertEqual(self.run_guard(careful, 'Read', {'file_path': own + '/someone-else/agent-transcripts/t.jsonl'}, root=w + '/in'), 'deny')
             self.assertEqual(self.run_guard(None, 'Read', {'file_path': w + '/in/a'}), 'deny')  # no rule: nothing
-            self.assertEqual(self.run_guard(dict(read=None, write=None, shell=True, task=True), 'Write', {'file_path': '/etc/x'}), 'allow')
+            self.assertEqual(self.run_guard(dict(read=None, write=None, shell=True, task=True), 'Write', {'file_path': os.path.expanduser('~/zook-guard-anywhere.txt')}), 'allow')
+            self.assertEqual(self.run_guard(dict(read=None, write=None, shell=True, task=True), 'Write', {'file_path': '/etc/x'}), 'deny')  # a system setting: asks, and nobody can answer here
 
 
 if __name__ == '__main__': unittest.main()

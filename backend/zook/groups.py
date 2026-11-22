@@ -373,7 +373,7 @@ class GroupRuns:
         with store.lock:
             group = store.find('groups', group_id)
             if not group: return
-            for name in saved: group.setdefault('fileInfo', {})[name] = dict(by=bot['name'])
+            for name in saved: group.setdefault('fileInfo', {})[name] = dict(by=bot['name'], **{k: v for k, v in (group.get('fileInfo', {}).get(name) or {}).items() if k == 'origName'})  # the uploaded name stays known
             if saved: group['messages'].append(dict(id=ID(), role='system', content='%s 存了共用檔案：%s' % (bot['name'], '、'.join(saved)), createdAt=NOW()))
             if skipped: group['messages'].append(dict(id=ID(), role='system', content='%s 的檔案太大沒有存進群組：%s' % (bot['name'], '、'.join(skipped)), createdAt=NOW()))
             store.save()

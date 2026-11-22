@@ -223,6 +223,7 @@
       case 'zook_read_skill_resource': return `查看 Skill「${skillName(a.skill_id)}」的參考資料「${fileName(a.path)}」`;
       case 'zook_run_skill_helper': return `執行 Skill「${skillName(a.skill_id)}」附帶的小程式`;
       case 'zook_workspace_list': return '查看工作區裡有哪些檔案';
+      case 'zook_native_gate': return String(a.title || '做需要你核准的動作');  // a CLI's own tool at a safety boundary
       case 'zook_workspace_read': return `讀取檔案「${fileName(a.path)}」`;
       case 'zook_workspace_write': return `把內容存成檔案「${fileName(a.path)}」`;
       case 'zook_list_team': return '查看團隊裡有哪些 Bot 和群組';
@@ -263,7 +264,7 @@
     if (c.status === 'running' || c.status === 'pending') return ['run', '進行中'];
     if (c.status === 'denied') return ['bad', '你沒有允許'];
     if (c.status === 'error' || c.status === 'failed') return ['bad', humanError(c.error)];
-    return ['ok', c.autoApproved ? '已自動完成' : '完成'];
+    return ['ok', c.approvedBy === 'user' ? '你允許後完成' : c.autoApproved ? '已自動完成' : '完成'];  // who allowed it, apart from whether it worked
   }
   const EFFORT_WORDS = {fast: '快速', low: '快速', standard: '標準', medium: '標準', deep: '深入', high: '深入'};
   const scheduleLabel = id => String((state.data?.schedules || []).find(x => x.id === id)?.content || '排程').slice(0, 40);
@@ -284,7 +285,7 @@
     return (jobs ? pendingIn(jobs) : pendingForBot(botId)).map(a => {
       const call = (a.job.toolCalls || []).find(c => c.id === a.toolCallId) || {name: a.name, label: a.label, sourceLabel: a.sourceLabel, arguments: a.arguments};
       const who = state.data.bots.find(x => x.id === a.job.botId)?.name || 'Bot';
-      return `<section class="approval-card" aria-label="需要你的核准"><strong>${esc(who)}${a.job.taskTitle ? `（任務 ${esc(a.job.taskTitle)}）` : ''} 想要${esc(a.text || describeCall({...call, arguments: a.arguments}))}</strong>${approvalReason(a) ? `<small class="approval-reason">${esc(approvalReason(a))}</small>` : ''}<details data-approval-details="${esc(a.id)}"><summary>查看詳細內容</summary>${argsList(a.arguments)}</details><div class="actions"><button class="primary" data-action="approve" data-id="${esc(a.id)}" ${state.deciding[a.id]?'disabled':''}>允許這次</button><button class="secondary" data-action="deny" data-id="${esc(a.id)}" ${state.deciding[a.id]?'disabled':''}>不要</button></div></section>`;
+      return `<section class="approval-card" aria-label="需要你的核准"><strong>${esc(who)}${a.job.taskTitle ? `（任務 ${esc(a.job.taskTitle)}）` : ''} 想要${esc(a.text || describeCall({...call, arguments: a.arguments})).replace(/\n/g, '<br>')}</strong>${approvalReason(a) ? `<small class="approval-reason">${esc(approvalReason(a))}</small>` : ''}<details data-approval-details="${esc(a.id)}"><summary>查看詳細內容</summary>${argsList(a.arguments)}</details><div class="actions"><button class="primary" data-action="approve" data-id="${esc(a.id)}" ${state.deciding[a.id]?'disabled':''}>允許這次</button><button class="secondary" data-action="deny" data-id="${esc(a.id)}" ${state.deciding[a.id]?'disabled':''}>不要</button></div></section>`;
     }).join('');
   }
   // Everything a Bot did (Skills, connectors, web) shows in that Bot's own panel, including work done inside groups.
@@ -298,7 +299,7 @@
       let [cls, label] = callStatus(c);
       if ((cls === 'wait' || cls === 'run') && !c.jobRunning) [cls, label] = ['bad', '已中斷'];
       const who = showWho ? (state.data.bots.find(b => b.id === c.botId)?.name || 'Bot') + ' ' : '';
-      return `<div class="tool-event ${cls}" title="${esc(label + (c.name === 'native_command' && c.arguments?.command ? '：' + c.arguments.command : ''))}"><span class="ev-dot ${cls}" role="img" aria-label="${esc(label)}"></span><span class="ev-text">${esc(who + describeCall(c))}${c.groupName && !showWho ? `<small class="ev-where">在群組「${esc(c.groupName)}」</small>` : ''}</span></div>`;
+      return `<div class="tool-event ${cls}" title="${esc(label + (c.name === 'native_command' && (c.arguments?.summary || c.arguments?.command) ? '：' + (c.arguments.summary || c.arguments.command) : ''))}"><span class="ev-dot ${cls}" role="img" aria-label="${esc(label)}"></span><span class="ev-text">${esc(who + describeCall(c))}${c.groupName && !showWho ? `<small class="ev-where">在群組「${esc(c.groupName)}」</small>` : ''}</span></div>`;
     }).join('')}</div>`;
   }
   // An empty conversation opens with the Bot's own greeting and questions you might ask it (made from its persona when it was
@@ -398,7 +399,7 @@
     const activeIds = g.activeJobIds?.length ? g.activeJobIds : g.activeJobId ? [g.activeJobId] : [];
     const activeNames = running ? activeIds.map(id => state.data.bots.find(b => b.id === state.jobDetails[id]?.botId)?.name).filter(Boolean) : [];
     const active = activeNames.length ? {name: activeNames.join('、')} : null;
-    return `<aside class="detail"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatarStack(g,'big')}<h2>${esc(g.name)}</h2><p>${members.length} 位成員${running ? ' · 討論中' + (active ? '（' + esc(active.name) + ' 發言中）' : '') : ''}</p><button class="secondary detail-edit" data-action="edit-group">編輯群組</button></div><div class="tabs"><button data-action="group-tab" data-id="members" class="${state.groupTab==='files'?'':'active'}">成員</button><button data-action="group-tab" data-id="files" class="${state.groupTab==='files'?'active':''}">檔案</button></div>${state.groupTab==='files'?groupFilesTab(g):`${members.map(b => `<button class="member-row" data-member-work="${esc(b.id)}" data-group="${esc(g.id)}">${avatar(b)}<span><strong>${esc(b.name)}${jobTitle(b)}</strong><small>${esc([(b.provider||state.data.settings.provider||'') + (b.model ? ' ' + b.model : ''), '主動性：' + permissionName(b.permissionMode || state.data.settings.permissionMode), (g.memberCounts?.[b.id] ? '發言 ' + g.memberCounts[b.id] + ' 次' : '')].filter(Boolean).join(' · '))}</small></span></button>`).join('')}<div class="detail-empty">點成員會開啟他自己的對話視窗，可以看到他在這個討論中查了什麼、用了哪些 Skill；群組裡只有他的結論。</div>`}${usageDock()}</aside>`;
+    return `<aside class="detail"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatarStack(g,'big')}<h2>${esc(g.name)}</h2><p>${members.length} 位成員${running ? ' · 討論中' + (active ? '（' + esc(active.name) + ' 發言中）' : '') : ''}</p><button class="secondary detail-edit" data-action="edit-group">編輯群組</button></div><div class="tabs"><button data-action="group-tab" data-id="members" class="${state.groupTab==='files'?'':'active'}">成員</button><button data-action="group-tab" data-id="files" class="${state.groupTab==='files'?'active':''}">檔案</button></div>${state.groupTab==='files'?groupFilesTab(g):`${members.map(b => `<button class="member-row" data-member-work="${esc(b.id)}" data-group="${esc(g.id)}">${avatar(b)}<span><strong>${esc(b.name)}${jobTitle(b)}</strong><small>${esc([(b.provider||state.data.settings.provider||'') + (b.model ? ' ' + b.model : ''), permText(b), (g.memberCounts?.[b.id] ? '發言 ' + g.memberCounts[b.id] + ' 次' : '')].filter(Boolean).join(' · '))}</small></span></button>`).join('')}<div class="detail-empty">點成員會開啟他自己的對話視窗，可以看到他在這個討論中查了什麼、用了哪些 Skill；群組裡只有他的結論。</div>`}${usageDock()}</aside>`;
   }
   function groupModal(g = {}) {
     const editing = !!g.id, chosen = new Set(g.botIds || (state.selected && !state.groupId ? [state.selected] : []));
@@ -526,7 +527,8 @@
     const picked = provider === 'auto' ? 'auto' : (provider || '') + (account ? '::' + account : '');
     const opt = (value, label) => `<option value="${esc(value)}" ${picked === value ? 'selected' : ''}>${esc(label)}</option>`;
     const kept = !provider && account ? list.flatMap(p => p.accounts || []).find(a => a.id === account) : null;  // an older Bot: the default CLI with one of its extra accounts
-    return opt('', '使用預設') + (kept ? opt('::' + account, '使用預設（' + kept.name + '）') : '') + opt('auto', '自動選擇（每則訊息自己挑）') + list.map(p => {
+    const fallback = list.find(p => p.id === (state.data.settings.provider || 'codex')), short = String(fallback?.name || state.data.settings.provider || 'Codex').split('（')[0];
+    return opt('', short + '（預設）') + (kept ? opt('::' + account, short + '・' + kept.name + '（預設）') : '') + opt('auto', '自動配（依人格和工作指示）') + list.map(p => {
       const name = String(p.name).split('（')[0], extra = p.accounts || [];
       return opt(p.id, extra.length ? name + '（預設帳號）' : name) + extra.map(a => opt(p.id + '::' + a.id, name + '（' + a.name + (a.type === 'key' ? '・API 金鑰' : '') + '）')).join('');
     }).join('');

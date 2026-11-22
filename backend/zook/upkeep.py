@@ -62,6 +62,9 @@ def backup_check(data):
     for g in data.get('groups') or []:
         if 'taskRun' in g and not task_run_ok(g['taskRun']): g.pop('taskRun')  # 任務引擎's books, only in the shape Zook writes
     task_settings_clean(data['settings'])
+    for bot in data['bots'] + [b for b in data.get('deletedBots') or [] if isinstance(b, dict)]:  # what this Mac allows is never in a copy
+        bot['scripts'] = False; limit_locally(bot)
+    data['settings'].update(gateFullSet=True, scriptsOff=True)  # and the one-time upgrades do not grant it afterwards
     # The main file of a Zook that keeps conversations in their own files has no conversation in it. Putting it back as if it were whole would empty them all.
     if data.get('layout') is not None: raise ValueError('這個檔案是 Zook 的主檔，裡面沒有對話內容，不能當成備份。請改用「備份與還原」建立的備份檔。')
     for key, rel, messages, _ in chat_conversations(data):
@@ -544,7 +547,7 @@ def restore_bot(store, bot_id):
     bot = copy.deepcopy(kept); bot.pop('deletedAt', None); bot.pop('recovered', None)
     if bot.get('provider') in REMOVED_PROVIDERS: bot.update(provider=AUTO, model='', account='')  # set to a CLI Zook no longer has
     if bot.get('isAdmin') and any(b.get('isAdmin') for b in store.data['bots']): bot['isAdmin'] = False  # there is one 管理員
-    bot.setdefault('isAdmin', False); bot['pinned'] = False
+    bot.setdefault('isAdmin', False); bot['pinned'] = False; bot['scripts'] = False  # local scripts are switched on again on purpose, if at all
     for key, value in (('enabledSkills', []), ('enabledMcp', []), ('allowCommands', True), ('persona', ''), ('webSearch', False), ('messages', [])): bot.setdefault(key, value)
     if bot.get('provider') and bot['provider'] != AUTO and not P.spec(store.data, bot['provider']): bot.update(provider='', model='')
     if bot.get('account') and not find_account(bot['account']): bot['account'] = ''

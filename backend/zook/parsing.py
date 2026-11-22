@@ -27,13 +27,24 @@ def hide_command_secrets(text):
 def native_action(kind, value):
     """Activity entry for something a CLI's built-in tool did (a file it changed or a command it ran)."""
     value = str(value or '').strip()
-    if kind == 'command':
+    if kind == 'command':  # what it did and where, as on an approval card: never the command itself, which may hold a password
         match = re.match(r"^/bin/(?:zsh|bash|sh) -lc (['\"]?)(.*)\1$", value, re.S)
-        return dict(name='native_command', category='code', arguments={'command': hide_command_secrets(match.group(2) if match else value)[:300]})
+        return dict(name='native_command', category='code', arguments={'summary': command_summary(match.group(2) if match else value)})
     return dict(name='native_write', category='internal', arguments={'path': value[:300]})
 
 
 THINKING_EACH, THINKING_ALL = 2000, 8000  # characters of a CLI's own thinking kept per step and per reply
+
+
+def command_summary(command):
+    try: return gate_module().command_summary(command)
+    except Exception: return '執行指令'
+
+
+def mark_result(out, ref, failed, text=''):
+    """A built-in tool call the CLI reported back: refused or failed calls are not recorded as done."""
+    for w in out['web']:
+        if ref and w.get('_ref') == ref: w['status'] = ('denied' if re.search(r'(?i)沒有允許|denied|refus|reject|block|not allowed|permission', text) else 'error') if failed else 'completed'
 
 
 def add_thinking(out, text):
@@ -96,10 +107,13 @@ def parse_cli_output(provider, text, model=''):
                 call = o.get('tool_call') if isinstance(o.get('tool_call'), dict) else {}
                 name = next(iter(call), ''); raw = (call.get(name) or {}).get('args') if isinstance(call.get(name), dict) else {}
                 raw = raw if isinstance(raw, dict) else {}
-                if name in ('editToolCall', 'writeToolCall', 'deleteToolCall'): out['web'].append(native_action('write', raw.get('path') or raw.get('file_path') or ''))
-                elif name == 'shellToolCall': out['web'].append(native_action('command', raw.get('command') or ''))
+                if name in ('editToolCall', 'writeToolCall', 'deleteToolCall'): out['web'].append(dict(native_action('write', raw.get('path') or raw.get('file_path') or ''), _ref=o.get('call_id'), status='error'))
+                elif name == 'shellToolCall': out['web'].append(dict(native_action('command', raw.get('command') or ''), _ref=o.get('call_id'), status='error'))  # done only when Cursor says so
                 elif name == 'webFetchToolCall': out['web'].append(dict(name='web_fetch', arguments={'url': str(raw.get('url') or '')[:300]}))
                 elif name == 'webSearchToolCall': out['web'].append(dict(name='web_search', arguments={'query': str(raw.get('searchTerm') or '')[:200]}))
+            elif kind == 'tool_call' and o.get('subtype') == 'completed':
+                text = json.dumps(o.get('tool_call'), ensure_ascii=False)[:20000]
+                mark_result(out, o.get('call_id'), bool(re.search(r'(?i)"(?:error|rejected|denied|failure)"|permission denied|被拒|沒有允許', text)), text)
             elif kind == 'result': end = o
         if end is None and not chunks and not partial:
             out['unparsable'] = True; return out
@@ -195,7 +209,7 @@ def parse_cli_output(provider, text, model=''):
             elif isinstance(block, dict) and block.get('type') == 'tool_use' and block.get('name') in ('Read', 'Grep', 'Glob', 'LS'):
                 inp = block.get('input') if isinstance(block.get('input'), dict) else {}
                 where = inp.get('file_path') or inp.get('path') or (inp.get('pattern') if block.get('name') == 'Glob' else '')  # a search phrase is not kept
-                out['web'].append(dict(name='native_read', category='read', arguments={'path': hide_command_secrets(str(where or ''))[:300]}))
+                out['web'].append(dict(name='native_read', category='read', arguments={'path': hide_command_secrets(str(where or ''))[:300]}, _ref=block.get('id'), status='error'))  # done when its result says so
             elif isinstance(block, dict) and block.get('type') == 'tool_use' and block.get('name') == 'Skill':
                 inp = block.get('input') if isinstance(block.get('input'), dict) else {}
                 out['web'].append(dict(name='native_skill', category='read', arguments={'name': hide_command_secrets(str(inp.get('skill') or inp.get('name') or ''))[:120]}))
@@ -205,9 +219,13 @@ def parse_cli_output(provider, text, model=''):
                 else: out['web'].append(dict(name='web_search', arguments={'query': str(inp.get('query') or '')[:200]}))
             elif isinstance(block, dict) and block.get('type') == 'tool_use' and block.get('name') in ('Edit', 'Write', 'MultiEdit', 'NotebookEdit'):
                 inp = block.get('input') if isinstance(block.get('input'), dict) else {}
-                out['web'].append(native_action('write', inp.get('file_path') or inp.get('notebook_path') or ''))
+                out['web'].append(dict(native_action('write', inp.get('file_path') or inp.get('notebook_path') or ''), _ref=block.get('id'), status='error'))
             elif isinstance(block, dict) and block.get('type') == 'tool_use' and block.get('name') == 'Bash':
-                out['web'].append(native_action('command', (block.get('input') or {}).get('command') if isinstance(block.get('input'), dict) else ''))
+                out['web'].append(dict(native_action('command', (block.get('input') or {}).get('command') if isinstance(block.get('input'), dict) else ''), _ref=block.get('id'), status='error'))
+        if d.get('type') == 'user' and isinstance(d.get('message'), dict):  # what each tool call came back with: a refusal is an error result
+            for block in d['message'].get('content') or []:
+                if isinstance(block, dict) and block.get('type') == 'tool_result':
+                    mark_result(out, block.get('tool_use_id'), block.get('is_error') is True, json.dumps(block.get('content'), ensure_ascii=False)[:5000])
         if d.get('type') == 'rate_limit_event' and isinstance(d.get('rate_limit_info'), dict): out['quota'] = d['rate_limit_info']
         if d.get('type') == 'result' or ('result' in d and 'type' not in d): result = d
     if result is None:

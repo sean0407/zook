@@ -65,6 +65,7 @@ def sync_items(store):
         value = {k: bot.get(k) or '' for k in SYNC_BOT_TEXT}
         value.update(pinned=bool(bot.get('pinned')), createdAt=bot.get('createdAt') or '')
         if value['provider'] not in SYNC_PROVIDERS: value.update(provider='', model='')  # a model set up only on this Mac stays here
+        elif bot.get('autoAssigned') or bot.get('syncedModel'): value['fixedModel'] = True  # matched by 自動選擇: never run on API billing, there either
         items['bots:' + bot['id']] = value
         for chat in bot['chats']:
             messages = bot['messages'] if chat['id'] == bot['chatId'] else chat.get('messages') or []
@@ -94,6 +95,7 @@ def sync_clean(key, value):
         out.update(pinned=value.get('pinned') is True, createdAt=value.get('createdAt') if _text(value.get('createdAt'), 40) else '')
         if out['provider'] in REMOVED_PROVIDERS: out.update(provider=AUTO, model='')  # an older Mac still names it: the same change as here
         elif out['provider'] not in SYNC_PROVIDERS: out.update(provider='', model='')
+        if value.get('fixedModel') is True and out['provider'] not in ('', AUTO): out['fixedModel'] = True
         return out
     if parts[0] == 'chats' and len(parts) == 3:
         messages = value.get('messages')
@@ -160,6 +162,11 @@ def sync_put(store, key, value, gone=()):
             if store.data.get('deletedBots'): store.data['deletedBots'] = [b for b in store.data['deletedBots'] if b.get('id') != parts[1]]  # back from another Mac: it is no longer a Bot kept aside
         if not value['provider'] and bot.get('provider') and bot['provider'] not in SYNC_PROVIDERS: value = dict(value, provider=bot['provider'], model=bot.get('model') or '')  # this Mac's own model for it stays
         bot.setdefault('isAdmin', False)  # who the 管理員 is, is decided on each Mac, never by a file
+        if value.get('provider') != bot.get('provider') and 'provider' in bot: limit_locally(bot)  # another Mac's choice never widens what this Mac allows
+        value = {k: v for k, v in value.items() if k != 'gateFull'}
+        fixed = value.pop('fixedModel', False) if isinstance(value, dict) else False
+        if fixed: bot['syncedModel'] = True  # matched by 自動選擇 on another Mac: checked for API billing before it runs here
+        elif value.get('provider') != bot.get('provider'): bot.pop('syncedModel', None)
         bot.update(value)
         if bot.get('section') and not bot.get('pinned') and bot['section'] not in store.data['settings'].get('sections', []): store.data['settings'].setdefault('sections', []).append(bot['section'])
         return True

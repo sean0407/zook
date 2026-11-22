@@ -61,6 +61,14 @@ def intro_valid(intro):
             and all(isinstance(q, str) and q and _intro_line(q, 40) == q for q in intro['questions']))
 
 
+def intro_keys(store, bot):
+    """The sign-ins this Bot's greeting could use, as autoStatus keys."""
+    with store.lock:
+        if bot.get('provider') == AUTO: return [p for p in AUTO_MODELS]
+        provider = bot_model(store, bot)[0]; account = find_account(bot.get('account'), provider)
+        return [auto_account_key(account) if account else provider]
+
+
 def intro_blocked(store, bot, provider, account_id):
     """Lock held. Why a greeting is not made now, or ''. Only a sign-in known to be a subscription; never past a used-up budget or limit."""
     if provider_kind(provider) not in INTRO_KINDS: return '這個 CLI 不能完全關閉工具'
@@ -68,7 +76,8 @@ def intro_blocked(store, bot, provider, account_id):
     if account_id and not account: return '帳號已移除'
     if account and account.get('type') != 'login': return 'API 計費'
     key = auto_account_key(account) if account else provider
-    if not auto_ready(store, key): return '還沒確認是訂閱帳號'
+    problem = auto_billing_problem(store, provider, account_id)  # checked recently, as before any reply of a Bot whose model is fixed
+    if problem: return problem
     if budget_state(store, provider) == 'over': return '用量預算已用完'
     snap = (store.data.get('quota') or {}).get(key) or {}
     if quota_exhausted(store, key) or limit_reached_now(snap): return '額度已用完'
@@ -134,8 +143,11 @@ class Intros:
             source = intro_source(bot)
             if (bot.get('intro') or {}).get('source') == source: return  # still fits
             if failed.get(bot_id, ('', 0))[0] == source and time.time() - failed[bot_id][1] < INTRO_RETRY: return
-            needs_status = 'autoStatus' not in store.data or bot.get('provider', '') not in (AUTO, '') and bot_model(store, bot)[0] not in (store.data.get('autoStatus') or {})
-        if needs_status: refresh_auto_status(store)  # which sign-ins are subscriptions: learnt once, outside the lock
+            choice, why = self._intro_choice(bot)
+            needs_status = 'autoStatus' not in store.data or not choice and why in ('最近沒能確認是訂閱帳號', '還沒確認是訂閱帳號')
+        if needs_status and 'autoStatus' not in store.data: refresh_auto_status(store, wait=True)  # which sign-ins are subscriptions: outside the lock
+        elif needs_status: auto_recheck(store, intro_keys(store, bot))  # asked of the CLI now, as before any reply
+        else: auto_recheck(store, [k for k in intro_keys(store, bot) if auto_unwatched(k)])  # a sign-in Zook cannot watch: asked every time
         with store.lock:
             bot = store.find('bots', bot_id)
             if not bot or intro_source(bot) != source: return

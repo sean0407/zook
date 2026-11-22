@@ -1,6 +1,8 @@
 # Settings, the data store, and helpers shared by everything else. Loaded by backend/server.py into one shared namespace.
 import argparse
 import socket
+import getpass
+import select
 import base64
 import calendar
 import contextlib
@@ -274,6 +276,11 @@ def upload_name(name):
     return name[:120] or 'file'
 
 
+def upload_original(name):
+    """The name a file was uploaded with, as it was (a leading dot too), for knowing a key file by it: never used as a path."""
+    return re.sub(r'[\x00-\x1f]+', '', str(name or '').replace('\\', '/').split('/')[-1]).strip()[:200]
+
+
 def upload_meta(store, upload_id):
     if not isinstance(upload_id, str) or not re.fullmatch(r'[0-9a-f]{32}', upload_id): return None
     try: return json.loads((store.dir / 'uploads' / upload_id / 'meta.json').read_text(encoding='utf-8'))
@@ -326,7 +333,7 @@ def upload_from_path(store, path):
                 out.write(chunk)
         if not copied: raise ValueError('檔案是空的。')
         name = upload_name(parts[-1])
-        meta = dict(id=upload_id, name=name, size=copied, kind='image' if pathlib.Path(name).suffix.lower() in IMAGE_TYPES else 'file', createdAt=NOW())
+        meta = dict(id=upload_id, name=name, origName=upload_original(parts[-1]), size=copied, kind='image' if pathlib.Path(name).suffix.lower() in IMAGE_TYPES else 'file', createdAt=NOW())
         (folder / 'meta.json').write_text(json.dumps(meta, ensure_ascii=False), encoding='utf-8')
         folder = None
         return meta
@@ -341,7 +348,7 @@ def attachments_for(store, ids):
     if not isinstance(ids, list) or len(ids) > MAX_ATTACHMENTS: raise ValueError('每則訊息最多 %d 個檔案。' % MAX_ATTACHMENTS)
     metas = [upload_meta(store, x) for x in ids]
     if not all(metas): raise ValueError('找不到附加的檔案，請重新附加。')
-    return [dict(id=m['id'], name=m['name'], size=m['size'], kind=m['kind']) for m in metas]
+    return [dict(id=m['id'], name=m['name'], size=m['size'], kind=m['kind'], **({'origName': m['origName']} if isinstance(m.get('origName'), str) else {})) for m in metas]
 
 
 def place_attachments(store, bot_id, attachments):
@@ -353,7 +360,36 @@ def place_attachments(store, bot_id, attachments):
             name = '%s-%s' % (a['id'][:8], a['name'])
             with open(store.dir / 'uploads' / a['id'] / 'file', 'rb') as source: write_into_folder(fd, name, source, keep=True)
             paths.append(folder / name)
+    remember_uploaded_names(store, bot_id, {'%s-%s' % (a['id'][:8], a['name']): a.get('origName') or a['name'] for a in attachments})
     return paths
+
+
+UPLOAD_NAMES = '.zook-uploads.json'
+
+
+def remember_uploaded_names(store, bot_id, names):
+    """Keep, next to the Bot's attachments folder, the name each was uploaded with (zook_gate.secret_name reads it): .env stays known as
+    .env. The Bot controls its workspace, so the list is never written in place: a new file is made beside it (refusing links), then put
+    in its place in one step. What is there now is read only when it is a plain file of its own, and never waited on (a pipe)."""
+    try:
+        with bot_folder(store, bot_id) as fd:
+            kept = {}
+            try:
+                old = os.open(UPLOAD_NAMES, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                with os.fdopen(old, 'rb') as f:
+                    info = os.fstat(f.fileno())
+                    if stat.S_ISREG(info.st_mode) and info.st_nlink == 1: kept = json.loads(f.read(1 << 20))
+            except (OSError, ValueError): kept = {}
+            kept = dict(kept if isinstance(kept, dict) else {}, **{str(k): str(v) for k, v in names.items()})
+            temp = '.zook-uploads-%s.tmp' % secrets.token_hex(8)
+            out = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=fd)
+            try:
+                with os.fdopen(out, 'w', encoding='utf-8') as f: json.dump(dict(list(kept.items())[-500:]), f, ensure_ascii=False)
+                os.rename(temp, UPLOAD_NAMES, src_dir_fd=fd, dst_dir_fd=fd)  # replaces the entry, never what a link or a second name points to
+            except OSError:
+                try: os.unlink(temp, dir_fd=fd)
+                except OSError: pass
+    except OSError: pass  # a folder that cannot be reached safely: the names are still judged as they are
 
 
 @contextlib.contextmanager
@@ -485,9 +521,80 @@ CLAUDE_NATIVE_TOOLS = ['Read', 'Glob', 'Grep', 'Edit', 'Write']
 ACCESS_SCOPES = ('full', 'folder', 'workspace')
 
 
-def bot_access(bot, workspace):
+# Claude and Cursor Bots have the whole Mac and ask only at the safety boundaries (zook_gate.py), with Zook's tools on 自動.
+# Whether this Mac lets a Bot do so is bot['gateFull'], kept on this Mac only (never synced): set when the Bot is made or edited
+# into Claude or Cursor here, or for such Bots from before (handler.py), never by a file from another Mac. Their own 主動性 and
+# 存取範圍 (kept in the data) are not used while they run on Claude or Cursor; on a backup model of another CLI, which has no such
+# gate, that one reply stays in the Bot's workspace and asks first (謹慎), whatever they say.
+GATED_KINDS = ('claude', 'cursor')
+
+
+def _bot_provider(bot, data=None):
+    settings = ((data or _active.get('data') or {}).get('settings') or {})
+    return (bot or {}).get('provider') or settings.get('provider', 'codex')
+
+
+def gated_bot(bot, kind=None, data=None):
+    """Whether this Bot runs under the boundary gate: this Mac allowed it, its own model is Claude or Cursor, and so is the CLI answering (when known)."""
+    provider = _bot_provider(bot, data)
+    return (bot or {}).get('gateFull') is True and provider != 'auto' and provider_kind(provider) in GATED_KINDS and (kind is None or kind in GATED_KINDS)
+
+
+def gated_fallback(bot, kind=None, data=None):
+    """A Claude or Cursor Bot answered this time by a backup CLI that has no gate."""
+    provider = _bot_provider(bot, data)
+    return kind is not None and kind not in GATED_KINDS and provider != 'auto' and provider_kind(provider) in GATED_KINDS
+
+
+def limit_locally(bot):
+    """A Bot that lost this Mac's whole-Mac permission (another Mac changed its model, or it came from a backup): its workspace and
+    謹慎 until the user changes it here, never the 主動性 and 存取範圍 it had before the gate."""
+    had = bot.pop('gateFull', None)
+    if had or provider_kind(_bot_provider(bot)) in GATED_KINDS: bot['localLimit'] = True
+
+
+def local_choice(before, after, body):
+    """Saving a Bot on this Mac. Only a model the user picks here (another CLI than before) sets the whole-Mac permission; a name or
+    persona edit does not. Choosing a model, 主動性 or 存取範圍 here ends a limit set by sync or a backup."""
+    if any(k in body and (body[k] or '') != (before.get(k) or '') for k in ('provider', 'account')): after.pop('syncedModel', None)  # picked here
+    if 'provider' in body and (body['provider'] or '') != (before.get('provider') or ''):
+        set_gate_full(after); after.pop('localLimit', None)
+    elif any(k in body and (body[k] or '') != (before.get(k) or '') for k in ('access', 'accessFolder', 'permissionMode')): after.pop('localLimit', None)
+
+
+def held_backups(bot, provider, chain):
+    """A Claude or Cursor Bot, or one held in by this Mac, is never answered by a custom CLI as a backup: its own arguments cannot be
+    held to the workspace and 謹慎."""
+    if provider_kind(provider) not in GATED_KINDS and not bot.get('localLimit'): return chain
+    return chain[:1] + [x for x in chain[1:] if not str(x[0]).startswith(P.CUSTOM_PREFIX)]
+
+
+def set_access_after_match(bot, grant):
+    """自動選擇 just set this Bot's model. Only the user, on this Mac, right now (grant) gives the whole Mac. Otherwise a Bot that had it
+    keeps it only while its model is still Claude or Cursor, and is held to its workspace and 謹慎 when it moves elsewhere; a Bot that
+    lands on Claude or Cursor without it is held in too."""
+    had = bot.pop('gateFull', None)
+    gated = provider_kind(_bot_provider(bot)) in GATED_KINDS
+    if grant and not bot.get('localLimit'): set_gate_full(bot)
+    elif had and gated: bot['gateFull'] = True
+    elif had or gated: bot['localLimit'] = True
+
+
+def hold_in(bot):
+    """A Bot not set up by the user on this Mac: no whole Mac; a Claude or Cursor one keeps to its workspace and 謹慎."""
+    bot.pop('gateFull', None)
+    if provider_kind(_bot_provider(bot)) in GATED_KINDS and bot.get('provider') != 'auto': bot['localLimit'] = True
+
+
+def set_gate_full(bot):
+    """On this Mac: a Bot made or edited into Claude or Cursor may use the whole Mac behind the gate; any other Bot may not."""
+    if provider_kind(_bot_provider(bot)) in GATED_KINDS and bot.get('provider') != 'auto': bot['gateFull'] = True
+    else: bot.pop('gateFull', None)
+
+
+def bot_access(bot, workspace, kind=None):
     """(scope, folder the CLI starts in). A Bot whose chosen folder has gone away is stopped rather than given more room."""
-    scope, chosen = bot_scope(bot)
+    scope, chosen = bot_scope(bot, kind)
     if scope == 'workspace': return scope, pathlib.Path(workspace)
     if scope == 'full': return scope, pathlib.Path.home()
     folder = pathlib.Path(chosen or '')
@@ -496,8 +603,10 @@ def bot_access(bot, workspace):
     return scope, folder
 
 
-def bot_scope(bot):
+def bot_scope(bot, kind=None):
     """(access scope, chosen folder). A Bot without its own choice follows the default in 設定."""
+    if gated_bot(bot, kind): return 'full', ''
+    if gated_fallback(bot, kind) or bot.get('localLimit'): return 'workspace', ''
     if bot.get('access') in ACCESS_SCOPES: return bot['access'], bot.get('accessFolder') or ''
     settings = _active['data'].get('settings') or {}
     return (settings['access'], settings.get('accessFolder') or '') if settings.get('access') in ACCESS_SCOPES else ('full', '')
@@ -594,7 +703,9 @@ def colors_for(index):
     return ['#2585f6', '#13bf78', '#f59a0a', '#ed2f9b', '#14b8a6', '#ff6d0c', '#9254ff', '#a47545'][index % 8]
 
 
-def permission_mode(store, bot):
+def permission_mode(store, bot, kind=None):
+    if gated_bot(bot, kind, store.data): return 'auto'
+    if gated_fallback(bot, kind, store.data) or bot.get('localLimit'): return 'manual'
     mode = bot.get('permissionMode') or store.data['settings'].get('permissionMode') or 'manual'
     return mode if mode in ('manual', 'auto', 'bypass') else 'manual'
 
@@ -632,7 +743,7 @@ def describe_call(call):
     if name == 'native_write': return '修改檔案「%s」' % base(a.get('path'))
     if name == 'native_command': return '在工作資料夾執行指令'
     fixed = {'zook_read_skill': '閱讀 Skill「%s」的說明' % (call.get('sourceLabel') or 'Skill'), 'zook_read_skill_resource': '查看 Skill 的參考資料「%s」' % base(a.get('path')),
-             'zook_run_skill_helper': '執行 Skill 附帶的小程式', 'zook_workspace_list': '查看工作區裡有哪些檔案', 'zook_group_file_read': '讀取群組共用檔案「%s」' % (a.get('name') or ''), 'zook_workspace_read': '讀取檔案「%s」' % base(a.get('path')),
+             'zook_run_skill_helper': '執行 Skill 附帶的小程式', 'zook_native_gate': str(a.get('title') or '做需要核准的動作')[:200], 'zook_workspace_list': '查看工作區裡有哪些檔案', 'zook_group_file_read': '讀取群組共用檔案「%s」' % (a.get('name') or ''), 'zook_workspace_read': '讀取檔案「%s」' % base(a.get('path')),
              'zook_workspace_write': '把內容存成檔案「%s」' % base(a.get('path')), 'zook_list_team': '查看團隊裡有哪些 Bot 和群組', 'zook_create_bot': '新增 Bot「%s」' % (a.get('name') or ''),
              'zook_create_group': '建立群組「%s」' % (a.get('name') or '、'.join(a.get('bot_names') or [])), 'zook_start_group_discussion': '在群組「%s」發起討論' % (a.get('group_name') or ''),
              'zook_feature': '使用%s' % str(a.get('feature') or '特色功能'), 'zook_remember': '記住一件事：「%s」' % str(a.get('content') or '')[:60], 'zook_ask_user': '問你：「%s」' % str(a.get('question') or '')[:60], 'zook_list_schedules': '查看排程',
