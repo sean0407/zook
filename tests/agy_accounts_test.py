@@ -186,6 +186,8 @@ class Keychain(Base):
         folder = self.m.agy_account_home(self.account['id']); data = self.kc(folder).read_bytes(); secret = self.host.items[self.account['id']]
         self.m._agy_keychain_cache.clear(); self.host.fail = 'all'  # the login keychain is locked, refused or timed out
         with self.assertRaises(RuntimeError): self.m.provider_env('antigravity', self.account)  # agy is not started
+        cli = self.root / 'bin/agy'; cli.parent.mkdir(exist_ok=True); cli.write_text('#!/bin/sh\n'); cli.chmod(0o755)
+        self.m.find_cli = lambda provider: str(cli)  # a Mac without agy (CI) must reach the keychain check too
         with self.assertRaises(RuntimeError): self.m.terminal_login_script('antigravity', self.account)
         self.assertEqual(self.kc(folder).read_bytes(), data); self.assertEqual(self.host.items[self.account['id']], secret)
         self.assertEqual(sorted(p.name for p in (folder / 'Library/Keychains').iterdir() if not p.name.startswith('.fl')), ['login.keychain-db', 'zook-agy.keychain-db'])
