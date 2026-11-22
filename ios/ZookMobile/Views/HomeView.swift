@@ -365,10 +365,7 @@ struct UsageView: View {
                         ForEach(UsageView.autoChoices, id: \.0) { choice in Text(choice.1).tag(choice.0) }
                     }.pickerStyle(.menu)
                 } footer: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        if let autoProblem = autoProblem { Text(autoProblem).foregroundStyle(.red) }
-                        Text("自動偵測時，Claude 每次會用到一點點額度。")
-                    }
+                    if let autoProblem = autoProblem { Text(autoProblem).foregroundStyle(.red) }
                 }
                 ForEach(quota.providers) { provider in
                     Section(provider.name.components(separatedBy: "（").first ?? provider.name) {
