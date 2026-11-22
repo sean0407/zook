@@ -89,6 +89,7 @@ def sync_clean(key, value):
     """A value read from another Mac's file, reduced to what Zook accepts, or None. The folder is the user's, but the file is still only data."""
     parts = key.split(':')
     if not isinstance(value, dict) or any(not SYNC_ID.fullmatch(p) for p in parts[1:]): return None
+    if parts[0] in ('bots', 'chats') and any(p != p.lower() for p in parts[1:]): return None  # ids name folders, and the Mac's disk ignores case
     if parts[0] == 'bots' and len(parts) == 2:
         if any(not _text(value.get(k, ''), limit) for k, limit in SYNC_BOT_TEXT.items()) or not str(value.get('name') or '').strip(): return None
         out = {k: value.get(k, '') for k in SYNC_BOT_TEXT}
@@ -162,6 +163,7 @@ def sync_put(store, key, value, gone=()):
             if aside:  # this Mac's own Bot, set aside here (a 取代 join): what this Mac allowed it comes back with it
                 for k in LOCAL_GRANTS:
                     if k in aside: bot[k] = copy.deepcopy(aside[k])
+                bot.update(provider=aside.get('provider') or '', model=aside.get('model') or '')  # another CLI from the folder loses the whole Mac below
                 if bot.get('isAdmin') and any(b.get('isAdmin') for b in store.data['bots']): bot['isAdmin'] = False
             else: hold_in(bot)  # never set up on this Mac: its workspace and 謹慎 until the user changes it here, never the defaults in 設定
             store.data['bots'].append(bot)

@@ -174,12 +174,23 @@ def restore_keep_access(old, new):
         else: settings.pop(key, None)
     settings.setdefault('sharedMcp', []); settings['abilitiesV2'] = True  # nor does an upgrade pick a 管理員 by name (core.py)
     new['customProviders'] = copy.deepcopy(P.custom_list(old))
-    mine = {c.get('id') for c in new['customProviders']}
-    unknown = lambda p: isinstance(p, str) and p.startswith(P.CUSTOM_PREFIX) and p not in mine
-    if unknown(settings.get('provider')): settings['provider'] = here_settings.get('provider') if not unknown(here_settings.get('provider')) else 'codex'
+    custom = lambda p: isinstance(p, str) and p.startswith(P.CUSTOM_PREFIX)
+    # A custom CLI runs with no sandbox of Zook's: only where this Mac itself set it, never because the copy names one.
+    if custom(settings.get('provider')) and settings.get('provider') != here_settings.get('provider'):
+        if here_settings.get('provider'): settings['provider'] = here_settings['provider']
+        else: settings.pop('provider', None); settings.pop('model', None)  # the built-in default
+    own_order = lambda d: d.get('fallbacks') if isinstance(d.get('fallbacks'), list) else []
+    if isinstance(settings.get('fallbacks'), list): settings['fallbacks'] = [x for x in settings['fallbacks'] if not custom(x) or x in own_order(here_settings)]
+    for key in ('google', 'googleOthers', 'gmail'):  # sign-ins in this Mac's Keychain are used only as this Mac set them up
+        if key in here_settings: settings[key] = copy.deepcopy(here_settings[key])
+        else: settings.pop(key, None)
     local_connectors = [c for c in old.get('connectors') or [] if isinstance(c, dict)]
     known = {c.get('id') for c in local_connectors}
-    new['connectors'] = copy.deepcopy(local_connectors) + [c for c in new.get('connectors') or [] if isinstance(c, dict) and c.get('id') not in known]  # off: not in sharedMcp
+    brought = [copy.deepcopy(c) for c in new.get('connectors') or [] if isinstance(c, dict) and c.get('id') not in known]  # off: not in sharedMcp
+    for c in brought:  # and with no sign-in or key of this Mac's: it is signed in again once the user turns it on here
+        for key in ('oauth', 'otherAccounts', 'secretId'): c.pop(key, None)
+        if isinstance(c.get('moreSecrets'), dict): c['moreSecrets'] = {k: '' for k in c['moreSecrets']}
+    new['connectors'] = copy.deepcopy(local_connectors) + brought
     if isinstance(old.get('claudeGate'), dict): new['claudeGate'] = copy.deepcopy(old['claudeGate'])
     else: new.pop('claudeGate', None)
     for item in new.get('schedules') or []:
@@ -188,8 +199,9 @@ def restore_keep_access(old, new):
     here = {b.get('id'): b for b in listed(old)}
     kind = lambda bot, data: provider_kind(bot.get('provider') or (data.get('settings') or {}).get('provider', 'codex'))
     for bot in listed(new):
-        if unknown(bot.get('provider')): bot.update(provider='', model='')
-        if isinstance(bot.get('fallbacks'), list): bot['fallbacks'] = [x for x in bot['fallbacks'] if not unknown(x)]
+        was = here.get(bot.get('id')) or {}
+        if custom(bot.get('provider')) and bot['provider'] != was.get('provider'): bot.update(provider='', model='')
+        if isinstance(bot.get('fallbacks'), list): bot['fallbacks'] = [x for x in bot['fallbacks'] if not custom(x) or x in own_order(was)]
         was = here.get(bot.get('id'))
         if was is None: hold_in(bot); continue
         for key in LOCAL_GRANTS:
@@ -202,16 +214,17 @@ def restore_keep_access(old, new):
 
 def held_in_migrate(store):
     """Once per data folder: Bots from before the hold that the user did not set up here, made by another Bot (its 新增 Bot call is
-    still in a reply's record) or arrived from another Mac (synced here, and without 'pinned', which sync never brings), keep to their
-    workspace and 謹慎."""
+    still in a reply's record) or arrived from another Mac (this Mac's sync record says its version here was written elsewhere, not
+    changed here since), keep to their workspace and 謹慎. A Bot of this Mac's own that has not changed since joining is held in too."""
     settings = store.data['settings']
     if settings.get('heldInSet'): return False
-    synced = set(sync_marks(store)['stamps']) if (store.dir / 'sync-marks.json').exists() else set()
+    stamps = sync_marks(store)['stamps'] if (store.dir / 'sync-marks.json').exists() else {}
+    synced = {k for k, v in stamps.items() if isinstance(v, list) and len(v) > 2 and v[2] is False}
     made = {str((c.get('arguments') or {}).get('name') or '').strip().lower() for j in store.data.get('jobs') or [] for c in j.get('toolCalls') or []
             if str(c.get('name') or '').endswith('zook_create_bot')} - {''}
     for bot in store.data['bots']:
         if bot.get('localLimit'): continue
-        if ('pinned' not in bot and 'bots:' + str(bot.get('id')) in synced) or str(bot.get('name') or '').strip().lower() in made: hold_in(bot)
+        if 'bots:' + str(bot.get('id')) in synced or str(bot.get('name') or '').strip().lower() in made: hold_in(bot)
     settings['heldInSet'] = True
     return True
 

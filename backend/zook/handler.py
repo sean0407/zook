@@ -678,6 +678,8 @@ class Handler(BaseHTTPRequestHandler):
                         approval = next ( (x for x in job.get('approvals', []) if x['id'] == parts[2]), None)
                         if approval:
                             if job['status'] != 'running' or approval['status'] != 'pending': return self.error(409, '此審批已結束。')
+                            if self.device and decision == 'approve' and str(approval.get('name') or '').endswith(('zook_create_schedule', 'zook_update_schedule')):
+                                return self.error(403, '建立或修改排程要在 Mac 上核准。')  # work that starts by itself later
                             approval['status'] = 'approved' if decision == 'approve' else 'denied'; store.save()
                             log_activity(store, 'approval', ('核准：' if decision == 'approve' else '拒絕：') + (approval.get('text') or describe_call(dict(approval, name=approval.get('name')))) + '（%s）' % self.server.target_name('bot', job['botId']),
                                          by=('手機：' + str(self.device.get('name') or '已配對裝置')) if self.device else '')

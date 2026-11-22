@@ -63,7 +63,20 @@ def backup_check(data):
     trash = data.get('deletedBots') or []
     if not isinstance(trash, list) or any(not isinstance(b, dict) or not SYNC_ID.fullmatch(str(b.get('id') or '')) for b in trash): raise ValueError('備份檔的內容不完整。')
     if any(not SYNC_ID.fullmatch(b['id']) for b in data['bots'] + (data.get('groups') or [])): raise ValueError('備份檔的內容不完整。')
-    if any(not isinstance(c, dict) or not SYNC_ID.fullmatch(str(c.get('id') or '')) for b in data['bots'] + trash for c in (b.get('chats') if isinstance(b.get('chats'), list) else [])): raise ValueError('備份檔的內容不完整。')
+    chats = lambda b: b.get('chats') if isinstance(b.get('chats'), list) else []
+    if any(not isinstance(c, dict) or not SYNC_ID.fullmatch(str(c.get('id') or '')) for b in data['bots'] + trash for c in chats(b)): raise ValueError('備份檔的內容不完整。')
+    # The Mac's disk ignores case: every id is lowercase, everywhere it is named, and two that differ only in case are refused.
+    named = [x['id'] for x in data['bots'] + trash + (data.get('groups') or [])] + [c['id'] for b in data['bots'] + trash for c in chats(b)]
+    upper = {i: i.lower() for i in named if i != i.lower()}
+    if upper:
+        def lower(value):
+            if isinstance(value, dict): return {upper.get(k, k): lower(v) for k, v in value.items()}
+            if isinstance(value, list): return [lower(v) for v in value]
+            return upper.get(value, value) if isinstance(value, str) else value
+        data.update(lower({k: v for k, v in data.items()}))
+    for group in (data['bots'] + trash, data.get('groups') or [], *[chats(b) for b in data['bots'] + trash]):
+        ids = [x['id'] for x in group]
+        if len(ids) != len(set(ids)): raise ValueError('備份檔的內容不完整。')
     for g in data.get('groups') or []:
         if 'taskRun' in g and not task_run_ok(g['taskRun']): g.pop('taskRun')  # 任務引擎's books, only in the shape Zook writes
     task_settings_clean(data['settings'])
@@ -90,6 +103,7 @@ def backup_restore(app, name):
     except (OSError, EOFError, UnicodeError, RecursionError): raise ValueError('這份備份無法讀取，資料沒有變動。')
     for bot in data['bots']: bot.pop('queue', None)  # messages that were waiting when the copy was made have been sent since
     safety = backup_write(store, 'safety', store.data)
+    halted = sync_halt(store)  # saved first: if Zook stops halfway, the older data is never sent to the other Macs
     # This Mac's own pairing, sign-ins and sync stay as they are: they belong to the machine, not to the copy.
     keep = {key: copy.deepcopy(store.data.get(key)) for key in ('remoteDevices', 'sync') if key in store.data}
     keep_remote = copy.deepcopy(store.data['settings'].get('remote'))
@@ -126,7 +140,7 @@ def backup_restore(app, name):
     store.chat_forget()  # the files on disk are the copy's now
     store.save(everything=True)
     # Older data must not be sent to the other Macs as if it were new, nor its gaps as deletions: syncing stops until it is switched on again.
-    return safety, sync_halt(store)
+    return safety, halted
 
 
 def sync_halt(store):
@@ -557,7 +571,7 @@ def restore_bot(store, bot_id):
     trash = store.data.get('deletedBots') or []
     kept = next((b for b in trash if b.get('id') == bot_id), None)
     if not kept or store.find('bots', bot_id): raise ValueError('找不到可以喚回的 Bot。')
-    bot = copy.deepcopy(kept); bot.pop('deletedAt', None)
+    bot = copy.deepcopy(kept); bot.pop('deletedAt', None); bot.pop('queue', None)  # what was waiting then is not sent now
     if bot.pop('recovered', None): hold_in(bot)  # found in an old copy, not deleted here
     if bot.get('provider') in REMOVED_PROVIDERS: bot.update(provider=AUTO, model='', account='')  # set to a CLI Zook no longer has
     if bot.get('isAdmin') and any(b.get('isAdmin') for b in store.data['bots']): bot['isAdmin'] = False  # there is one 管理員
@@ -593,7 +607,7 @@ def recover_deleted_bots(store):
         for bot in (old.get('bots') if isinstance(old, dict) and isinstance(old.get('bots'), list) else []):
             if isinstance(bot, dict) and bot.get('id') in wanted and isinstance(bot.get('name'), str) and bot['name'].strip():
                 wanted.discard(bot['id'])
-                found = dict(copy.deepcopy(bot), deletedAt='', recovered=path.name); hold_in(found)  # an old copy is not what this Mac allows now
+                found = dict(copy.deepcopy(bot), deletedAt='', recovered=path.name); found.pop('queue', None); hold_in(found)  # an old copy is not what this Mac allows now
                 store.data.setdefault('deletedBots', []).append(found)
     del store.data.get('deletedBots', [])[:-TRASH_KEEP]
     return True

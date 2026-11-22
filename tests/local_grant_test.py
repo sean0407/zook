@@ -270,5 +270,138 @@ class LocalGrantTest(unittest.TestCase):
         record = next(c for c in self.store.data['connectors'] if c['name'] == '包裡的')
         self.assertNotIn('zook:' + record['id'], self.store.data['settings'].get('sharedMcp') or [])
 
+    # Second Codex review (3493768).
+    def test_restore_uses_this_macs_sign_ins_and_refreshes_none_for_a_brought_connector(self):
+        with self.store.lock: self.store.data['settings']['google'] = dict(email='me@here', secretId='local')
+        def change(c):
+            c['settings']['google'] = dict(email='x', secretId='stolen'); c['settings']['googleOthers'] = [dict(secretId='s2')]
+            c['connectors'] = [dict(id='new', name='新', transport='http', url='https://a.example', oauth=dict(url='https://a.example', secretId='kc', tokenEndpoint='https://evil.example'), secretId='k2', moreSecrets={'K': 'kc3'})]
+        data = self.restore_copy(change)
+        self.assertEqual(data['settings']['google'], dict(email='me@here', secretId='local')); self.assertNotIn('googleOthers', data['settings'])
+        brought = data['connectors'][0]
+        self.assertEqual((brought.get('oauth'), brought.get('secretId'), brought['moreSecrets']), (None, None, {'K': ''}))
+        called = []
+        with mock.patch.object(m, 'oauth_access', lambda store, record: called.append(record['id']) or 'tok'), mock.patch.object(m, 'discovered', lambda: dict(mcp=[], skills=[], plugins=[], _private=dict(mcp={}, skills={}))):
+            with self.app.store.lock: self.app.store.data['connectors'] = [dict(id='off', name='off', transport='http', url='https://b.example', oauth=dict(url='https://b.example', secretId='x'))]
+            try: m.inventory_for(self.app.store)
+            except Exception: pass
+        self.assertEqual(called, [])  # not turned on here: no refresh
+
+    def test_restore_keeps_custom_clis_only_where_this_mac_set_them(self):
+        with self.store.lock:
+            self.store.data['customProviders'] = [dict(id='custom-a', name='a', command='/bin/echo')]
+            mine = next(b for b in self.store.data['bots'] if not b.get('isAdmin')); mine.update(provider='codex', fallbacks=['codex'])
+            self.admin.update(provider='custom-a', fallbacks=['custom-a'])
+            self.store.data['settings'].pop('provider', None); self.store.data['settings']['fallbacks'] = []
+        def change(c):
+            for b in c['bots']: b.update(provider='custom-a', fallbacks=['custom-a', 'claude'])
+            c['settings'].update(provider='custom-a', fallbacks=['custom-a', 'codex'])
+        data = self.restore_copy(change); find = lambda i: next(b for b in data['bots'] if b['id'] == i)
+        self.assertEqual((find(mine['id'])['provider'], find(mine['id'])['fallbacks']), ('', ['claude']))  # never set here: back to the default
+        self.assertEqual((find(self.admin['id'])['provider'], find(self.admin['id'])['fallbacks']), ('custom-a', ['custom-a', 'claude']))  # set here: kept
+        self.assertNotEqual(data['settings'].get('provider'), 'custom-a'); self.assertIsNotNone(data['settings'].get('provider', 'codex'))
+        self.assertEqual(data['settings']['fallbacks'], ['codex'])
+
+    def test_an_unknown_default_goes_back_to_the_built_in_one(self):
+        new = dict(settings={'provider': 'custom-gone'}, bots=[])
+        m.restore_keep_access(m.NOTHING_HERE(), new)
+        self.assertNotIn('provider', new['settings'])  # never None: a Bot on 「預設」 gets the built-in default
+        self.assertEqual(m._bot_provider(dict(provider=''), new), 'codex')
+
+    def test_group_summary_never_runs_a_custom_cli_for_a_held_bot(self):
+        with self.store.lock:
+            self.store.data['customProviders'] = [dict(id='custom-a', name='a', command='/bin/echo')]
+            bot = self.admin; bot.update(provider='custom-a', localLimit=True)
+            group = dict(id='g1', name='g', botIds=[bot['id']], messages=[dict(id='m%d' % i, role='user', content='話 %d' % i) for i in range(200)], status='idle', runId='r', activeJobId=None)
+            self.store.data['groups'].append(group); self.store.data['settings']['autoCompact'] = True
+        ran = []
+        with mock.patch.object(self.app, '_run_attempt', lambda *a, **k: ran.append(a[2])), mock.patch.object(m, 'group_closer', lambda store, g: bot['id']), mock.patch.object(m, 'inventory_for', lambda store: {}):
+            self.app.compact_group('g1', 'r')
+            self.assertEqual(ran, [])
+            with self.store.lock: bot.pop('localLimit'); group.pop('compacting', None)
+            self.app.compact_group('g1', 'r')
+        self.assertEqual(ran, ['custom-a'])  # the same path runs it for a Bot the user set up here
+
+    def test_a_bot_set_aside_here_returns_without_the_whole_mac_on_another_cli(self):
+        store = self.store
+        with store.lock:
+            mine = next(b for b in store.data['bots'] if not b.get('isAdmin')); mine.update(provider='claude', gateFull=True, access='full', permissionMode='bypass')
+            m.sync_drop_bot(store, mine)
+            m.sync_put(store, 'bots:' + mine['id'], m.sync_clean('bots:' + mine['id'], dict(name=mine['name'], provider='cursor', model='')))
+        back = store.find('bots', mine['id'])
+        self.assertEqual((back['provider'], back.get('gateFull'), back['localLimit']), ('cursor', None, True))
+        self.assertEqual((m.permission_mode(store, back, 'cursor'), m.bot_scope(back, 'cursor')), ('manual', ('workspace', '')))
+
+    def test_the_phone_cannot_turn_schedules_on_or_approve_them(self):
+        with self.store.lock:
+            self.store.data['schedules'].append(dict(id='s1', botId=self.admin['id'], on=False, content='x', trigger='time'))
+            self.store.data.setdefault('remoteDevices', []).append(dict(id='dev1', name='iPhone'))
+            self.store.data['jobs'].append(dict(id='j', botId=self.admin['id'], status='running', toolCalls=[], approvals=[dict(id='a1', name='zook_create_schedule', status='pending')]))
+        status, _ = self.req('POST', '/api/mobile/schedules/s1', dict(action='resume'), token='bridge-token', device='dev1')
+        self.assertNotEqual(status, 200); self.assertFalse(self.store.data['schedules'][0]['on'])
+        status, _ = self.req('POST', '/api/approvals/a1', dict(decision='approve'), token='bridge-token', device='dev1')
+        self.assertEqual(status, 403); self.assertEqual(self.store.data['jobs'][-1]['approvals'][0]['status'], 'pending')
+        status, _ = self.req('POST', '/api/approvals/a1', dict(decision='approve'))  # in the Mac's window
+        self.assertEqual(status, 200)
+
+    def test_upgrade_finds_bots_that_really_came_through_sync(self):
+        store = self.store; folder = Path(self.temp.name) / 'cloud'; folder.mkdir()
+        other = dict(format=1, device=dict(id='00000000000000ab', name='其他 Mac'), at='', tombs={},
+                     items={'bots:far0001': dict(t=time.time() - 5, h='', p=[], v=dict(name='遠端來的', provider='codex', pinned=True))})
+        (folder / 'zook-sync-00000000000000ab.json').write_text(json.dumps(other))
+        with store.lock: m.sync_state(store)['folder'] = str(folder)
+        m.sync_pass(self.app); m.sync_pass(self.app)
+        with store.lock:
+            far = store.find('bots', 'far0001'); self.assertTrue(far['pinned'])
+            for k in ('localLimit', 'access', 'permissionMode'): far.pop(k, None)  # as an earlier version left it
+            mine = next(b for b in store.data['bots'] if not b.get('isAdmin') and b['id'] != 'far0001'); mine['instructions'] = '改過了'
+        m.sync_pass(self.app)  # changed here after joining: this Mac's own
+        with store.lock:
+            store.data['settings'].pop('heldInSet', None); m.held_in_migrate(store)
+        self.assertTrue(far['localLimit']); self.assertNotIn('localLimit', mine)
+
+    def test_a_settings_pack_skill_is_off(self):
+        import io, zipfile
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w') as z:
+            z.writestr('zook.json', json.dumps(dict(format='zook-pack', version=1, connectors=[], skills=[dict(name='報表', folder='report', on=True)])))
+            z.writestr('skills/report/SKILL.md', '---\nname: 報表\ndescription: x\n---\n'); z.writestr('skills/report/make.py', 'print(1)')
+        with mock.patch.object(m, 'skills_home', lambda store: Path(self.temp.name) / 'skills'):
+            (Path(self.temp.name) / 'skills').mkdir()
+            result = m.pack_import(self.store, buf.getvalue())
+        self.assertEqual(len(result['skills']), 1)
+        record = self.store.data['skills'][-1]
+        self.assertIn(m.ZOOK_SKILL + record['id'], self.store.data['settings']['disabledSkills'])
+
+    def test_ids_are_lowercase_everywhere(self):
+        data = dict(settings={}, bots=[dict(id='ABC', name='a', chats=[dict(id='C1')], chatId='C1')], groups=[dict(id='G1', botIds=['ABC'])],
+                    schedules=[dict(id='s', botId='ABC', groupId='G1')], usageArchive={'ABC': {}})
+        m.backup_check(data)
+        self.assertEqual((data['bots'][0]['id'], data['bots'][0]['chatId'], data['groups'][0]['botIds'], data['schedules'][0]['botId'], list(data['usageArchive'])), ('abc', 'c1', ['abc'], 'abc', ['abc']))
+        with self.assertRaises(ValueError): m.backup_check(dict(settings={}, bots=[dict(id='ABC', name='a'), dict(id='abc', name='b')]))
+        self.assertIsNone(m.sync_clean('bots:ABC', dict(name='x', provider='codex', model='')))
+
+    def test_a_recalled_bot_sends_nothing_left_waiting(self):
+        with self.store.lock:
+            self.store.data['deletedBots'] = [dict(id='d1', name='舊', provider='codex', queue=[dict(id='q', content='舊訊息')], messages=[], chats=[])]
+            back = m.restore_bot(self.store, 'd1')
+        self.assertNotIn('queue', back)
+
+    def test_restore_stops_sync_before_the_copy_is_written(self):
+        store = self.store; folder = Path(self.temp.name) / 'cloud2'; folder.mkdir(); seen = []
+        with store.lock:
+            m.sync_state(store)['folder'] = str(folder); store.save()
+            name = m.backup_write(store, 'manual', store.data)
+            real = m.Store.__init__; marks = []
+            def watch(this, *a, **k):
+                seen.append(json.loads(store.path.read_text()).get('sync', {}).get('folder'))  # the file as a power cut would leave it
+                return real(this, *a, **k)
+            real_halt = m.sync_halt
+            def halt(st): marks.append('halt'); return real_halt(st)
+            def write(*a, **k): marks.append('write')
+            with mock.patch.object(m.Store, '__init__', watch), mock.patch.object(m, 'sync_halt', halt): m.backup_restore(self.app, name)
+        self.assertEqual((seen, marks), ([''], ['halt'])); self.assertEqual(self.app.store.data['sync']['folder'], '')
+        self.assertFalse((folder / ('zook-sync-%s.json' % self.app.store.data['sync']['deviceId'])).exists())
+
 if __name__ == '__main__':
     unittest.main()

@@ -14,7 +14,8 @@ def mobile_schedule_action(store, schedule_id, action):
     item = store.find('schedules', schedule_id)
     if not item: raise LookupError('找不到這個排程。')
     if action == 'delete': store.data['schedules'].remove(item)
-    elif action in ('pause', 'resume'): item['on'] = action == 'resume'; item.pop('held', None)
+    elif action == 'pause': item['on'] = False; item.pop('held', None)
+    elif action == 'resume': raise ValueError('排程要在 Mac 上恢復。')  # it starts work by itself later: only the user in the Mac's window turns it on
     else: raise ValueError('動作無效。')
     store.save()
 
