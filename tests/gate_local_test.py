@@ -359,6 +359,8 @@ class FinalReviewTest(unittest.TestCase):
         s = runtime.RuntimeSession([], [], False, self.root, lambda *a: True, events.append, {'skills': [], 'mcp': []}, extra_tools=[m.group_file_tool(store, 'g1', runtime)])
         s.tools(); s.call('zook_group_file_read', {'name': 'env'}); s.close()
         self.assertNotIn('K=secret', json.dumps(events, ensure_ascii=False))
+        page = (ROOT / 'backend/zook/groups.py').read_text(encoding='utf-8')
+        self.assertIn("if k == 'origName'})  # the uploaded name stays known", page)  # a Bot saving the file back keeps it
 
     def test_a_reply_sent_again_is_checked_again(self):
         m, store = self.m, self.store
@@ -371,6 +373,8 @@ class FinalReviewTest(unittest.TestCase):
             self.assertFalse(m.billing_still_ok(store, 'j', bot, 'claude', None, True))  # switched to API billing between the tries
         self.assertEqual(job['status'], 'failed'); self.assertIn('沒有重送', job['error'])
         self.assertTrue(m.billing_still_ok(store, 'j', dict(bot, autoAssigned=False), 'claude', None, False))
+        app = (ROOT / 'backend/zook/app.py').read_text(encoding='utf-8')
+        self.assertEqual(app.count('billing_still_ok(store, job_id, bot, p, a, fixed)'), 3)  # after a summary too, right before it is sent again
 
 
 def zook_gate_names(path):

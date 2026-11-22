@@ -84,10 +84,14 @@ def claude_gate_seen(store, env):
     return (store.data.get('claudeGate') or {}).get(claude_gate_key(env)) is True
 
 
-def claude_scope(store, provider, bot, scope, root, workspace):
-    """(scope, folder) for a Claude reply: the whole Mac only once its hook was seen running in this Claude setup."""
+def claude_scope(store, provider, bot, scope, root, workspace, job=None):
+    """(scope, folder) for a Claude reply: the whole Mac only once its hook was seen checking a tool in this Claude setup. Until then
+    the reply keeps every built-in tool, Bash too (job['gateProbe']), held to its workspace by the gate: the first tool it uses
+    leaves the mark, and the next reply has the whole Mac."""
     with store.lock: seen = claude_gate_seen(store, provider_env(provider, find_account(bot.get('account'), provider)))
-    return (scope, root) if scope != 'full' or seen else ('workspace', workspace)
+    if scope != 'full' or seen: return scope, root
+    if job is not None: job['gateProbe'] = True
+    return 'workspace', workspace
 
 
 def claude_gate_env(store, env, tools, scope, root, workspace, files=(), group_bot=None):
@@ -102,6 +106,7 @@ def claude_gate_env(store, env, tools, scope, root, workspace, files=(), group_b
     gate = [str(folder / secrets.token_hex(12)), secrets.token_hex(16), 0]
     env['ZOOK_GATE_MARK'], env['ZOOK_GATE_NONCE'] = gate[0], gate[1]
     if tools and scope != 'full': env['ZOOK_GATE_ROOTS'] = json.dumps([str(root), str(workspace)])
+    if 'Bash' in tools and scope != 'full': env['ZOOK_GATE_SHELL'] = '1'  # commands too, with every path in them inside those folders
     if not tools:
         env['ZOOK_GATE_ROOTS'] = json.dumps([str(f) for f in files] + ([str(group_copy_folder(store, group_bot))] if group_bot else []))
         env['ZOOK_GATE_DEFER'] = '1'

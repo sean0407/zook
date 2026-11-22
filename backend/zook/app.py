@@ -501,7 +501,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 if tidy: job.update(compactTried=True); job.pop('errorKind', None); self.attempt_errors.pop(job_id, None)
             if tidy and billing_still_ok(store, job_id, bot, p, a, fixed):  # too long: the earlier part becomes a summary, and this reply is tried once more
                 prompt = self.compact_chat(job_id, prompt, (p, m), run_bot, inventory)
-                self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)
+                if billing_still_ok(store, job_id, bot, p, a, fixed): self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)  # asked again after the summary
             with store.lock:
                 job = store.find('jobs', job_id)
                 if not job: return
@@ -550,7 +550,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             workspace = store.dir / 'workspaces' / bot['id']; workspace.mkdir(parents=True, exist_ok=True, mode=0o700)
             # The access scope applies to every CLI. Grok and plain CLIs cannot ask before each action, so with 主動性 謹慎 they stay in the workspace.
             scope, root = bot_access(bot, workspace, kind) if native or kind in ('codex', 'claude') or (kind == 'cursor' and planning) else ('workspace', workspace)
-            if kind == 'claude': scope, root = claude_scope(store, provider, bot, scope, root, workspace)  # the whole Mac once its hook was seen running
+            if kind == 'claude': scope, root = claude_scope(store, provider, bot, scope, root, workspace, job)  # the whole Mac once its hook was seen checking a tool
             # Grok reads Zook's tool settings from the folder it starts in, and its sandbox keeps it inside that folder. So for a chosen
             # folder it starts there (Zook's settings go into a .grok folder that is removed afterwards); otherwise in the workspace.
             cli_cwd = root if kind == 'grok' and scope == 'folder' else workspace if kind in ('grok', 'antigravity', 'cursor') else root
@@ -674,7 +674,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 args += ['resume', resume, '-'] if resume else ['-']
             else:
                 hooks_ok = claude_hooks_allowed(env=env)  # a policy may turn Zook's hook off: then no built-in tool at all, and nothing allowed in advance
-                claude_tools = (CLAUDE_NATIVE_TOOLS + (['Bash'] if scope == 'full' else []) + (['Task'] if 'multi' in features else [])) if native and selected and hooks_ok else []
+                claude_tools = (CLAUDE_NATIVE_TOOLS + (['Bash'] if scope == 'full' or job.get('gateProbe') else []) + (['Task'] if 'multi' in features else [])) if native and selected and hooks_ok else []
                 attach_read = ['Read'] if hooks_ok and (job.get('attachments') or job.get('groupFiles')) and 'Read' not in claude_tools else []  # just to look at what was attached
                 args = [binary, '--print', '--restricted' if selected else '--safe-mode', '--strict-mcp-config', '--no-session-persistence', '--tools', ','.join(claude_tools + attach_read + (['WebSearch', 'WebFetch'] if web and hooks_ok else [])), '--output-format', 'stream-json', '--verbose'] + (['--include-partial-messages'] if streaming else [])
                 if claude_tools and scope == 'full': args += ['--add-dir', '/']

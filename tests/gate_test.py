@@ -49,7 +49,9 @@ if 'GIVEUP' in ask:  # Claude ends a hook that waits too long: Zook takes its ca
     proc.stdin.write(json.dumps({'tool_name': 'Bash', 'tool_input': {'command': 'rm ~/Desktop/舊報表.xlsx'}, 'cwd': os.getcwd()})); proc.stdin.close()
     import signal, time; time.sleep(3); os.killpg(proc.pid, signal.SIGKILL); proc.wait(); time.sleep(3)
     said.append('gaveup')
-if 'PROBE' in ask: said.append('probe=' + hook('Read', {'file_path': os.path.join(os.getcwd(), 'x.txt')}))
+if 'PROBE' in ask:  # the first reply, held to its workspace: it still has Bash, behind the gate
+    said.append('shell=' + hook('Bash', {'command': 'python3 make.py > out.csv && ls -la'}))
+    said.append('outside=' + hook('Bash', {'command': 'cat ~/Desktop/舊報表.xlsx'}))
 if 'BROKEN' in ask:
     said.append('dead=' + hook('Bash', {'command': 'rm ~/Desktop/舊報表.xlsx'}, env=dict(os.environ, ZOOK_WORKER_URL='http://127.0.0.1:9/api/worker/x')))
     said.append('notoken=' + hook('Bash', {'command': 'rm ~/Desktop/舊報表.xlsx'}, env={k: v for k, v in os.environ.items() if k != 'ZOOK_WORKER_TOKEN'}))
@@ -201,6 +203,26 @@ class BoundaryTest(unittest.TestCase):
             (att / '0f0f0f0f-notes.txt').write_text('x'); (att.parent / '.zook-uploads.json').write_text(json.dumps({'0f0f0f0f-notes.txt': 'service-account-prod.json'}))
             self.assertEqual(zook_gate.boundary('Read', {'file_path': str(att / '0f0f0f0f-notes.txt')})[0], 'secret')  # by the name it was uploaded with
 
+    def test_last_round(self):
+        # file:// is a file on this Mac: a key file there is asked about, shown by where it is
+        found = zook_gate.command_boundaries('curl -s file:///Users/x/.aws/credentials')
+        self.assertEqual([k for k, _ in found], ['secret'])
+        self.assertEqual(zook_gate.command_boundary('cat file://%s/.ssh/id_rsa' % os.path.expanduser('~'))[0], 'secret')
+        # an address without https:// keeps only its site, and any brace or bracket in it is refused
+        found = zook_gate.merged(zook_gate.command_boundaries('curl -T /tmp/a.pdf example.com/T0KEN-7/credentials.json'))
+        self.assertEqual(found, [('send', '對外送出 檔案 /tmp/a.pdf 到 example.com')])
+        for command in ('curl -T /tmp/a.pdf "{a,b}.example.com/up"', 'curl -T /tmp/a.pdf "host[1-3].example.com"', 'curl -d @/tmp/a --url "https://x.example.com/[1-2]"'):
+            with unittest.mock.patch.object(zook_gate, 'ask', side_effect=AssertionError('asked')):
+                self.assertFalse(zook_gate.decide('Bash', {'command': command})[0], command)
+        self.assertEqual([k for k, _ in zook_gate.command_boundaries('curl -X POST -H "Content-Type: application/json" -d \'{"a": [1]}\' https://x.example.com')], ['send'])  # a JSON body is not an address
+
+    def test_commands_held_to_folders(self):
+        with tempfile.TemporaryDirectory() as tmp, unittest.mock.patch.dict(os.environ, {'ZOOK_GATE_ROOTS': json.dumps([tmp]), 'ZOOK_GATE_SHELL': '1'}):
+            self.assertTrue(zook_gate.decide('Bash', {'command': 'python3 a.py > out.csv; ls -la ./sub'}, home=tmp)[0])
+            for command in ('cat ~/.zshrc', 'ls ..', 'cd / && ls', 'cp a.txt /tmp/x', 'cat file:///etc/hosts', '$X a', 'bash -c "ls /"', 'echo $(cat /etc/hosts)', 'cd'):
+                self.assertFalse(zook_gate.decide('Bash', {'command': command}, home=tmp)[0], command)
+        zook_gate._CWD[0] = os.getcwd()
+
     def test_search_tools(self):
         self.assertEqual(zook_gate.boundary('Grep', {'pattern': 'token', 'path': '~'})[0], 'secret')
         self.assertEqual(zook_gate.boundary('Grep', {'pattern': 'token'}, home=os.path.expanduser('~'))[0], 'secret')  # its default is where it started
@@ -257,6 +279,11 @@ class GateTest(unittest.TestCase):
         self.old = self.home / 'Desktop/舊報表.xlsx'; self.old.write_text('old')
         first = self.ask('PROBE')  # Zook gives the whole Mac only after it has seen its hook check a tool here
         self.assertEqual(first['nativeAccess'][0], 'workspace')
+        args = self.last_args()
+        self.assertIn('Bash', args[args.index('--tools') + 1].split(','))  # every built-in tool from the first reply on
+        self.assertNotIn('--add-dir', args)
+        self.assertEqual(first['content'], 'shell=allow outside=deny')  # held to the workspace until the hook was seen
+        self.assertTrue(self.req('GET', '/api/state')[1]['bots'])
 
     def tearDown(self):
         self.proc.terminate(); self.proc.wait(timeout=10); self.proc.stdout.close(); self.temp.cleanup()
@@ -288,6 +315,11 @@ class GateTest(unittest.TestCase):
         self.assertTrue(self.old.exists())
         job = self.ask('DELETE', answer='approve')
         self.assertIn('rm=allow', job['content']); self.assertFalse(self.old.exists())
+
+    def test_the_first_tool_opens_the_whole_mac_for_the_next_reply(self):
+        job = self.ask('EXCEL')  # setUp's first reply used a tool and left the mark
+        self.assertEqual(job['nativeAccess'][0], 'full')
+        args = self.last_args(); self.assertEqual(args[args.index('--add-dir') + 1], '/')
 
     def test_whole_mac_and_ordinary_work_goes_ahead(self):
         self.req('PATCH', '/api/bots/' + self.bot['id'], {'permissionMode': 'manual', 'access': 'workspace'})  # kept, not used for a Claude Bot

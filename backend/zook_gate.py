@@ -185,7 +185,8 @@ def _short(text, most=60):
 
 def _where(path):
     """Where a file is, whole, so two files of the same name are told apart: ~/… inside the home folder. A web address: its site only."""
-    if '://' in str(path): return _host(path) or '網址'
+    if str(path).lower().startswith('file://'): path = _file_url(str(path))
+    elif '://' in str(path): return _host(path) or '網址'
     full = os.path.normpath(_abs(path))
     if full == HOME: return '家目錄'
     return '~' + full[len(HOME):] if full.startswith(HOME + os.sep) else full
@@ -207,8 +208,35 @@ def _host(arg):
         try: return urllib.parse.urlsplit(arg).hostname or ''
         except ValueError: return ''
     if arg.startswith('-'): return ''
+    web = re.match(r'^(?:[^@/\s]+@)?([\w-]+(?:\.[\w-]+)+)(?::\d+)?/', arg)  # example.com/a/b: the site only, never the path
+    if web: return web.group(1)
     m = re.match(r'^(?:[^@/\s]+@)?([\w.-]+)(?::|$)', arg)
     return m.group(1) if m else ''
+
+
+CURL_VALUED = CURL_SEND | {'-H', '--header', '-o', '--output', '-u', '--user', '-A', '--user-agent', '-e', '--referer', '-X', '--request', '-b', '--cookie',
+                           '-c', '--cookie-jar', '-w', '--write-out', '-x', '--proxy', '-m', '--max-time', '--connect-timeout', '-r', '--range', '-E', '--cert',
+                           '--key', '--cacert', '-U', '--proxy-user', '--retry', '--limit-rate', '-z', '--time-cond', '--resolve', '--connect-to', '-D',
+                           '--dump-header', '-C', '--continue-at', '-Y', '-y', '--speed-limit', '--speed-time', '--max-redirs', '--interface', '--oauth2-bearer'}
+
+
+def _file_url(arg):
+    try: return urllib.parse.unquote(urllib.parse.urlsplit(arg).path) or '/'
+    except ValueError: return arg
+
+
+def _curl_addresses(args):
+    """Every address curl is given: what is not an option or an option's value, and --url's value. With or without https://."""
+    out, i = [], 0
+    while i < len(args):
+        a = args[i]
+        if a in ('--url',): out += args[i + 1:i + 2]; i += 2; continue
+        if a.startswith('--url='): out.append(a.split('=', 1)[1]); i += 1; continue
+        if a.startswith('-') and a != '-':
+            i += 2 if a in CURL_VALUED or (re.fullmatch(r'-[a-zA-Z]*[dFTHouAeXbcwxmrECUzDY]', a) and not a.startswith('--')) else 1
+            continue
+        out.append(a); i += 1
+    return out
 
 
 def _destination(url):
@@ -468,8 +496,8 @@ def _argv_boundaries(argv, whole, depth):
         files = [a for i, a in enumerate(args) if i and args[i - 1] in ('-T', '--upload-file')]
         files += [v[1:].split(';')[0] for i, a in enumerate(args) for v in [a.split('=', 1)[1] if a.startswith('--') and '=' in a and a.split('=', 1)[0] in CURL_SEND else args[i + 1] if a in CURL_SEND and i + 1 < len(args) else '']
                   if '@' in v and v.split('=', 1)[-1].startswith('@') for v in [v.split('=', 1)[-1]]]
-        urls = [a for a in args if '://' in a or re.fullmatch(r'[\w-]+(\.[\w-]+)+(:\d+)?(/\S*)?', a)]
-        globbed = any(set(u) & set('{}[]') for u in urls)  # curl may turn it into many addresses; -g can be undone by a later option
+        urls = _curl_addresses(args)
+        globbed = any(set(u) & set('{}[]') for u in urls)  # curl may turn it into many addresses (host or path); -g can be undone by a later option
         if sends and any(a in ('-K', '--config') or a.startswith('--config=') or re.fullmatch(r'-[a-zA-Z]*K.*', a) and not a.startswith('--') for a in args):
             found.append(('split', '這個 curl 指令從設定檔讀取要傳的內容和目的地，看不出會傳幾次、傳到哪裡'))
         elif sends and globbed: found.append(('split', '這個 curl 的網址是一個樣式（例如 {a,b} 或 [1-3]），會展開成好幾個目的地'))
@@ -505,7 +533,9 @@ def _argv_boundaries(argv, whole, depth):
     if any(_guard_path(t) for t in targets): found.append(_hit('guard', '修改 ' + _names([t for t in targets if _guard_path(t)])))
     elif name not in DELETE_COMMANDS and any(_system_path(t) for t in targets) and name not in ('touch', 'mkdir'): found.append(_hit('system', '寫入 ' + _names([t for t in targets if _system_path(t)])))
     if name in DELETE_COMMANDS and any(_guard_path(t) for t in plain): found.append(_hit('guard', '刪除 ' + _names([t for t in plain if _guard_path(t)])))
-    touched = [a for a in args if '://' not in a and (a.startswith(('/', '~', '$HOME', '${HOME}', '.', '@')) or '/' in a or os.path.basename(a).startswith('.env'))]  # a web address is not a file here
+    local = [_file_url(a) if a.lower().startswith('file://') else a for a in args]  # file:// is a file on this Mac, checked like one
+    web = set(_curl_addresses(args)) if name in ('curl', 'wget') else set()  # an address without https:// is still not a file here
+    touched = [a for a in local if '://' not in a and a not in web and (a.startswith(('/', '~', '$HOME', '${HOME}', '.', '@')) or '/' in a or os.path.basename(a).startswith('.env'))]
     touched += [a.split('=', 1)[1] for a in args if a.startswith('--') and '=' in a]
     if not any(k == 'secret' for k, _ in found) and any(_secret_path(a) for a in touched): found.append(_hit('secret', _names([a for a in touched if _secret_path(a)])))
     return found
@@ -600,6 +630,24 @@ def ask(actions):
     return isinstance(answer, dict) and answer.get('approved') is True
 
 
+def _command_paths(command):
+    """Every file or folder a command line names (its words that look like paths, and where it redirects), for holding it to folders.
+    A command that cannot be read is outside. A program run from a file is not read: the same limit as everywhere in this gate."""
+    parts, clear = _split(_without_inner(command))
+    if not clear or _inner(command): return ['（無法判讀的指令）']
+    found = []
+    for argv in parts:
+        words, read, written = _redirects(argv)
+        words = _strip(words)
+        if words and ('$' in words[0] or os.path.basename(words[0]) in SHELLS | {'eval'}): return ['（無法判讀的指令）']
+        for w in words[1:] + read + written:
+            if w.lower().startswith('file://'): w = _file_url(w)
+            if '://' in w: continue
+            if w.startswith(('/', '~', '$HOME', '${HOME}', '..')) or '/' in w or w in ('.', '..'): found.append(_abs(w.split('=', 1)[-1] if w.startswith('--') else w))
+        if words and os.path.basename(words[0]) == 'cd' and len(words) == 1: found.append(HOME)
+    return found
+
+
 def outside_roots(tool, data, home=''):
     """When Zook limits this reply to some folders (ZOOK_GATE_ROOTS): the paths this call would reach outside them. A command line
     cannot be held to folders, so any command is outside."""
@@ -609,7 +657,10 @@ def outside_roots(tool, data, home=''):
     low = str(tool or '').lower(); data = data if isinstance(data, dict) else {}
     if low.startswith('mcp') or low in ('task', 'agent', 'todowrite'): return []
     _CWD[0] = home or os.getcwd()
-    if low in SHELL_TOOLS or isinstance(data.get('command'), str): return ['（指令）']
+    if low in SHELL_TOOLS or isinstance(data.get('command'), str):
+        if os.environ.get('ZOOK_GATE_SHELL') != '1' or not isinstance(roots, list): return ['（指令）']
+        named = _command_paths(data.get('command') or '')
+        return [p for p in named if p.startswith('（') or not _under(p, [str(r) for r in roots if isinstance(r, str) and r])]
     paths = [_abs(p) for p in _paths(data)]
     if low == 'glob' and isinstance(data.get('pattern'), str): paths.append(data['pattern'] if os.path.isabs(_expand(data['pattern'])) else os.path.join(paths[0] if paths else _CWD[0], data['pattern']))
     if low in ('grep', 'glob', 'ls', 'listdir', 'list_dir') and not paths: paths = [_CWD[0]]  # its default: where it started
