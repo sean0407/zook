@@ -225,7 +225,7 @@
       form.elements.modelCustom.value = '';
       form.elements.modelCustom.hidden = true;
       form.dataset.providerChanged = '1';
-      form.querySelector('.model-note').textContent = '提供者已變更，模型已切換為預設。';
+      form.querySelector('.model-note').textContent = '換了一家，型號已改回它建議的版本，正在讀取能選的型號…';
       loadModels(form);
     } else if (e.target.name === 'modelSelect') {
       const custom = form.elements.modelCustom;

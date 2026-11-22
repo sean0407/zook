@@ -212,6 +212,13 @@
     if (!state.data.knowledge) state.data.knowledge = [];
     if (!state.data.schedules) state.data.schedules = [];
     if (!state.data.groups) state.data.groups = [];
+    if (!state.lastRestored) {  // after a reload, the conversation or group that was open before
+      state.lastRestored = true;
+      let last = {};
+      try { last = JSON.parse(localStorage.getItem('zook-last-chat') || '{}') || {}; } catch (_) {}
+      if (last.group && state.data.groups.some(g => g.id === last.group)) state.groupId = last.group;
+      if (last.bot && state.data.bots.some(b => b.id === last.bot)) state.selected = last.bot;
+    }
     if (state.groupId && !activeGroup()) state.groupId = null;
     for (const job of state.data.jobs || []) state.jobDetails[job.id] = job;
     if (!state.selected || !activeBot()) state.selected = state.data.bots[0]?.id || null;

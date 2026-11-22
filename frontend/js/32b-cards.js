@@ -23,6 +23,30 @@
   const LIMIT_WORDS = {workspace_owner_credits_depleted: '工作區的點數用完了，這個帳號暫時不能用（要由工作區擁有者加值）', usage_limit_reached: '額度用完了，等重置後才能再用', rate_limit_reached: '額度用完了，等重置後才能再用'};
   const limitNow = s => !!s?.limitReached && Date.now() - Date.parse(s.updatedAt) < 30 * 60e3;  // same half hour as the backend's limit_reached_now
   const limitWords = code => LIMIT_WORDS[code] || (/credit/i.test(code) ? '點數用完了，這個帳號暫時不能用' : '已達使用上限，這個帳號暫時不能用');
+  // How much one account has left, for the cards and the Bot form: 'out' (cannot be used now) wins over what the bars still show,
+  // 'low' is under 20%. reset is when it can be used again, in words; it is empty when the CLI does not say.
+  const resetTime = r => r == null ? NaN : new Date(typeof r === 'number' ? (r > 1e12 ? r : r * 1000) : r).getTime();
+  function accountLevel(provider, account) {
+    const q = quotaFor(provider, account || undefined), s = q?.quota;
+    if (!s || q.apiBilling || q.noQuotaApi) return {level: ''};
+    const wins = (s.windows || []).map(w => ({left: windowLeft(w), resetsAt: w.resetsAt})), empty = wins.filter(w => w.left <= 0);
+    if (limitNow(s) || empty.length) {
+      const last = empty.filter(w => !isNaN(resetTime(w.resetsAt))).sort((a, b) => resetTime(b.resetsAt) - resetTime(a.resetsAt))[0];
+      return {level: 'out', reset: last ? fmtReset(last.resetsAt) : '', why: limitNow(s) ? limitWords(s.limitReached) : ''};
+    }
+    const low = wins.filter(w => w.left < 20).sort((a, b) => a.left - b.left)[0];
+    return low ? {level: 'low', left: Math.round(low.left), reset: fmtReset(low.resetsAt)} : {level: ''};
+  }
+  const levelMark = l => l.level === 'out' ? '・已用完' : l.level === 'low' ? '・剩不到 20%' : '';
+  // The line under 模型與帳號 in the Bot form when the chosen account is used up or nearly so. It only tells; nothing is blocked.
+  function quotaWarnText(choice) {
+    const [p, a] = String(choice || '').split('::');
+    if (p === 'auto') return '';
+    const l = accountLevel(p || state.data.settings.provider || 'codex', a || '');
+    if (l.level === 'out') return '這個帳號的額度已用完，現在傳訊息會失敗' + (l.reset ? '，' + l.reset : '；等額度重置或換一個帳號') + '。';
+    if (l.level === 'low') return `這個帳號只剩 ${l.left}% 額度，可能很快用完` + (l.reset ? '，' + l.reset : '') + '。';
+    return '';
+  }
   function loginButtons(p, a) {
     const acct = a ? a.id : '', signed = (a || p).status === 'logged_in';
     if (a && a.type !== 'login') return '';
@@ -48,17 +72,18 @@
     if (q?.quotaUnread && !(s?.windows || []).length) return '<p class="quota-empty">讀不到額度</p>';
     if (limitNow(s) && !(s.windows || []).length) return `<p class="error-text small">${esc(limitWords(s.limitReached))}</p>`;
     if (!s || !(s.windows || []).length) return '<p class="quota-empty">還沒有額度資料，按右上角「偵測使用量」讀取。</p>';
-    const bars = s.windows.map(w => { const left = windowLeft(w); return `<div class="quota-row"><div class="quota-label"><span>${esc(w.label)}</span><span><b>剩餘 ${left}%</b></span></div><div class="quota-track left-track"><div class="quota-bar ${left < 20 ? 'bad' : ''}" style="width:${left}%"></div></div><small class="quota-reset">${esc(left >= 100 ? '' : fmtReset(w.resetsAt))}</small></div>`; }).join('');
+    const bars = s.windows.map(w => { const left = windowLeft(w); return `<div class="quota-row"><div class="quota-label"><span>${esc(w.label)}</span><span><b>剩餘 ${left}%</b></span></div><div class="quota-track left-track"><div class="quota-bar ${left < 20 ? 'warn' : ''}" style="width:${left}%"></div></div><small class="quota-reset">${esc(left >= 100 ? '' : fmtReset(w.resetsAt))}</small></div>`; }).join('');
     const extra = (s.resetCredits ? `<p class="quota-coupon-line">額度重置券 ${s.resetCredits} 張（在 Codex 中使用）</p>` : '') + (s.credits && (s.credits.unlimited || (s.credits.balance && s.credits.balance !== '0')) ? `<p class="quota-extra">額外額度：${s.credits.unlimited ? '不限' : esc(s.credits.balance)}</p>` : '') + (limitNow(s) ? `<p class="error-text small">${esc(limitWords(s.limitReached))}</p>` : '');
     return done + bars + extra;
   }
   function accountCard(p, a) {
-    const q = quotaFor(p.id, a ? a.id : undefined), who = a || p;
+    const q = quotaFor(p.id, a ? a.id : undefined), who = a || p, lv = p.installed ? accountLevel(p.id, a ? a.id : '') : {level: ''};
+    const levelLine = lv.level === 'out' ? `<p class="quota-state out">已用完・暫時不能用${lv.reset ? '<small>' + esc(lv.reset) + '</small>' : ''}</p>` : lv.level === 'low' ? `<p class="quota-state low">快用完・剩不到 20%</p>` : '';
     const line = a ? [a.name, a.email].filter(Boolean).join(' · ') : [(p.profiles || []).length ? '預設帳號' : '', p.email || p.method].filter(Boolean).join(' · ') || p.vendor || '';
-    const auto = q?.autoOn === undefined ? '' : `<label class="auto-pick small-switch">${toggle(`${a ? `data-auto-account="${esc(a.id)}"` : `data-auto-model="${esc(p.id)}"`} ${q.autoBilled ? 'disabled' : ''}`, q.autoOn, '自動選用')}<span>${q.autoBilled ? 'API 計費，不會自動選用' : '自動選用'}</span></label>`;
+    const auto = q?.autoOn === undefined ? '' : `<label class="auto-pick small-switch">${toggle(`${a ? `data-auto-account="${esc(a.id)}"` : `data-auto-model="${esc(p.id)}"`} ${q.autoBilled ? 'disabled' : ''}`, q.autoOn, '自動選用')}<span>${q.autoBilled ? 'API 計費，不會自動選用' : lv.level === 'out' ? '自動選用・現在會被跳過' : '自動選用・用完時會被跳過'}</span></label>`;
     const add = !a && p.installed && (p.canAddLogin || p.canAddKey) ? `<button class="secondary small-btn" data-action="profile-add" data-id="${esc(p.id)}">＋ 帳號</button>` : '';
     const warn = p.issue || (p.changed || []).length ? `<p class="error-text small">${esc(p.issue || '這個版本有變動，暫時關閉：' + p.changed.join('、'))}</p>` : '';
-    return `<article class="left-card account-card"><header class="account-head"><div class="account-title"><h3>${esc(cliShort(p))}${p.custom ? ' <span class="pill">自訂</span>' : ''}</h3><span title="${esc(line)}">${esc(line)}</span></div>${p.version?.updateAvailable ? `<span class="new-version" title="有新版 ${esc(p.version.latest)}">有新版</span>` : ''}</header><div class="account-body">${warn}${cardBody(p, a, q)}</div><footer class="account-foot">${auto}<div class="card-actions">${add}<button class="secondary small-btn" data-action="account-detail" data-id="${esc(p.id)}" data-account="${esc(a ? a.id : '')}">詳細</button></div></footer></article>`;
+    return `<article class="left-card account-card ${lv.level ? 'quota-' + lv.level : ''}"><header class="account-head"><div class="account-title"><h3>${esc(cliShort(p))}${p.custom ? ' <span class="pill">自訂</span>' : ''}</h3><span title="${esc(line)}">${esc(line)}</span></div>${p.version?.updateAvailable ? `<span class="new-version" title="有新版 ${esc(p.version.latest)}">有新版</span>` : ''}</header><div class="account-body">${warn}${levelLine}${cardBody(p, a, q)}</div><footer class="account-foot">${auto}<div class="card-actions">${add}<button class="secondary small-btn" data-action="account-detail" data-id="${esc(p.id)}" data-account="${esc(a ? a.id : '')}">詳細</button></div></footer></article>`;
   }
   function accountCards() {
     const list = state.accounts?.providers;

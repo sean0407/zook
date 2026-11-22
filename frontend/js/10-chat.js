@@ -247,7 +247,7 @@
       case 'zook_delete_schedule': return `刪除排程「${scheduleLabel(a.schedule_id)}」`;
       case 'web_search': return a.query ? `上網搜尋「${String(a.query).slice(0, 60)}」` : '上網搜尋';
       case 'native_write': return `修改檔案「${fileName(a.path)}」`;
-      case 'native_command': return '在工作資料夾執行指令';
+      case 'native_command': return a.summary && a.summary !== '執行指令' ? String(a.summary).slice(0, 80) : '在工作資料夾執行指令';  // 「執行指令：python3、ls」 says which programs
       case 'native_read': return `查看「${fileName(a.path) || '檔案'}」`;
       case 'native_skill': return `使用 Skill「${String(a.name || 'Skill').slice(0, 60)}」`;
       case 'web_fetch': return `讀取網頁「${(String(a.url || '').match(/^https?:\/\/([^/]+)/) || [, a.url || '網頁'])[1]}」`;
@@ -294,13 +294,14 @@
     const list = source.flatMap(j => (j.toolCalls || []).map(c => ({...c, botId: j.botId, jobRunning: j.status === 'running', groupName: j.groupId ? (state.data.groups || []).find(g => g.id === j.groupId)?.name : ''})));
     if (!list.length) return '';
     const showWho = !!jobs;
-    return `<div class="tool-timeline">${list.slice(-30).reverse().map(c => {
+    const rows = list.slice(-30).reverse().map(c => {
       // A small colored dot only: green done, yellow waiting, red interrupted (blue while running). The reason shows on hover.
       let [cls, label] = callStatus(c);
       if ((cls === 'wait' || cls === 'run') && !c.jobRunning) [cls, label] = ['bad', '已中斷'];
       const who = showWho ? (state.data.bots.find(b => b.id === c.botId)?.name || 'Bot') + ' ' : '';
-      return `<div class="tool-event ${cls}" title="${esc(label + (c.name === 'native_command' && (c.arguments?.summary || c.arguments?.command) ? '：' + (c.arguments.summary || c.arguments.command) : ''))}"><span class="ev-dot ${cls}" role="img" aria-label="${esc(label)}"></span><span class="ev-text">${esc(who + describeCall(c))}${c.groupName && !showWho ? `<small class="ev-where">在群組「${esc(c.groupName)}」</small>` : ''}</span></div>`;
-    }).join('')}</div>`;
+      return {cls, label, text: who + describeCall(c), where: c.groupName && !showWho ? c.groupName : '', title: label + (c.name === 'native_command' && (c.arguments?.summary || c.arguments?.command) ? '：' + (c.arguments.summary || c.arguments.command) : ''), n: 1};
+    }).reduce((out, r) => { const last = out[out.length - 1]; if (last && last.text === r.text && last.cls === r.cls && last.where === r.where) last.n++; else out.push(r); return out; }, []);  // the same step several times in a row: one line with a count
+    return `<div class="tool-timeline">${rows.map(r => `<div class="tool-event ${r.cls}" title="${esc(r.title)}"><span class="ev-dot ${r.cls}" role="img" aria-label="${esc(r.label)}"></span><span class="ev-text">${esc(r.text)}${r.n > 1 ? `<small class="ev-count">（連續 ${r.n} 次）</small>` : ''}${r.where ? `<small class="ev-where">在群組「${esc(r.where)}」</small>` : ''}</span></div>`).join('')}</div>`;
   }
   // An empty conversation opens with the Bot's own greeting and questions you might ask it (made from its persona when it was
   // created). A Bot from before that asks for them once; until they arrive, a plain hello.
@@ -371,7 +372,7 @@
   }
   const groupFileMark = g => { const all = g.messages || []; return all.length + ':' + all.filter(m => m.status === 'completed' || m.role === 'system').length + ':' + (all[all.length - 1]?.id || ''); };
   // A member's copy of the group's files lives inside Zook's own data; the person only needs the file's name.
-  const hideInnerPaths = text => String(text).replace(/\[([^\]\n]+)\]\((?:file:\/\/|file:)?[^)\s]*\/workspaces\/[0-9a-f]{32}\/[^)\s]*\)/g, '$1（群組檔案）').replace(/(?:…|\.\.\.)?(?:\/[^\s`'"<>()（）「」，、：]*)?\/workspaces\/[0-9a-f]{32}\/(?:[^\s`'"<>()（）「」，、]*\/)?([^\s`'"<>()（）「」，、\/]+)/g, '$1（群組檔案）');
+  const hideInnerPaths = text => String(text).replace(/\[([^\]\n]+)\]\((?:file:\/\/|file:)?[^)\s]*\/workspaces\/[0-9a-f]{32}\/[^)\s]*\)/g, '$1（群組檔案）').replace(/(?:…|\.\.\.)?(?:\/[^\s`'"<>()（）「」，、：]*)?\/workspaces\/[0-9a-f]{32}\/(?:[^\s`'"<>()（）「」，、]*\/)?([^\s`'"<>()（）「」，、\/]+)/g, '$1（群組檔案）').replace(/(群組檔案\s*[：:「]\s*)([^\n（]{1,200}?)（群組檔案）/g, '$1$2');  // 「群組檔案：X（群組檔案）」 says it once
   function groupMessage(g, m) {
     if (m.compacted && !m.checkOf) return '<div class="compact-line"><span>前面的討論已整理成摘要，成員從這裡接續</span></div>' + groupMessage(g, Object.assign({}, m, {compacted: false}));
     if (m.checkOf) return '';
@@ -525,7 +526,8 @@
   const choiceOptions = (provider, account) => {
     const list = (state.providers || [{id: 'codex', name: 'Codex'}, {id: 'claude', name: 'Claude'}]);
     const picked = provider === 'auto' ? 'auto' : (provider || '') + (account ? '::' + account : '');
-    const opt = (value, label) => `<option value="${esc(value)}" ${picked === value ? 'selected' : ''}>${esc(label)}</option>`;
+    const mark = value => { const [p, a] = value.split('::'); return p === 'auto' ? '' : levelMark(accountLevel(p || state.data.settings.provider || 'codex', a || '')); };  // 已用完／剩不到 20%
+    const opt = (value, label) => `<option value="${esc(value)}" ${picked === value ? 'selected' : ''}>${esc(label + mark(value))}</option>`;
     const kept = !provider && account ? list.flatMap(p => p.accounts || []).find(a => a.id === account) : null;  // an older Bot: the default CLI with one of its extra accounts
     const fallback = list.find(p => p.id === (state.data.settings.provider || 'codex')), short = String(fallback?.name || state.data.settings.provider || 'Codex').split('（')[0];
     return opt('', short + '（預設）') + (kept ? opt('::' + account, short + '・' + kept.name + '（預設）') : '') + opt('auto', '自動配（依人格和工作指示）') + list.map(p => {
