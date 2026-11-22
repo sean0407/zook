@@ -43,6 +43,25 @@ class GroupFileSafety(unittest.TestCase):
         (copy / 'a.txt').write_text('a'); (copy / 'drafts').mkdir(); (copy / 'z.txt').write_text('z')
         self.assertEqual(server.sync_group_files_out(self.store, 'g1', 'B', 'b1', seen)[0], ['a.txt', 'z.txt'])
 
+    def test_lock_and_temporary_files_are_not_shared(self):
+        """巡檢 #25: PowerPoint's ~$ lock file showed up as a group file with download and 「請其他成員查核」."""
+        seen = server.sync_group_files_in(self.store, 'g1', 'b1'); copy = server.group_copy_folder(self.store, 'b1')
+        for name in ('提案.pptx', '~$提案.pptx', '.~lock.提案.odp#', 'draft.TMP', '.DS_Store', 'Thumbs.db'): (copy / name).write_text('x')
+        self.assertEqual(server.sync_group_files_out(self.store, 'g1', 'B', 'b1', seen)[0], ['提案.pptx'])
+        (self.shared / '~$keep.txt').write_text('lock')  # one already there from before is not listed either
+        self.assertEqual([e.name for e in server._plain_files(self.shared)], ['keep.txt', '提案.pptx'])
+
+    def test_an_upload_that_would_be_hidden_is_refused(self):
+        """An uploaded capture.tmp was stored, listed nowhere, and could not be downloaded or deleted."""
+        group = dict(id='g1')
+        for name in ('capture.tmp', '~$提案.pptx', 'Thumbs.db', 'page.crdownload'):
+            temp = self.root / 'upload'; temp.write_bytes(b'data')
+            with self.assertRaises(ValueError) as caught: server.add_group_file(self.store, group, name, temp, 4, '你')
+            self.assertIn('改檔名', str(caught.exception)); self.assertTrue(temp.exists())
+        self.assertEqual(sorted(p.name for p in self.shared.iterdir()), ['keep.txt'])
+        temp = self.root / 'upload'; self.assertEqual(server.add_group_file(self.store, group, 'capture.txt', temp, 4, '你'), 'capture.txt')
+        self.assertEqual([f['name'] for f in server.list_group_files(self.store, group)], ['capture.txt', 'keep.txt'])
+
     def test_hidden_answers_are_not_copied_to_later_members(self):
         (self.shared / 'other.txt').write_text('answer')
         self.assertEqual(list(server.sync_group_files_in(self.store, 'g1', 'b1', {'other.txt'})), ['keep.txt'])

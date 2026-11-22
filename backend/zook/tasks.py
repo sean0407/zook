@@ -301,7 +301,7 @@ def task_host_prompt(store, group, run, bot, kind):
     if kind == 'plan':
         rules = ['先判斷：使用者明確要大家分工時，照他的意思建立工作。沒有要求分工、而且簡單到你自己一次就能答好時，才直接回答，不要建立工作。',
                  '需要分工時：' + TASK_HOST_TOOLS,
-                 '每項工作說明要自足：成員看不到這段對話，只看得到你寫的說明。寫清楚目標、要做什麼、限制、可以動哪些檔案、要交回什麼。',
+                 '每項工作說明要自足：成員看不到這段對話，只看得到你寫的說明。寫清楚目標、要做什麼、限制、可以動哪些檔案、要交回什麼；使用者指定的存放位置要原樣寫進去。',
                  '「怎樣算完成」要寫成可以檢查的條件，例如「列出 3 個景點，每個附一句理由」。',
                  '交給最適合的成員，一項工作一位；不要交給你自己，也不要自己做成員的工作。互不相關的工作會同時進行。',
                  '要等別的工作做完才能開始的，在 after 填那些工作的編號；Zook 會把它們的回報交給這項工作。只在真的需要前面的結果時才填，其餘讓它們同時進行。',
@@ -337,7 +337,7 @@ def task_worker_prompt(store, group, run, task, bot, writable):
     shared = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
     copy_folder = group_copy_folder(store, bot['id'])
     if shared: rules.append('群組共用檔案在 %s：%s。用你的讀檔工具查看；讀不到時改用 zook_group_file_read。' % (copy_folder, '、'.join(shared[:40])))
-    rules.append('要交給群組的檔案請存到 %s（只放在這一層）。' % copy_folder if writable else '這次不能修改或新增群組共用檔案。')
+    rules.append('要交給群組的檔案請存到 %s（只放在這一層）；工作說明指定的存放位置也要存一份。' % copy_folder if writable else '這次不能修改或新增群組共用檔案。')
     parts = [identity_block(bot) + memory_block(store, bot), '\n規則：\n' + '\n'.join('- ' + r for r in rules),
              '\n=== 工作 %d：%s ===\n%s' % (task['n'], task['title'], task['spec']), '\n怎樣算完成：\n' + task['doneWhen']]
     upstream = [t for t in run['tasks'] if t['n'] in (task.get('deps') or []) and t['status'] == 'done']

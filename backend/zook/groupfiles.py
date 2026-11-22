@@ -10,10 +10,10 @@ def group_files_dir(store, group_id):
 
 
 def _plain_files(folder):
-    """Ordinary visible files directly in this folder; links and folders are ignored."""
+    """Ordinary visible files directly in this folder; links, folders, lock and temporary files are ignored."""
     try:
         with os.scandir(str(folder)) as found:
-            return sorted([e for e in found if e.is_file(follow_symlinks=False) and not e.name.startswith('.')], key=lambda e: e.name)
+            return sorted([e for e in found if e.is_file(follow_symlinks=False) and not scratch_name(e.name)], key=lambda e: e.name)
     except OSError: return []
 
 
@@ -53,6 +53,7 @@ def add_group_file(store, group, name, source, size, by):
     """Move an uploaded temporary file into the group's files. The name it was uploaded with is kept (origName): a key file stays known."""
     original = upload_original(name)
     if size > MAX_UPLOAD: raise ValueError('單一檔案不能超過 20 MB。')
+    if scratch_name(_short_name(name)): raise ValueError('這個檔名會被當成暫存檔或鎖檔（例如 .tmp、~$ 開頭），放進群組後看不到。請改檔名再上傳。')  # it would be stored but never listed
     with _group_files_lock:
         if group_files_size(store, group['id']) + size > GROUP_FILES_TOTAL: raise ValueError('這個群組的檔案已達 200 MB 上限，請先刪除一些。')
         folder = group_files_dir(store, group['id']); folder.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -125,8 +126,8 @@ def sync_group_files_out(store, group_id, bot_name, bot_id, seen):
     saved, skipped = [], []
     try:
         for entry_name in sorted(os.listdir(folder_fd)):
-            if entry_name.startswith('.'): continue
-            temp = shared / ('.incoming-' + ID())
+            if scratch_name(entry_name): continue  # e.g. PowerPoint's ~$ lock file is not a shared file
+            temp =shared / ('.incoming-' + ID())
             try:
                 try: copied = _read_bot_file(folder_fd, entry_name, temp)
                 except OSError: skipped.append(_short_name(entry_name)); continue

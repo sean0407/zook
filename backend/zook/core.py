@@ -632,14 +632,24 @@ def access_note(scope, root, commands, grok=False):
 
 
 NATURAL_REPLY_NOTE = ('回覆時像真人同事一樣，用自然、口語的方式說明你做了什麼和結果。不要提到內部工具名稱、參數、程式碼或 JSON，'
-                      '也不要貼出工具回傳的原始資料；除非使用者明確要求看程式碼或技術細節。')
+                      '也不要貼出工具回傳的原始資料，或轉述 Skill 的內部規則、你在 Skill 之間的取捨；除非使用者明確要求看程式碼或技術細節。')
 
 
-# Files a person can open as they are: real files, checked, Excel showing its numbers everywhere (Quick Look and phones do not recalculate).
-FILE_DELIVERY_NOTE = ('要交出檔案（Excel、Word、簡報、PDF、圖片）時：存成真的檔案，回覆裡寫出檔名與完整路徑。要看版面時，在你能寫入的地方把它轉成圖片看過'
-                      '（macOS 內建：qlmanage -t -s 1600 -o 暫存資料夾 檔案；多頁的要看相關頁）；只能讀不能寫的時候就用現有預覽或讀內容，並說明哪些版面沒有看到。'
+# Files a person can open as they are: real files where the user asked for them, every page looked at without opening the user's apps
+# (巡檢 M01: PowerPoint left open with a ~$ lock file, only the cover checked, dark text on a dark background, 4:3 for a 16:9 deck),
+# Excel showing its numbers everywhere (Quick Look and phones do not recalculate), and no scripts or previews left beside the result (#22).
+PAGEPICS = str(pathlib.Path(__file__).with_name('pagepics.py'))
+FILE_DELIVERY_NOTE = ('要交出檔案（Excel、Word、簡報、PDF、圖片）時：存成真的檔案，回覆裡寫出檔名與完整路徑。使用者指定了存放位置（資料夾或檔名）時，一定要存一份到那裡並寫出實際路徑；'
+                      '在群組裡就同時放群組檔案和那個位置。'
+                      '要看版面時，用不開視窗的方式把每一頁轉成圖片看過：PDF 與 .pptx 用 /usr/bin/python3 "%s" 檔案 暫存資料夾（逐頁出圖並印出頁面比例），'
+                      '其他格式，或這個指令讀不到、失敗時（例如 Bot 只能用指定資料夾），改用 qlmanage -t -s 1600 -o 暫存資料夾 檔案（只有第一頁，其餘讀內容確認，並說明哪些頁沒看到）；指令列出沒轉出的頁也一樣處理。不要用 open、osascript 或叫起 PowerPoint、Keynote、Word 等 App；'
+                      '萬一開了，用完關掉並刪掉留下的 ~$ 鎖檔。逐頁檢查文字和背景對比看得清楚、沒有被切掉或重疊、頁面比例符合（簡報 16:9，除非使用者另有要求）。'
+                      '只能讀不能寫的時候就讀內容，並說明哪些版面沒有看到。'
                       'Excel 要保留公式（使用者改明細才會跟著變），並同時存入算好的值（例如 xlsxwriter 的 write_formula 帶入 value），不然預覽和手機會顯示 0。'
-                      '只有真的需要時才寫暫存程式，放在這次專用的暫存資料夾，交付前只刪掉你這次建立的暫存程式和預覽圖。')
+                      '暫存程式和預覽圖只在需要時做，放在你新建的暫存資料夾（例如 mktemp -d；只能用指定資料夾時就在裡面另建子資料夾），不要放在交付位置或群組檔案裡；'
+                      '交付前刪掉這個暫存資料夾（只刪你這次建立的），交付位置只留成果。單聊、群組主持人與成員都一樣。') % PAGEPICS
+# Which shared Skill fits: what it is for, not the file type it makes (#28). Also sent when a CLI conversation is continued.
+SKILL_PICK_NOTE = '任務明確是某個 Skill 寫的用途時，才用 zook_read_skill 讀取完整指示再照做；只是輸出格式相同不算，例如一般報表不用海報或藝術設計的 Skill'
 # Facts about the user's own company are not made up (巡檢 C01 twice: 「全系列通過嚴格檢驗」 that no one had said).
 FACTS_NOTE = '公司事實（政策、檢驗、保固、價格、承諾）只寫使用者給的或你從適用的可靠來源確認過的；缺了又必要的寫成【待確認：…】讓使用者補，不必要的就不寫。'
 
