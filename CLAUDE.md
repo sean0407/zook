@@ -4,7 +4,7 @@
 
 ## 產品
 
-Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone App「ZookMobile」。它把使用者已安裝的 Codex、Claude、Grok、Antigravity、OpenCode、Cursor、Gemini 或自訂 CLI 放進同一個介面，可以多 Bot 群聊。
+Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone App「ZookMobile」。它把使用者已安裝的 Codex、Claude、Grok、Antigravity、Gemini、Cursor 或自訂 CLI（2026-11-22 收斂成這 6 家，之後不再接新的 CLI） 放進同一個介面，可以多 Bot 群聊。
 
 分層：模型 → 各家 CLI → Zook 的工具層與記憶層 → 簡易介面。目標是 Grok Bot 的簡單介面，加上 ChatGPT 的對話習慣和 Claude Code 的工具與自動化，同時充分發揮每家 CLI 的原生能力。
 
@@ -34,7 +34,7 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 | `native/Browser.swift` | Bot 的內建瀏覽器（`Zook --zook-browser`，同一個執行檔）：不保存資料的 WKWebView，可瀏覽與在搜尋框輸入 |
 | `native/remote/` | `zook-remote`，與中繼伺服器的加密連線 |
 | `backend/server.py` | 啟動入口：依序載入 `backend/zook/` 的檔案，全部共用同一個命名空間 |
-| `backend/zook/` | 依 `server.py` 裡的順序載入，共用同一個命名空間。`core` 資料儲存、`accounts` 帳號與更新、`library` 設定包與排程規則、`oauth` 連接器與 Google 登入、`catalog` 連接器目錄、`outputs` 產出、`mobile` 手機、`groupfiles` 群組共用檔案、`groups` 群組討論、`triggers` 資料夾與信件觸發、`sync` 多台 Mac 同步、`errors` CLI 失敗原因分類、`stream` 回覆逐字顯示、`waiting` 忙碌時排隊、`paging` 長對話分頁與搜尋、`compact` 對話過長自動整理、`automation` 本機腳本介面、`choices` 選項按鈕與 Bot 提問、`teams` 一句話建立團隊、`live` 保持 CLI 開啟、`opencode` OpenCode、`cursor` Cursor、`browser` 內建瀏覽器（擋私有位址的轉送層、工具、誰能用）、任務引擎（[設計](docs/task-engine-design.md)）：`tasks` 帳本、提示詞與工具，`taskrun` 執行迴圈，`taskcheck` 交叉驗收、重試、決策關卡與確認，`taskplus` 依驗收紀錄派工與派助手、`app` 回覆、`parsing` 解讀 CLI 輸出、`abilities` 各家能力對照、`sessions` 接續 CLI 原生對話與即時讀取輸出、`routing` 自動選擇模型、`fields` 欄位檢查、`upkeep` 備份、活動紀錄、用量預算、固定規則、舊工作瘦身、已刪除的 Bot、`templates` Skill 範本、`usageview` 用量頁、`handler` HTTP 路由 |
+| `backend/zook/` | 依 `server.py` 裡的順序載入，共用同一個命名空間。`core` 資料儲存、`accounts` 帳號與更新、`library` 設定包與排程規則、`oauth` 連接器與 Google 登入、`catalog` 連接器目錄、`outputs` 產出、`mobile` 手機、`groupfiles` 群組共用檔案、`groups` 群組討論、`triggers` 資料夾與信件觸發、`sync` 多台 Mac 同步、`errors` CLI 失敗原因分類、`stream` 回覆逐字顯示、`waiting` 忙碌時排隊、`paging` 長對話分頁與搜尋、`compact` 對話過長自動整理、`automation` 本機腳本介面、`choices` 選項按鈕與 Bot 提問、`teams` 一句話建立團隊、`live` 保持 CLI 開啟、`cursor` Cursor、`browser` 內建瀏覽器（擋私有位址的轉送層、工具、誰能用）、任務引擎（[設計](docs/task-engine-design.md)）：`tasks` 帳本、提示詞與工具，`taskrun` 執行迴圈，`taskcheck` 交叉驗收、重試、決策關卡與確認，`taskplus` 依驗收紀錄派工與派助手、`app` 回覆、`parsing` 解讀 CLI 輸出、`abilities` 各家能力對照、`sessions` 接續 CLI 原生對話與即時讀取輸出、`routing` 自動選擇模型、`fields` 欄位檢查、`upkeep` 備份、活動紀錄、用量預算、固定規則、舊工作瘦身、已刪除的 Bot、`templates` Skill 範本、`usageview` 用量頁、`handler` HTTP 路由 |
 | `backend/runtime.py` | MCP 客戶端、工具執行、核准分級；連接器的工具用到才載入 |
 | `backend/discovery.py` | 掃描這台 Mac 上 Codex、Claude 與共用庫的 Skills、連接器、插件（由 `runtime.py` 以路徑載入） |
 | `backend/zook_cli.py` | 本機腳本介面的指令工具，說明在 [docs/automation.md](docs/automation.md) |
@@ -42,7 +42,7 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 | `backend/tool_server.py` | 提供給 CLI 的 Zook 工具（MCP） |
 | `backend/cursor_guard.py` | Cursor 的 preToolUse 檢查：內建工具只能用在 Bot 允許的資料夾（fail-closed） |
 | `backend/gmail_mcp.py` | 內建 Gmail |
-| `backend/cli_installer.py` | 把 npm 類 CLI（Gemini、OpenCode、Copilot、Kimi）連同 Node.js 裝進 Zook 自己的 tools 資料夾 |
+| `backend/cli_installer.py` | 把 npm 類 CLI（例如 Gemini）連同 Node.js 裝進 Zook 自己的 tools 資料夾 |
 | `frontend/` | `index.html`、`style.css`、`js/`。`js/` 的檔案依檔名順序接成 `/app.js`（第一個檔案開頭和最後一個檔案結尾是同一個函式），無框架、無建置步驟 |
 | `ios/` | iPhone App |
 | `relay/` | Cloudflare Worker 中繼 |
@@ -179,4 +179,3 @@ GitHub Actions（`.github/workflows/test.yml`）在每個 PR 和推送到 `main`
 - Grok 的 Zook 工具伺服器必須用 `/usr/bin/python3` 啟動，嚴格沙箱擋得住 Xcode 內的 Python。
 - 內建瀏覽器（`browser.py`、`native/Browser.swift`）：需要 macOS 14（用 WKWebView 的轉送設定）。每則回覆第一次用到時才啟動，回覆結束就關掉。所有連線經過 Zook 自己的轉送層，名稱由它解析、任何一個答案是私有位址就整個拒絕，並連到它檢查過的位址；WebKit 的內容規則另外先擋字面上的私有位址。只開放 http(s) 的 GET 換頁（包含用 GET 送出的搜尋表單）；POST 表單、下載、上傳、新視窗、登入對話框、WebRTC 都關掉。Bot 只能在搜尋欄位（不在 POST 表單裡）輸入，不能在密碼、信箱、電話、驗證碼欄位或任何和密碼欄同一區塊的欄位輸入。網頁自己的程式可以在文字打進去的當下就送走，Zook 擋不到，所以每次輸入不論主動性都先問使用者，卡片寫出網站、欄位和文字，核准後網頁或欄位變了就不輸入；Bot 自己組出、帶資料（查詢參數、片段或很長的路徑）的網址也一樣先問。macOS 會讓結尾有點的名稱（`localhost.`）不經轉送層，所以這種網址一律拒絕。群組討論的回合算非使用者的回合。活動紀錄只留動作與網址，不留網頁內容。因為沒有使用者的登入，Bot 無法以使用者身分發文或下單。網頁內容只放在回覆的 `page` 裡，內文用每次不同的標記包住。轉送層也擋這台 Mac 所在、有公開位址的網段（用介面的實際網段；讀不到時一律不連），每則回覆最多同時 24 條連線、全部回覆合計 96 條。路由器的對外 IPv4 位址沒有擋（要查外部服務才知道）。Bot 能把資料放進網址開啟，這和上網搜尋一樣，靠「上網搜尋」開關與每個 Bot 的開關控制。
 - Cursor：用 `--force` 跑，靠工作資料夾 `.cursor/hooks.json` 的 preToolUse 檢查（`cursor_guard.py`）限制範圍；它的網頁搜尋不經過這個檢查，「上網搜尋」關閉時用 `CURSOR_FORCED_SHELL_EGRESS=1` 關掉。
-- GitHub Copilot、Kimi：能安裝和登入，但還不能在 Zook 回覆（Copilot 要在 GitHub 打開 Copilot CLI 權限；Kimi CLI 要 Kimi Code 付費方案）。

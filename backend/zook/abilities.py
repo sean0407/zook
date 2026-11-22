@@ -12,8 +12,6 @@ ABILITY_CHECKS = {
                    live=[(_HELP, '--input-format'), (_HELP, '--replay-user-messages')]),
     'grok': dict(chat=[(_HELP, '--prompt-file'), (_HELP, '--output-format')], tools=[(_HELP, '--allow')], images=[(_HELP, '--prompt-file')], plan=[(_HELP, '--deny')],
                  effort=[(_HELP, '--reasoning-effort')], resume=[(_HELP, '--resume')]),
-    'opencode': dict(chat=[(('run', '--help'), '--format'), (('run', '--help'), '--standalone')], tools=[(_HELP, 'mcp')], images=[(('run', '--help'), '--file')],
-                     plan=[(('run', '--help'), '--format')], resume=[(('run', '--help'), '--session'), (('session', '--help'), 'export')]),
     'cursor': dict(chat=[(_HELP, '--print'), (_HELP, '--output-format')], tools=[(_HELP, '--approve-mcps'), (_HELP, '--force')], plan=[(_HELP, '--mode')],
                    resume=[(_HELP, '--resume')]),
     'antigravity': dict(chat=[(_HELP, '--input-format'), (_HELP, '--output-format')], tools=[(_HELP, '--settings')], images=[(_HELP, '--settings')], plan=[(_HELP, '--mode')],
@@ -70,7 +68,6 @@ def ability_view(store, provider):
     kind = provider_kind(provider); offered = ABILITY_CHECKS.get(kind)
     report = ability_report(store, provider) if offered else None
     missing = (report or {}).get('missing') or {}
-    if kind == 'unverified': return dict(abilities=[], changed=[])  # cannot reply in Zook yet
     if not offered: return dict(abilities=[dict(id='chat', name='對話', state='on')], changed=[])
     items = [dict(id=key, name=name, state='broken' if key in missing else 'on') for key, name in ABILITIES if key in offered]
     return dict(abilities=items, changed=[name for key, name in ABILITIES if key in missing])

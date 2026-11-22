@@ -1,11 +1,11 @@
 # 自動選擇: picks a model for each message from the task type and saved quota, without asking any model. Loaded by backend/server.py into one shared namespace.
 AUTO = 'auto'
-AUTO_MODELS = ('codex', 'claude', 'grok', 'antigravity', 'opencode', 'cursor')
-AUTO_DEFAULT_OFF = ('antigravity', 'opencode', 'cursor')  # Antigravity: the user accepted an account risk; OpenCode, Cursor: CLIs added later. Each is used only when turned on
-AUTO_SUBSCRIPTIONS = ('Claude 訂閱帳號', 'ChatGPT 帳號', 'Grok 帳號', 'Google 帳號', '免費模型')
+AUTO_MODELS = ('codex', 'claude', 'grok', 'antigravity', 'cursor')
+AUTO_DEFAULT_OFF = ('antigravity', 'cursor')  # Antigravity: the user accepted an account risk; Cursor: a CLI added later. Each is used only when turned on
+AUTO_SUBSCRIPTIONS = ('Claude 訂閱帳號', 'ChatGPT 帳號', 'Grok 帳號', 'Google 帳號')
 AUTO_MIN_LEFT = 10  # percent of quota that must remain
-AUTO_TASKS = dict(image=('看圖', ('codex', 'claude', 'antigravity', 'grok', 'opencode')), code=('寫程式', ('codex', 'claude', 'grok', 'antigravity', 'opencode', 'cursor')),
-                  analysis=('長篇分析', ('claude', 'codex', 'antigravity', 'grok', 'opencode', 'cursor')), quick=('簡短問答', ('claude', 'codex', 'antigravity', 'opencode', 'cursor', 'grok')))  # measured: Grok thinks for tens of seconds before a short answer
+AUTO_TASKS = dict(image=('看圖', ('codex', 'claude', 'antigravity', 'grok')), code=('寫程式', ('codex', 'claude', 'grok', 'antigravity', 'cursor')),
+                  analysis=('長篇分析', ('claude', 'codex', 'antigravity', 'grok', 'cursor')), quick=('簡短問答', ('claude', 'codex', 'antigravity', 'cursor', 'grok')))  # measured: Grok thinks for tens of seconds before a short answer
 AUTO_MARKS = dict(image='image', code='code', analysis='analysis', quick='simple')  # the small mark at the end of a reply
 AUTO_LONG = 1500
 _AUTO_CODE = re.compile(r'```|`[^`\n]+`|程式|代碼|除錯|函式|腳本|報錯|重構|編譯|正則|(?<![a-z])(?:bug|debug|python|javascript|typescript|swift|sql|html|css|api|json|regex|script|git|commit|refactor|traceback|function)(?![a-z])', re.I)

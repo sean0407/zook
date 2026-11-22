@@ -104,7 +104,7 @@ class Handler(BaseHTTPRequestHandler):
                 ver = provider_version(provider)
                 item.update(version={k: ver[k] for k in ('current', 'latest', 'updateAvailable', 'error')} if ver else None)
                 item.update(login=flow.view() if flow else None, install=inst.view() if inst else None, loginMethods=[dict(id=m, label=l) for m, l in login_methods(provider)],
-                            canInstall=bool(s.get('install') or s.get('update')), terminalLogin=bool(s.get('terminal_login')), chat=s.get('kind') != 'unverified', installCommand=s.get('install', ''), canUpdate=bool(s.get('update')),
+                            canInstall=bool(s.get('install') or s.get('update')), terminalLogin=bool(s.get('terminal_login')), installCommand=s.get('install', ''), canUpdate=bool(s.get('update')),
                             canLogout=bool(provider in ('codex', 'claude') or s.get('logout')), removable=provider not in P.DEFAULT_ADDED,
                             requires=s.get('requires', ''), requirementMet=not s.get('requires') or bool(P.find_binary(s['requires'])),
                             config={k: s.get(k, '') for k in ('command', 'args', 'model_args', 'install', 'login', 'status')} if s.get('custom') else None,
@@ -389,7 +389,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, png, 'image/png') if png else self.error(404, '沒有這個圖示。')
             if path == '/api/providers' and self.command == 'GET':
                 data = self.server.store.data
-                return self.respond(200, {'providers': [dict(id=pid, name=provider_label(pid), installed=bool(find_cli(pid)), tools=bool((P.spec(data, pid) or {}).get('tools')), features=feature_support(provider_kind(pid)), chat=provider_kind(pid) != 'unverified',
+                return self.respond(200, {'providers': [dict(id=pid, name=provider_label(pid), installed=bool(find_cli(pid)), tools=bool((P.spec(data, pid) or {}).get('tools')), features=feature_support(provider_kind(pid)),
                                                              accounts=[dict(id=a['id'], name=a['name'], type=a['type']) for a in data.get('accounts') or [] if a.get('provider') == pid])
                                                         for pid in P.active_ids(data)]})
             if parts[:2] == ['api', 'accounts']:

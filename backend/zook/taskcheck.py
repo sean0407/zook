@@ -46,7 +46,8 @@ def task_job_cli(store, job, bot):
 def task_worker_kind(store, task):
     """The vendor (CLI kind) the last try of a task really ran on, as recorded when it ran. None when it is not known."""
     attempt = next((a for a in reversed(task.get('attempts') or []) if a.get('state') == 'reported'), {})
-    return provider_kind(attempt['cli']) if attempt.get('cli') else None
+    if not attempt.get('cli'): return None
+    return provider_kind(attempt['cli']) or (attempt['cli'] if attempt['cli'] in REMOVED_PROVIDERS else None)  # a removed CLI is still its own vendor for choosing who checks
 
 
 def task_pick_verifier(store, group, run, task, working):

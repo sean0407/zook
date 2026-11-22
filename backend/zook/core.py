@@ -42,7 +42,7 @@ MAX_CLI_OUTPUT = 128 * 1024 * 1024  # a CLI's event log can carry whole generate
 # Thinking strength: 快速 / 標準 / 深入. 標準 passes nothing, so each CLI keeps its own default.
 EFFORTS = ('fast', 'standard', 'deep')
 EFFORT_LEVELS = dict(fast='low', deep='high')
-PLAN_KINDS = ('codex', 'claude', 'grok', 'antigravity', 'opencode', 'cursor')  # the CLIs Zook can really hold to read-only
+PLAN_KINDS = ('codex', 'claude', 'grok', 'antigravity', 'cursor')  # the CLIs Zook can really hold to read-only
 SUBAGENT_NOTE = '\n這裡不能派出子代理或內部執行助手。如果 Skill 或規則要求派出，改由你自己直接完成，不要因此停下來。'
 PLAN_NOTE = ('\n先規劃：這次只提出計畫，不要動手。用條列說明要做什麼、步驟順序、會動到哪些檔案或服務、哪些動作需要使用者核准。'
              '可以讀資料來了解狀況，但不要修改檔案、不要執行會改變東西的指令、不要對外送出任何東西。最後提醒使用者：確認沒問題就按「照計畫執行」。')
@@ -191,6 +191,7 @@ class StoreBase:
         self.data['settings'].setdefault('fallbacks', [])
         self.data['settings'].setdefault('remote', dict(enabled=False, relayUrl=''))
         self.data.setdefault('remoteDevices', [])
+        drop_removed_providers(self)  # OpenCode, GitHub Copilot and Kimi are no longer supported
         if 'sections' not in self.data['settings']:
             # Sidebar groups keep their own order, including groups that are empty for now.
             self.data['settings']['sections'] = list(dict.fromkeys(b.get('section') or '我的 Bots' for b in self.data.get('bots', []) if not b.get('pinned')))

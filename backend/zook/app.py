@@ -523,7 +523,6 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             kind = provider_kind(provider)
             effort = job.get('effort') if ability_on(store, provider, 'effort') else 'standard'  # a CLI version without the option just uses its default
             if not kind: raise RuntimeError('找不到這個提供者，請到「各模型使用量」頁確認。')
-            if kind == 'unverified': raise RuntimeError('%s 還沒驗證能不能在 Zook 回覆，目前只能安裝和登入。請改用其他模型。' % provider_label(provider))
             web = web_enabled()
             # Each CLI keeps its own built-in tools (files, commands) inside the Bot's workspace when 主動性 is 自動 or 全部允許.
             # In 謹慎 only Zook's tools are available, because built-in tools cannot ask before each action.
@@ -543,8 +542,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             features = active_features(bot, kind, native, planning, scope)
             with store.lock: job.update(features=features, nativeAccess=[scope, str(root), permission_mode(store, bot), bool(native)])
             resume = self.native_session(job, provider, model, account, cli_cwd)
-            if resume and kind == 'opencode' and not opencode_has_session(store.dir, binary, resume, env): resume = None  # it would start an empty one under that id
-            if resume and kind == 'cursor' and not cursor_has_session(store.dir, resume): resume = None  # the same with Cursor
+            if resume and kind == 'cursor' and not cursor_has_session(store.dir, resume): resume = None  # it would start an empty one under that id
             keep_session = bool(job.get('chatId')) and kind in PLAN_KINDS
             with store.lock: job['resumed'] = bool(resume)
             if resume: prompt = self.__dict__.get('short_prompts', {}).get(job_id, prompt)
@@ -582,7 +580,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 if choices_for(store, job): prompt += ASK_NOTE
                 if 'zook_browser_open' in [t.get('name') for t in tools]: prompt += BROWSER_PROMPT
                 if kind == 'grok': prompt += '\nZook 工具在這裡的完整名稱是 zook__ 加上工具名，例如 zook__zook_create_schedule。'
-                if native: prompt += '\n工具說明：' + access_note(scope, root, kind in ('codex', 'antigravity', 'opencode') or (kind == 'cursor' and scope == 'full'), kind == 'grok') + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。'
+                if native: prompt += '\n工具說明：' + access_note(scope, root, kind in ('codex', 'antigravity') or (kind == 'cursor' and scope == 'full'), kind == 'grok') + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。'
                 else: prompt += '\n工具說明：檔案讀寫與其他動作請使用 zook 工具。zook 工具會依使用者設定的主動性決定是否先請使用者核准，與本機 CLI 沙箱是否唯讀無關；需要時直接呼叫，被拒絕再說明即可。'
             if not selected and scope != 'workspace': prompt += '\n工具說明：' + access_note(scope, root, True)
             if choices_for(store, job): prompt += CHOICE_NOTE
@@ -640,10 +638,6 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 if scope != 'workspace': prompt += '\n你目前在 Bot 的工作資料夾，要處理的檔案在 %s，請用完整路徑。' % root
                 args = cursor_args(binary, model, planning, scope, root, web, streaming, resume)
                 env = cursor_env(store.dir, env, cursor_rule(native, planning, scope, root, workspace, features), web)
-            elif kind == 'opencode':
-                attached = workspace / 'attachments' if job.get('attachments') or job.get('groupFiles') else None
-                args, extra = opencode_args(binary, model, native, planning, scope, root, web, selected, features, adapter, wait if selected else 60, resume, attached)
-                env = dict(opencode_env(store.dir, env), **extra)
             elif provider == 'codex':
                 images = [x for x in (job.get('attachments') or []) if pathlib.Path(x).suffix.lower() in IMAGE_TYPES and ability_on(store, provider, 'images')]
                 args = [binary, 'exec'] + [a for x in images for a in ('-i', x)] + ['--json'] + ((['--dangerously-bypass-approvals-and-sandbox'] if scope == 'full' else codex_permission_args(binary)) if native and selected else ['--sandbox', 'read-only']) + ['--skip-git-repo-check', '--ephemeral', '--ignore-user-config', '--color', 'never',
@@ -681,7 +675,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 if streaming: partial_start(job)
                 # A conversation's CLI may be kept open between messages (live.py); otherwise it is started for this one reply.
                 kept = live_turn(self, job, provider, kind, args, cli_cwd, env, resume, prompt, partial_feeder(kind, job_id) if streaming else None)
-                proc = kept or subprocess.Popen(args, stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=str(cli_cwd), env=dict(env, PWD=str(cli_cwd)))  # PWD too: OpenCode takes it as its project folder
+                proc = kept or subprocess.Popen(args, stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=str(cli_cwd), env=dict(env, PWD=str(cli_cwd)))  # PWD too, so it matches the folder the CLI starts in
                 self.processes[job_id] = proc
             try:
                 # A reply may take as long as it keeps working. It is stopped when nothing has happened for a while (no output from the
@@ -750,9 +744,6 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 if kind == 'cursor' and cursor_error(parsed['error'] + '\n' + said[-3000:]):
                     with store.lock: job['errorKind'] = 'quota' if '額度' in cursor_error(parsed['error'] + '\n' + said[-3000:]) else 'auth'
                     raise RuntimeError(cursor_error(parsed['error'] + '\n' + said[-3000:]))
-                if kind == 'opencode' and opencode_error(parsed['error']):
-                    with store.lock: job['errorKind'] = 'quota' if 'free-limit' in parsed['error'] else 'auth'
-                    raise RuntimeError(opencode_error(parsed['error']))
                 issue = cli_issue(said) if provider == 'gemini' and proc.returncode != 0 else ''  # what the CLI itself reports, not the Bot's text
                 if issue:
                     if not account: self.note_provider_issue(provider, issue)
