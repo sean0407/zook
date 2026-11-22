@@ -640,6 +640,7 @@ def describe_call(call):
              'zook_browser_scroll': '把網頁往上捲' if a.get('direction') == 'up' else '把網頁往下捲', 'zook_browser_read': '讀網頁的下一段', 'zook_browser_links': '看網頁上的更多連結',
              'zook_browser_screenshot': '幫網頁截圖', 'zook_browser_type': '在網頁輸入「%s」%s' % (str(a.get('text') or '')[:60], '並按 Enter' if a.get('enter') is True else '')}
     if name in fixed: return fixed[name]
+    if call.get('category') == 'code' and call.get('sourceLabel'): return '執行一段程式（%s）' % call['sourceLabel']  # e.g. node_repl's js
     label = re.sub(r'[_-]+', ' ', str(call.get('label') or '')).strip()
     return '使用「%s」%s' % (call.get('sourceLabel') or '外部服務', '的%s功能' % label if label else '')
 
