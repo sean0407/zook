@@ -646,10 +646,10 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                     if provider == 'gemini': guard_gemini_folder(cli_cwd, workspace)
                     args, stdin_prompt = P.command_args(P.spec(store.data, provider), str(prompt_file), prompt, model, full=scope == 'full', binary=binary)
             elif kind == 'antigravity':
-                prepare_antigravity_folder(workspace, scope, root, wait)
+                live_drop_bot(self, bot['id'], job); prepare_antigravity_folder(workspace, scope, root, wait)  # one agy per Bot: they share its workspace
                 if scope != 'workspace': prompt += '\n你目前在 Bot 的工作資料夾，要處理的檔案在 %s。' % root
                 if not (native and scope == 'full'): prompt += '\n不要讀取工作資料夾以外的檔案，也不要使用你內建的記憶或知識資料夾；這類動作會被擋下。要記住事情就直接回覆，或使用 zook 工具。'
-                args = antigravity_args(binary, model, effort, native, planning, scope, root, web) + (['--conversation', resume] if resume else [])
+                args = antigravity_args(binary, model, effort, native, planning, scope, root, web, agy_read_paths(workspace, job)) + (['--conversation', resume] if resume else [])
                 prompt = json.dumps({'event': 'user', 'message': {'content': prompt}}, ensure_ascii=False) + '\n'
             elif kind == 'cursor':
                 prepare_cursor_folder(workspace, adapter, selected, wait)
@@ -700,7 +700,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             try:
                 # A reply may take as long as it keeps working. It is stopped when nothing has happened for a while (no output from the
                 # CLI, no tool use), or at the overall limit. A 長任務 is given its whole time even when its CLI stays silent.
-                quiet_limit = LONG_JOB_TIMEOUT if job.get('long') else JOB_TIMEOUT
+                quiet_limit = LONG_JOB_TIMEOUT if job.get('long') else agy_quiet(kind, JOB_TIMEOUT)
                 deadline = time.monotonic() + (LONG_JOB_TIMEOUT if job.get('long') else max(JOB_HARD_TIMEOUT, JOB_TIMEOUT))
                 pipes = kept or Pipes(proc, prompt.encode('utf-8') if stdin_prompt else None, MAX_CLI_OUTPUT, on_output=partial_feeder(kind, job_id) if streaming else None)
                 active = self.__dict__.setdefault('job_activity', {}); active[job_id] = time.monotonic()
@@ -711,8 +711,9 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                     with store.lock:
                         waiting_on = store.find('jobs', job_id) or {}; asking = any(a.get('status') == 'pending' for a in waiting_on.get('approvals', []) + (waiting_on.get('questions') or []))
                     now = time.monotonic()
+                    if kind == 'antigravity' and any(c.get('status') == 'running' for c in waiting_on.get('toolCalls') or []): active[job_id] = now  # agy is silent while a Zook tool works
                     if asking: deadline += now - began; active[job_id] = now; continue  # time spent waiting for the user does not count
-                    if now - max(pipes.last, active.get(job_id, 0)) >= quiet_limit: stopped_for = '已經 %d 分鐘沒有任何進展。' % max(1, round(quiet_limit / 60))
+                    if now - max(pipes.last, active.get(job_id, 0)) >= quiet_limit: stopped_for = quiet_reason(kind, quiet_limit)
                     elif now >= deadline: stopped_for = '已超過時間上限。'
                     if stopped_for: raise subprocess.TimeoutExpired(args, quiet_limit)
                 output, stderr = pipes.result()
@@ -721,10 +722,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 if kept and kept.finished: self.live_fails = 0
             except subprocess.TimeoutExpired:
                 terminate_tree(proc)
-                if not pipes.wait(5):
-                    try: os.killpg(proc.pid, signal.SIGKILL)
-                    except ProcessLookupError: pass
-                    pipes.wait(2)
+                if not pipes.wait(5): kill_group(proc); pipes.wait(2)
                 with store.lock: job['mayHaveActed'] = bool(native)  # stopped midway, so what its tools already did is unknown
                 raise RuntimeError('執行逾時：' + stopped_for)
             finally: self.__dict__.get('job_activity', {}).pop(job_id, None)

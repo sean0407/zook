@@ -339,13 +339,24 @@ def bot_usage(store):
     return dict(bots=result, days=days, untracked=sum(1 for j in store.data['jobs'] if j.get('status') == 'completed' and not j.get('usage')))
 
 
+def signal_group(proc, sig):
+    """Send a signal to a CLI and everything it started. False when nothing is left to signal. macOS refuses (EPERM) a group whose
+    leader has ended but is not yet collected; then the leader itself is signalled, if it was not collected yet."""
+    proc = getattr(getattr(proc, 'cli', None), 'proc', None) or proc  # a kept CLI's reply (live.py) stands for its process
+    try: os.killpg(proc.pid, sig); return True
+    except ProcessLookupError: return False
+    except OSError:
+        if proc.returncode is not None: return False  # collected: its number may belong to another program now
+        try: os.kill(proc.pid, sig); return True
+        except OSError: return False
+
+
+def kill_group(proc): signal_group(proc, signal.SIGKILL)
+
+
 def terminate_tree(proc):
-    try: os.killpg(proc.pid, signal.SIGTERM)
-    except ProcessLookupError: return
-    def force():
-        # Kill the process group even if its leader exited; descendants may still run.
-        try: os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError: pass
-    timer = threading.Timer(2.0, force); timer.daemon = True; timer.start()
+    if not signal_group(proc, signal.SIGTERM): return
+    # Kill the process group even if its leader exited; descendants may still run.
+    timer = threading.Timer(2.0, kill_group, (proc,)); timer.daemon = True; timer.start()
 
 

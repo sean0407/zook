@@ -272,6 +272,21 @@ def live_close(app, cli, wait=0):
     else: threading.Thread(target=cli.close, daemon=True).start()
 
 
+def live_drop_bot(app, bot_id, job):
+    """One agy per Bot. Every Antigravity run of a Bot starts in the same workspace and rewrites the same tool settings there, so
+    a kept agy of another conversation, left idle next to a group turn, was seen with the group member stuck at 正在思考. Before
+    an Antigravity reply starts, the Bot's other kept agy CLIs are closed, and waited for. A group turn never uses a kept one, so
+    for it every one of them goes."""
+    guard = app.__dict__.get('live_lock')
+    if not guard: return 0
+    keep = (bot_id, job.get('chatId')) if job.get('chatId') and not job.get('groupId') and not job.get('internal') else None
+    with guard:
+        gone = [c for c in app.lives.values() if c.kind == 'antigravity' and c.key[0] == bot_id and c.key != keep and c.turn is None]
+        for cli in gone: app.lives.pop(cli.key, None); app.live_ids.pop(cli.ident, None)
+    for cli in gone: cli.close(wait=3)
+    return len(gone)
+
+
 def live_turn(app, job, provider, kind, args, cwd, env, resume, prompt, on_output):
     """Send this message to the conversation's kept CLI, starting one when there is none that fits. None means: start the CLI the
     usual way (the switch is off, this kind of reply is not kept, or everything that could be kept is busy)."""

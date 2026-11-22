@@ -448,9 +448,11 @@ def provider_needs_check(spec, status, record):
     except OSError: return False
 
 
-def antigravity_settings(native, scope, web):
-    """This run's settings for agy, never saved. Paid AI credits stay off; 謹慎 and 先規劃 cannot change anything."""
-    allow, deny = ['mcp(zook/*)'], []
+def antigravity_settings(native, scope, web, reads=()):
+    """This run's settings for agy, never saved. Paid AI credits stay off; 謹慎 and 先規劃 cannot change anything.
+    reads: files and folders Zook copied for this reply (agy_read_paths). agy runs headless and cannot ask, so without an allow
+    rule a read it wants approved is denied, and a read-only check could not open the PDF it was asked to check. Reading only."""
+    allow, deny = ['mcp(zook/*)'] + ['read_file(%s)' % p for p in reads], []
     if web: allow.append('read_url(*)')
     else: deny += ['read_url(*)', 'execute_url(*)']
     settings = dict(useG1Credits=False)
@@ -462,9 +464,9 @@ def antigravity_settings(native, scope, web):
     return settings
 
 
-def antigravity_args(binary, model, effort, native, planning, scope, folder, web):
+def antigravity_args(binary, model, effort, native, planning, scope, folder, web, reads=()):
     """The conversation goes in over stdin (stream-json), so it never shows on a command line."""
-    args = [binary, '--input-format', 'stream-json', '--output-format', 'stream-json', '--disable-slash-commands', '--settings', json.dumps(antigravity_settings(native, scope, web))]
+    args = [binary, '--input-format', 'stream-json', '--output-format', 'stream-json', '--disable-slash-commands', '--settings', json.dumps(antigravity_settings(native, scope, web, reads))]
     if planning: args += ['--mode', 'plan']
     elif native and scope == 'full': args += ['--dangerously-skip-permissions']
     elif native: args += ['--mode', 'accept-edits', '--sandbox'] + (['--add-dir', str(folder)] if scope == 'folder' else [])
@@ -472,6 +474,43 @@ def antigravity_args(binary, model, effort, native, planning, scope, folder, web
 
 
 AGY_ROOTS = ('.agents', '.agent', '_agents', '_agent')  # agy loads hooks, tools, skills and plugins from any of these
+AGY_READ_MAX = 200  # files named one by one in the read rules
+try: AGY_QUIET = max(1.0, float(os.environ.get('ZOOK_AGY_QUIET') or 300))  # seconds an Antigravity reply may print nothing
+except ValueError: AGY_QUIET = 300.0
+
+
+def agy_read_paths(workspace, job):
+    """What agy may read although it may change nothing: the copies Zook placed in the Bot's attachments folder (files attached
+    to the message, the group's shared files, files the user named and Zook copied in). Only regular files there are named; a
+    link is never named, and the folder itself only when nothing in it is a link (a Bot could have left one pointing elsewhere)."""
+    folder = pathlib.Path(workspace) / 'attachments'
+    if folder.is_symlink() or not folder.is_dir(): return []
+    files, linked = [], False
+    for here, dirs, names in os.walk(str(folder)):  # os.walk does not follow links into other folders
+        for name in dirs + names:
+            path = os.path.join(here, name)
+            if os.path.islink(path): linked = True
+            elif name in names and os.path.isfile(path) and len(files) < AGY_READ_MAX: files.append(path)
+    wanted = {os.path.realpath(str(x)) for x in job.get('attachments') or []}
+    files.sort(key=lambda p: os.path.realpath(p) not in wanted)  # this reply's own files first, if the list is cut
+    out = []
+    for path in ([] if linked else [str(folder)]) + files:
+        if '(' in path or ')' in path: continue  # would end the rule early; the folder rule still covers it
+        for one in (path, os.path.realpath(path)):
+            if one not in out: out.append(one)
+    return out
+
+
+def agy_quiet(kind, limit):
+    """How long a reply may stay silent. Antigravity streams a line for every step, so a long silence means it is stuck (seen: a
+    group member woken with nothing to do sat at 正在思考 for minutes using no CPU); it is stopped sooner than other CLIs."""
+    return min(limit, AGY_QUIET) if kind == 'antigravity' else limit
+
+
+def quiet_reason(kind, limit):
+    minutes = max(1, round(limit / 60))
+    if kind == 'antigravity': return 'Antigravity 已經 %d 分鐘沒有任何輸出，可能卡住了，已停止這次回覆。請再傳一次。' % minutes
+    return '已經 %d 分鐘沒有任何進展。' % minutes
 
 
 def prepare_antigravity_folder(workspace, scope, folder, wait):
