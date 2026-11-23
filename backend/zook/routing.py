@@ -266,6 +266,14 @@ def pick_auto(store, content, names=(), plan=False, bot=None, taken=None, keep=N
 
 def auto_candidates(store, task, order, plan=False):
     """Lock held. (signed-in subscriptions that may be picked, in order; those of them with quota left). Raises ValueError when none."""
+    allowed = auto_choices(store, task, order, plan)
+    usable = [c for c in allowed if not auto_quota_low(store, *c)]
+    if not usable: raise ValueError('可自動選用的模型額度都低於 10%%：%s。Zook 不會自動改用付費方式，請等額度重置，或指定其他模型。' % '、'.join(auto_choice_name(*c) for c in allowed))
+    return allowed, usable
+
+
+def auto_choices(store, task, order, plan=False):
+    """Lock held. The signed-in subscriptions that may be picked, best fit first, whatever quota they have left. Raises ValueError when none."""
     main = auto_allowed(store)
     ready = lambda key: auto_ready(store, key)
     allowed = []  # (provider, account id); '' is the CLI's own sign-in, which comes before that CLI's extra accounts
@@ -276,14 +284,13 @@ def auto_candidates(store, task, order, plan=False):
         if p in main and ready(p): allowed.append((p, ''))
         allowed += [(p, a['id']) for a in auto_accounts(store, p) if auto_account_on(store, a) and ready(auto_account_key(a))]
     if not allowed: raise ValueError('自動選擇目前沒有可用的模型。請到「各模型使用量」開啟至少一個已登入的模型。')
-    usable = [c for c in allowed if not auto_quota_low(store, *c)]
-    if not usable: raise ValueError('可自動選用的模型額度都低於 10%%：%s。Zook 不會自動改用付費方式，請等額度重置，或指定其他模型。' % '、'.join(auto_choice_name(*c) for c in allowed))
-    return allowed, usable
+    return allowed
 
 
 # 自動選擇 decides when a Bot is made (2026-11-22): its model is fixed from what it is for, and it answers with that model from then
 # on. A Bot whose work changes (persona or work instructions) is matched again when it is saved. A Bot stays on 自動選擇 (each
-# message picks) only when no model could be picked: sign-ins not known yet, none turned on, or none with quota left.
+# message picks) only when no model could be picked: sign-ins not known yet or none turned on. The match looks at the work only, never
+# at the quota left right now (2026-11-22): when the matched model runs out, each message's backup models take over.
 AUTO_WORK = dict(code='寫程式多', analysis='分析和寫報告多', image='常要看圖', quick='一般問答和文書為主')
 
 
@@ -304,14 +311,12 @@ def auto_assign(store, bot, instructions=True, grant=False):
     edit, a Bot made by another Bot) never widens what it may reach (set_access_after_match in core.py)."""
     if 'autoStatus' not in store.data: return ''
     task = bot_work(bot, instructions)
-    try: allowed, usable = auto_candidates(store, task, AUTO_TASKS[task][1])
+    try: provider, account = auto_choices(store, task, AUTO_TASKS[task][1])[0]
     except ValueError: return ''
-    reason = '%s，配 %s' % (AUTO_WORK[task], auto_choice_name(*usable[0]))
-    if usable[0] != allowed[0]: reason += '（%s 額度不足）' % auto_choice_name(*allowed[0])
-    provider, account = usable[0]
+    reason = '%s，配 %s' % (AUTO_WORK[task], auto_choice_name(provider, account))
     model = auto_known_model(store, provider, account)
     bot.update(provider=provider, account=account, model=model, autoAssigned=True, autoReason=reason)
-    bot.pop('autoPending', None); bot.pop('syncedModel', None)
+    for key in ('autoPending', 'syncedModel', 'autoRematch'): bot.pop(key, None)
     if model: bot.pop('autoModelPending', None)
     else: bot['autoModelPending'] = True  # the CLI's own default is not known yet: the model of its first reply is kept (app.py)
     set_access_after_match(bot, grant)
@@ -446,20 +451,29 @@ def auto_on_edit(store, before, after, body):
     if not before.get('autoAssigned'): return ''
     if not after.get('model') and after.get('provider') == before.get('provider'): after['model'] = before.get('model') or ''  # 「預設」 in the form: the model it was matched with
     if any((after.get(k) or '') != (before.get(k) or '') for k in ('provider', 'account', 'model')):
-        for key in ('autoAssigned', 'autoReason', 'autoModelPending'): after.pop(key, None)
+        for key in ('autoAssigned', 'autoReason', 'autoModelPending', 'autoRematch'): after.pop(key, None)
         return ''  # the user picked a model: it stays
     if all(after.get(k) == before.get(k) for k in ('persona', 'instructions', 'jobTitle', 'name')): return ''
-    trial = dict(after)
-    if not auto_assign(store, trial): return ''  # nothing can be picked right now: it keeps the model it has
-    after.update({k: trial[k] for k in ('provider', 'account', 'model', 'autoAssigned', 'autoReason')})
-    if 'autoModelPending' in trial: after['autoModelPending'] = True
-    else: after.pop('autoModelPending', None)
-    for key in ('gateFull', 'localLimit'):  # a re-match never widens it: held in when it moves off the gate (set_access_after_match)
-        if key in trial: after[key] = trial[key]
-        else: after.pop(key, None)
-    if (trial['provider'], trial['account']) == (before.get('provider'), before.get('account') or ''): return ''
+    trial = auto_rematch(store, after)
+    if not trial: return ''  # nothing can be picked right now, or it stays where it is
     log_activity(store, 'bot', 'Bot「%s」的工作內容改了，改配 %s' % (after.get('name', ''), trial['autoReason']), by='Zook')
     return '工作內容改了，改配 ' + auto_choice_name(trial['provider'], trial['account']) + '（' + trial['autoReason'] + '）'
+
+
+def auto_rematch(store, bot):
+    """Lock held. Match a Bot that was matched automatically again, in place, never widening what it may reach. Returns the new match
+    when it moved to another model, else None (it keeps its model, with the reason brought up to date)."""
+    trial = dict(bot)
+    if not auto_assign(store, trial): return None  # nothing can be picked right now: it keeps the model it has
+    bot.pop('autoRematch', None); bot['autoReason'] = trial['autoReason']
+    for key in ('gateFull', 'localLimit'):  # a re-match never widens it: held in when it moves off the gate (set_access_after_match)
+        if key in trial: bot[key] = trial[key]
+        else: bot.pop(key, None)
+    if (trial['provider'], trial['account']) == (bot.get('provider'), bot.get('account') or ''): return None  # same model: it keeps it
+    bot.update({k: trial[k] for k in ('provider', 'account', 'model', 'autoAssigned')})
+    if 'autoModelPending' in trial: bot['autoModelPending'] = True
+    else: bot.pop('autoModelPending', None)
+    return trial
 
 
 def auto_migrate(store):
@@ -470,7 +484,11 @@ def auto_migrate(store):
             for bot in store.data['bots']:
                 if bot.get('provider') == AUTO: bot['autoPending'] = True
             store.data['settings']['autoFixed'] = True; store.save()
-        waiting = any(b.get('provider') == AUTO for b in store.data['bots'])
+        if not store.data['settings'].get('autoByWork'):  # 0.20.0 matched by the quota left at that moment: matched again by the work, once
+            for bot in store.data['bots']:
+                if bot.get('autoAssigned') and bot.get('provider') != AUTO and '額度不足' in str(bot.get('autoReason') or ''): bot['autoRematch'] = True
+            store.data['settings']['autoByWork'] = True; store.save()
+        waiting = any(b.get('provider') == AUTO or b.get('autoRematch') for b in store.data['bots'])
     if waiting: refresh_auto_status(store)  # runs each CLI; never with the lock held; ends with auto_retry
 
 
@@ -479,6 +497,7 @@ def auto_retry(store):
     itself, so a Bot left waiting is tried again after the next sign-in check, and one that is matched is told once."""
     changed = False
     for bot in store.data['bots']:
+        if bot.get('autoRematch'): changed = _auto_rematch_old(store, bot) or changed
         if bot.get('provider') != AUTO or not bot.get('autoPending'): continue
         reason = auto_assign(store, bot)
         if reason: changed = True; log_activity(store, 'bot', 'Bot「%s」原本用自動選擇，現在固定配好：%s。可以在編輯 Bot 改。' % (bot['name'], reason), by='Zook')
@@ -487,3 +506,13 @@ def auto_retry(store):
             log_activity(store, 'bot', 'Bot「%s」用自動選擇，目前沒有能配的模型，先維持每則訊息自動挑；帳號可用時會再配。' % bot['name'], by='Zook')
         if reason: bot.pop('autoPendingTold', None)
     if changed: store.save()
+
+
+def _auto_rematch_old(store, bot):
+    """Lock held. A Bot 0.20.0 matched by the quota left at that moment: matched again by its work. Only a move is told. True when changed."""
+    if not bot.get('autoAssigned') or bot.get('provider') == AUTO:  # chosen by hand since, or by another Mac: not this Mac's match any more
+        bot.pop('autoRematch', None); return True
+    before = bot.get('autoReason')
+    trial = auto_rematch(store, bot)
+    if trial: log_activity(store, 'bot', 'Bot「%s」改依工作內容配模型，改配 %s（%s）。可以在編輯 Bot 改。' % (bot.get('name', ''), auto_choice_name(trial['provider'], trial['account']), trial['autoReason']), by='Zook')
+    return bool(trial) or 'autoRematch' not in bot or bot.get('autoReason') != before
