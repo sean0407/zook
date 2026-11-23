@@ -403,5 +403,40 @@ class LocalGrantTest(unittest.TestCase):
         self.assertEqual((seen, marks), ([''], ['halt'])); self.assertEqual(self.app.store.data['sync']['folder'], '')
         self.assertFalse((folder / ('zook-sync-%s.json' % self.app.store.data['sync']['deviceId'])).exists())
 
+    # Third review (630a1ca).
+    def test_a_bot_an_earlier_version_found_in_an_old_copy_is_never_allowed(self):
+        with self.store.lock:
+            self.store.data['deletedBots'] = [dict(id='lost', name='舊', provider='codex', recovered='zook-old.json', access='full', permissionMode='bypass', isAdmin=True, messages=[], chats=[])]
+        data = self.restore_copy(lambda c: c.update(deletedBots=[]) or c['bots'].append(dict(id='lost', name='舊', provider='codex', messages=[], chats=[])))
+        lost = next(b for b in data['bots'] if b['id'] == 'lost')
+        self.assertEqual((lost['isAdmin'], lost['localLimit']), (False, True)); self.assertEqual(self.held(lost), ('manual', ('workspace', '')))
+        with self.app.store.lock:
+            store = self.app.store; store.data['deletedBots'] = [dict(id='x', name='x', recovered='old.json', access='full', permissionMode='bypass')]
+            store.data['settings'].pop('heldInSet', None); m.held_in_migrate(store)
+        self.assertEqual((store.data['deletedBots'][0]['access'], store.data['deletedBots'][0]['localLimit']), ('workspace', True))
+
+    def test_after_recovery_new_bots_start_in_their_workspace(self):
+        store = self.store
+        with store.lock:
+            store.data['settings'].update(access='full', permissionMode='bypass'); m.backup_write(store, 'auto', store.data)
+            store.path.write_text('{broken'); m.recover_data(store)
+        self.assertEqual((store.data['settings']['access'], store.data['settings']['permissionMode']), ('workspace', 'manual'))
+        m._active['data'] = store.data
+        self.assertEqual(m.bot_scope(dict(id='n', name='n', provider='codex'), 'codex'), ('workspace', ''))
+
+    def test_sync_judges_a_move_by_the_cli_it_moves_to(self):
+        store = self.store
+        with store.lock:
+            bot = next(b for b in store.data['bots'] if not b.get('isAdmin')); bot.update(provider='codex', access='full', permissionMode='bypass')
+            m.sync_put(store, 'bots:' + bot['id'], m.sync_clean('bots:' + bot['id'], dict(name=bot['name'], provider='claude', model='')))
+        self.assertEqual((bot['provider'], bot['localLimit'], bot['access']), ('claude', True, 'workspace'))  # onto the gate without this Mac's permission
+
+    def test_a_former_admin_from_the_copy_steps_down(self):
+        with self.store.lock:
+            mine = next(b for b in self.store.data['bots'] if not b.get('isAdmin'))
+            self.store.data['bots'].remove(mine); self.store.data['deletedBots'] = [dict(mine, isAdmin=True)]  # 管理員 when it was set aside here
+        data = self.restore_copy(lambda c: c.update(deletedBots=[]) or c['bots'].append(dict(mine, isAdmin=True)))
+        self.assertEqual([b['id'] for b in data['bots'] if b.get('isAdmin')], [self.admin['id']])
+
 if __name__ == '__main__':
     unittest.main()

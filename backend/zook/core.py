@@ -546,11 +546,11 @@ def gated_fallback(bot, kind=None, data=None):
     return kind is not None and kind not in GATED_KINDS and provider != 'auto' and provider_kind(provider) in GATED_KINDS
 
 
-def limit_locally(bot):
+def limit_locally(bot, provider=None):
     """A Bot that lost this Mac's whole-Mac permission (another Mac changed its model, or it came from a backup): its workspace and
     謹慎 until the user changes it here, never the 主動性 and 存取範圍 it had before the gate."""
-    had = bot.pop('gateFull', None)
-    if had or provider_kind(_bot_provider(bot)) in GATED_KINDS: hold_scope(bot)
+    had = bot.pop('gateFull', None)  # provider: the model it is moving to, when that is not in the Bot yet
+    if had or provider_kind(_bot_provider(bot if provider is None else dict(bot, provider=provider))) in GATED_KINDS: hold_scope(bot)
 
 
 def hold_scope(bot):

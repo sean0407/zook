@@ -172,7 +172,7 @@ def sync_put(store, key, value, gone=()):
         bot.setdefault('isAdmin', False)  # who the 管理員 is, is decided on each Mac, never by a file
         moved = bot.get('autoMovedFrom') if value.get('provider') != bot.get('provider') else None
         if value.get('provider') != bot.get('provider') and 'provider' in bot:
-            limit_locally(bot)  # another Mac's choice never widens what this Mac allows
+            limit_locally(bot, value.get('provider'))  # another Mac's choice never widens what this Mac allows
             for field in AUTO_MARKERS: bot.pop(field, None)  # no longer this Mac's own match
         value = {k: v for k, v in value.items() if k != 'gateFull'}
         fixed = value.pop('fixedModel', False) if isinstance(value, dict) else False

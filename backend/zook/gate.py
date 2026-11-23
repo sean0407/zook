@@ -203,13 +203,20 @@ def restore_keep_access(old, new):
         if custom(bot.get('provider')) and bot['provider'] != was.get('provider'): bot.update(provider='', model='')
         if isinstance(bot.get('fallbacks'), list): bot['fallbacks'] = [x for x in bot['fallbacks'] if not custom(x) or x in own_order(was)]
         was = here.get(bot.get('id'))
-        if was is None: hold_in(bot); continue
+        if was is None or was.get('recovered'): hold_in(bot); continue  # found in an old copy by an earlier version: never allowed here
         for key in LOCAL_GRANTS:
             if key in was: bot[key] = copy.deepcopy(was[key])
             else: bot.pop(key, None)
         if kind(bot, new) != kind(was, old):
             had = bot.pop('gateFull', None)
             if had or kind(bot, new) in GATED_KINDS: hold_scope(bot)
+    # One 管理員, the one this Mac has: a Bot back from the copy that was 管理員 when it was set aside here steps down.
+    admins = [b for b in new.get('bots') or [] if isinstance(b, dict) and b.get('isAdmin')]
+    if len(admins) > 1:
+        now = {b.get('id') for b in old.get('bots') or [] if isinstance(b, dict) and b.get('isAdmin')}
+        chosen = next((b for b in admins if b['id'] in now), admins[0])
+        for b in admins:
+            if b is not chosen: b['isAdmin'] = False
 
 
 def held_in_migrate(store):
@@ -225,6 +232,8 @@ def held_in_migrate(store):
     for bot in store.data['bots']:
         if bot.get('localLimit'): continue
         if 'bots:' + str(bot.get('id')) in synced or str(bot.get('name') or '').strip().lower() in made: hold_in(bot)
+    for bot in store.data.get('deletedBots') or []:  # found in an old copy by an earlier version, before it was held in there
+        if isinstance(bot, dict) and bot.get('recovered') and not bot.get('localLimit'): hold_in(bot)
     settings['heldInSet'] = True
     return True
 

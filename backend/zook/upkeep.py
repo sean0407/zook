@@ -168,6 +168,7 @@ def recover_data(store):
         # Nothing on this Mac says what it allows now, and the copy may be from before something was taken back: every Bot is held in,
         # no connector or custom CLI is on, and phones pair again.
         restore_keep_access(NOTHING_HERE(), store.data); store.data['remoteDevices'] = []
+        store.data['settings'].update(access='workspace', permissionMode='manual'); store.data['settings'].pop('accessFolder', None)  # a Bot made later starts narrow too
         log_activity(store, 'backup', '資料檔無法讀取，改用備份 %s（損壞的檔案留存為 %s）' % (backup['name'], kept or '無法留存'), by='Zook')
         return dict(at=NOW(), backup=backup['name'], backupAt=backup['at'], kept=kept)
     log_activity(store, 'backup', '資料檔無法讀取，也沒有可用的備份，從全新狀態開始（損壞的檔案留存為 %s）' % (kept or '無法留存'), by='Zook')
