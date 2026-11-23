@@ -164,6 +164,8 @@ class StoreBase:
         self.path = self.dir / 'swarmr.json'
         self.lock = threading.RLock()
         recovered, layout, existed = None, None, self.path.exists()
+        try: self.stopped_at = datetime.datetime.fromtimestamp(self.path.stat().st_mtime, datetime.timezone.utc).isoformat() if existed else ''  # about when Zook last stopped: its last save
+        except OSError: self.stopped_at = ''
         if existed:
             try:
                 with self.path.open(encoding='utf-8') as f: self.data = json.load(f)
@@ -225,7 +227,7 @@ class StoreBase:
             for approval in job['approvals'] + (job.get('questions') or []):
                 if approval['status'] == 'pending': approval['status'] = 'expired'
             if job['status'] == 'running':
-                job.update(status='failed', error='服務重新啟動，工作已中斷。')
+                job.update(status='failed', error='服務重新啟動，工作已中斷。'); interrupted_at(job, self.stopped_at)  # resume.py carries it on
                 self.finish_message(job, '', 'failed')
         if recovered: self.data['settings']['recovered'] = recovered; sync_halt(self)
         self.note_damaged()
