@@ -101,6 +101,100 @@ class AutoWorkTest(unittest.TestCase):
         m.auto_migrate(store)
         self.assertEqual((bot['provider'], store.find('bots', 'b')['provider']), ('grok', 'codex')); self.assertEqual(self.logged(), [])
 
+    def test_old_match_changed_since_is_left_alone(self):
+        m, store = self.m, self.store
+        bot = dict(id='a', name='分析師', provider='grok', account='', persona='細心的分析師', autoAssigned=True, autoReason=OLD, autoModelPending=True)
+        store.data['bots'].append(bot)
+        m.auto_migrate(store)
+        self.assertEqual(bot['provider'], 'grok'); self.assertEqual(self.logged(), [])
+        self.assertFalse([k for k in bot if k.startswith('auto')])  # only the leftover marks are cleared
+        found = m._OLD_MATCH.search('分析和寫報告多，配 Codex（Waifdance）（Claude（Home） 額度不足）')
+        self.assertEqual(found.group(1), 'Codex（Waifdance）')
+
+    def test_best_fit_signed_out_waits_for_it(self):
+        m, store = self.m, self.store
+        store.data['autoStatus']['claude']['signedIn'] = False
+        bot = dict(id='a', name='分析師', provider='codex', account='', model='gpt-5.5', persona='細心的分析師', autoAssigned=True, autoReason=OLD)
+        store.data['bots'].append(bot)
+        m.auto_migrate(store)
+        self.assertEqual((bot['provider'], bot['autoRematch']), ('codex', True)); self.assertEqual(self.logged(), [])
+        store.data['autoStatus']['claude']['signedIn'] = True
+        m.auto_retry(store)
+        self.assertEqual(bot['provider'], 'claude'); self.assertNotIn('autoRematch', bot)
+
+    def test_bots_left_on_auto_when_every_quota_was_low_are_matched(self):
+        m, store = self.m, self.store
+        bot = dict(id='a', name='分析師', provider='auto', persona='細心的分析師')  # 0.20.0 could pick nothing and did not mark it
+        store.data['bots'].append(bot)
+        m.auto_migrate(store)
+        self.assertEqual((bot['provider'], bot['autoAssigned']), ('claude', True))
+        self.assertIn('固定配好', self.logged()[0])
+
+    def test_an_old_mac_writing_back_its_pick_is_matched_again(self):
+        m, store = self.m, self.store
+        bot = dict(id='a', name='分析師', provider='codex', account='', model='gpt-5.5', persona='細心的分析師', autoAssigned=True, autoReason=OLD, messages=[], chats=[])
+        store.data['bots'].append(bot)
+        m.auto_migrate(store)
+        self.assertEqual(bot['provider'], 'claude')
+        old = m.sync_clean('bots:a', dict(name='分析師', provider='codex', model='gpt-5.5', persona='細心的分析師', fixedModel=True))  # 0.20.0 on the other Mac
+        self.assertTrue(m.sync_put(store, 'bots:a', dict(old)))
+        self.assertEqual((bot['provider'], bot['autoRematch'], bot['autoAssigned']), ('codex', True, True))
+        self.log.reset_mock(); m.auto_retry(store)
+        self.assertEqual(bot['provider'], 'claude'); self.assertEqual(len(self.logged()), 1)
+        hand = m.sync_clean('bots:a', dict(name='分析師', provider='codex', model='gpt-5.5', persona='細心的分析師'))  # picked by hand there
+        self.assertTrue(m.sync_put(store, 'bots:a', dict(hand)))
+        self.log.reset_mock(); m.auto_retry(store)
+        self.assertEqual(bot['provider'], 'codex'); self.assertFalse([k for k in bot if k.startswith('auto')]); self.assertEqual(self.logged(), [])
+
+    def add_accounts(self):
+        store, now = self.store, time.time()
+        store.data['accounts'] = [dict(id='w1', provider='claude', name='Work', type='login'), dict(id='w2', provider='claude', name='Home', type='login')]
+        for a in ('w1', 'w2'): store.data['autoStatus']['claude@' + a] = dict(signedIn=True, billed=False, checkedAt=now)
+        store.data['quota'].update({'claude@w1': dict(updatedAt=self.m.NOW(), windows=[dict(label='5 小時', usedPercent=80, resetsAt=now + 3600)]),
+                                    'claude@w2': dict(updatedAt=self.m.NOW(), windows=[dict(label='5 小時', usedPercent=20, resetsAt=now + 3600)])})
+
+    def test_backups_try_the_same_cli_first_then_the_choices_for_the_work(self):
+        m, store = self.m, self.store
+        self.add_accounts()
+        bot = dict(id='a', name='分析師', provider='claude', account='', model='claude-opus-5-5', persona='細心的分析師', autoAssigned=True)
+        self.assertEqual(m.auto_backups(store, bot, 'claude'), [['claude', 'claude-opus-5-5', 'w2'], ['claude', 'claude-opus-5-5', 'w1'], ['codex', '', '']])
+        store.data['settings']['fallbacks'] = ['codex']  # the user's own backups come first, and are not tried twice
+        chain = [list(x) for x in m.provider_chain(store, bot, 'claude', bot['model'])] + m.auto_backups(store, bot, 'claude')
+        self.assertEqual([x[0] for x in chain], ['claude', 'codex', 'claude', 'claude'])
+        self.assertEqual(m.auto_backups(store, dict(bot, autoAssigned=False), 'claude'), [])  # a model the user chose: only its own backups
+        self.assertEqual(m.auto_backups(store, bot, 'claude', dict(autoNamed=True, redoOf='x')), [])  # 換模型重答 names the model
+        store.data['settings']['autoModels'] = ['codex']  # the default Claude sign-in is off: an extra account is still a choice
+        made = dict(id='b', name='分析師二', provider='auto', persona='細心的分析師')
+        m.auto_on_create(store, made)
+        self.assertEqual((made['provider'], made['account']), ('claude', 'w1'))
+
+    def test_a_used_up_match_answers_with_a_backup_this_once(self):
+        m, store = self.m, self.store
+        self.add_accounts()
+        store.data['quota']['claude'] = dict(updatedAt=m.NOW(), windows=[dict(label='5 小時', usedPercent=100, resetsAt=time.time() + 3600)])
+        bot = dict(id='a', name='分析師', provider='claude', account='', model='', persona='細心的分析師', autoAssigned=True, autoReason='分析和寫報告多，配 Claude',
+                   messages=[dict(id='m1', role='assistant', content='', status='running')], chats=[])
+        store.data['bots'].append(bot)
+        store.data['jobs'].append(dict(id='j', botId='a', messageId='m1', status='running', createdAt=m.NOW()))
+        app = m.App(('127.0.0.1', 0), store, self.temp.name, 'local-token'); ran = []
+        def attempt(job_id, prompt, p, model, run_bot, inventory, final):
+            ran.append((p, run_bot.get('account') or ''))
+            with store.lock: store.find('jobs', job_id)['status'] = 'completed'
+        try:
+            with mock.patch.object(app, '_run_attempt', side_effect=attempt), mock.patch.object(m, 'auto_recheck_live'), mock.patch.object(m, 'auto_recheck'):
+                app._run_job('j', 'hi', 'claude', '', bot=dict(bot))
+        finally: app.server_close()
+        self.assertEqual(ran, [('claude', 'w2')])  # Claude itself is used up: its other account with most left
+        self.assertIn('這次改用 Claude（Home）', bot['messages'][0]['note']); self.assertIn('額度已用完', bot['messages'][0]['note'])
+        self.assertEqual((bot['provider'], bot['account']), ('claude', ''))  # the match stays
+
+    def test_held_in_is_told(self):
+        m, store = self.m, self.store
+        bot = dict(id='a', name='分析師', provider='codex', account='', persona='細心的分析師', autoAssigned=True, autoReason=OLD)
+        store.data['bots'].append(bot)
+        m.auto_migrate(store)
+        self.assertIn('改配 Claude', self.logged()[0]); self.assertIn('存取改成只限工作資料夾、先問，要放寬請到 Bot 設定', self.logged()[0])
+
 
 if __name__ == '__main__':
     unittest.main()

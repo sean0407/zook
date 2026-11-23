@@ -450,7 +450,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             job = store.find('jobs', job_id)
             if not job or job['status'] != 'running': return
             if bot is None: bot = copy.deepcopy(store.find('bots', job['botId']))
-            raw = [list(x) for x in job['autoChain']] if job.get('autoChain') else [list(x) for x in provider_chain(store, bot, provider, model)]
+            raw = [list(x) for x in job['autoChain']] if job.get('autoChain') else [list(x) for x in provider_chain(store, bot, provider, model)] + auto_backups(store, bot, provider, job)
             auto, named = bot.get('provider') == AUTO, bool(job.get('autoNamed') and job.get('redoOf'))  # only the user's own 換模型重答 names a model
             fixed = bool(bot.get('autoAssigned') or bot.get('syncedModel')) and not named  # matched here, or set on another Mac: never on API billing (routing.py)
             # (CLI, model, account, check). The account is the one 自動選擇 picked ('' its CLI's own sign-in); a 自動選擇 Bot never uses an

@@ -162,11 +162,13 @@ def sync_put(store, key, value, gone=()):
             if store.data.get('deletedBots'): store.data['deletedBots'] = [b for b in store.data['deletedBots'] if b.get('id') != parts[1]]  # back from another Mac: it is no longer a Bot kept aside
         if not value['provider'] and bot.get('provider') and bot['provider'] not in SYNC_PROVIDERS: value = dict(value, provider=bot['provider'], model=bot.get('model') or '')  # this Mac's own model for it stays
         bot.setdefault('isAdmin', False)  # who the 管理員 is, is decided on each Mac, never by a file
+        moved = bot.get('autoMovedFrom') if value.get('provider') != bot.get('provider') else None
         if value.get('provider') != bot.get('provider') and 'provider' in bot:
             limit_locally(bot)  # another Mac's choice never widens what this Mac allows
-            for field in ('autoAssigned', 'autoReason', 'autoRematch', 'autoModelPending'): bot.pop(field, None)  # no longer this Mac's own match
+            for field in AUTO_MARKERS: bot.pop(field, None)  # no longer this Mac's own match
         value = {k: v for k, v in value.items() if k != 'gateFull'}
         fixed = value.pop('fixedModel', False) if isinstance(value, dict) else False
+        if moved: bot['autoMovedFrom'] = moved; sync_old_match(bot, fixed, value.get('provider')); bot.pop('autoMovedFrom', None)  # an old Mac wrote back the pick moved off here
         if fixed: bot['syncedModel'] = True  # matched by 自動選擇 on another Mac: checked for API billing before it runs here
         elif value.get('provider') != bot.get('provider'): bot.pop('syncedModel', None)
         bot.update(value)
