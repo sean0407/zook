@@ -15,8 +15,9 @@ INTERRUPT_NOTE = ('\n\n（Zook 系統提示）Zook 剛才重新啟動，你上�
 
 
 def interrupted_at(job, when):
-    """Lock held. Mark a reply that was running when Zook stopped. `when` is when Zook stopped, as an ISO time."""
-    job['interrupted'] = when or job.get('createdAt') or NOW()
+    """Lock held. Mark a reply that was running when Zook stopped. `when` is when Zook stopped, as an ISO time; 'unknown' when the
+    data comes from a Zook before this one (nothing then starts by itself)."""
+    job['interrupted'] = when or 'unknown'
 
 
 def finished_before_stop(store, job):
@@ -29,26 +30,34 @@ def finished_before_stop(store, job):
     return True
 
 
+def process_started(pid):
+    """(when the process started, its command line) as ps says, or ('', '') when there is no such process."""
+    try: line = subprocess.run(['/bin/ps', '-o', 'lstart=,command=', '-p', str(int(pid))], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, ValueError, subprocess.SubprocessError): return '', ''
+    return (line[:24].strip(), line[24:].strip()) if len(line) > 24 else ('', '')
+
+
 def note_cli_pid(store, job_id, proc, binary):
-    """Lock held. The CLI's process, so one left running by a crash is stopped before its reply is carried on."""
+    """Lock held. The CLI's process and when it started, so one left running by a crash is stopped before its reply is carried on."""
     pid = getattr(proc, 'pid', None) or getattr(getattr(getattr(proc, 'cli', None), 'proc', None), 'pid', None)
     job = store.find('jobs', job_id)
-    if job is not None and pid and job.get('cliPid') != [int(pid), str(binary or '')]: job['cliPid'] = [int(pid), str(binary or '')]; store.save()  # on disk before a crash can come
+    if job is None or not pid or (job.get('cliPid') or [0])[0] == int(pid): return
+    started, command = process_started(pid)
+    if started and binary and str(binary) in command: job['cliPid'] = [int(pid), str(binary), started]; store.save()  # on disk before a crash can come
 
 
-def stop_left_behind(job):
-    """At start: the CLI of a reply cut off by a crash may still be running. It is stopped, only when that process is still the CLI."""
-    pid, binary = (job.pop('cliPid', None) or [0, ''])[:2]
-    if not pid or not binary: return
-    try: command = subprocess.run(['/bin/ps', '-o', 'command=', '-p', str(int(pid))], capture_output=True, text=True, timeout=5).stdout.strip()
-    except (OSError, ValueError, subprocess.SubprocessError): return
-    if not command or binary not in command: return  # gone, or the number now belongs to something else
-    for sig, wait in ((signal.SIGTERM, 3.0), (signal.SIGKILL, 1.0)):
+def stop_left_behind(record):
+    """At start: the CLI of a reply cut off by a crash may still be running, with what it started. Its whole process group is
+    stopped, only when the process is still that same CLI (same start time and command line as when the reply began)."""
+    pid, binary, seen = (list(record or []) + [0, '', ''])[:3]
+    started, command = process_started(pid) if pid and binary and seen else ('', '')
+    if not started or started != seen or str(binary) not in command: return  # gone, or the number now belongs to something else
+    for sig, wait in ((signal.SIGTERM, 3.0), (signal.SIGKILL, 2.0)):  # a group's number is not given out again while any member lives
         try: os.killpg(int(pid), sig)
         except (ProcessLookupError, PermissionError): return
         end = time.monotonic() + wait
         while time.monotonic() < end:
-            try: os.kill(int(pid), 0)
+            try: os.killpg(int(pid), 0)
             except (ProcessLookupError, PermissionError): return
             time.sleep(0.1)
 
@@ -73,9 +82,8 @@ def done_actions(job, limit=15):
 
 
 def interrupt_note(old):
-    done, added = done_actions(old), [str(x)[:2000] for x in old.get('addedText') or []][-10:]
-    return (INTERRUPT_NOTE + ('\n中斷前已經完成、不要再做一次的動作：\n' + '\n'.join('- ' + x for x in done) if done else '')
-            + ('\n使用者在回覆途中補充了以下訊息，請一併照做：\n' + '\n'.join('- ' + x for x in added) if added else ''))
+    done = done_actions(old)  # what the user added while it answered goes with the new reply's own addedText (continue_job)
+    return INTERRUPT_NOTE + ('\n中斷前已經完成、不要再做一次的動作：\n' + '\n'.join('- ' + x for x in done) if done else '')
 
 
 def note_cli_session(store, job_id, provider, model, account, folder, session):
@@ -118,6 +126,7 @@ def resume_request(handler, store, inventory):
     old = next((j for j in reversed(store.data['jobs']) if j.get('botId') == bot['id'] and j.get('messageId') == wanted and j.get('interrupted') and j.get('chatId') and not j.get('groupId') and not j.get('internal')), None)
     if not old: return handler.error(404, '找不到這則被中斷的回覆。')
     if any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs']): return handler.error(409, '此機器人已有執行中的工作。')
+    if handler.server.__dict__.get('resuming'): return handler.error(409, 'Zook 正在接續重啟前的工作，請過幾秒再按。')
     return handler.respond(202, {'jobId': handler.server.continue_job(bot, old, inventory)['id']})
 
 
@@ -157,34 +166,49 @@ def resume_feed(store, job_id, kind, keep_session, resume, feed, where):
 
 
 class Resuming:
+    def resume_then_drain(self):
+        """At start: first what the last stop cut short, then the messages that were waiting (they would otherwise come after it)."""
+        try: self.resume_interrupted()
+        finally: self.queue_drain_all()
+
     def resume_interrupted(self):
         """Shortly after Zook starts: carry on what the last stop cut short."""
+        store = self.store; self.resuming = True  # 接著做 waits for this
+        try:
+            with store.lock: left = [j.pop('cliPid') for j in store.data['jobs'] if j.get('interrupted') and j.get('cliPid')]
+            for record in left: stop_left_behind(record)  # before anything starts again; it may wait a few seconds
+            try: inventory = inventory_for(store)
+            except Exception: inventory = None
+            with store.lock: self._resume_all(inventory)
+        finally: self.resuming = False
+
+    def _resume_all(self, inventory):
         store = self.store
-        try: inventory = inventory_for(store)
-        except Exception: inventory = None
-        with store.lock:
-            for old in [j for j in store.data['jobs'] if j.get('interrupted') and not j.get('resumedBy') and not j.get('resumeSeen')]:
-                old['resumeSeen'] = True; left = old.get('cliPid')
-                if left: store.lock.release()
-                try: stop_left_behind(old)  # outside the lock: it may wait a few seconds
-                finally:
-                    if left: store.lock.acquire()
-                if old.get('groupId') or not old.get('chatId') or old.get('internal'): continue
-                bot = store.find('bots', old['botId'])
-                if not bot or not self.resume_place(bot, old): continue
-                message = self.resume_place(bot, old)[2]
-                if task_acted_outward(old):  # it may have sent or changed something outside: doing it again could do it twice
-                    message.update(resumable=True, note='中斷前可能已經對外做了一部分（例如寄出或改了連接的服務），所以沒有自動接著做。確認後可以按「接著做」。'); continue
-                if not resume_age_ok(old['interrupted']): message['resumable'] = True; continue
-                try: self.continue_job(bot, old, inventory)
-                except Exception: message['resumable'] = True  # busy, removed model, …: the user can press 「接著做」
-            for group in store.data['groups']:
-                run = group.get('taskRun')
-                if isinstance(run, dict) and run.get('interrupted') and not run.get('resumeSeen'):
-                    run['resumeSeen'] = True
-                    try: self.task_pickup(group)
-                    except Exception: pass
-            store.save()
+        for old in [j for j in store.data['jobs'] if j.get('interrupted') and j.get('resumedBy') and not store.find('jobs', j['resumedBy'])]:
+            old.pop('resumedBy'); old.pop('resumeSeen', None)  # its new reply never reached the main file: the claim is void
+            bot = store.find('bots', old.get('botId'))
+            message = find_message(bot, old.get('messageId')) if bot else None
+            if message and message.get('status') == 'running': message['status'] = 'failed'
+        for old in [j for j in store.data['jobs'] if j.get('interrupted') and not j.get('resumedBy') and not j.get('resumeSeen')]:
+            old['resumeSeen'] = True
+            if old.get('groupId') or not old.get('chatId') or old.get('internal'): continue
+            bot = store.find('bots', old['botId'])
+            place = self.resume_place(bot, old) if bot else None
+            if not place: continue
+            message = place[2]
+            if task_acted_outward(old):  # it may have sent or changed something outside: doing it again could do it twice
+                message.update(resumable=True, note='中斷前可能已經對外做了一部分（例如寄出或改了連接的服務），所以沒有自動接著做。確認後可以按「接著做」。'); continue
+            if not resume_age_ok(old['interrupted']):
+                message.update(resumable=True, note='Zook 關閉超過 %d 小時（或不知道關了多久），所以沒有自動接著做。' % RESUME_HOURS); continue
+            try: self.continue_job(bot, old, inventory)
+            except Exception: message['resumable'] = True  # busy, removed model, …: the user can press 「接著做」
+        for group in store.data['groups']:
+            run = group.get('taskRun')
+            if isinstance(run, dict) and run.get('interrupted') and not run.get('resumeSeen'):
+                run['resumeSeen'] = True
+                try: self.task_pickup(group)
+                except Exception: pass
+        store.save()
 
     def resume_place(self, bot, old):
         """(messages, asked, reply) when the cut-off reply is still the last thing in its conversation, else None. Lock held."""
@@ -213,6 +237,8 @@ class Resuming:
                                    origin=old.get('origin') or 'user', resume_of=old)
         except BaseException: old.pop('resumedBy', None); raise
         old['resumedBy'] = job['id']
+        added = [m['content'] for m in messages[place[3] + 1:-1] if m.get('interjected')][-10:]  # what the user added while it answered, kept for a later restart too
+        if added: job['addedText'] = added
         return job
 
     def task_pickup(self, group):
@@ -221,7 +247,7 @@ class Resuming:
         run = group['taskRun']
         if run.get('status') != 'stopped': return
         if not resume_age_ok(run['interrupted']):
-            group['messages'].append(dict(id=ID(), role='system', content='Zook 關閉超過 %d 小時，這個任務沒有自動接著做。要繼續的話，在任務看板上按「重試」。' % RESUME_HOURS, createdAt=NOW()))
+            group['messages'].append(dict(id=ID(), role='system', content='Zook 關閉超過 %d 小時（或不知道關了多久），這個任務沒有自動接著做。要繼續的話，在任務看板上按「重試」。' % RESUME_HOURS, createdAt=NOW()))
             return
         if group.get('status') == 'running' or not any(t.get('before') for t in run.get('tasks') or []): return  # nothing was planned yet: nothing to carry on
         for t in run['tasks']:
@@ -235,7 +261,7 @@ class Resuming:
                 t.update(status='verifying', verify=dict(state='waiting')); t.pop('note', None)
             elif before == 'running':
                 t.update(status='pending' if t.get('deps') else 'ready', resumed=True); t.pop('note', None)
-                if last.get('state') == 'unknown' and not t.get('resumeBonus'):  # a try that really started, once per task: restarts never lift the cap for good
+                if not t.get('resumeBonus'):  # the try that was cut off (or only reserved), once per task: restarts never lift the cap for good
                     run['bonusAttempts'] = run.get('bonusAttempts', 0) + 1; t['resumeBonus'] = True
             elif before == 'review': t['status'] = 'review'
             else: t['status'] = before; t.pop('note', None)

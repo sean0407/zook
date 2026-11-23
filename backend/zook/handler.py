@@ -957,8 +957,7 @@ def main():
     app.store.save()
     try: app.script_api = ScriptApi(app)  # for scripts on this Mac; every Bot starts with it switched off
     except OSError: app.script_api = None
-    picked = threading.Timer(float(os.environ.get('ZOOK_RESUME_DELAY') or 1), app.resume_interrupted); picked.daemon = True; picked.start()  # what the last stop cut short (resume.py), before the waiting messages
-    later = threading.Timer(2.0, app.queue_drain_all); later.daemon = True; later.start()  # messages that were waiting when Zook was closed
+    later = threading.Timer(float(os.environ.get('ZOOK_RESUME_DELAY') or 1), app.resume_then_drain); later.daemon = True; later.start()  # what the last stop cut short (resume.py), then the messages that were waiting
     app.auto_refreshed = time.time()
     live_learn(app); local_migrate(app.store)  # this Mac's own settings for Bots from before (gate.py)
     threading.Thread(target=auto_migrate, args=(app.store,), daemon=True).start()  # Bots on 自動選擇 from before get their model once (routing.py)

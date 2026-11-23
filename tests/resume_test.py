@@ -88,6 +88,15 @@ class ResumeAfterRestart(unittest.TestCase):
         self.start(); self.check_resumed()
         self.until(lambda: subprocess.run(['/bin/ps', '-p', str(pid)], capture_output=True).returncode != 0)  # stopped before the reply went on
 
+    def test_a_restored_backup_or_older_data_starts_nothing_by_itself(self):
+        self.cut_off(); data = self.data()
+        for j in data['jobs']:
+            if j.get('interrupted'): j['status'] = 'running'; j.pop('interrupted'); j.pop('resumeSeen', None)  # as a backup taken mid-reply holds it
+        data['savedAt'] = '2026-01-01T00:00:00+00:00'
+        (self.root / 'data/swarmr.json').write_text(json.dumps(data))
+        self.start(); time.sleep(1.5)
+        self.assertEqual(len(self.runs()), 2); self.assertTrue(self.state()['messages'][-1].get('resumable'))
+
     def test_a_reply_that_may_have_acted_outward_waits_for_the_user(self):
         job = self.cut_off(); data = self.data()
         for j in data['jobs']:

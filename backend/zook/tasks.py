@@ -244,7 +244,7 @@ def task_recover(group, store=None):
             if a.get('state') in ('running', 'starting'): a['state'] = 'unknown'  # a try cut off before its reply began, too
     for g in run.get('gates') or []:
         if g.get('status') == 'pending': g['status'] = 'cancelled'; g['before'] = 'pending'
-    group.setdefault('messages', []).append(dict(id=ID(), role='system', content='Zook 重新啟動時任務還在進行。', createdAt=NOW()))
+    group.setdefault('messages', []).append(dict(id=ID(), role='system', content='Zook 重新啟動時任務還在進行。', createdAt=NOW()))  # resume.py says what happens next
     if store is not None: task_board_update(store, group)
 
 
