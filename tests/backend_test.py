@@ -190,6 +190,7 @@ print(json.dumps({'result':'personal response'}))
 
     def test_sigterm_kills_job_descendants(self):
         bot = self.request('GET', '/api/state')[1]['bots'][0]
+        self.request('PATCH', '/api/settings', {'backgroundRuns': False})  # on, a reply goes on after closing (background_test.py)
         self.request('POST', '/api/chat', {'botId':bot['id'], 'content':'WAIT_FOR_CANCEL'})
         for _ in range(100):
             if (self.root/'child.pid').exists(): break

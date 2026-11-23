@@ -168,7 +168,7 @@ def resume_feed(store, job_id, kind, keep_session, resume, feed, where):
 class Resuming:
     def resume_then_drain(self):
         """At start: first what the last stop cut short, then the messages that were waiting (they would otherwise come after it)."""
-        try: self.resume_interrupted()
+        try: bg_reattach(self); self.resume_interrupted()  # what went on under its runner first (background.py)
         finally: self.queue_drain_all()
 
     def resume_interrupted(self):

@@ -258,8 +258,8 @@ class AutoDetect(unittest.TestCase):
         self.assertEqual(items[0]['by'], '手機：Sean 的 iPhone'); self.assertIn('自動偵測使用量（每 15 分鐘）', items[0]['text'])
 
     def test_schedule_loop_runs_the_timer(self):
-        source = (BACKEND / 'zook' / 'app.py').read_text(encoding='utf-8')
-        loop = source[source.index('def schedule_loop'):source.index('def note_skipped')]
+        source = (BACKEND / 'zook' / 'scheduling.py').read_text(encoding='utf-8')
+        loop = source[source.index('def schedule_loop'):]
         self.assertIn('usage_detect_tick(self)', loop)
 
 

@@ -31,6 +31,7 @@ class ResumeAfterRestart(unittest.TestCase):
                         ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', ZOOK_SCHEDULE_TICK='3600', ZOOK_SHELL_ENV='0', ZOOK_RESUME_DELAY='0.2')
         self.proc = None; self.start()
         self.bot = self.req('POST', '/api/bots', {'name': 'N', 'provider': 'codex'})[1]
+        self.req('PATCH', '/api/settings', {'backgroundRuns': False})  # #34 on its own; with it on, a reply is not cut off at all (background_test.py)
 
     def start(self):
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=self.env)

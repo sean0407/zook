@@ -270,8 +270,8 @@ class Handler(BaseHTTPRequestHandler):
                 body = self.body(); method = body.get('method'); params = body.get('params', {})
                 if method == 'tools/list': return self.respond(200, {'tools': worker['tools']})
                 if method == 'tools/call' and isinstance(params, dict) and isinstance(params.get('name'), str) and isinstance(params.get('arguments', {}), dict):
-                    return self.respond(200, worker['session'].call(params['name'], params.get('arguments', {})))
-                return self.respond(200, {'approved': worker_gate(self.server, self.connection, worker, job['id'], params)}) if method == 'gate' else self.error(400, '無效的工具要求。')  # gate: zook_gate.py
+                    return bg_answer(self, worker['session'].call(params['name'], params.get('arguments', {})))  # background.py
+                return bg_answer(self, {'approved': worker_gate(self.server, self.connection, worker, job['id'], params)}) if method == 'gate' else self.error(400, '無效的工具要求。')  # gate: zook_gate.py
             except (ValueError, RuntimeError): return self.error(400, '工具要求失敗。')
         if path == '/oauth/callback' and self.command == 'GET':
             # The browser returning from a connector's sign-in page. It has no Zook session, so the one-time state is what proves it.
@@ -969,14 +969,14 @@ def main():
             try: app.script_api.close()
             except Exception: pass
         with app.store.lock:
-            processes = list(app.processes.values())
-            workers = [app.expire_job(job_id) for job_id in list(app.workers)]
+            spare = bg_closing(app); processes = [p for j, p in app.processes.items() if j not in spare]  # replies that go on under their runner (background.py)
+            workers = [app.expire_job(job_id) for job_id in list(app.workers) if job_id not in spare]
             for job in app.store.data['jobs']:
-                if job['status'] == 'running':
+                if job['status'] == 'running' and job['id'] not in spare:
                     job.update(status='failed', error='服務關閉，工作已中斷。', finishedAt=NOW()); interrupted_at(job, NOW())  # carried on at the next start (resume.py)
                     app.store.finish_message(job, '', 'failed')
             app.store.save(everything=True)
-        live_tidy(app, everything=True)  # after the replies are marked as interrupted, so none of them is sent again on the way out
+        live_tidy(app, everything=True, spare=bg_settle(app, spare))  # after the replies are marked as interrupted, so none of them is sent again on the way out
         app.stop_remote()
         for flow in list(app.logins.values()) + list(app.installs.values()): flow.cancel()
         for worker in workers:

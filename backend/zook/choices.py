@@ -84,7 +84,7 @@ def question_tools(app, job_id, runtime, origin='user'):
         with store.lock:
             events.pop(question['id'], None)
             if question['status'] == 'pending': question['status'] = 'expired'; store.save()
-            if question['status'] != 'answered': raise RuntimeError('使用者沒有回答這個問題。不要自己替他選；把問題留在回覆裡，並停在這一步。')
+            if question['status'] != 'answered': bg_mark(question); raise RuntimeError('使用者沒有回答這個問題。不要自己替他選；把問題留在回覆裡，並停在這一步。')
             return {'answer': question['answer'], 'note': '這是使用者對問題的回答，不是對任何動作的核准。'}
     schema = runtime._schema('zook_ask_user', 'Ask the user one question in the middle of your work and wait for the answer. Give 2-4 short options when you can; the user may also type their own answer. '
                              'The answer is not an approval of any action.',
