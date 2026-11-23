@@ -113,7 +113,8 @@ class SendIsQuick(unittest.TestCase):
             for i in range(3):
                 sid, url = uuid.uuid4().hex, 'http://127.0.0.1:%d/mcp%d' % (self.token_server.server_port, i)
                 m.blob_set(sid, dict(access='a', refresh='r', expiresAt=time.time() + 600, life=3600))
-                data['connectors'].append(dict(id=uuid.uuid4().hex, name='Slow%d' % i, transport='http', url=url, headers={},
+                cid = uuid.uuid4().hex; data['settings'].setdefault('sharedMcp', []).append('zook:' + cid)  # turned on here: only then is a sign-in renewed
+                data['connectors'].append(dict(id=cid, name='Slow%d' % i, transport='http', url=url, headers={},
                                                oauth=dict(url=url, secretId=sid, clientId='c', tokenEndpoint='http://127.0.0.1:%d/token' % self.token_server.server_port, local=True)))
             (self.root / 'data/swarmr.json').write_text(json.dumps(data))
         finally:
@@ -130,6 +131,7 @@ class SendIsQuick(unittest.TestCase):
 
     def test_the_light_list_only_leaves_out_sign_ins(self):
         m = load(); store = m.Store(self.root / 'data')
+        store.data['settings'].setdefault('sharedMcp', []).append('zook:' + 'c' * 32)  # turned on here
         store.data['connectors'].append(dict(id='c' * 32, name='Slow', transport='http', url='http://127.0.0.1:1/mcp', headers={}, oauth=dict(url='http://127.0.0.1:1/mcp', secretId='d' * 32, clientId='c', tokenEndpoint='http://127.0.0.1:1/token')))
         asked = []; real = m.oauth_access
         m.oauth_access = lambda *a: asked.append(1) or 'tok'
