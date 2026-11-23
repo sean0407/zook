@@ -251,7 +251,7 @@ class TaskRecoverTest(unittest.TestCase):
         run = group['taskRun']
         self.assertEqual((run['status'], [t['status'] for t in run['tasks']]), ('stopped', ['unknown', 'cancelled', 'done']))
         self.assertEqual(run['tasks'][0]['attempts'][0]['state'], 'unknown')
-        self.assertIn('不會自動重做', group['messages'][0]['content'])
+        self.assertIn('重新啟動', group['messages'][0]['content'])
 
     def test_attempts_are_counted_when_picked(self):
         m = load()

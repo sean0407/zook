@@ -653,8 +653,8 @@ class Handler(BaseHTTPRequestHandler):
                 body = self.body()
                 with store.lock: return self.respond(201, self.server.create_team(body))
             inventory = None
-            if (path in ('/api/chat', '/api/chat/redo') and self.command == 'POST') or (parts[:2] == ['api', 'bots'] and self.command in ('POST', 'PATCH')) or (len(parts) == 4 and parts[:2] == ['api', 'schedules']):
-                inventory = inventory_for(store, tokens=path not in ('/api/chat', '/api/chat/redo'))  # a message only checks its Bot's choices; the reply signs in to connectors itself
+            if (path in ('/api/chat', '/api/chat/redo', '/api/chat/resume') and self.command == 'POST') or (parts[:2] == ['api', 'bots'] and self.command in ('POST', 'PATCH')) or (len(parts) == 4 and parts[:2] == ['api', 'schedules']):
+                inventory = inventory_for(store, tokens=path not in ('/api/chat', '/api/chat/redo', '/api/chat/resume'))  # a message only checks its Bot's choices; the reply signs in to connectors itself
             with store.lock:
                 if self.command == 'GET' and path == '/api/state':
                     for b in store.data['bots']: ensure_chats(b)  # Bots added by an import, too
@@ -694,7 +694,7 @@ class Handler(BaseHTTPRequestHandler):
                     job = store.find('jobs', parts[2])
                     if not job: return self.error(404, '找不到工作。')
                     self.server.cancel_job(job)
-                    return self.respond(200, job)
+                    return self.respond(200, job_view(job))
                 if path == '/api/chat' and self.command == 'POST':
                     body = self.body(); bot = store.find('bots', body.get('botId'))
                     if not bot: return self.error(404, '找不到機器人。')
@@ -726,6 +726,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self.respond(202, waiting)
                     send_remember(self.server, once, {'jobId': job['id']})
                     return self.respond(202, {'jobId': job['id']})
+                if path == '/api/chat/resume' and self.command == 'POST': return resume_request(self, store, inventory)  # 接著做 (resume.py)
                 if path == '/api/chat/redo' and self.command == 'POST':
                     # Answer the last question again, send an edited version of it, or answer it with another model.
                     body = self.body(); bot = store.find('bots', body.get('botId'))
@@ -956,7 +957,7 @@ def main():
     app.store.save()
     try: app.script_api = ScriptApi(app)  # for scripts on this Mac; every Bot starts with it switched off
     except OSError: app.script_api = None
-    later = threading.Timer(2.0, app.queue_drain_all); later.daemon = True; later.start()  # messages that were waiting when Zook was closed
+    later = threading.Timer(float(os.environ.get('ZOOK_RESUME_DELAY') or 1), app.resume_then_drain); later.daemon = True; later.start()  # what the last stop cut short (resume.py), then the messages that were waiting
     app.auto_refreshed = time.time()
     live_learn(app); local_migrate(app.store)  # this Mac's own settings for Bots from before (gate.py)
     threading.Thread(target=auto_migrate, args=(app.store,), daemon=True).start()  # Bots on 自動選擇 from before get their model once (routing.py)
@@ -972,7 +973,7 @@ def main():
             workers = [app.expire_job(job_id) for job_id in list(app.workers)]
             for job in app.store.data['jobs']:
                 if job['status'] == 'running':
-                    job.update(status='failed', error='服務關閉，工作已中斷。', finishedAt=NOW())
+                    job.update(status='failed', error='服務關閉，工作已中斷。', finishedAt=NOW()); interrupted_at(job, NOW())  # carried on at the next start (resume.py)
                     app.store.finish_message(job, '', 'failed')
             app.store.save(everything=True)
         live_tidy(app, everything=True)  # after the replies are marked as interrupted, so none of them is sent again on the way out

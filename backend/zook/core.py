@@ -216,6 +216,7 @@ class StoreBase:
         if bots and not any('isAdmin' in b for b in bots):
             for b in bots: b['isAdmin'] = b.get('name') == '管理員'
         for b in bots: b.setdefault('isAdmin', False); b.setdefault('persona', ''); b.setdefault('webSearch', False)
+        self.stopped_at = str(self.data.get('savedAt') or '')  # when the last run last saved: a restored backup keeps its own old time
         for group in self.data['groups']:
             group.pop('compacting', None); task_recover(group, self)
             if group.get('status') == 'running':
@@ -224,8 +225,9 @@ class StoreBase:
             job.setdefault('toolCalls', []); job.setdefault('approvals', [])
             for approval in job['approvals'] + (job.get('questions') or []):
                 if approval['status'] == 'pending': approval['status'] = 'expired'
+            if job['status'] == 'running' and finished_before_stop(self, job): continue  # its answer was saved, only the job record was not
             if job['status'] == 'running':
-                job.update(status='failed', error='服務重新啟動，工作已中斷。')
+                job.update(status='failed', error='服務重新啟動，工作已中斷。'); interrupted_at(job, self.stopped_at)  # resume.py carries it on
                 self.finish_message(job, '', 'failed')
         if recovered: self.data['settings']['recovered'] = recovered; sync_halt(self)
         self.note_damaged()

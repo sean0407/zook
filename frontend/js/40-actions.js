@@ -306,6 +306,12 @@
           await refresh(); poll(sent.jobId, b.id);
           break;
         }
+        case 'resume-reply': {
+          const b = activeBot(), last = (b.messages || []).slice(-1)[0];
+          const sent = await post('chat/resume', {botId: b.id, messageId: last?.id});
+          await refresh(); poll(sent.jobId, b.id);
+          break;
+        }
         case 'redo-again': {
           const b = activeBot();
           if (redoAllowed(b)) await redo(b, {mode: 'again'});

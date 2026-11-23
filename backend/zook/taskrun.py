@@ -272,6 +272,7 @@ class TaskRuns:
             attempt.update(jobId=turn['job']['id'], state='running')
             store.save()
         self._group_job(group_id, turn)
+        with store.lock: task.pop('resumed', None)  # told once (resume.py)
         with store.lock:
             group = store.find('groups', group_id)
             if group:

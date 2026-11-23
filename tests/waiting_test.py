@@ -79,14 +79,16 @@ class WaitingTest(unittest.TestCase):
         self.assertEqual([m['content'] for m in me['messages'] if m['role'] == 'user'], ['甲', '丙'])
         self.assertEqual(self.req('DELETE', '/api/bots/%s/queue/%s' % (self.bot['id'], c['queueId']))[0], 409)  # already sent
 
-    def test_line_survives_a_restart_and_the_interrupted_reply_is_not_rerun(self):
+    def test_line_survives_a_restart_and_the_interrupted_reply_goes_first(self):
+        # #34: the reply the restart cut off is carried on (in its own message, once), then what was waiting is answered.
         (self.root / 'bin/delay').write_text('30')
         self.say('被中斷的'); self.say('等著的')
         time.sleep(0.5); self.stop()
         (self.root / 'bin/delay').write_text('0.2'); self.start()
-        me = self.settle(1)
-        self.assertEqual([(m['content'], m.get('status')) for m in me['messages']], [('被中斷的', None), ('', 'failed'), ('等著的', None), ('回覆：等著的', 'completed')])
-        self.assertEqual(self.asked().count('被中斷的'), 1)
+        me = self.settle(2)
+        self.assertEqual([(m['content'], m.get('status')) for m in me['messages']], [('被中斷的', None), ('回覆：被中斷的', 'completed'), ('等著的', None), ('回覆：等著的', 'completed')])
+        self.assertIn('接續 Zook 重啟前中斷的回覆', me['messages'][1].get('note', ''))
+        self.assertEqual(self.asked().count('被中斷的'), 2)
 
     def test_switched_off_refuses_as_before_and_bad_messages_are_refused_at_once(self):
         self.say('忙著')
