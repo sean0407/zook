@@ -19,6 +19,40 @@ def interrupted_at(job, when):
     job['interrupted'] = when or job.get('createdAt') or NOW()
 
 
+def finished_before_stop(store, job):
+    """Lock held, at start. A reply whose answer reached its conversation file before Zook stopped, though its job record did not:
+    it is finished, and is neither marked failed nor done again."""
+    owner = store.find('groups', job['groupId']) if job.get('groupId') else store.find('bots', job.get('botId'))
+    message = find_message(owner, job.get('messageId')) if owner else None
+    if not message or message.get('status') != 'completed' or not message.get('content'): return False
+    job.update(status='completed', content=message['content'], finishedAt=job.get('finishedAt') or NOW())
+    return True
+
+
+def note_cli_pid(store, job_id, proc, binary):
+    """Lock held. The CLI's process, so one left running by a crash is stopped before its reply is carried on."""
+    pid = getattr(proc, 'pid', None) or getattr(getattr(getattr(proc, 'cli', None), 'proc', None), 'pid', None)
+    job = store.find('jobs', job_id)
+    if job is not None and pid and job.get('cliPid') != [int(pid), str(binary or '')]: job['cliPid'] = [int(pid), str(binary or '')]; store.save()  # on disk before a crash can come
+
+
+def stop_left_behind(job):
+    """At start: the CLI of a reply cut off by a crash may still be running. It is stopped, only when that process is still the CLI."""
+    pid, binary = (job.pop('cliPid', None) or [0, ''])[:2]
+    if not pid or not binary: return
+    try: command = subprocess.run(['/bin/ps', '-o', 'command=', '-p', str(int(pid))], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, ValueError, subprocess.SubprocessError): return
+    if not command or binary not in command: return  # gone, or the number now belongs to something else
+    for sig, wait in ((signal.SIGTERM, 3.0), (signal.SIGKILL, 1.0)):
+        try: os.killpg(int(pid), sig)
+        except (ProcessLookupError, PermissionError): return
+        end = time.monotonic() + wait
+        while time.monotonic() < end:
+            try: os.kill(int(pid), 0)
+            except (ProcessLookupError, PermissionError): return
+            time.sleep(0.1)
+
+
 def resume_age_ok(when, now=None):
     try: then = datetime.datetime.fromisoformat(str(when).replace('Z', '+00:00'))
     except ValueError: return False
@@ -39,8 +73,9 @@ def done_actions(job, limit=15):
 
 
 def interrupt_note(old):
-    done = done_actions(old)
-    return INTERRUPT_NOTE + ('\n中斷前已經完成、不要再做一次的動作：\n' + '\n'.join('- ' + x for x in done) if done else '')
+    done, added = done_actions(old), [str(x)[:2000] for x in old.get('addedText') or []][-10:]
+    return (INTERRUPT_NOTE + ('\n中斷前已經完成、不要再做一次的動作：\n' + '\n'.join('- ' + x for x in done) if done else '')
+            + ('\n使用者在回覆途中補充了以下訊息，請一併照做：\n' + '\n'.join('- ' + x for x in added) if added else ''))
 
 
 def note_cli_session(store, job_id, provider, model, account, folder, session):
@@ -78,7 +113,9 @@ def resume_request(handler, store, inventory):
     """POST /api/chat/resume {botId, messageId}: 接著做, a reply that Zook's restart cut off. Lock held."""
     body = handler.body(); bot = store.find('bots', body.get('botId'))
     if not bot: return handler.error(404, '找不到機器人。')
-    old = next((j for j in reversed(store.data['jobs']) if j.get('botId') == bot['id'] and j.get('messageId') == body.get('messageId') and j.get('interrupted') and not j.get('groupId')), None)
+    wanted = body.get('messageId')
+    if not isinstance(wanted, str) or not wanted: return handler.error(400, '請指定要接著做的回覆。')
+    old = next((j for j in reversed(store.data['jobs']) if j.get('botId') == bot['id'] and j.get('messageId') == wanted and j.get('interrupted') and j.get('chatId') and not j.get('groupId') and not j.get('internal')), None)
     if not old: return handler.error(404, '找不到這則被中斷的回覆。')
     if any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs']): return handler.error(409, '此機器人已有執行中的工作。')
     return handler.respond(202, {'jobId': handler.server.continue_job(bot, old, inventory)['id']})
@@ -107,7 +144,12 @@ def resume_job(job, chat, old, use, note, content):
 
 
 def resume_feed(store, job_id, kind, keep_session, resume, feed, where):
-    """The output feed of a reply, which also notes the CLI conversation it writes into as soon as that is known."""
+    """The output feed of a reply, which also notes the CLI conversation it writes into as soon as that is known.
+    A carried-on reply says under it whether it continued its CLI conversation or was sent Zook's saved one."""
+    with store.lock:
+        job = store.find('jobs', job_id) or {}
+        message = find_message(store.find('bots', job.get('botId')), job.get('messageId')) if job.get('resumeOf') else None
+        if message is not None: message['note'] = RESUME_MARK if resume else RESUME_MARK + '（' + RESUME_SAVED + '）'
     if not keep_session or kind not in RESUME_KINDS: return feed
     spot = lambda sid: note_cli_session(store, job_id, *where[:3], where[3], sid)
     if resume: spot(resume); return feed
@@ -122,11 +164,17 @@ class Resuming:
         except Exception: inventory = None
         with store.lock:
             for old in [j for j in store.data['jobs'] if j.get('interrupted') and not j.get('resumedBy') and not j.get('resumeSeen')]:
-                old['resumeSeen'] = True
+                old['resumeSeen'] = True; left = old.get('cliPid')
+                if left: store.lock.release()
+                try: stop_left_behind(old)  # outside the lock: it may wait a few seconds
+                finally:
+                    if left: store.lock.acquire()
                 if old.get('groupId') or not old.get('chatId') or old.get('internal'): continue
                 bot = store.find('bots', old['botId'])
                 if not bot or not self.resume_place(bot, old): continue
                 message = self.resume_place(bot, old)[2]
+                if task_acted_outward(old):  # it may have sent or changed something outside: doing it again could do it twice
+                    message.update(resumable=True, note='中斷前可能已經對外做了一部分（例如寄出或改了連接的服務），所以沒有自動接著做。確認後可以按「接著做」。'); continue
                 if not resume_age_ok(old['interrupted']): message['resumable'] = True; continue
                 try: self.continue_job(bot, old, inventory)
                 except Exception: message['resumable'] = True  # busy, removed model, …: the user can press 「接著做」
@@ -143,21 +191,27 @@ class Resuming:
         try: messages = chat_messages(bot, old['chatId'])
         except ValueError: return None
         at = next((i for i, m in enumerate(messages) if m['id'] == old.get('messageId')), None)
-        if at is None or at == 0 or at != len(messages) - 1 or messages[at - 1].get('role') != 'user': return None  # the user has moved on
-        return messages, messages[at - 1], messages[at]
+        if at is None or at != len(messages) - 1 or messages[at].get('status') != 'failed': return None  # the user has moved on, or it finished
+        asked = at - 1
+        while asked >= 0 and messages[asked].get('role') == 'user' and messages[asked].get('interjected'): asked -= 1  # added while it answered
+        if asked < 0 or messages[asked].get('role') != 'user': return None
+        return messages, messages[asked], messages[at], asked
 
     def continue_job(self, bot, old, inventory):
         """Lock held. Start the reply again where it was cut off, in the same message. Raises like send_to_bot."""
         place = self.resume_place(bot, old)
         if not place: raise ValueError('這則回覆後面已經有新的訊息，不能接著做。')
         if old.get('resumedBy'): raise ValueError('這則回覆已經接著做了。')
-        messages, asked, reply = place
+        messages, asked, reply, _ = place
         kept = [a for a in asked.get('attachments') or [] if upload_meta(self.store, a['id'])]
         ran, native = old.get('ran') or [], old.get('cliSession')
         use = (ran[0], ran[1]) if native and len(ran) >= 2 and native.get('provider') == ran[0] else None
-        job = self.send_to_bot(bot, asked['content'], inventory, author=asked.get('author'), chat_id=old['chatId'], use=use, attachments=kept,
-                               effort=old.get('effort') or reply.get('effort') or 'standard', plan=bool(asked.get('plan')), long=bool(old.get('long')),
-                               origin=old.get('origin') or 'user', resume_of=old)
+        old['resumedBy'] = 'starting'  # claimed before the new reply is first saved, so a crash in between never starts it twice
+        try:
+            job = self.send_to_bot(bot, asked['content'], inventory, author=asked.get('author'), chat_id=old['chatId'], use=use, attachments=kept,
+                                   effort=old.get('effort') or reply.get('effort') or 'standard', plan=bool(asked.get('plan') or old.get('plan')), long=bool(old.get('long')),
+                                   origin=old.get('origin') or 'user', resume_of=old)
+        except BaseException: old.pop('resumedBy', None); raise
         old['resumedBy'] = job['id']
         return job
 
@@ -174,11 +228,15 @@ class Resuming:
             before = t.pop('before', None)
             if not before or t.get('aborted') or t.get('status') not in ('unknown', 'cancelled', 'stuck'): continue
             last = (t.get('attempts') or [{}])[-1]
+            cut = self.store.find('jobs', last.get('jobId')) if last.get('jobId') else None
+            if before == 'running' and cut and task_acted_outward(cut):
+                t.update(status='stuck', note='這次嘗試可能已經對外做了一部分（例如寄出或改了連接的服務），自動接著做可能重複，停下來等你決定。'); continue
             if before == 'verifying' or (before == 'running' and last.get('state') == 'reported' and last.get('outcome') == 'succeeded'):
                 t.update(status='verifying', verify=dict(state='waiting')); t.pop('note', None)
             elif before == 'running':
                 t.update(status='pending' if t.get('deps') else 'ready', resumed=True); t.pop('note', None)
-                run['bonusAttempts'] = run.get('bonusAttempts', 0) + 1  # the cut-off try does not use up the task's own tries
+                if last.get('state') == 'unknown' and not t.get('resumeBonus'):  # a try that really started, once per task: restarts never lift the cap for good
+                    run['bonusAttempts'] = run.get('bonusAttempts', 0) + 1; t['resumeBonus'] = True
             elif before == 'review': t['status'] = 'review'
             else: t['status'] = before; t.pop('note', None)
         for g in run.get('gates') or []:

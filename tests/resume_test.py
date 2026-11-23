@@ -82,7 +82,21 @@ class ResumeAfterRestart(unittest.TestCase):
         self.cut_off(); self.start(); self.check_resumed()
 
     def test_a_crashed_zook_carries_on_the_reply(self):
-        self.cut_off(hard=True); self.start(); self.check_resumed()
+        job = self.cut_off(hard=True)
+        pid = next(j for j in self.data()['jobs'] if j['id'] == job)['cliPid'][0]
+        os.kill(pid, 0)  # the crash left its CLI running
+        self.start(); self.check_resumed()
+        self.until(lambda: subprocess.run(['/bin/ps', '-p', str(pid)], capture_output=True).returncode != 0)  # stopped before the reply went on
+
+    def test_a_reply_that_may_have_acted_outward_waits_for_the_user(self):
+        job = self.cut_off(); data = self.data()
+        for j in data['jobs']:
+            if j['id'] == job: j['toolCalls'] = [dict(id='c', name='gmail_send', category='external_write', status='running')]
+        (self.root / 'data/swarmr.json').write_text(json.dumps(data))
+        self.start(); time.sleep(1.5)
+        self.assertEqual(len(self.runs()), 2)
+        reply = self.state()['messages'][-1]
+        self.assertTrue(reply.get('resumable')); self.assertIn('對外', reply.get('note', ''))
 
     def test_after_a_day_it_waits_for_the_user(self):
         self.cut_off()

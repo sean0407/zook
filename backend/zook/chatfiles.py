@@ -232,6 +232,7 @@ class ChatFiles:
         fd, name = tempfile.mkstemp(prefix='.swarmr-', dir=str(self.dir))
         try:
             os.fchmod(fd, 0o600)
+            self.data['savedAt'] = NOW()  # about when Zook last stopped, read at the next start (resume.py); a backup keeps its own
             with os.fdopen(fd, 'w', encoding='utf-8') as f:
                 json.dump(chat_strip(self.data), f, ensure_ascii=False)
                 f.flush()

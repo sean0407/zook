@@ -694,7 +694,7 @@ class Handler(BaseHTTPRequestHandler):
                     job = store.find('jobs', parts[2])
                     if not job: return self.error(404, '找不到工作。')
                     self.server.cancel_job(job)
-                    return self.respond(200, job)
+                    return self.respond(200, job_view(job))
                 if path == '/api/chat' and self.command == 'POST':
                     body = self.body(); bot = store.find('bots', body.get('botId'))
                     if not bot: return self.error(404, '找不到機器人。')

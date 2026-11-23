@@ -137,7 +137,8 @@ class ChatFilesTest(unittest.TestCase):
             return real(this, everything)
         with mock.patch.object(self.m.Store, 'save_chats', fail_late):
             self.assertRaises(ValueError, self.m.backup_restore, app, name)
-        self.assertEqual(self.main.read_bytes(), main); self.assertEqual(talk(self.m, store), want)
+        unsaved = lambda raw: dict(json.loads(raw), savedAt=None)  # only the time of the last save may differ (resume.py reads it)
+        self.assertEqual(unsaved(self.main.read_bytes()), unsaved(main)); self.assertEqual(talk(self.m, store), want)
         self.assertFalse((self.dir / 'chats.old').exists())
         self.assertEqual(talk(self.m, self.open()), want)
         bad = old_data(); bad['bots'][0]['messages'][0]['content'] = ['not', 'text']  # a file from elsewhere with a field of the wrong kind

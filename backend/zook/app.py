@@ -170,7 +170,7 @@ class App(Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting,
         knowledge = [x for x in store.data['knowledge'] if not x.get('botId') or x.get('botId') == bot['id']][-10:]
         placed = place_attachments(store, bot['id'], attachments) if attachments else []
         earlier = place_attachments(store, bot['id'], (before := recent_attachments(store, messages[-12:], {a['id'] for a in attachments or []})))
-        so_far = len(messages) - 2 if place else len(messages)
+        so_far = place[3] if place else len(messages)
         note = interrupt_note(resume_of) if place else ''
         def build():
             # Built again when the conversation is turned into a summary just before this reply.
@@ -188,8 +188,7 @@ class App(Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting,
         if attachments: asked['attachments'] = attachments
         if plan: asked['plan'] = True
         if queue_id and origin == 'user': asked['queued'] = True  # sent while it was answering and waited its turn: shown as 排在後面
-        if place: msg['note'] = RESUME_MARK if resume_of.get('cliSession') and use else RESUME_MARK + '（' + RESUME_SAVED + '）'
-        else: messages.extend([asked, msg])
+        if not place: messages.extend([asked, msg])  # a carried-on reply keeps its place; resume_feed writes its note
         chat = next(c for c in bot['chats'] if c['id'] == chat_id)
         chat['updatedAt'] = NOW()
         if not chat.get('title'): chat['title'] = chat_title(content)
@@ -705,7 +704,7 @@ class App(Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting,
                 # A conversation's CLI may be kept open between messages (live.py); otherwise it is started for this one reply.
                 kept = live_turn(self, job, provider, kind, args, cli_cwd, env, resume, prompt, feed)
                 proc = kept or subprocess.Popen(args, stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=str(cli_cwd), env=dict(env, PWD=str(cli_cwd)))  # PWD too, so it matches the folder the CLI starts in
-                self.processes[job_id] = proc
+                self.processes[job_id] = proc; note_cli_pid(store, job_id, proc, binary)  # resume.py
             try:
                 # A reply may take as long as it keeps working. It is stopped when nothing has happened for a while (no output from the
                 # CLI, no tool use), or at the overall limit. A 長任務 is given its whole time even when its CLI stays silent.

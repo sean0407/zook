@@ -227,7 +227,7 @@ def task_recover(group, store=None):
     """At start: a run that was going when Zook stopped is over. What its tasks were doing is not known, so nothing is redone."""
     run = group.get('taskRun') if isinstance(group, dict) else None
     if not isinstance(run, dict) or run.get('status') != 'running': return
-    run['status'] = 'stopped'; run['interrupted'] = (store.__dict__.get('stopped_at') if store is not None else '') or NOW(); run.pop('resumeSeen', None)  # resume.py carries it on
+    run['status'] = 'stopped'; run['interrupted'] = (store.__dict__.get('stopped_at') if store is not None else '') or 'unknown'; run.pop('resumeSeen', None)  # resume.py carries it on
     for t in run.get('tasks') or []:
         if t.get('status') not in TASK_SETTLED or t.get('status') == 'review': t['before'] = t.get('status')
         if t.get('parent') and t.get('staged'): task_handoff_abort(run, t['parent'])  # its member's turn was cut short
@@ -241,7 +241,7 @@ def task_recover(group, store=None):
         elif t.get('status') not in TASK_SETTLED: t['status'] = 'cancelled'
         t.pop('staged', None)
         for a in t.get('attempts') or []:
-            if a.get('state') == 'running': a['state'] = 'unknown'
+            if a.get('state') in ('running', 'starting'): a['state'] = 'unknown'  # a try cut off before its reply began, too
     for g in run.get('gates') or []:
         if g.get('status') == 'pending': g['status'] = 'cancelled'; g['before'] = 'pending'
     group.setdefault('messages', []).append(dict(id=ID(), role='system', content='Zook 重新啟動時任務還在進行。', createdAt=NOW()))
