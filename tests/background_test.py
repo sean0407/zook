@@ -165,6 +165,40 @@ class BackgroundRunTest(unittest.TestCase):
         self.assertNotIn('runner', self.job(job))  # never sent to a window
         self.go(); self.finished('背景完成')
 
+    def test_another_program_on_zooks_old_address_hears_nothing(self):
+        import http.server, threading
+        self.send('TOOL 寫一個檔案'); old = self.port
+        self.stop(); heard = []
+        class Imposter(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a): pass
+            def do_POST(self):
+                heard.append(self.path); data = json.dumps({'approved': True, 'content': [{'type': 'text', 'text': 'ok'}]}).encode()
+                self.send_response(200); self.send_header('Content-Length', str(len(data))); self.end_headers(); self.wfile.write(data)
+        try: fake = http.server.ThreadingHTTPServer(('127.0.0.1', old), Imposter)
+        except OSError: self.skipTest('the old port was taken')
+        threading.Thread(target=fake.serve_forever, daemon=True).start()
+        try:
+            self.go(); time.sleep(2)
+            self.assertEqual(heard, [])  # the Zook that had that address is gone: the call waits instead
+            self.start()
+            approval = self.until(lambda: next((a for j in self.req('GET', '/api/state')[1]['jobs'] for a in j.get('approvals') or [] if a['status'] == 'pending'), None))
+            self.req('POST', '/api/approvals/' + approval['id'], {'decision': 'approve'})
+            self.finished('tool:ok'); self.assertEqual(heard, [])
+        finally: fake.shutdown(); fake.server_close()
+
+    def test_closing_again_before_it_was_taken_up_keeps_it_going(self):
+        self.send('SLOW 寫一份長報告'); pid = self.cli_pid()
+        self.stop(); self.env['ZOOK_RESUME_DELAY'] = '30'; self.start(); time.sleep(0.5)
+        self.stop(); self.assertTrue(self.alive(pid))
+        self.env['ZOOK_RESUME_DELAY'] = '0.2'; self.start(); self.go(); self.finished('背景完成'); self.assertEqual(len(self.runs()), 1)
+
+    def test_only_zooks_own_run_folders_are_cleaned_up(self):
+        foreign = self.root / 'data/runs/someone-elses'; foreign.mkdir(parents=True); (foreign / 'keep.txt').write_text('mine')
+        os.utime(str(foreign), (0, 0))
+        self.send('SLOW 寫一份長報告'); self.go(); self.finished('背景完成')
+        self.until(lambda: [p.name for p in (self.root / 'data/runs').iterdir()] == ['someone-elses'])
+        self.assertEqual((foreign / 'keep.txt').read_text(), 'mine')
+
 
 class KeptCliTest(unittest.TestCase):
     """A conversation's kept CLI (live.py) that is answering when Zook closes finishes that answer, and the next Zook shows it."""

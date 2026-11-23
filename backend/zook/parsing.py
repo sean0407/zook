@@ -344,6 +344,7 @@ def signal_group(proc, sig):
     leader has ended but is not yet collected; then each process still in the group is signalled by itself, and the leader too
     while it was not collected yet."""
     proc = getattr(getattr(proc, 'cli', None), 'proc', None) or proc  # a kept CLI's reply (live.py) stands for its process
+    if isinstance(proc, HostedProc): return proc.signal(sig)  # through its runner, never by a number that may be reused (background.py)
     try: os.killpg(proc.pid, sig); return True
     except ProcessLookupError: return False
     except OSError: pass
@@ -368,6 +369,8 @@ def group_members(pgid):
 
 def group_alive(proc):
     """Whether the CLI or anything it started is still running."""
+    proc = getattr(getattr(proc, 'cli', None), 'proc', None) or proc
+    if isinstance(proc, HostedProc): return proc.poll() is None  # its runner ends what is left of it (background.py)
     if proc.poll() is None: return True
     try: os.killpg(proc.pid, 0); return True
     except ProcessLookupError: return False

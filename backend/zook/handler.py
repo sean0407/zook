@@ -267,8 +267,8 @@ class Handler(BaseHTTPRequestHandler):
                     authorized = worker and job and job['status'] == 'running' and secrets.compare_digest(self.headers.get('Authorization', ''), 'Bearer '+worker['token'])
             if not authorized: return self.error(403, '禁止存取。')
             try:
-                body = self.body(); method = body.get('method'); params = body.get('params', {})
-                if method == 'tools/list': return self.respond(200, {'tools': worker['tools']})
+                body = self.body(); method = body.get('method'); params = body.get('params', {}); bg_left(self)  # background.py
+                if method == 'tools/list': return bg_answer(self, {'tools': worker['tools']})
                 if method == 'tools/call' and isinstance(params, dict) and isinstance(params.get('name'), str) and isinstance(params.get('arguments', {}), dict):
                     return bg_answer(self, worker['session'].call(params['name'], params.get('arguments', {})))  # background.py
                 return bg_answer(self, {'approved': worker_gate(self.server, self.connection, worker, job['id'], params)}) if method == 'gate' else self.error(400, '無效的工具要求。')  # gate: zook_gate.py

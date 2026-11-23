@@ -378,7 +378,7 @@ def live_turn(app, job, provider, kind, args, cwd, env, resume, prompt, on_outpu
             cli.gate = [env.get('ZOOK_GATE_MARK'), env.get('ZOOK_GATE_NONCE'), 0] if env.get('ZOOK_GATE_NONCE') else None  # its own word (gate.py)
             lives[key] = cli; ids[ident] = cli
         else: job['kept'] = True  # this reply did not have to start the CLI
-        bg_note(store, job, cli.proc, True)  # where this reply's output starts, for a later Zook (background.py)
+        bg_note(store, job, cli.proc, True, cli.cost)  # where this reply's output starts, for a later Zook (background.py)
         return cli.begin(job['id'], prompt, MAX_CLI_OUTPUT, on_output)
 
 

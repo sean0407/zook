@@ -305,11 +305,12 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             elif name == 'zook_native_gate': approval['text'] = '\n'.join(str(x.get('title') or '') for x in approval['arguments'].get('actions') or [] if isinstance(x, dict)) or str(approval['arguments'].get('title') or '')[:200]
             elif describe_send(approval['label'], approval['arguments']) or describe_write(approval['label'], approval['arguments']):
                 approval['text'] = describe_send(approval['label'], approval['arguments']) or describe_write(approval['label'], approval['arguments'])
+            if bg_hold(self, job_id, approval): job.setdefault('approvals', []).append(approval); self.store.save(); return False  # Zook is closing for this reply (background.py)
             job.setdefault('approvals', []).append(approval); self.approval_events[approval_id] = event
             run = self.schedule_run_for(job)
             if run: self.notify_run(run, '需要你核准：' + (approval.get('text') or describe_call(dict(approval, name=name))))
             self.store.save()
-        event.wait(schedule_approval_wait() if run else APPROVAL_TIMEOUT)
+        event.wait(bg_wait(schedule_approval_wait() if run else APPROVAL_TIMEOUT))  # no longer than the CLI still waits
         with self.store.lock:
             self.approval_events.pop(approval_id, None)
             if approval['status'] == 'pending':
@@ -610,7 +611,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 # A conversation's CLI may be kept open between messages (live.py); otherwise it is started for this one reply.
                 kept = live_turn(self, job, provider, kind, args, cli_cwd, env, resume, prompt, feed)
                 proc = kept or bg_popen(self, job, args, cli_cwd, env, stdin_prompt, kind)  # under a runner when it may go on while Zook is closed (background.py)
-                kept = kept or bg_turn(proc, kind, feed); proc = kept or proc  # a kept CLI's reply taken up after a restart
+                kept = kept or bg_turn(proc, kind, feed, job); proc = kept or proc  # a kept CLI's reply taken up after a restart
                 self.processes[job_id] = proc; note_cli_pid(store, job_id, proc, binary)  # resume.py
             try:
                 # A reply may take as long as it keeps working. It is stopped when nothing has happened for a while (no output from the
@@ -702,7 +703,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                     self.remember_session(job, provider, model, account, cli_cwd, cli_session(kind, output.decode('utf-8', errors='replace')))
                     store.finish_message(job, content, 'completed')
                     if options: (find_message(store.find('bots', job['botId']), job['messageId']) or {})['options'] = options
-                    if isinstance(kept, LiveTurn) and kept.pending: (find_message(store.find('bots', job['botId']), job['messageId']) or {})['note'] = '回覆途中補充的訊息它沒有讀到，請再傳一次。'
+                    if isinstance(kept, LiveTurn) and (kept.pending or kept.__dict__.get('unsure')): (find_message(store.find('bots', job['botId']), job['messageId']) or {})['note'] = '回覆途中補充的訊息它沒有讀到，請再傳一次。'
                     store.save()
         except LiveLost:
             self.live_fails = self.__dict__.get('live_fails', 0) + 1

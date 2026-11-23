@@ -21,6 +21,7 @@ import http.server
 import select
 import socket
 import json
+import re
 import os
 import pathlib
 import signal
@@ -35,11 +36,32 @@ MAX_BODY = 4 * 1024 * 1024
 MAX_ERR = 1024 * 1024
 
 
+def sign(key, *parts):
+    """Proof that a message comes from someone who holds the runner key, without sending the key itself."""
+    return hmac.new(key.encode(), b'\n'.join(p if isinstance(p, bytes) else str(p).encode() for p in parts), 'sha256').hexdigest()
+
+
+def pid_alive(pid):
+    try: os.kill(int(pid), 0); return True
+    except ProcessLookupError: return False
+    except (OSError, ValueError, TypeError): return True
+
+
+def worker_url(url):
+    """Only Zook's own worker address on this Mac: http://127.0.0.1:<port>/api/worker/<id>, nothing else in it."""
+    if not isinstance(url, str): return False
+    try: where = urllib.parse.urlsplit(url); port = where.port
+    except ValueError: return False
+    return (where.scheme == 'http' and where.hostname == '127.0.0.1' and where.netloc == '127.0.0.1:%d' % (port or 0) and bool(port)
+            and not where.query and not where.fragment and bool(re.fullmatch(r'/api/worker/[A-Za-z0-9_-]{1,80}', where.path)))
+
+
 class Run:
     def __init__(self, cfg):
         self.cfg = cfg; self.folder = pathlib.Path(cfg['dir'])
         self.cond = threading.Condition()
-        self.url, self.auth = cfg.get('url') or '', 'Bearer ' + (cfg.get('token') or '')  # where Zook is now, and how it knows the calls
+        self.url, self.auth = (cfg.get('url') if worker_url(cfg.get('url')) else ''), 'Bearer ' + (cfg.get('token') or '')  # where Zook is now, and how it knows the calls
+        self.zook_pid = cfg.get('zook_pid')  # the Zook it belongs to now: once that process is gone, nothing is sent to its old address
         self.pending, self.last, self.stopped, self.proc, self.gone_at = 0, time.monotonic(), '', None, None
         self.out_size = 0; self.limit_at = time.monotonic() + float(cfg.get('limit') or 3600)
 
@@ -64,7 +86,7 @@ class Run:
         threading.Thread(target=later, daemon=True).start()
 
     # Calls from the CLI ------------------------------------------------------------------------------------------------
-    def forward(self, body, box):
+    def forward(self, body, box, arrived):
         """(status, data) for one tool call, waiting while Zook is away. box['conn'] is the call's connection to Zook, so it can be
         cut when the CLI stops waiting (Zook then takes its approval card down); box['gone'] says the CLI stopped waiting."""
         hold = time.monotonic() + float(self.cfg.get('hold') or 720)
@@ -72,13 +94,18 @@ class Run:
         try:
             while not box.get('gone'):
                 with self.cond:
+                    if self.url and self.zook_pid and not pid_alive(self.zook_pid): self.url = ''
                     url, auth = self.url, self.auth
                 if url:
                     where = urllib.parse.urlsplit(url)
                     conn = http.client.HTTPConnection(where.hostname, where.port, timeout=max(1, hold - time.monotonic())); box['conn'] = conn
                     try:
-                        conn.request('POST', where.path, body, {'Authorization': auth, 'Content-Type': 'application/json'})
+                        nonce = os.urandom(16).hex(); left = int(float(self.cfg.get('wait') or 660) - (time.monotonic() - arrived) - 5)
+                        if left <= 0: return 504, b'{"error": "Zook is not open"}'
+                        conn.request('POST', where.path, body, {'Authorization': auth, 'Content-Type': 'application/json', 'X-Zook-Nonce': nonce, 'X-Zook-Left': str(left)})
                         response = conn.getresponse(); status, data = response.status, response.read(MAX_BODY)
+                        # Only Zook holds the runner key: an answer without its proof (another program on that port) is not passed on.
+                        if not hmac.compare_digest(response.getheader('X-Zook-Proof') or '', sign(self.cfg['key'], 'zook', nonce, status, data)): return 502, b'{"error": "Zook connection lost"}'
                         retry = False
                         if status == 503:
                             try: retry = json.loads(data or b'{}').get('retry') is True
@@ -98,12 +125,20 @@ class Run:
 
     def control(self, value):
         action = value.get('action')
+        if action == 'hello': return 200, {'ok': True, 'version': VERSION}
         if action == 'attach':
-            url, token = value.get('url'), value.get('token')
-            if not isinstance(url, str) or not url.startswith('http://127.0.0.1:') or not isinstance(token, str) or not token: return 400, {}
-            with self.cond: self.url, self.auth = url, 'Bearer ' + token; self.gone_at = None; self.cond.notify_all()
+            url, token, pid = value.get('url'), value.get('token'), value.get('pid')
+            if not worker_url(url) or not isinstance(token, str) or not token or not isinstance(pid, int): return 400, {}
+            with self.cond: self.url, self.auth, self.zook_pid = url, 'Bearer ' + token, pid; self.cond.notify_all()  # a kept CLI stays timed: no Zook writes to it any more
             return 200, {'ok': True}
         if action == 'stop': self.stop('stopped'); return 200, {'ok': True}
+        if action == 'signal' and value.get('sig') in (signal.SIGTERM, signal.SIGKILL):
+            proc = self.proc  # not collected yet, so its number is still its own
+            if proc and proc.poll() is None:
+                try: os.killpg(proc.pid, value['sig'])
+                except OSError: pass
+                return 200, {'ok': True, 'sent': True}
+            return 200, {'ok': True, 'sent': False}
         if action == 'status': return 200, {'pending': self.pending, 'version': VERSION}
         return 400, {}
 
@@ -116,7 +151,8 @@ class Run:
                 chunk = pipe.read1(65536)
                 if not chunk: return
                 if name == 'out': self.last = time.monotonic()
-                if written < cap: os.write(fd, chunk[:cap - written]); written += len(chunk)
+                if written + len(chunk) > cap: self.stop('輸出超過大小限制。'); continue  # ended, not cut short without a word
+                os.write(fd, chunk); written += len(chunk)
         except (OSError, ValueError): pass
         finally: os.close(fd)
 
@@ -162,9 +198,11 @@ def serve(run):
     class Handler(http.server.BaseHTTPRequestHandler):
         def log_message(self, *a): pass
 
-        def reply(self, status, data):
+        def reply(self, status, data, nonce=None):
             data = data if isinstance(data, bytes) else json.dumps(data).encode()
-            self.send_response(status); self.send_header('Content-Type', 'application/json'); self.send_header('Content-Length', str(len(data))); self.end_headers()
+            self.send_response(status); self.send_header('Content-Type', 'application/json'); self.send_header('Content-Length', str(len(data)))
+            if nonce: self.send_header('X-Zook-Proof', sign(run.cfg['key'], 'runner', nonce, status, data))  # Zook checks it is talking to this runner
+            self.end_headers()
             self.wfile.write(data)
 
         def do_POST(self):
@@ -172,16 +210,17 @@ def serve(run):
             try: size = int(self.headers.get('Content-Length') or 0)
             except ValueError: size = -1
             if not 0 <= size <= MAX_BODY: return self.reply(400, {})
-            body = self.rfile.read(size); auth = self.headers.get('Authorization', '')
+            body = self.rfile.read(size); auth = self.headers.get('Authorization', ''); arrived = time.monotonic()
             ident = run.cfg.get('ident') or ''
             if self.path == '/control':
-                if not hmac.compare_digest(auth, 'Bearer ' + run.cfg['key']): return self.reply(403, {})
+                nonce = self.headers.get('X-Zook-Nonce') or ''
+                if not re.fullmatch(r'[0-9a-f]{32}', nonce) or not hmac.compare_digest(self.headers.get('X-Zook-Sig') or '', sign(run.cfg['key'], 'control', nonce, body)): return self.reply(403, {})
                 try: value = json.loads(body)
                 except ValueError: return self.reply(400, {})
-                return self.reply(*run.control(value if isinstance(value, dict) else {}))
+                return self.reply(*run.control(value if isinstance(value, dict) else {}), nonce=nonce)
             if ident and self.path == '/api/worker/' + ident and hmac.compare_digest(auth, 'Bearer ' + (run.cfg.get('token') or '')):
                 box, out = {}, {}
-                worker = threading.Thread(target=lambda: out.update(r=run.forward(body, box)), daemon=True); worker.start()
+                worker = threading.Thread(target=lambda: out.update(r=run.forward(body, box, arrived)), daemon=True); worker.start()
                 while worker.is_alive():
                     worker.join(1)
                     if worker.is_alive() and client_gone(self.connection):  # the CLI stopped waiting: so does Zook
@@ -219,6 +258,9 @@ def main():
     if use_stdin: threading.Thread(target=run.feed, args=(b'',), daemon=True).start()
     threading.Thread(target=run.watch, daemon=True).start()
     code = run.proc.wait()
+    if run.stopped:  # what it started goes with it, as Zook would have ended it (only just collected: the number is still its group's)
+        try: os.killpg(run.proc.pid, signal.SIGKILL)
+        except OSError: pass
     for t in pumps: t.join(timeout=5)  # a helper it left behind may hold the output open: not waited for
     run.write_json('exit', {'code': code, 'stopped': run.stopped})
 
