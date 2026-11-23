@@ -820,7 +820,8 @@ class Handler(BaseHTTPRequestHandler):
                         body = self.body()
                         try: result = self.server.verify_group_message(group, parts[4], body.get('confirm') is True)
                         except RuntimeError as exc: return self.error(409, str(exc))
-                        store.save(); return self.respond(200 if result.get('needsConfirm') else 202, result)
+                        if result.get('needsConfirm'): return self.respond(409, dict(result, error=result['message']))  # nothing started: the window says why and asks
+                        store.save(); return self.respond(202, result)
                     if len(parts) == 4 and parts[3] == 'files' and self.command == 'GET' and not self.device:
                         return self.respond(200, {'files': list_group_files(store, group), 'limit': GROUP_FILES_TOTAL})
                     if len(parts) == 5 and parts[3] == 'files' and self.command == 'GET' and not self.device:

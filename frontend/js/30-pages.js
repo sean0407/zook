@@ -203,7 +203,9 @@
     } catch (_) {} finally { state.syncing = false; }
   }
   async function refresh() {
-    applyState(await api('state'));
+    const loads = state.loads; let data = await api('state');
+    if (loads !== state.loads) data = await api('state');  // a group poll brought newer data meanwhile: this answer may be older, so ask again
+    applyState(data);
   }
   function applyState(data) {
     state.data = data; state.loads = (state.loads || 0) + 1;

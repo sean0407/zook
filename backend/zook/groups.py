@@ -65,6 +65,22 @@ def group_verifier(store, group, message):
     return next((x for x in options if not x[3]), options[0] if options else None)
 
 
+def verifier_missing(store, group, message):
+    """Why nobody can check this reply, said plainly. Lock held."""
+    others = [b for b in (store.find('bots', x) for x in group['botIds']) if b and b['id'] != message.get('botId')]
+    if not others: return '群組裡沒有其他成員，無法查核這則回覆。'
+    busy = [b['name'] for b in others if any(j['botId'] == b['id'] and j['status'] == 'running' for j in store.data['jobs'])]
+    if len(busy) == len(others): return '%s 正在其他對話中工作，請等完成後再試一次。' % '、'.join(busy)
+    return '其他成員的模型沒辦法用只讀的方式查核（或這台 Mac 沒有安裝），無法查核這則回覆。'
+
+
+def group_skip_turn(group, bot, why, step):
+    """A turn that does not run. A check says so under the reply it was asked to check, with a way to try again; anything
+    else is a line in the discussion. Lock held."""
+    if (step or {}).get('targetId'): group['messages'].append(dict(id=ID(), role='assistant', botId=bot['id'], checkOf=step['targetId'], content='', status='failed', error=why.strip(), createdAt=NOW()))
+    else: group['messages'].append(dict(id=ID(), role='system', content=bot['name'] + why, createdAt=NOW()))
+
+
 def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, blind=False, target=None, writable=False, hidden=(), hidden_files=()):
     members = [store.find('bots', x) for x in group['botIds']]
     members = [m for m in members if m]
@@ -327,8 +343,8 @@ class GroupRuns:
         message = find_message(group, message_id)
         if not message or message.get('role') != 'assistant' or not message.get('content') or message.get('status') != 'completed' or message.get('checkOf'): raise ValueError('這則回覆不能查核。')
         pick = group_verifier(self.store, group, message)
-        if not pick: raise ValueError('目前沒有其他成員可以查核這則回覆。')
-        if pick[3] and not confirmed: return dict(needsConfirm=True, message='其他成員都用同一家模型，查核效果有限。仍要查核嗎？')
+        if not pick: raise RuntimeError(verifier_missing(self.store, group, message))  # refused with the reason, never an answer that does nothing
+        if pick[3] and not confirmed: return dict(needsConfirm=True, message='群組裡沒有別家的 Bot，無法交叉查核。仍要請同一家模型的成員查核嗎？效果有限。')
         step = dict(role='verify', bots=[pick[0]], readonly=True, use=[pick[1], pick[2]] + ([pick[4]] if pick[4] is not None else []), targetId=message_id)  # with the account 自動選擇 picked
         return dict(runId=self.start_group(group, [], True, dict(kind='steps', broadcast=True, steps=[step])))
 
@@ -342,7 +358,7 @@ class GroupRuns:
             if not bot or bot_id not in group['botIds']: return None
             if any(j['botId'] == bot_id and j['status'] == 'running' for j in store.data['jobs']):
                 if (step or {}).get('waitBusy'): return 'busy'  # a task waits for its member instead of skipping it
-                group['messages'].append(dict(id=ID(), role='system', content=bot['name'] + ' 正在其他對話中工作，這次略過。', createdAt=NOW()))
+                group_skip_turn(group, bot, '%s 正在其他對話中工作，這次沒有查核，請等它完成後再試一次。' % bot['name'] if (step or {}).get('targetId') else ' 正在其他對話中工作，這次略過。', step)
                 store.save(); return None
             step = step or {}; readonly = bool(step.get('readonly')); auto_chain, auto_mark = None, {}
             if step.get('use'): auto_chain = [list(step['use'])]  # a check stays on the model that was chosen for it
@@ -355,7 +371,7 @@ class GroupRuns:
                     store.save(); return None
             provider, model = auto_chain[0][:2] if auto_chain else bot_model(store, bot)
             if readonly and provider_kind(provider) not in PLAN_KINDS:
-                group['messages'].append(dict(id=ID(), role='system', content=bot['name'] + ' 的模型無法限制成只讀，這次略過。', createdAt=NOW()))
+                group_skip_turn(group, bot, '%s 的模型無法限制成只讀，沒辦法查核。' % bot['name'] if step.get('targetId') else ' 的模型無法限制成只讀，這次略過。', step)
                 store.save(); return None
             writable = not readonly and permission_mode(store, bot) in ('auto', 'bypass')
             target = find_message(group, step['targetId']) if step.get('targetId') else None
@@ -453,7 +469,9 @@ class GroupRuns:
             if not group or group.get('runId') != run_id: return False
             group['activeJobIds'] = []; group['activeJobId'] = None
             for t in turns_here:
-                if t['job']['status'] != 'completed': continue
+                if t['job']['status'] != 'completed':
+                    if t['role'] == 'verify': t['msg']['error'] = '查核已停止。' if t['job']['status'] == 'cancelled' else t['job'].get('error') or '查核沒有完成。'  # kept with the check: shown under the reply after a reload too
+                    continue
                 card = group_card(t['job'].get('content')) if t['role'] in GROUP_CLOSING + ('moderate',) else None
                 if card: t['msg']['card'] = card
                 if t['role'] == 'verify': t['msg']['verdict'] = group_verdict(t['job'].get('content'))

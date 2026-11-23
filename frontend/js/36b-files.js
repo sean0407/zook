@@ -16,8 +16,9 @@
   }
   function messageFiles(text, items) {
     const said = String(text || ''), seen = new Set();
-    const named = name => { for (let at = said.indexOf(name); at >= 0; at = said.indexOf(name, at + 1)) { const before = said[at - 1] || ' ', after = said[at + name.length] || ' '; if (!/[\w.\-]/.test(before) && !/\w/.test(after)) return true; } return false; };
-    const found = items.filter(f => f.name.length >= 3 && named(f.name) && !seen.has(f.url) && seen.add(f.url)).slice(0, 12);
+    // 「~$報告.docx」 is Office's lock file, not 報告.docx: it never gets a card of its own, nor makes the real file's card appear.
+    const named = name => { for (let at = said.indexOf(name); at >= 0; at = said.indexOf(name, at + 1)) { const before = said[at - 1] || ' ', after = said[at + name.length] || ' '; if (!/[\w.\-$]/.test(before) && !/\w/.test(after)) return true; } return false; };
+    const found = items.filter(f => f.name.length >= 3 && !/^(~\$|\.~lock\.)/.test(f.name) && named(f.name) && !seen.has(f.url) && seen.add(f.url)).slice(0, 12);
     const twice = new Set(found.filter((f, i) => found.findIndex(x => x.name === f.name) !== i).map(f => f.name));
     if (!found.length) return '';
     const pics = found.filter(f => f.kind === 'image'), rest = found.filter(f => f.kind !== 'image');

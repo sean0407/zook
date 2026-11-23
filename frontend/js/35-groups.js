@@ -49,25 +49,49 @@
   function groupCardView(m) {
     return `<div class="group-card">${m.card.body ? `<section><div class="md">${markdown(m.card.body)}</div></section>` : ''}${CARD_PARTS.filter(([k]) => m.card[k]).map(([k, name]) => `<section><h4>${name}</h4><div class="md">${markdown(m.card[k])}</div></section>`).join('')}<div class="group-card-actions"><button type="button" class="link" data-action="card-copy" data-id="${esc(m.id)}">複製</button><button type="button" class="link" data-action="card-save" data-id="${esc(m.id)}">存到知識庫</button></div></div>`;
   }
+  // 請其他成員查核: what came back is shown under the reply it checks. A check that failed says why in plain words and offers to try
+  // again; an older failure that a later check replaced is not shown. What the Mac refused (nobody can check, or only the same
+  // vendor can) is said right there too, instead of in a notice that fades.
+  const othersIn = (g, m) => (g.botIds || []).some(x => x !== m.botId && state.data.bots.some(b => b.id === x));  // someone besides the author is in the group
+  const checksOf = (g, m) => { const all = groupMsgs(g).filter(x => x.checkOf === m.id); return all.filter((c, i) => (c.status === 'completed' && c.content) || c.status === 'running' || i === all.length - 1); };
+  const checkFailed = c => c.status !== 'running' && !(c.status === 'completed' && c.content);
   function groupChecks(g, m) {
-    const checks = groupMsgs(g).filter(x => x.checkOf === m.id);
-    if (!checks.length) return '';
+    const checks = checksOf(g, m), note = (state.verifyNotes || {})[m.id];
+    if (!checks.length && !note) return '';
     const cls = {'同意': 'ok', '有疑慮': 'warn', '有錯誤': 'bad'};
     return `<div class="group-checks">${checks.map(c => {
       const b = state.data.bots.find(x => x.id === c.botId);
       if (c.status === 'running') return `<div class="group-check"><strong>${esc(b?.name || '成員')}</strong> 正在查核…</div>`;
-      if (!c.content) return `<div class="group-check muted">${esc(b?.name || '成員')} 沒有完成查核</div>`;
+      if (checkFailed(c)) {
+        const why = c.error || (c.status === 'cancelled' ? '查核已停止。' : '') || Object.values(state.jobDetails).find(j => j.messageId === c.id)?.error || '查核沒有完成。';
+        return `<div class="group-check failed"><div class="group-check-head"><strong>${esc(b?.name || '成員')} 查核失敗</strong></div><p>${esc(why)}</p>${g.status !== 'running' && othersIn(g, m) && !(state.verifyNotes || {})[m.id] ? `<button type="button" class="link" data-action="group-verify" data-id="${esc(m.id)}">再試一次</button>` : ''}</div>`;
+      }
       return `<div class="group-check"><div class="group-check-head"><strong>${esc(b?.name || '成員')} 查核</strong><span class="pill ${cls[c.verdict] || ''}">${esc(c.verdict || '未判定')}</span></div><div class="md">${markdown(c.content.replace(/【判定】\s*(同意|有疑慮|有錯誤)/, '').trim())}</div></div>`;
-    }).join('')}</div>`;
+    }).join('')}${note ? `<div class="group-check failed"><p>${esc(note.text)}</p>${note.confirm && othersIn(g, m) ? `<button type="button" class="link" data-action="group-verify-anyway" data-id="${esc(m.id)}">仍要查核</button> ` : ''}<button type="button" class="link" data-action="group-verify-dismiss" data-id="${esc(m.id)}">${note.confirm ? '取消' : '知道了'}</button></div>` : ''}</div>`;
   }
-  const groupVerifyButton = (g, m) => g.status !== 'running' && m.status === 'completed' && m.content ? `<div class="msg-actions"><button type="button" class="link" data-action="group-verify" data-id="${esc(m.id)}">請其他成員查核</button></div>` : '';
+  // One button per reply, and none when nobody else is in the group, while a check runs, or when the failed check already offers 再試一次.
+  const groupVerifyButton = (g, m) => {
+    if (g.status === 'running' || m.status !== 'completed' || !m.content || (state.verifyNotes || {})[m.id]) return '';
+    if (!othersIn(g, m)) return '';
+    const last = checksOf(g, m).slice(-1)[0];
+    if (last && (last.status === 'running' || checkFailed(last))) return '';
+    return `<div class="msg-actions"><button type="button" class="link" data-action="group-verify" data-id="${esc(m.id)}">請其他成員查核</button></div>`;
+  };
 
-  async function verifyGroupMessage(g, id) {
-    const path = 'groups/' + encodeURIComponent(g.id) + '/messages/' + encodeURIComponent(id) + '/verify';
-    let result = await post(path, {});
-    if (result.needsConfirm) { if (!confirm(result.message)) return; result = await post(path, {confirm: true}); }
+  async function verifyGroupMessage(g, id, anyway = false) {
+    const res = await fetch('/api/groups/' + encodeURIComponent(g.id) + '/messages/' + encodeURIComponent(id) + '/verify', {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(anyway ? {confirm: true} : {})});
+    const body = await res.json().catch(() => ({}));
+    state.verifyNotes = state.verifyNotes || {};
+    if (!res.ok) { state.verifyNotes[id] = {text: body.error || '沒辦法查核這則回覆，請稍後再試。', confirm: !!body.needsConfirm}; render(true); return; }
+    delete state.verifyNotes[id];
     await refresh(); pollGroup(g.id);
   }
+  // A check that is still running is read again every few seconds until it finishes or fails, even if the discussion's own
+  // polling stopped early (a dropped request, a reply that arrived while an older full refresh was still on its way).
+  setInterval(() => {
+    const g = state.data && state.page === 'chat' && state.groupId ? activeGroup() : null;
+    if (g && !state.groupPollers[g.id] && (g.status === 'running' || groupMsgs(g).some(x => x.checkOf && x.status === 'running'))) pollGroup(g.id);
+  }, 2500);
 
   // 檔案 tab of the group's detail panel.
   const fileSize = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(0) + ' KB' : (n / 1048576).toFixed(1) + ' MB';

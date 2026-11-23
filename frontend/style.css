@@ -1600,6 +1600,8 @@ button.run-row:hover { background: #f1f1f1; }
 .group-check { padding: 8px 12px; border-left: 2px solid #dcdcdc; background: #fafafa; border-radius: 0 10px 10px 0; font-size: 13px; }
 .group-check-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
 .group-check .md > :last-child { margin-bottom: 0; }
+.group-check.failed { border-left-color: #d9a441; background: #fff8ec; }
+.group-check.failed p { margin: 0 0 4px; }
 .pill.bad { background: #fde8e6; color: #b3261e; }
 .group-files { display: grid; gap: 8px; padding: 10px 14px; }
 .group-file { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }

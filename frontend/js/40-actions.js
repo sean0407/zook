@@ -175,6 +175,8 @@
         case 'group-discard': { const g = activeGroup(); await post('groups/' + encodeURIComponent(g.id) + '/continue', {discard: true}); await refresh(); break; }
         case 'group-summarize': { const g = activeGroup(); await post('groups/' + encodeURIComponent(g.id) + '/summarize'); await refresh(); pollGroup(g.id); break; }
         case 'group-verify': await verifyGroupMessage(activeGroup(), id); break;
+        case 'group-verify-anyway': await verifyGroupMessage(activeGroup(), id, true); break;
+        case 'group-verify-dismiss': delete (state.verifyNotes || {})[id]; render(true); break;
         case 'card-copy': { const m = groupMsgs(activeGroup()).find(x => x.id === id); await navigator.clipboard.writeText(cardText(m.card)); toast('已複製結論'); break; }
         case 'card-save': { const g = activeGroup(), m = groupMsgs(g).find(x => x.id === id); await post('knowledge', {title: g.name + ' 討論結論', content: cardText(m.card)}); toast('已存到知識庫'); break; }
         case 'group-tab': state.groupTab = id; if (activeGroup()) delete state.groupFiles[activeGroup().id]; render(true); break;
