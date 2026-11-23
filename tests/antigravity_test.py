@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Antigravity through its official CLI, agy."""
-import http.client, importlib.util, json, os, signal, subprocess, sys, tempfile, threading, time, types, unittest
+import fnmatch, http.client, importlib.util, json, os, signal, subprocess, sys, tempfile, threading, time, types, unittest
 from unittest import mock
 from urllib.parse import quote
 from pathlib import Path
@@ -32,6 +32,12 @@ def pathlib_read(path): return Path(path).read_bytes()
 
 
 class Units(unittest.TestCase):
+    def setUp(self):  # each test's own temporary folder: turn copies go there (zook-agy-turns)
+        self.tmp = tempfile.mkdtemp(); self.patch = mock.patch.object(tempfile, 'tempdir', os.path.realpath(self.tmp)); self.patch.start()
+
+    def tearDown(self):
+        self.patch.stop(); subprocess.run(['/bin/rm', '-rf', self.tmp])
+
     def test_reply_and_usage(self):
         out = server.parse_cli_output('antigravity', json.dumps(dict(event='result', result=dict(status='SUCCESS', response='OK\n', usage=dict(input_tokens=10, output_tokens=2, cache_read_tokens=4)))), 'm')
         self.assertEqual((out['content'], out['usage']['input'], out['usage']['cachedInput'], out['usage']['output']), ('OK', 10, 4, 2))
@@ -88,17 +94,25 @@ class Units(unittest.TestCase):
             placed = server.place_attachments(store, 'b1', [mine, key, env]); server.place_attachments(store, 'b1', [other])
             shared = server.group_files_dir(store, 'g1'); shared.mkdir(parents=True)
             for name in ('預算.pdf', 'key.txt', 'hidden.pdf', 'a[1]*?.pdf'): (shared / name).write_bytes(b'%PDF')
+            (store.dir / 'workspaces/b2').mkdir(); (store.dir / 'workspaces/b1/notes.txt').write_text('x')
             server.sync_group_files_in(store, 'g1', 'b1', {'hidden.pdf'})
             job = dict(id='j1', attachments=[str(x) for x in placed], attachmentIds=[mine['id'], key['id'], env['id']], groupFiles=True, groupId='g1')
-            rules, note = server.agy_read_paths(store, 'b1', job)
-            turn = store.dir / 'workspaces/b1/attachments/.zook-turns/j1'
+            rules, note, blocked = server.agy_read_paths(store, 'b1', job)
+            turn = Path(tempfile.gettempdir()) / 'zook-agy-turns/b1/j1'
             self.assertEqual(self.rules_files(rules), ['1-報告 _2_.pdf', '2-a_1___.pdf', '3-預算.pdf'])  # keys (by either name), hidden files and other chats left out
             self.assertTrue(all(r.startswith((str(turn), os.path.realpath(str(turn)))) for r in rules))  # never the folder, never the Bot's own copies
             self.assertFalse([r for r in rules if set(r) & set('()[]*?')])
             self.assertEqual((turn / '1-報告 _2_.pdf').read_bytes(), b'mine'); self.assertIn('報告 (2).pdf', note)
-            s = server.antigravity_settings(False, 'workspace', False, rules)
+            s = server.antigravity_settings(False, 'workspace', False, rules, blocked)
             self.assertFalse([r for r in s['permissions']['allow'] if not r.startswith(('read_file(', 'mcp(zook'))])  # reading only
             for rule in ('write_file(*)', 'command(*)', 'execute_url(*)'): self.assertIn(rule, s['permissions']['deny'])
+            # agy reads anything unless denied, and a deny wins: Zook's folders other than this Bot's workspace are closed.
+            w = str(store.dir / 'workspaces')
+            for place in (w + '/b1/attachments', w + '/b1/attachments/group-files', w + '/b2', str(store.dir / 'uploads'), str(store.dir / 'swarmr.json')):
+                self.assertTrue([r for r in s['permissions']['deny'] if fnmatch.fnmatchcase(place, r[len('read_file('):-1])], place)
+            for place in (w + '/b1/notes.txt', str(turn / '1-報告 _2_.pdf')):
+                self.assertFalse([r for r in s['permissions']['deny'] if r.startswith('read_file(') and fnmatch.fnmatchcase(place, r[len('read_file('):-1])], place)
+            self.assertNotIn('read_file', ' '.join(server.antigravity_settings(True, 'workspace', False)['permissions']['deny']))  # a turn that can write: unchanged
             server.agy_cleanup(store, 'b1', 'j1', True); self.assertFalse(turn.exists())
 
     def test_read_grants_ignore_what_a_bot_left_in_its_workspace(self):
@@ -107,23 +121,23 @@ class Units(unittest.TestCase):
             mine = upload('a.pdf', data=b'original'); placed = server.place_attachments(store, 'b1', [mine])
             placed[0].write_bytes(b'changed by a writable turn')
             job = dict(id='j2', attachments=[str(placed[0])], attachmentIds=[mine['id']])
-            rules, _ = server.agy_read_paths(store, 'b1', job)
+            rules, _, _ = server.agy_read_paths(store, 'b1', job)
             self.assertEqual(placed[0].read_bytes(), b'changed by a writable turn')  # the Bot's own copy is left as it is
             self.assertEqual(pathlib_read(rules[0]), b'original')  # the turn reads the upload
             server.agy_cleanup(store, 'b1', 'j2', True)
-            # A link in place of the turn folder or the workspace: nothing is named.
-            os.symlink(str(Path(d)), str(store.dir / 'workspaces/b1/attachments/.zook-turns/j3'))
-            self.assertEqual(server.agy_read_paths(store, 'b1', dict(job, id='j3')), ([], ''))
-            os.symlink(str(store.dir / 'workspaces/b1'), str(store.dir / 'workspaces/b3'))
-            self.assertEqual(server.agy_read_paths(store, 'b3', dict(job, id='j4')), ([], ''))
+            # A link in place of the turn folder: nothing is named.
+            os.symlink(str(Path(d)), str(Path(tempfile.gettempdir()) / 'zook-agy-turns/b1/j3'))
+            try: self.assertEqual(server.agy_read_paths(store, 'b1', dict(job, id='j3'))[:2], ([], ''))
+            finally: os.unlink(str(Path(tempfile.gettempdir()) / 'zook-agy-turns/b1/j3'))
 
     def test_a_data_folder_with_brackets_still_gets_rules(self):
         with tempfile.TemporaryDirectory() as d:
             store, upload = self.grants_store(str(Path(d) / 'Zook (test)'))
             mine = upload('a.pdf'); server.place_attachments(store, 'b1', [mine])
-            rules, _ = server.agy_read_paths(store, 'b1', dict(id='j5', attachmentIds=[mine['id']]))
-            self.assertEqual(self.rules_files(rules), ['1-a.pdf']); self.assertFalse([r for r in rules if set(r) & set('()')])
+            rules, _, blocked = server.agy_read_paths(store, 'b1', dict(id='j5', attachmentIds=[mine['id']]))
+            self.assertEqual(self.rules_files(rules), ['1-a.pdf']); self.assertFalse([r for r in rules + blocked if set(r[10:-1]) & set('()')])
             self.assertTrue(rules[0].startswith(os.path.join(tempfile.gettempdir(), 'zook-agy-turns')))
+            self.assertTrue([r for r in blocked if fnmatch.fnmatchcase(str(store.dir / 'workspaces/b1/attachments/x'), r[10:-1])])  # still closed
             server.agy_cleanup(store, 'b1', 'j5', True); self.assertFalse(os.path.exists(rules[0]))
 
     def test_this_turns_files_come_before_the_cap(self):
@@ -133,7 +147,7 @@ class Units(unittest.TestCase):
             for n in range(server.AGY_READ_MAX + 20): (shared / ('%03d.pdf' % n)).write_bytes(b'x')
             server.sync_group_files_in(store, 'g1', 'b1')
             mine = upload('z.pdf'); server.place_attachments(store, 'b1', [mine])
-            rules, _ = server.agy_read_paths(store, 'b1', dict(id='j6', attachmentIds=[mine['id']], groupFiles=True, groupId='g1'))
+            rules, _, _ = server.agy_read_paths(store, 'b1', dict(id='j6', attachmentIds=[mine['id']], groupFiles=True, groupId='g1'))
             files = self.rules_files(rules); self.assertEqual(len(files), server.AGY_READ_MAX); self.assertIn('1-z.pdf', files)
 
     def test_a_check_copies_only_what_the_author_could_read(self):

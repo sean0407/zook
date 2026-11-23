@@ -649,8 +649,8 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 live_drop_bot(self, bot['id'], job); prepare_antigravity_folder(workspace, scope, root, wait)  # one agy per Bot: they share its workspace
                 if scope != 'workspace': prompt += '\n你目前在 Bot 的工作資料夾，要處理的檔案在 %s。' % root
                 if not (native and scope == 'full'): prompt += '\n不要讀取工作資料夾以外的檔案，也不要使用你內建的記憶或知識資料夾；這類動作會被擋下。要記住事情就直接回覆，或使用 zook 工具。'
-                reads, note = ((), '') if native else agy_read_paths(store, bot['id'], job)  # only a turn that cannot change anything; copies of this turn alone
-                args = antigravity_args(binary, model, effort, native, planning, scope, root, web, reads) + (['--conversation', resume] if resume else [])
+                reads, note, blocked = ((), '', ()) if native else agy_read_paths(store, bot['id'], job)  # only a turn that cannot change anything; copies of this turn alone
+                args = antigravity_args(binary, model, effort, native, planning, scope, root, web, reads, blocked) + (['--conversation', resume] if resume else [])
                 prompt = json.dumps({'event': 'user', 'message': {'content': prompt + note}}, ensure_ascii=False) + '\n'; live_settle(self, job, kind, args, cli_cwd, env, resume)
             elif kind == 'cursor':
                 prepare_cursor_folder(workspace, adapter, selected, wait)

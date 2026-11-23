@@ -448,7 +448,7 @@ def provider_needs_check(spec, status, record):
     except OSError: return False
 
 
-def antigravity_settings(native, scope, web, reads=()):
+def antigravity_settings(native, scope, web, reads=(), blocked=()):
     """This run's settings for agy, never saved. Paid AI credits stay off; 謹慎 and 先規劃 cannot change anything.
     reads: the copies Zook made for this reply (agy_read_paths). agy runs headless and cannot ask, so without an allow
     rule a read it wants approved is denied, and a read-only check could not open the PDF it was asked to check. Reading only."""
@@ -457,16 +457,16 @@ def antigravity_settings(native, scope, web, reads=()):
     else: deny += ['read_url(*)', 'execute_url(*)']
     settings = dict(useG1Credits=False)
     if not native:
-        settings.update(agentMode='', toolPermission='request-review'); deny += ['write_file(*)', 'command(*)', 'execute_url(*)']
+        settings.update(agentMode='', toolPermission='request-review'); deny += ['write_file(*)', 'command(*)', 'execute_url(*)'] + list(blocked)
     elif scope == 'full': settings['allowNonWorkspaceAccess'] = True
     else: settings['toolPermission'] = 'proceed-in-sandbox'
     settings['permissions'] = dict(allow=allow, deny=list(dict.fromkeys(deny)))
     return settings
 
 
-def antigravity_args(binary, model, effort, native, planning, scope, folder, web, reads=()):
+def antigravity_args(binary, model, effort, native, planning, scope, folder, web, reads=(), blocked=()):
     """The conversation goes in over stdin (stream-json), so it never shows on a command line."""
-    args = [binary, '--input-format', 'stream-json', '--output-format', 'stream-json', '--disable-slash-commands', '--settings', json.dumps(antigravity_settings(native, scope, web, reads))]
+    args = [binary, '--input-format', 'stream-json', '--output-format', 'stream-json', '--disable-slash-commands', '--settings', json.dumps(antigravity_settings(native, scope, web, reads, blocked))]
     if planning: args += ['--mode', 'plan']
     elif native and scope == 'full': args += ['--dangerously-skip-permissions']
     elif native: args += ['--mode', 'accept-edits', '--sandbox'] + (['--add-dir', str(folder)] if scope == 'folder' else [])
@@ -499,9 +499,10 @@ def agy_read_paths(store, bot_id, job):
     sources = [(m.get('origName') or m['name'], m['name'], store.dir / 'uploads' / m['id'] / 'file') for m in metas] + shared
     secret = runtime_module().secret_name
     sources = [s for s in dict((x[2], x) for x in sources).values() if not secret(s[1], s[0])][:AGY_READ_MAX]  # this turn's attachments first
-    if not sources: return [], ''
+    blocked = agy_blocked(store, bot_id)
+    if not sources: return [], '', blocked
     try: folder, fd = agy_turn_folder(store, bot_id, job['id'])
-    except (OSError, ValueError): return [], ''
+    except (OSError, ValueError): return [], '', blocked
     rules, lines = [], []
     try:
         for i, (_, name, source) in enumerate(sources, 1):
@@ -513,20 +514,34 @@ def agy_read_paths(store, bot_id, job):
             path = str(folder / safe); lines.append('- %s：%s' % (name, path))
             rules += [p for p in dict.fromkeys((path, os.path.realpath(path))) if not set(p) & AGY_UNSAFE]
     finally: os.close(fd)
-    return rules, ('\n這一輪只能讀下面這些副本（內容和附件或群組檔案相同，請讀這些路徑）：\n' + '\n'.join(lines)) if lines else ''
+    return rules, ('\n這一輪只能讀下面這些副本（內容和附件或群組檔案相同，請讀這些路徑）：\n' + '\n'.join(lines)) if lines else '', blocked
 
 
 def agy_turn_folder(store, bot_id, job_id):
-    """A new, empty folder for one turn's copies, held open: in the Bot's attachments folder (no link anywhere on the way), or,
-    when that path cannot be written in a rule, in a private folder of Zook's in the system's temporary folder."""
+    """A new, empty folder for one turn's copies, held open: outside Zook's data folder (a private folder of Zook's in the system's
+    temporary folder), because everything of Zook's that is not this Bot's own is closed to the turn (agy_blocked)."""
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', str(job_id)): raise ValueError('job')
-    inside = store.dir / 'workspaces' / bot_id / 'attachments' / AGY_TURNS
-    if not set(str(inside)) & AGY_UNSAFE and not set(os.path.realpath(str(store.dir))) & AGY_UNSAFE:
-        with bot_folder(store, bot_id, 'attachments', AGY_TURNS) as parent: return inside / job_id, agy_new_folder(parent, job_id)
     base = agy_temp_turns(bot_id)
     parent = os.open(str(base), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try: return base / job_id, agy_new_folder(parent, job_id)
     finally: os.close(parent)
+
+
+def agy_blocked(store, bot_id):
+    """What a read-only agy turn may not read. agy reads any file without asking (seen with agy 1.5.14: request-review leaves reads
+    alone, and a deny rule wins over an allow rule), so instead of naming what it may read, everything of Zook's except this
+    Bot's own workspace is closed: the attachments folder (other conversations' and groups' copies), the other Bots' workspaces
+    and the rest of Zook's data."""
+    roots = {str(store.dir), os.path.realpath(str(store.dir))}
+    places = [os.path.join(r, n) for r in roots for n in os.listdir(str(store.dir)) if n != 'workspaces']
+    try: others = [n for n in os.listdir(str(store.dir / 'workspaces')) if n != bot_id]
+    except OSError: others = []
+    places += [os.path.join(r, 'workspaces', n) for r in roots for n in others + ['%s/attachments' % bot_id]]
+    rules = []
+    for place in places:  # a bracket would end the rule: it becomes *, which can only close more, never less
+        place = ''.join('*' if c in '()[]{}' else c for c in place)
+        rules += ['read_file(%s)' % place, 'read_file(%s/*)' % place, 'read_file(%s/**)' % place]
+    return list(dict.fromkeys(rules))
 
 
 def agy_temp_turns(bot_id):
