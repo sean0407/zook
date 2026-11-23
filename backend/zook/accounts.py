@@ -531,7 +531,7 @@ def agy_blocked(store, bot_id):
     """What a read-only agy turn may not read. agy reads any file without asking (seen with agy 1.5.14: request-review leaves reads
     alone, and a deny rule wins over an allow rule), so instead of naming what it may read, everything of Zook's except this
     Bot's own workspace is closed: the attachments folder (other conversations' and groups' copies), the other Bots' workspaces
-    and the rest of Zook's data."""
+    and the rest of Zook's data. Checked with the real agy 1.5.14: those reads are refused, and this turn's copy is read in full."""
     roots = {str(store.dir), os.path.realpath(str(store.dir))}
     places = [os.path.join(r, n) for r in roots for n in os.listdir(str(store.dir)) if n != 'workspaces']
     try: others = [n for n in os.listdir(str(store.dir / 'workspaces')) if n != bot_id]
