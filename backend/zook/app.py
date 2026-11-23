@@ -459,6 +459,9 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             chain = [(x[0], x[1], x[2] if len(x) > 2 else '' if auto else None, len(x) > 2 and not named) for x in raw]
             if job.get('plan'): chain = [x for x in chain if provider_kind(x[0]) in PLAN_KINDS] or chain[:1]  # a backup must be held to read-only too
             chain = held_backups(bot, provider, chain)
+            if not chain:
+                job.update(status='failed', error='這個 Bot 目前限在工作資料夾，不能用自訂 CLI 回覆。請在 Mac 的「編輯 Bot」換模型或放寬存取範圍。', finishedAt=NOW())
+                store.finish_message(job, '', 'failed'); store.save(); return
             first, skipped = chain[0], {}
             for x in chain[:]:
                 p, a = x[0], x[2]

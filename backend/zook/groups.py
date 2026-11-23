@@ -471,6 +471,7 @@ class GroupRuns:
             if provider == AUTO:
                 try: provider, model, account = pick_auto(store, '整理群組討論摘要', plan=True)[0][0]
                 except (ValueError, IndexError): return
+            if not held_backups(bot, provider, [(provider, model)]): return  # a Bot held in never runs a custom CLI, not even for a summary
             helper = dict(id=ID(), botId=bot['id'], messageId='', status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[], plan=True, noResume=True, internal='summary')
             store.data['jobs'].append(helper); bot = copy.deepcopy(bot)
             if account is not None: bot['account'] = account  # the account 自動選擇 picked, not one the Bot kept from before

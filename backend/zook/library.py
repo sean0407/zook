@@ -78,7 +78,7 @@ def pack_import(store, raw):
             record = dict(id=ID(), name=name, folder=folder, origin='pack', originPath='', stamp='')
             with store.lock:
                 store.data['skills'].append(record)
-                if item.get('on') is False: store.data['settings']['disabledSkills'].append(ZOOK_SKILL + record['id'])
+                store.data['settings']['disabledSkills'].append(ZOOK_SKILL + record['id'])  # off until the user turns it on here: it can carry programs
                 store.save()
             result['skills'].append(name)
         for item in manifest['connectors'][:200]:
@@ -97,8 +97,7 @@ def pack_import(store, raw):
             with store.lock:
                 if any(same_name(c['name']) == same_name(record['name']) for c in store.data['connectors']): result['skipped'].append(record['name']); continue
                 store.data['connectors'].append(record)
-                if item.get('on') is True and not waiting:
-                    st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + ['zook:' + record['id']]))
+                # A pack never turns a connector on: it can start a program, so the user turns it on here (Skills 與連接器).
                 store.save()
             result['connectors'].append(record['name'])
             if waiting: result['needKeys'].append(record['name'])
@@ -125,7 +124,7 @@ def inventory_for(store, tokens=True):
     sign-ins that may have to be renewed over the network: enough to check a Bot's choices, not to run a reply (marked '_light')."""
     data = discovered()
     if not tokens: data['_light'] = True
-    with store.lock: own = copy.deepcopy(store.data.get('connectors') or []); gmail = dict(store.data['settings'].get('gmail') or {})
+    with store.lock: own = copy.deepcopy(store.data.get('connectors') or []); gmail = dict(store.data['settings'].get('gmail') or {}); shared_on = set(store.data['settings'].get('sharedMcp') or [])
     # Built-in Gmail: listed always, usable once an address and app password have been saved.
     item = {'id': GMAIL_ID, 'name': 'Gmail', 'source': 'builtin', 'transport': 'stdio', 'status': 'configured', 'gmail': True, 'address': gmail.get('address', ''),
             'needsSetup': not gmail.get('address')}
@@ -152,7 +151,7 @@ def inventory_for(store, tokens=True):
         else:
             config = dict(transport='http', url=record['url'], headers=dict(record.get('headers') or {}))
             if secret: config['headers']['Authorization'] = 'Bearer ' + secret
-            elif record.get('oauth') and tokens:
+            elif record.get('oauth') and tokens and ident in shared_on:  # a sign-in is refreshed only for a connector the user turned on here
                 access = oauth_access(store, record)
                 if access: config['headers']['Authorization'] = 'Bearer ' + access
             config['noCredentials'] = 'Authorization' not in config['headers']  # nothing to be refused: it has simply never been signed in

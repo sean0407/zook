@@ -678,6 +678,8 @@ class Handler(BaseHTTPRequestHandler):
                         approval = next ( (x for x in job.get('approvals', []) if x['id'] == parts[2]), None)
                         if approval:
                             if job['status'] != 'running' or approval['status'] != 'pending': return self.error(409, '此審批已結束。')
+                            if self.device and decision == 'approve' and str(approval.get('name') or '').endswith(('zook_create_schedule', 'zook_update_schedule')):
+                                return self.error(403, '建立或修改排程要在 Mac 上核准。')  # work that starts by itself later
                             approval['status'] = 'approved' if decision == 'approve' else 'denied'; store.save()
                             log_activity(store, 'approval', ('核准：' if decision == 'approve' else '拒絕：') + (approval.get('text') or describe_call(dict(approval, name=approval.get('name')))) + '（%s）' % self.server.target_name('bot', job['botId']),
                                          by=('手機：' + str(self.device.get('name') or '已配對裝置')) if self.device else '')
@@ -888,7 +890,7 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) == 3 and parts[:2] == ['api', 'bots'] and self.command == 'PATCH':
                     bot = store.find('bots', parts[2])
                     if not bot: return self.error(404, '找不到機器人。')
-                    body = self.body(); candidate = copy.deepcopy(bot); update(candidate, body, 'bot'); validate_selection(candidate, inventory); local_choice(bot, candidate, body); notice = auto_on_edit(store, bot, candidate, body); bot.clear(); bot.update(candidate); store.save(); watch_auto_status(store, bot)
+                    body = self.body(); candidate = copy.deepcopy(bot); update(candidate, body, 'bot'); validate_selection(candidate, inventory); local_choice(bot, candidate, body, local=not self.via_bridge and self.device is None); notice = auto_on_edit(store, bot, candidate, body); bot.clear(); bot.update(candidate); store.save(); watch_auto_status(store, bot)
                     if 'permissionMode' in body: self.server.release_approvals()
                     if (bot.get('intro') or {}).get('source') != intro_source(bot): bot.pop('intro', None); store.save(); self.server.want_intro(bot['id'])  # what it is changed: a new greeting
                     return self.respond(200, dict(bot, **({'autoNotice': notice} if notice else {})))

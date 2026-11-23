@@ -153,7 +153,7 @@ class LocalRulesTest(unittest.TestCase):
         self.assertTrue(m.sync_put(store, 'bots:g', m.sync_clean('bots:g', dict(name='g', provider='codex', model=''))))
         self.assertEqual((moved.get('gateFull'), moved['localLimit']), (None, True))
         self.assertEqual((m.permission_mode(store, moved, 'codex'), m.bot_scope(moved, 'codex')), ('manual', ('workspace', '')))  # not its old 全部允許
-        after = dict(moved, name='x'); m.local_choice(moved, after, dict(name='x', access='full')); self.assertTrue(after['localLimit'])  # the form sends what it has
+        after = dict(moved, name='x'); m.local_choice(moved, after, dict(name='x', access='workspace', permissionMode='manual')); self.assertTrue(after['localLimit'])  # the form sends what it has
         after = dict(moved); m.local_choice(moved, after, dict(access='folder')); self.assertNotIn('localLimit', after)  # changed here by the user
         data = dict(bots=[dict(id='b', name='b', provider='claude', gateFull=True, scripts=True)], settings={}, deletedBots=[dict(id='d', name='d', provider='codex', scripts=True)])
         m.backup_check(data)

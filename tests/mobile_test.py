@@ -58,7 +58,7 @@ class MobileViewsTest(unittest.TestCase):
         with self.assertRaises(RuntimeError): m.bot_access(gone, ws)                      # a missing folder stops the Bot instead of widening its reach
         self.assertFalse(m.device_may('POST', '/api/choose-folder')); self.assertFalse(m.device_may('PATCH', '/api/bots/' + self.bot['id']))
         made = m.mobile_create_bot(self.store, dict(name='手機 Bot', access='workspace', accessFolder='/'))
-        self.assertNotIn('access', made); self.assertNotIn('accessFolder', made)
+        self.assertEqual((made['access'], made['localLimit']), ('workspace', True)); self.assertNotIn('accessFolder', made)  # held in until the Mac widens it
         self.assertIn('Desktop', m.access_note('full', pathlib.Path.home(), True)); self.assertIn(self.tmp.name, m.access_note('folder', self.tmp.name, False))
 
     def test_plain_clis_get_their_own_run_everything_switch_only_with_the_whole_mac(self):
@@ -81,7 +81,7 @@ class MobileViewsTest(unittest.TestCase):
         before = len(self.store.data['bots'])
         bot = m.mobile_create_bot(self.store, dict(name='  詩人 ', instructions='寫詩', enabledMcp=['x'], allowCommands=False, permissionMode='auto', persona='p'))
         self.assertEqual((bot['name'], bot['instructions'], bot['provider'], bot['enabledMcp'], bot['allowCommands'], bot['persona']), ('詩人', '寫詩', '', [], True, ''))
-        self.assertNotIn('permissionMode', bot); self.assertEqual(len(self.store.data['bots']), before + 1)
+        self.assertEqual((bot['permissionMode'], bot['localLimit']), ('manual', True)); self.assertEqual(len(self.store.data['bots']), before + 1)
         looks = m.mobile_create_bot(self.store, dict(name='紅心', color='#FF284B', shape='8')); self.assertEqual((looks['color'], looks['shape']), ('#ff284b', '8'))
         for bad in ({'name': 'x', 'color': 'red'}, {'name': 'x', 'color': '#12345'}, {'name': 'x', 'shape': '13'}, {'name': 'x', 'shape': 'url(x)'}):
             with self.assertRaises(ValueError): m.mobile_create_bot(self.store, bad)

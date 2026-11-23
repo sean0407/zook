@@ -22,7 +22,7 @@ class MobileMore(unittest.TestCase):
     def test_schedules_can_be_paused_resumed_and_deleted_only(self):
         view = m.mobile_schedules(self.store)['schedules'][0]; self.assertEqual((view['content'], view['on'], view['target']), ('每天整理信件', True, self.bot['name']))
         m.mobile_schedule_action(self.store, 's1', 'pause'); self.assertFalse(self.store.data['schedules'][0]['on'])
-        m.mobile_schedule_action(self.store, 's1', 'resume'); self.assertTrue(self.store.data['schedules'][0]['on'])
+        self.assertRaises(ValueError, m.mobile_schedule_action, self.store, 's1', 'resume'); self.assertFalse(self.store.data['schedules'][0]['on'])  # turned on again only on the Mac
         self.assertRaises(ValueError, m.mobile_schedule_action, self.store, 's1', 'edit'); self.assertRaises(LookupError, m.mobile_schedule_action, self.store, 'nope', 'pause')
         m.mobile_schedule_action(self.store, 's1', 'delete'); self.assertEqual(self.store.data['schedules'], [])
 

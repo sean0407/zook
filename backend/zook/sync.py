@@ -89,6 +89,7 @@ def sync_clean(key, value):
     """A value read from another Mac's file, reduced to what Zook accepts, or None. The folder is the user's, but the file is still only data."""
     parts = key.split(':')
     if not isinstance(value, dict) or any(not SYNC_ID.fullmatch(p) for p in parts[1:]): return None
+    if parts[0] in ('bots', 'chats') and any(p != p.lower() for p in parts[1:]): return None  # ids name folders, and the Mac's disk ignores case
     if parts[0] == 'bots' and len(parts) == 2:
         if any(not _text(value.get(k, ''), limit) for k, limit in SYNC_BOT_TEXT.items()) or not str(value.get('name') or '').strip(): return None
         out = {k: value.get(k, '') for k in SYNC_BOT_TEXT}
@@ -158,13 +159,20 @@ def sync_put(store, key, value, gone=()):
         if bot and bot['id'] in busy: return False
         if not bot:
             bot = dict(id=parts[1], messages=[], chats=[], chatId=None, enabledSkills=[], enabledMcp=[], allowCommands=True, webSearch=False)
+            aside = next((b for b in store.data.get('deletedBots') or [] if b.get('id') == parts[1] and not b.get('recovered')), None)
+            if aside:  # this Mac's own Bot, set aside here (a 取代 join): what this Mac allowed it comes back with it
+                for k in LOCAL_GRANTS:
+                    if k in aside: bot[k] = copy.deepcopy(aside[k])
+                bot.update(provider=aside.get('provider') or '', model=aside.get('model') or '')  # another CLI from the folder loses the whole Mac below
+                if bot.get('isAdmin') and any(b.get('isAdmin') for b in store.data['bots']): bot['isAdmin'] = False
+            else: hold_in(bot)  # never set up on this Mac: its workspace and 謹慎 until the user changes it here, never the defaults in 設定
             store.data['bots'].append(bot)
             if store.data.get('deletedBots'): store.data['deletedBots'] = [b for b in store.data['deletedBots'] if b.get('id') != parts[1]]  # back from another Mac: it is no longer a Bot kept aside
         if not value['provider'] and bot.get('provider') and bot['provider'] not in SYNC_PROVIDERS: value = dict(value, provider=bot['provider'], model=bot.get('model') or '')  # this Mac's own model for it stays
         bot.setdefault('isAdmin', False)  # who the 管理員 is, is decided on each Mac, never by a file
         moved = bot.get('autoMovedFrom') if value.get('provider') != bot.get('provider') else None
         if value.get('provider') != bot.get('provider') and 'provider' in bot:
-            limit_locally(bot)  # another Mac's choice never widens what this Mac allows
+            limit_locally(bot, value.get('provider'))  # another Mac's choice never widens what this Mac allows
             for field in AUTO_MARKERS: bot.pop(field, None)  # no longer this Mac's own match
         value = {k: v for k, v in value.items() if k != 'gateFull'}
         fixed = value.pop('fixedModel', False) if isinstance(value, dict) else False
@@ -277,7 +285,7 @@ def sync_pass(app):
             return dict(on=True, error=str(exc))
         now, took, conflicts = time.time(), 0, 0
         with store.lock:
-            if state.get('folder') != folder: return dict(on=bool(state.get('folder')))  # switched off or moved meanwhile
+            if sync_state(store) is not state or state.get('folder') != folder: return dict(on=False)  # switched off, moved or put back from a backup meanwhile
             marks = sync_marks(store); stamps, tombs = marks['stamps'], marks['tombs']
             before = _digest([stamps, tombs])
             joining = not stamps  # first round on this Mac: where both sides have the same item, the folder's version is taken
@@ -318,9 +326,7 @@ def sync_pass(app):
                         conflicts += 1
                     if sync_put(store, key, value, tombs):
                         stamps[key] = [digest, entry['t'], False, history]; tombs.pop(key, None); took += 1
-            if joining and not any(b.get('isAdmin') for b in store.data['bots']):  # every Mac keeps one 管理員, chosen the way a new workspace chooses it
-                for b in store.data['bots']:
-                    if b.get('name') == '管理員': b['isAdmin'] = True; break
+            # 管理員 is never given by a name from another Mac: only by the user here, or with this Mac's own Bot coming back (sync_put).
             # 3. This Mac's file: everything it has, with when each item last changed.
             final = sync_items(store)
             for key, value in final.items():
@@ -339,18 +345,20 @@ def sync_pass(app):
             else: state['lastAt'] = NOW()  # nothing to write down: the time is only shown
         target = os.path.join(folder, 'zook-sync-%s.json' % own)
         if changed or took or folder in _sync_unwritten or not os.path.exists(target):
-            try:
-                fd, temp = tempfile.mkstemp(prefix='.zook-sync-', dir=folder)
+            with store.lock:  # written under the lock: a backup put back meanwhile has stopped syncing, and nothing from before it is published
+                if sync_state(store) is not state or state.get('folder') != folder: return dict(on=False)
                 try:
-                    os.fchmod(fd, 0o600)
-                    with os.fdopen(fd, 'w', encoding='utf-8') as f: json.dump(payload, f, ensure_ascii=False)
-                    os.replace(temp, target); _sync_unwritten.discard(folder)
-                finally:
-                    if os.path.exists(temp): os.unlink(temp)
-            except OSError:
-                _sync_unwritten.add(folder)  # written on the next round, whether or not anything else changes
-                with store.lock: state['lastError'] = '寫不進同步資料夾。'; store.save()
-                return dict(on=True, error='寫不進同步資料夾。')
+                    fd, temp = tempfile.mkstemp(prefix='.zook-sync-', dir=folder)
+                    try:
+                        os.fchmod(fd, 0o600)
+                        with os.fdopen(fd, 'w', encoding='utf-8') as f: json.dump(payload, f, ensure_ascii=False)
+                        os.replace(temp, target); _sync_unwritten.discard(folder)
+                    finally:
+                        if os.path.exists(temp): os.unlink(temp)
+                except OSError:
+                    _sync_unwritten.add(folder)  # written on the next round, whether or not anything else changes
+                    state['lastError'] = '寫不進同步資料夾。'; store.save()
+                    return dict(on=True, error='寫不進同步資料夾。')
         if conflicts: log_activity(store, 'backup', '同步時有 %d 個對話兩台都改過，這台的版本另存成副本' % conflicts, by='Zook')
         return dict(on=True, took=took, conflicts=conflicts)
 
