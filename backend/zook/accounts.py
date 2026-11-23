@@ -448,23 +448,25 @@ def provider_needs_check(spec, status, record):
     except OSError: return False
 
 
-def antigravity_settings(native, scope, web):
-    """This run's settings for agy, never saved. Paid AI credits stay off; 謹慎 and 先規劃 cannot change anything."""
-    allow, deny = ['mcp(zook/*)'], []
+def antigravity_settings(native, scope, web, reads=(), blocked=()):
+    """This run's settings for agy, never saved. Paid AI credits stay off; 謹慎 and 先規劃 cannot change anything.
+    reads: the copies Zook made for this reply (agy_read_paths). agy runs headless and cannot ask, so without an allow
+    rule a read it wants approved is denied, and a read-only check could not open the PDF it was asked to check. Reading only."""
+    allow, deny = ['mcp(zook/*)'] + ['read_file(%s)' % p for p in reads], []
     if web: allow.append('read_url(*)')
     else: deny += ['read_url(*)', 'execute_url(*)']
     settings = dict(useG1Credits=False)
     if not native:
-        settings.update(agentMode='', toolPermission='request-review'); deny += ['write_file(*)', 'command(*)', 'execute_url(*)']
+        settings.update(agentMode='', toolPermission='request-review'); deny += ['write_file(*)', 'command(*)', 'execute_url(*)'] + list(blocked)
     elif scope == 'full': settings['allowNonWorkspaceAccess'] = True
     else: settings['toolPermission'] = 'proceed-in-sandbox'
     settings['permissions'] = dict(allow=allow, deny=list(dict.fromkeys(deny)))
     return settings
 
 
-def antigravity_args(binary, model, effort, native, planning, scope, folder, web):
+def antigravity_args(binary, model, effort, native, planning, scope, folder, web, reads=(), blocked=()):
     """The conversation goes in over stdin (stream-json), so it never shows on a command line."""
-    args = [binary, '--input-format', 'stream-json', '--output-format', 'stream-json', '--disable-slash-commands', '--settings', json.dumps(antigravity_settings(native, scope, web))]
+    args = [binary, '--input-format', 'stream-json', '--output-format', 'stream-json', '--disable-slash-commands', '--settings', json.dumps(antigravity_settings(native, scope, web, reads, blocked))]
     if planning: args += ['--mode', 'plan']
     elif native and scope == 'full': args += ['--dangerously-skip-permissions']
     elif native: args += ['--mode', 'accept-edits', '--sandbox'] + (['--add-dir', str(folder)] if scope == 'folder' else [])
@@ -472,6 +474,119 @@ def antigravity_args(binary, model, effort, native, planning, scope, folder, web
 
 
 AGY_ROOTS = ('.agents', '.agent', '_agents', '_agent')  # agy loads hooks, tools, skills and plugins from any of these
+AGY_READ_MAX = 200  # files named one by one in the read rules
+try: AGY_QUIET = max(1.0, float(os.environ.get('ZOOK_AGY_QUIET') or 300))  # seconds an Antigravity reply may print nothing
+except ValueError: AGY_QUIET = 300.0
+
+
+AGY_TURNS = '.zook-turns'  # inside the Bot's attachments folder: one folder of copies per read-only turn, removed when it ends
+AGY_UNSAFE = set('()[]*?{}')  # letters that would end a read rule early or make it match other files
+
+
+def agy_read_paths(store, bot_id, job):
+    """What a read-only agy turn may read, and a note for its prompt. Each file of this turn (the message's and conversation's
+    attachments, the group's files for this turn) is copied from Zook's own copy (the upload, the group's files) into a folder of
+    this turn alone, under a name a rule can hold; only those copies are named, one by one. So another conversation's attachments,
+    a copy an earlier turn changed, links and hard links a Bot left in its workspace are never what is read, and nothing the Bot
+    has is overwritten. Keys and sign-ins (by the name here and the name uploaded with) are left out, as Zook's tools would ask."""
+    with store.lock:
+        metas = [m for m in (upload_meta(store, x) for x in job.get('attachmentIds') or []) if m]
+        group_id, shared = job.get('groupId') if job.get('groupFiles') else None, []
+        if group_id:  # the group's own files, those this turn's copy holds (some may be hidden from it)
+            here = {e.name for e in _plain_files(group_copy_folder(store, bot_id))}
+            try: shared = [(group_original(store, group_id, e.name) or e.name, e.name, pathlib.Path(e.path)) for e in _plain_files(group_files_dir(store, group_id)) if e.name in here]
+            except ValueError: shared = []
+    sources = [(m.get('origName') or m['name'], m['name'], store.dir / 'uploads' / m['id'] / 'file') for m in metas] + shared
+    secret = runtime_module().secret_name
+    sources = [s for s in dict((x[2], x) for x in sources).values() if not secret(s[1], s[0])][:AGY_READ_MAX]  # this turn's attachments first
+    blocked = agy_blocked(store, bot_id)
+    if not sources: return [], '', blocked
+    try: folder, fd = agy_turn_folder(store, bot_id, job['id'])
+    except (OSError, ValueError): return [], '', blocked
+    rules, lines = [], []
+    try:
+        for i, (_, name, source) in enumerate(sources, 1):
+            safe = '%d-%s' % (i, ''.join('_' if c in AGY_UNSAFE or c == '/' or ord(c) < 32 else c for c in name)[:120])
+            data = read_group_file(source)  # a plain file of its own, or None
+            if data is None: continue
+            out = os.open(safe, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd)
+            with os.fdopen(out, 'wb') as f: f.write(data)
+            path = str(folder / safe); lines.append('- %s：%s' % (name, path))
+            rules += [p for p in dict.fromkeys((path, os.path.realpath(path))) if not set(p) & AGY_UNSAFE]
+    finally: os.close(fd)
+    return rules, ('\n這一輪只能讀下面這些副本（內容和附件或群組檔案相同，請讀這些路徑）：\n' + '\n'.join(lines)) if lines else '', blocked
+
+
+def agy_turn_folder(store, bot_id, job_id):
+    """A new, empty folder for one turn's copies, held open: outside Zook's data folder (a private folder of Zook's in the system's
+    temporary folder), because everything of Zook's that is not this Bot's own is closed to the turn (agy_blocked)."""
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', str(job_id)): raise ValueError('job')
+    base = agy_temp_turns(bot_id)
+    parent = os.open(str(base), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try: return base / job_id, agy_new_folder(parent, job_id)
+    finally: os.close(parent)
+
+
+def agy_blocked(store, bot_id):
+    """What a read-only agy turn may not read. agy reads any file without asking (seen with agy 1.5.14: request-review leaves reads
+    alone, and a deny rule wins over an allow rule), so instead of naming what it may read, everything of Zook's except this
+    Bot's own workspace is closed: the attachments folder (other conversations' and groups' copies), the other Bots' workspaces
+    and the rest of Zook's data. Checked with the real agy 1.5.14: those reads are refused, and this turn's copy is read in full."""
+    roots = {str(store.dir), os.path.realpath(str(store.dir))}
+    places = [os.path.join(r, n) for r in roots for n in os.listdir(str(store.dir)) if n != 'workspaces']
+    try: others = [n for n in os.listdir(str(store.dir / 'workspaces')) if n != bot_id]
+    except OSError: others = []
+    places += [os.path.join(r, 'workspaces', n) for r in roots for n in others + ['%s/attachments' % bot_id]]
+    rules = []
+    for place in places:  # a bracket would end the rule: it becomes *, which can only close more, never less
+        place = ''.join('*' if c in '()[]{}' else c for c in place)
+        rules += ['read_file(%s)' % place, 'read_file(%s/*)' % place, 'read_file(%s/**)' % place]
+    return list(dict.fromkeys(rules))
+
+
+def agy_temp_turns(bot_id):
+    """Zook's own folder for turn copies in the temporary folder: real folders, only this user's, no link."""
+    base = pathlib.Path(tempfile.gettempdir()) / 'zook-agy-turns'
+    for folder in (base, base / bot_id):
+        try: os.mkdir(str(folder), 0o700)
+        except FileExistsError: pass
+        info = os.lstat(str(folder))
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077: raise OSError('turn folder')
+    if set(str(base)) & AGY_UNSAFE: raise OSError('turn folder')
+    return base / bot_id
+
+
+def agy_new_folder(parent, name):
+    os.mkdir(name, 0o700, dir_fd=parent)  # a turn's folder is new: one already there was not made for it
+    return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+
+
+def agy_cleanup(store, bot_id, job_id, busy):
+    """After an Antigravity reply: its copies go, and, when no other reply of the Bot runs, the tool settings Zook wrote."""
+    if not busy: shutil.rmtree(str(store.dir / 'workspaces' / bot_id / '.agents'), ignore_errors=True)
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', str(job_id)): return
+    for base in (store.dir / 'workspaces' / bot_id / 'attachments' / AGY_TURNS, pathlib.Path(tempfile.gettempdir()) / 'zook-agy-turns' / bot_id):
+        try: parent = os.open(str(base), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError: continue
+        try:
+            child = os.open(job_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            try: clear_folder(child)
+            finally: os.close(child)
+            os.rmdir(job_id, dir_fd=parent)
+        except OSError: pass
+        finally: os.close(parent)
+
+
+def agy_quiet(kind, limit):
+    """How long a reply may stay silent. Antigravity streams a line for every step, so a long silence means it is stuck (seen: a
+    group member woken with nothing to do sat at 正在思考 for minutes using no CPU); it is stopped sooner than other CLIs."""
+    return min(limit, AGY_QUIET) if kind == 'antigravity' else limit
+
+
+def quiet_reason(kind, limit):
+    minutes = max(1, round(limit / 60))
+    if kind == 'antigravity': return 'Antigravity 已經 %d 分鐘沒有任何輸出，可能卡住了，已停止這次回覆。請再傳一次。' % minutes
+    return '已經 %d 分鐘沒有任何進展。' % minutes
 
 
 def prepare_antigravity_folder(workspace, scope, folder, wait):
@@ -498,8 +613,10 @@ def antigravity_error(error, stderr=''):
 
 
 def antigravity_quota(path, env=None):
-    """Remaining limits from `agy -p /usage`, which uses no model quota itself. env: an extra account's (provider_env)."""
-    done = subprocess.run([path, '-p', '/usage', '--output-format', 'json'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20, cwd=tempfile.gettempdir(), env=env)
+    """Remaining limits from `agy -p /usage`, which uses no model quota itself. env: an extra account's (provider_env). It starts in
+    an empty folder of Zook's own, never a Bot's workspace: agy loads tool settings and hooks from the folder it starts in, and a
+    Bot's .agents belongs to that Bot's reply. What agy keeps for the account itself (its sign-in) is agy's own; Zook writes none of it."""
+    done = subprocess.run([path, '-p', '/usage', '--output-format', 'json'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20, cwd=str(agy_empty_folder()), env=env)
     data = json.loads(done.stdout.decode('utf-8', 'replace'))
     windows = []
     for group in ((data.get('command') or {}).get('data') or {}).get('groups') or []:
@@ -510,6 +627,18 @@ def antigravity_quota(path, env=None):
                 period = {'weekly': '每週', 'daily': '每天'}.get(bucket.get('window'), '5 小時' if 'hour' in str(bucket.get('window')) else '')
                 windows.append(dict(label=(name + ' · ' + period).strip(' ·'), usedPercent=max(0.0, min(100.0, (1 - float(left)) * 100)), resetsAt=bucket.get('reset_time')))
     return dict(windows=windows, plan='', limitReached=None, credits={}, resetCredits=None, updatedAt=NOW(), source='live') if windows else None
+
+
+def agy_empty_folder():
+    """Zook's own empty folder for agy runs that are not a Bot's reply. Anything left in it (a planted .agents) is removed first."""
+    folder = pathlib.Path(_active.get('dir') or tempfile.gettempdir()) / 'tools' / 'agy-empty'
+    if folder.is_symlink() or (os.path.lexists(str(folder)) and not folder.is_dir()): folder.unlink()
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for name in os.listdir(str(folder)):
+        here = folder / name
+        if here.is_symlink() or not here.is_dir(): here.unlink()
+        else: shutil.rmtree(str(here))
+    return folder
 
 
 def login_methods(provider):

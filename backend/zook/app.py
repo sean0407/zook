@@ -168,7 +168,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
         if plan and (provider_kind(provider) not in PLAN_KINDS or not ability_on(store, provider, 'plan')): raise ValueError('這個模型不支援先規劃。')
         knowledge = [x for x in store.data['knowledge'] if not x.get('botId') or x.get('botId') == bot['id']][-10:]
         placed = place_attachments(store, bot['id'], attachments) if attachments else []
-        earlier = place_attachments(store, bot['id'], recent_attachments(store, messages[-12:], {a['id'] for a in attachments or []}))
+        earlier = place_attachments(store, bot['id'], (before := recent_attachments(store, messages[-12:], {a['id'] for a in attachments or []})))
         so_far = len(messages)
         def build():
             # Built again when the conversation is turned into a summary just before this reply.
@@ -191,7 +191,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
         chat['updatedAt'] = NOW()
         if not chat.get('title'): chat['title'] = chat_title(content)
         job = dict(id=ID(), botId=bot['id'], chatId=chat_id, messageId=msg['id'], status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[])
-        if placed or earlier: job['attachments'] = [str(x) for x in (earlier + placed)[-MAX_ATTACHMENTS:]]
+        if placed or earlier: job.update(attachments=[str(x) for x in (earlier + placed)[-MAX_ATTACHMENTS:]], attachmentIds=[a['id'] for a in before + (attachments or [])][-MAX_ATTACHMENTS:])
         if replaces: job.update(redoOf=replaces, askedId=asked['id'])
         job['effort'] = effort
         if use and bot.get('provider') == AUTO: job.update(autoChain=[[provider, model, '']], autoNamed=True)  # 換模型重答 stays on the model the user named, on its own sign-in
@@ -430,7 +430,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 except Exception: inventory = None  # each try reads it again
             self._run_job(job_id, prompt, provider, model, bot, inventory)
         finally:
-            self.finish_session(job_id)
+            self.finish_session(job_id); agy_release(self, job_id)  # the next agy of this Bot may start
             with self.store.lock:
                 job = self.store.find('jobs', job_id)
                 if job and job.get('long') and job['status'] != 'running':  # nobody is expected to be watching a long task
@@ -649,11 +649,12 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                     if provider == 'gemini': guard_gemini_folder(cli_cwd, workspace)
                     args, stdin_prompt = P.command_args(P.spec(store.data, provider), str(prompt_file), prompt, model, full=scope == 'full', binary=binary)
             elif kind == 'antigravity':
-                prepare_antigravity_folder(workspace, scope, root, wait)
+                live_drop_bot(self, bot['id'], job); prepare_antigravity_folder(workspace, scope, root, wait)  # one agy per Bot: they share its workspace
                 if scope != 'workspace': prompt += '\n你目前在 Bot 的工作資料夾，要處理的檔案在 %s。' % root
                 if not (native and scope == 'full'): prompt += '\n不要讀取工作資料夾以外的檔案，也不要使用你內建的記憶或知識資料夾；這類動作會被擋下。要記住事情就直接回覆，或使用 zook 工具。'
-                args = antigravity_args(binary, model, effort, native, planning, scope, root, web) + (['--conversation', resume] if resume else [])
-                prompt = json.dumps({'event': 'user', 'message': {'content': prompt}}, ensure_ascii=False) + '\n'
+                reads, note, blocked = ((), '', ()) if native else agy_read_paths(store, bot['id'], job)  # only a turn that cannot change anything; copies of this turn alone
+                args = antigravity_args(binary, model, effort, native, planning, scope, root, web, reads, blocked) + (['--conversation', resume] if resume else [])
+                prompt = json.dumps({'event': 'user', 'message': {'content': prompt + note}}, ensure_ascii=False) + '\n'; live_settle(self, job, kind, args, cli_cwd, env, resume)
             elif kind == 'cursor':
                 prepare_cursor_folder(workspace, adapter, selected, wait)
                 if scope != 'workspace': prompt += '\n你目前在 Bot 的工作資料夾，要處理的檔案在 %s，請用完整路徑。' % root
@@ -703,7 +704,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             try:
                 # A reply may take as long as it keeps working. It is stopped when nothing has happened for a while (no output from the
                 # CLI, no tool use), or at the overall limit. A 長任務 is given its whole time even when its CLI stays silent.
-                quiet_limit = LONG_JOB_TIMEOUT if job.get('long') else JOB_TIMEOUT
+                quiet_limit = LONG_JOB_TIMEOUT if job.get('long') else agy_quiet(kind, JOB_TIMEOUT)
                 deadline = time.monotonic() + (LONG_JOB_TIMEOUT if job.get('long') else max(JOB_HARD_TIMEOUT, JOB_TIMEOUT))
                 pipes = kept or Pipes(proc, prompt.encode('utf-8') if stdin_prompt else None, MAX_CLI_OUTPUT, on_output=partial_feeder(kind, job_id) if streaming else None)
                 active = self.__dict__.setdefault('job_activity', {}); active[job_id] = time.monotonic()
@@ -714,8 +715,9 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                     with store.lock:
                         waiting_on = store.find('jobs', job_id) or {}; asking = any(a.get('status') == 'pending' for a in waiting_on.get('approvals', []) + (waiting_on.get('questions') or []))
                     now = time.monotonic()
+                    if kind == 'antigravity' and any(c.get('status') == 'running' for c in waiting_on.get('toolCalls') or []): active[job_id] = now  # agy is silent while a Zook tool works
                     if asking: deadline += now - began; active[job_id] = now; continue  # time spent waiting for the user does not count
-                    if now - max(pipes.last, active.get(job_id, 0)) >= quiet_limit: stopped_for = '已經 %d 分鐘沒有任何進展。' % max(1, round(quiet_limit / 60))
+                    if now - max(pipes.last, active.get(job_id, 0)) >= quiet_limit: stopped_for = quiet_reason(kind, quiet_limit)
                     elif now >= deadline: stopped_for = '已超過時間上限。'
                     if stopped_for: raise subprocess.TimeoutExpired(args, quiet_limit)
                 output, stderr = pipes.result()
@@ -724,10 +726,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 if kept and kept.finished: self.live_fails = 0
             except subprocess.TimeoutExpired:
                 terminate_tree(proc)
-                if not pipes.wait(5):
-                    try: os.killpg(proc.pid, signal.SIGKILL)
-                    except ProcessLookupError: pass
-                    pipes.wait(2)
+                if not pipes.wait(5): kill_group(proc); pipes.wait(2)
                 with store.lock: job['mayHaveActed'] = bool(native)  # stopped midway, so what its tools already did is unknown
                 raise RuntimeError('執行逾時：' + stopped_for)
             finally: self.__dict__.get('job_activity', {}).pop(job_id, None)
@@ -814,7 +813,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             with store.lock: busy = any(j['botId'] == bot['id'] and j['id'] != job_id and j['status'] == 'running' for j in store.data['jobs'])
             kept_turn = locals().get('kept')
             if isinstance(kept_turn, LiveTurn) and kept_turn.cli.kind == 'antigravity' and agy_touched(store.dir / 'workspaces' / bot['id']): kept_turn.cli.spoil('回覆中動到了 Antigravity 的設定資料夾')
-            if provider_kind(provider) == 'antigravity' and not busy: shutil.rmtree(str(store.dir / 'workspaces' / bot['id'] / '.agents'), ignore_errors=True)
+            if provider_kind(provider) == 'antigravity': agy_cleanup(store, bot['id'], job_id, busy)
             mine = self.__dict__.get('grok_dirs', {}).pop(job_id, None)  # the .grok Zook put into the user's chosen folder for this reply
             if mine and (mine / '.zook-owned').is_file(): shutil.rmtree(str(mine), ignore_errors=True)
             for leftover in (store.dir / 'workspaces').glob('*/.grok/.zook-prompt-%s.txt' % job_id):

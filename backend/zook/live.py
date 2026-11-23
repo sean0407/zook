@@ -127,10 +127,11 @@ class LiveCli:
         except OSError: pass  # it ended on its own just now
         if not wait: return
         try: self.proc.wait(timeout=wait)
-        except subprocess.TimeoutExpired:
-            try: os.killpg(self.proc.pid, signal.SIGKILL)
-            except OSError: pass
-            try: self.proc.wait(timeout=2)
+        except subprocess.TimeoutExpired: pass
+        end = time.monotonic() + 5
+        while group_alive(self.proc) and time.monotonic() < end:  # it, or a helper it started, is still there: ended by force
+            kill_group(self.proc); time.sleep(0.05)
+            try: self.proc.wait(timeout=0.2)
             except subprocess.TimeoutExpired: pass
 
 
@@ -272,6 +273,88 @@ def live_close(app, cli, wait=0):
     else: threading.Thread(target=cli.close, daemon=True).start()
 
 
+def live_drop_bot(app, bot_id, job):
+    """One agy per Bot. Every Antigravity run of a Bot starts in the same workspace and rewrites the same tool settings there, so
+    a kept agy of another conversation, left idle next to a group turn, was seen with the group member stuck at 正在思考. Before
+    an Antigravity reply starts (and before a group turn copies files in), the Bot's other kept agy CLIs are closed and waited for,
+    and so is any agy of a reply that was stopped but has not ended yet. A group turn never uses a kept one, so for it every one
+    of them goes. Raises when one cannot be ended."""
+    store = getattr(app, 'store', None); running = set()
+    if store and job.get('id'): agy_hold(app, bot_id, job['id'])
+    if store:
+        with store.lock: running = {j['id'] for j in store.data['jobs'] if j.get('botId') == bot_id and j['status'] == 'running'}
+    guard = app.__dict__.get('live_lock'); gone = []
+    keep = (bot_id, job.get('chatId')) if job.get('chatId') and not job.get('groupId') and not job.get('internal') else None
+    if guard:
+        with guard:
+            gone = [c for c in app.lives.values() if c.kind == 'antigravity' and c.key[0] == bot_id and (c.turn is None and c.key != keep or c.turn is not None and c.job_id not in running)]
+            for cli in gone: app.lives.pop(cli.key, None); app.live_ids.pop(cli.ident, None)
+    for cli in gone: cli.close(wait=3)
+    if store and not agy_wait_gone(app, bot_id, running): raise RuntimeError('這個 Bot 上一次的 Antigravity 還沒結束，這次先不執行。請稍後再試一次。')
+    return len(gone)
+
+
+def agy_hold(app, bot_id, job_id):
+    """One agy of a Bot at a time, also when two replies of it would run together (two conversations, a conversation and a group):
+    the later one waits here until the earlier reply is over (agy_release). Raises when this reply was stopped while waiting."""
+    cond = app.__dict__.setdefault('agy_cond', threading.Condition()); slots = app.__dict__.setdefault('agy_slots', {})
+    with cond:
+        while slots.get(bot_id) not in (None, job_id):
+            with app.store.lock: waiting = (app.store.find('jobs', job_id) or {}).get('status') == 'running'
+            if not waiting: raise RuntimeError('已停止。')
+            cond.wait(0.5)
+        slots[bot_id] = job_id
+
+
+def agy_release(app, job_id):
+    cond = app.__dict__.get('agy_cond')
+    if not cond: return
+    with cond:
+        for bot_id in [b for b, j in app.agy_slots.items() if j == job_id]: del app.agy_slots[bot_id]
+        cond.notify_all()
+
+
+def agy_wait_gone(app, bot_id, running, limit=8.0):
+    """Wait until no agy of this Bot is left from a reply that is no longer running (a stopped one ends in a moment); one that
+    does not is ended by force. False when something is still there after that."""
+    store = app.store; end = time.monotonic() + limit; forced = False
+    while True:
+        with store.lock:
+            procs = [getattr(getattr(p, 'cli', None), 'proc', None) or p for j, p in list((app.__dict__.get('processes') or {}).items())
+                     if j not in running and ((store.find('jobs', j) or {}).get('botId'), (store.find('jobs', j) or {}).get('runKind')) == (bot_id, 'antigravity')]
+        left = [p for p in procs if group_alive(p)]
+        if not left: return True
+        if time.monotonic() >= end: return False
+        if not forced and time.monotonic() >= end - limit / 2:
+            for p in left: kill_group(p)
+            forced = True
+        time.sleep(0.1)
+
+
+def live_settle(app, job, kind, args, cwd, env, resume):
+    """Before a kept agy is replaced (先規劃, another model, other settings), it is ended and waited for, so two never overlap."""
+    if kind != 'antigravity' or not job.get('chatId') or job.get('groupId'): return
+    guard = app.__dict__.get('live_lock'); lives = app.__dict__.get('lives') or {}
+    if not guard: return
+    mark = live_mark(args, cwd, env, job.get('origin') or 'user', agy_config(kind, cwd))
+    with guard:
+        cli = lives.get((job['botId'], job['chatId']))
+        if not cli or live_fits(cli, mark, resume): return
+        lives.pop(cli.key, None); app.live_ids.pop(cli.ident, None)
+    cli.close(wait=3)
+
+
+def live_fits(cli, mark, resume):
+    return cli.alive() and not cli.spoiled and cli.mark == mark and cli.turn is None and bool(resume) and cli.session == resume
+
+
+def agy_config(kind, cwd):
+    """Antigravity's tool settings (how long a tool may take): a kept agy is used again only with the same ones."""
+    if kind != 'antigravity': return ''
+    try: return (pathlib.Path(cwd) / '.agents' / 'mcp_config.json').read_text(encoding='utf-8')
+    except OSError: return ''
+
+
 def live_turn(app, job, provider, kind, args, cwd, env, resume, prompt, on_output):
     """Send this message to the conversation's kept CLI, starting one when there is none that fits. None means: start the CLI the
     usual way (the switch is off, this kind of reply is not kept, or everything that could be kept is busy)."""
@@ -279,13 +362,11 @@ def live_turn(app, job, provider, kind, args, cwd, env, resume, prompt, on_outpu
     if kind not in LIVE_KINDS or not live_on(store) or app.__dict__.get('closing') or not job.get('chatId') or job.get('groupId') or job.get('internal') or job.get('liveOff') or '--no-session-persistence' in args: return None
     if app.__dict__.get('live_fails', 0) >= LIVE_FAILS or not live_able(app, provider): return None
     lives = app.__dict__.setdefault('lives', {}); ids = app.__dict__.setdefault('live_ids', {}); guard = app.__dict__.setdefault('live_lock', threading.Lock())
-    key = (job['botId'], job['chatId']); config = pathlib.Path(cwd) / '.agents' / 'mcp_config.json' if kind == 'antigravity' else None  # its tool settings (how long a tool may take)
-    try: extra = config.read_text(encoding='utf-8') if config else ''
-    except OSError: extra = ''
-    mark = live_mark(args, cwd, env, job.get('origin') or 'user', extra)
+    key = (job['botId'], job['chatId'])
+    mark = live_mark(args, cwd, env, job.get('origin') or 'user', agy_config(kind, cwd))
     with guard:
         cli = lives.get(key)
-        if cli and (not cli.alive() or cli.spoiled or cli.mark != mark or cli.turn is not None or not resume or cli.session != resume): live_close(app, cli); cli = None
+        if cli and not live_fits(cli, mark, resume): live_close(app, cli); cli = None
         if cli is None:
             if len(lives) >= LIVE_MAX:
                 idle = sorted((c for c in lives.values() if c.turn is None), key=lambda c: c.used)

@@ -166,6 +166,26 @@ def group_steps(store, group, mode):
     return steps + [step('verdict', [closer])]
 
 
+SPLIT_IDLE = re.compile(r'^(?:本次|這次|这次|本輪|這輪|目前|暫時|暂时)?\s*(?:沒有|没有|無|无|不需要|不用|暫無|暂无|免)(?:.{0,16}(?:工作|任務|任务|項目|项目|分工|事|部分))?\s*[。.！!]?$')
+SPLIT_BULLET = re.compile(r'^[\s>*\-•・\d.、)）]*')
+
+
+def split_idle(plan, bots):
+    """The members a 分工 plan explicitly gives nothing to: a line 「成員名稱：本次沒有工作」 (or just 「無」). Only that member's own
+    line is read, and only when it says no more than that, so 「確認沒有遺漏」 or a real task never counts."""
+    idle = set()
+    for line in str(plan or '').splitlines()[:200]:
+        line = SPLIT_BULLET.sub('', line).replace('*', '').strip()
+        for bot in bots:
+            name = bot.get('name') or ''
+            if not name or not line.startswith(name): continue
+            rest = re.sub(r'^[(（][^)）]{0,30}[)）]', '', line[len(name):].lstrip()).lstrip()  # 「客服小幫手（Antigravity）：」
+            if rest[:1] not in ('：', ':'): continue
+            rest = rest[1:].strip()
+            if rest and len(rest) <= 30 and SPLIT_IDLE.match(rest): idle.add(bot['id'])
+    return idle
+
+
 def group_estimate(store, group, content, mode):
     """How many replies a message would start, and roughly how many tokens they use. Costs no model request."""
     members = [b for b in (store.find('bots', x) for x in group['botIds']) if b]
@@ -355,8 +375,11 @@ class GroupRuns:
             if auto_chain: job['autoChain'] = auto_chain; msg.update(auto_mark)
             if auto_mark: refresh_auto(self)
             source = [m for m in group['messages'] if m['id'] in step['attachIds']] if step.get('attachIds') is not None else group['messages'][-20:]  # 任務引擎: the goal's files only
-            try: files = place_attachments(store, bot_id, recent_attachments(store, source))
-            except OSError: files = []
+            given, staged = recent_attachments(store, source), True
+            check = named_check_plan(store, group, target, given) if target and readonly else None  # 查核: PDFs the checked reply names by path; copied outside the lock
+            try: files = place_attachments(store, bot_id, given)
+            except OSError: files, staged = [], False
+            if files: job['attachmentIds'] = [a['id'] for a in given]
             if provider_kind(provider) == 'codex' and not writable:  # without its shell, Codex can still be shown the group's pictures
                 files = files + [group_copy_folder(store, bot_id) / e.name for e in _plain_files(group_files_dir(store, group_id)) if pathlib.Path(e.name).suffix.lower() in IMAGE_TYPES][:5]
             if files: job['attachments'] = [str(x) for x in files]
@@ -365,14 +388,19 @@ class GroupRuns:
             store.save()
             unseen = group.get('interjectUnseen'); kept = {m['id'] for m in group['messages'][-GROUP_KEEP:] if not m.get('waiting')}
             seen = unseen if unseen in kept and not step.get('promptFor') and unseen not in set(step.get('hide') or ()) else None  # 插話 this turn's prompt holds
-            return dict(job=job, msg=msg, prompt=prompt, provider=provider, model=model, bot=copy.deepcopy(bot), role=role, writable=writable, skipFiles=set(step.get('hideFiles') or ()), saved=[], seen=seen)
+            return dict(job=job, msg=msg, prompt=prompt, provider=provider, model=model, bot=copy.deepcopy(bot), role=role, writable=writable, skipFiles=set(step.get('hideFiles') or ()), saved=[], seen=seen, staged=staged, check=check)
 
     def _group_job(self, group_id, turn):
         """One Bot's turn, with its own copy of the group's files."""
         store = self.store; bot = turn['bot']
         with self.__dict__.setdefault('group_copy_locks', {}).setdefault(bot['id'], threading.Lock()):  # a Bot in two groups has one copy folder
-            try: seen = sync_group_files_in(store, group_id, bot['id'], turn['skipFiles'])
-            except (OSError, ValueError): seen = None
+            try:
+                if provider_kind(turn['provider']) == 'antigravity': live_drop_bot(self, bot['id'], turn['job'])  # nothing of the Bot's is copied in while an agy of it still runs
+                if not turn.get('staged', True): raise OSError('attachments')
+                seen = sync_group_files_in(store, group_id, bot['id'], turn['skipFiles'])
+                if turn.get('check'): turn['prompt'] += named_check_copy(store, group_id, bot['id'], turn['job'], turn['check'])
+            except (OSError, ValueError, RuntimeError) as exc:
+                return self._group_stage_failed(turn['job']['id'], str(exc) if isinstance(exc, RuntimeError) else '')
             self.run_job(turn['job']['id'], turn['prompt'], turn['provider'], turn['model'], bot, None)
             if not turn['writable'] or turn['job']['status'] != 'completed': return
             if seen is None: turn['published'] = False; return
@@ -387,6 +415,28 @@ class GroupRuns:
             if saved: group['messages'].append(dict(id=ID(), role='system', content='%s 存了共用檔案：%s' % (bot['name'], '、'.join(saved)), createdAt=NOW()))
             if skipped: group['messages'].append(dict(id=ID(), role='system', content='%s 的檔案太大沒有存進群組：%s' % (bot['name'], '、'.join(skipped)), createdAt=NOW()))
             store.save()
+
+    def _skip_idle(self, group_id, run_id, plan, steps):
+        """分工: a member the host's plan says has nothing to do this time is not woken (it would only sit there)."""
+        with self.store.lock:
+            group = self.store.find('groups', group_id)
+            if not group or group.get('runId') != run_id: return steps
+            bots = [b for b in (self.store.find('bots', x) for x in steps[0]['bots']) if b]
+            idle = split_idle(plan['job'].get('content') or '', bots)
+            if not idle: return steps
+            group['messages'].append(dict(id=ID(), role='system', content='主持人沒有分工作給 %s，這次不用回覆。' % '、'.join(b['name'] for b in bots if b['id'] in idle), createdAt=NOW()))
+            self.store.save()
+        left = [x for x in steps[0]['bots'] if x not in idle]
+        return ([dict(steps[0], bots=left)] if left else []) + steps[1:]
+
+    def _group_stage_failed(self, job_id, why=''):
+        """The files of a turn could not be put safely into the Bot's workspace: the turn does not run without them."""
+        agy_release(self, job_id)
+        with self.store.lock:
+            job = self.store.find('jobs', job_id)
+            if not job or job['status'] != 'running': return
+            job.update(status='failed', error=why or '沒辦法把群組檔案安全地放進這個 Bot 的工作資料夾（裡面可能有捷徑），這一輪已停止。請檢查後再試一次。', finishedAt=NOW())
+            self.store.finish_message(job, '', 'failed'); self.store.save()
 
     def _group_batch(self, group_id, run_id, batch, moderated, blind, step=None):
         """Run these turns together. Returns the turns that ran, or False when the discussion ended."""
@@ -440,6 +490,7 @@ class GroupRuns:
             turns += len(now)
             # Members who answer independently still do not see each other's answers after 繼續.
             steps = ([dict(step, bots=later, hide=list(step.get('hide') or []) + [t['msg']['id'] for t in done], hideFiles=list(step.get('hideFiles') or []) + [n for t in done for n in t['saved']])] if later else []) + steps[1:]
+            if step['role'] == 'split_plan' and done and steps and steps[0]['role'] == 'split_work': steps = self._skip_idle(group_id, run_id, done[0], steps)
         if steps:
             with store.lock:
                 group = store.find('groups', group_id)
