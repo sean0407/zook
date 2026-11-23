@@ -450,7 +450,7 @@ def provider_needs_check(spec, status, record):
 
 def antigravity_settings(native, scope, web, reads=()):
     """This run's settings for agy, never saved. Paid AI credits stay off; 謹慎 and 先規劃 cannot change anything.
-    reads: files and folders Zook copied for this reply (agy_read_paths). agy runs headless and cannot ask, so without an allow
+    reads: the copies Zook made for this reply (agy_read_paths). agy runs headless and cannot ask, so without an allow
     rule a read it wants approved is denied, and a read-only check could not open the PDF it was asked to check. Reading only."""
     allow, deny = ['mcp(zook/*)'] + ['read_file(%s)' % p for p in reads], []
     if web: allow.append('read_url(*)')
@@ -479,66 +479,87 @@ try: AGY_QUIET = max(1.0, float(os.environ.get('ZOOK_AGY_QUIET') or 300))  # sec
 except ValueError: AGY_QUIET = 300.0
 
 
-def agy_read_paths(store, bot_id, job, fresh=False):
-    """What a read-only agy turn may read: this turn's own copies in the Bot's attachments folder (the files of this message and
-    conversation, the group's files copied for this turn), one by one. Never the folder: another conversation's attachments stay
-    out of reach. A file is named only when every step from the Bot's workspace down is a real folder (no link, the workspace
-    itself included), it is a regular file with one name (no hard link to a file elsewhere), it resolves inside this Bot's own
-    attachments folder, and Zook's own tools would read it without asking (keys and sign-ins, by its name here and the name it was
-    uploaded with, are left out). With fresh, the attached copies are made again from the uploads first, so a copy an earlier turn
-    changed is never what gets read."""
-    home = store.dir / 'workspaces' / bot_id; box = os.path.join(os.path.realpath(str(store.dir / 'workspaces')), bot_id, 'attachments')
-    if os.path.realpath(str(home)) != os.path.dirname(box): return []  # the workspace itself is a link
+AGY_TURNS = '.zook-turns'  # inside the Bot's attachments folder: one folder of copies per read-only turn, removed when it ends
+AGY_UNSAFE = set('()[]*?{}')  # letters that would end a read rule early or make it match other files
+
+
+def agy_read_paths(store, bot_id, job):
+    """What a read-only agy turn may read, and a note for its prompt. Each file of this turn (the message's and conversation's
+    attachments, the group's files for this turn) is copied from Zook's own copy (the upload, the group's files) into a folder of
+    this turn alone, under a name a rule can hold; only those copies are named, one by one. So another conversation's attachments,
+    a copy an earlier turn changed, links and hard links a Bot left in its workspace are never what is read, and nothing the Bot
+    has is overwritten. Keys and sign-ins (by the name here and the name uploaded with) are left out, as Zook's tools would ask."""
     with store.lock:
         metas = [m for m in (upload_meta(store, x) for x in job.get('attachmentIds') or []) if m]
-        group_files = (group_copy_folder(store, bot_id), job.get('groupId')) if job.get('groupFiles') and job.get('groupId') else None
-    if fresh and metas:
-        try: place_attachments(store, bot_id, metas, fresh=True)
-        except OSError: return []
-    originals = {'%s-%s' % (m['id'][:8], m['name']): m.get('origName') or m['name'] for m in metas}
-    wanted = [str(x) for x in job.get('attachments') or []]
-    if group_files:
-        try: names = sorted(os.listdir(str(group_files[0])))
-        except OSError: names = []
-        wanted += [str(group_files[0] / n) for n in names]
-        with store.lock: originals.update({n: group_original(store, group_files[1], n) for n in names})
+        group_id, shared = job.get('groupId') if job.get('groupFiles') else None, []
+        if group_id:  # the group's own files, those this turn's copy holds (some may be hidden from it)
+            here = {e.name for e in _plain_files(group_copy_folder(store, bot_id))}
+            try: shared = [(group_original(store, group_id, e.name) or e.name, e.name, pathlib.Path(e.path)) for e in _plain_files(group_files_dir(store, group_id)) if e.name in here]
+            except ValueError: shared = []
+    sources = [(m.get('origName') or m['name'], m['name'], store.dir / 'uploads' / m['id'] / 'file') for m in metas] + shared
     secret = runtime_module().secret_name
-    files = []
-    for path in dict.fromkeys(wanted):  # this turn's files first, then the cap
-        if len(files) >= AGY_READ_MAX: break
-        if agy_safe_copy(home, box, path) and not secret(path, originals.get(os.path.basename(path)) or None): files.append(path)
-    out = []
-    for path in files:
-        for one in dict.fromkeys((path, os.path.realpath(path))):
-            rule = agy_rule_path(one)
-            if rule and rule not in out: out.append(rule)
-    return out
+    sources = [s for s in dict((x[2], x) for x in sources).values() if not secret(s[1], s[0])][:AGY_READ_MAX]  # this turn's attachments first
+    if not sources: return [], ''
+    try: folder, fd = agy_turn_folder(store, bot_id, job['id'])
+    except (OSError, ValueError): return [], ''
+    rules, lines = [], []
+    try:
+        for i, (_, name, source) in enumerate(sources, 1):
+            safe = '%d-%s' % (i, ''.join('_' if c in AGY_UNSAFE or c == '/' or ord(c) < 32 else c for c in name)[:120])
+            data = read_group_file(source)  # a plain file of its own, or None
+            if data is None: continue
+            out = os.open(safe, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd)
+            with os.fdopen(out, 'wb') as f: f.write(data)
+            path = str(folder / safe); lines.append('- %s：%s' % (name, path))
+            rules += [p for p in dict.fromkeys((path, os.path.realpath(path))) if not set(p) & AGY_UNSAFE]
+    finally: os.close(fd)
+    return rules, ('\n這一輪只能讀下面這些副本（內容和附件或群組檔案相同，請讀這些路徑）：\n' + '\n'.join(lines)) if lines else ''
 
 
-def agy_safe_copy(home, box, path):
-    """A plain file of its own, reached from the Bot's workspace through real folders only, inside its attachments folder."""
-    rel = os.path.relpath(os.path.abspath(path), os.path.abspath(str(home)))
-    parts = rel.split(os.sep)
-    if parts[0] != 'attachments' or len(parts) < 2 or '..' in parts: return False
-    here = str(home)
-    for i, part in enumerate(parts):
-        here = os.path.join(here, part)
-        try: info = os.lstat(here)
-        except OSError: return False
-        if i < len(parts) - 1 and not stat.S_ISDIR(info.st_mode): return False  # a link on the way, even to another Bot's folder
-        if i == len(parts) - 1 and (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1): return False
-    return os.path.realpath(here).startswith(box + os.sep)
+def agy_turn_folder(store, bot_id, job_id):
+    """A new, empty folder for one turn's copies, held open: in the Bot's attachments folder (no link anywhere on the way), or,
+    when that path cannot be written in a rule, in a private folder of Zook's in the system's temporary folder."""
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', str(job_id)): raise ValueError('job')
+    inside = store.dir / 'workspaces' / bot_id / 'attachments' / AGY_TURNS
+    if not set(str(inside)) & AGY_UNSAFE and not set(os.path.realpath(str(store.dir))) & AGY_UNSAFE:
+        with bot_folder(store, bot_id, 'attachments', AGY_TURNS) as parent: return inside / job_id, agy_new_folder(parent, job_id)
+    base = agy_temp_turns(bot_id)
+    parent = os.open(str(base), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try: return base / job_id, agy_new_folder(parent, job_id)
+    finally: os.close(parent)
 
 
-def agy_rule_path(path):
-    """The path as a read rule. A bracket would end the rule early, so it stands as ? (any one letter). A rule with any wildcard
-    letter in it is used only when nothing else in that folder matches it; otherwise the file is left out."""
-    if not set(path) & set('()*?['): return path
-    pattern = path.replace('(', '?').replace(')', '?')
-    folder, name = os.path.split(pattern)
-    try: others = [n for n in os.listdir(folder) if fnmatch.fnmatchcase(n, name)]
-    except OSError: return ''
-    return pattern if others == [os.path.basename(path)] else ''
+def agy_temp_turns(bot_id):
+    """Zook's own folder for turn copies in the temporary folder: real folders, only this user's, no link."""
+    base = pathlib.Path(tempfile.gettempdir()) / 'zook-agy-turns'
+    for folder in (base, base / bot_id):
+        try: os.mkdir(str(folder), 0o700)
+        except FileExistsError: pass
+        info = os.lstat(str(folder))
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077: raise OSError('turn folder')
+    if set(str(base)) & AGY_UNSAFE: raise OSError('turn folder')
+    return base / bot_id
+
+
+def agy_new_folder(parent, name):
+    os.mkdir(name, 0o700, dir_fd=parent)  # a turn's folder is new: one already there was not made for it
+    return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+
+
+def agy_cleanup(store, bot_id, job_id, busy):
+    """After an Antigravity reply: its copies go, and, when no other reply of the Bot runs, the tool settings Zook wrote."""
+    if not busy: shutil.rmtree(str(store.dir / 'workspaces' / bot_id / '.agents'), ignore_errors=True)
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', str(job_id)): return
+    for base in (store.dir / 'workspaces' / bot_id / 'attachments' / AGY_TURNS, pathlib.Path(tempfile.gettempdir()) / 'zook-agy-turns' / bot_id):
+        try: parent = os.open(str(base), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError: continue
+        try:
+            child = os.open(job_id, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+            try: clear_folder(child)
+            finally: os.close(child)
+            os.rmdir(job_id, dir_fd=parent)
+        except OSError: pass
+        finally: os.close(parent)
 
 
 def agy_quiet(kind, limit):
@@ -577,8 +598,10 @@ def antigravity_error(error, stderr=''):
 
 
 def antigravity_quota(path, env=None):
-    """Remaining limits from `agy -p /usage`, which uses no model quota itself. env: an extra account's (provider_env)."""
-    done = subprocess.run([path, '-p', '/usage', '--output-format', 'json'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20, cwd=tempfile.gettempdir(), env=env)
+    """Remaining limits from `agy -p /usage`, which uses no model quota itself. env: an extra account's (provider_env). It starts in
+    an empty folder of Zook's own, never a Bot's workspace: agy loads tool settings and hooks from the folder it starts in, and a
+    Bot's .agents belongs to that Bot's reply. What agy keeps for the account itself (its sign-in) is agy's own; Zook writes none of it."""
+    done = subprocess.run([path, '-p', '/usage', '--output-format', 'json'], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=20, cwd=str(agy_empty_folder()), env=env)
     data = json.loads(done.stdout.decode('utf-8', 'replace'))
     windows = []
     for group in ((data.get('command') or {}).get('data') or {}).get('groups') or []:
@@ -589,6 +612,18 @@ def antigravity_quota(path, env=None):
                 period = {'weekly': '每週', 'daily': '每天'}.get(bucket.get('window'), '5 小時' if 'hour' in str(bucket.get('window')) else '')
                 windows.append(dict(label=(name + ' · ' + period).strip(' ·'), usedPercent=max(0.0, min(100.0, (1 - float(left)) * 100)), resetsAt=bucket.get('reset_time')))
     return dict(windows=windows, plan='', limitReached=None, credits={}, resetCredits=None, updatedAt=NOW(), source='live') if windows else None
+
+
+def agy_empty_folder():
+    """Zook's own empty folder for agy runs that are not a Bot's reply. Anything left in it (a planted .agents) is removed first."""
+    folder = pathlib.Path(_active.get('dir') or tempfile.gettempdir()) / 'tools' / 'agy-empty'
+    if folder.is_symlink() or (os.path.lexists(str(folder)) and not folder.is_dir()): folder.unlink()
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for name in os.listdir(str(folder)):
+        here = folder / name
+        if here.is_symlink() or not here.is_dir(): here.unlink()
+        else: shutil.rmtree(str(here))
+    return folder
 
 
 def login_methods(provider):

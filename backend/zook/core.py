@@ -7,7 +7,6 @@ import base64
 import calendar
 import contextlib
 import stat
-import fnmatch
 import ctypes
 import hashlib
 import html
@@ -352,15 +351,14 @@ def attachments_for(store, ids):
     return [dict(id=m['id'], name=m['name'], size=m['size'], kind=m['kind'], **({'origName': m['origName']} if isinstance(m.get('origName'), str) else {})) for m in metas]
 
 
-def place_attachments(store, bot_id, attachments, fresh=False):
-    """Copy attached files into a Bot's workspace (attachments/). Returns their paths there. A copy already there is kept (the Bot
-    may have worked on it), unless fresh: then it is made again from the upload."""
+def place_attachments(store, bot_id, attachments):
+    """Copy attached files into a Bot's workspace (attachments/). Returns their paths there."""
     folder = store.dir / 'workspaces' / bot_id / 'attachments'
     paths = []
     with bot_folder(store, bot_id, 'attachments') as fd:
         for a in attachments:
             name = '%s-%s' % (a['id'][:8], a['name'])
-            with open(store.dir / 'uploads' / a['id'] / 'file', 'rb') as source: write_into_folder(fd, name, source, keep=not fresh)
+            with open(store.dir / 'uploads' / a['id'] / 'file', 'rb') as source: write_into_folder(fd, name, source, keep=True)
             paths.append(folder / name)
     remember_uploaded_names(store, bot_id, {'%s-%s' % (a['id'][:8], a['name']): a.get('origName') or a['name'] for a in attachments})
     return paths

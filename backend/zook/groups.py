@@ -376,12 +376,10 @@ class GroupRuns:
             if auto_mark: refresh_auto(self)
             source = [m for m in group['messages'] if m['id'] in step['attachIds']] if step.get('attachIds') is not None else group['messages'][-20:]  # 任務引擎: the goal's files only
             given, staged = recent_attachments(store, source), True
-            if target and readonly: given += named_for_check(store, group, target, given)  # 查核: a PDF the checked reply names by its path
+            check = named_check_plan(store, group, target, given) if target and readonly else None  # 查核: PDFs the checked reply names by path; copied outside the lock
             try: files = place_attachments(store, bot_id, given)
             except OSError: files, staged = [], False
             if files: job['attachmentIds'] = [a['id'] for a in given]
-            named = [f for f, a in zip(files, given) if a.get('named')]
-            if named: prompt += attachment_note(named, '受查核的回覆提到的檔案（已複製一份給你，請讀這份）')
             if provider_kind(provider) == 'codex' and not writable:  # without its shell, Codex can still be shown the group's pictures
                 files = files + [group_copy_folder(store, bot_id) / e.name for e in _plain_files(group_files_dir(store, group_id)) if pathlib.Path(e.name).suffix.lower() in IMAGE_TYPES][:5]
             if files: job['attachments'] = [str(x) for x in files]
@@ -390,7 +388,7 @@ class GroupRuns:
             store.save()
             unseen = group.get('interjectUnseen'); kept = {m['id'] for m in group['messages'][-GROUP_KEEP:] if not m.get('waiting')}
             seen = unseen if unseen in kept and not step.get('promptFor') and unseen not in set(step.get('hide') or ()) else None  # 插話 this turn's prompt holds
-            return dict(job=job, msg=msg, prompt=prompt, provider=provider, model=model, bot=copy.deepcopy(bot), role=role, writable=writable, skipFiles=set(step.get('hideFiles') or ()), saved=[], seen=seen, staged=staged)
+            return dict(job=job, msg=msg, prompt=prompt, provider=provider, model=model, bot=copy.deepcopy(bot), role=role, writable=writable, skipFiles=set(step.get('hideFiles') or ()), saved=[], seen=seen, staged=staged, check=check)
 
     def _group_job(self, group_id, turn):
         """One Bot's turn, with its own copy of the group's files."""
@@ -400,6 +398,7 @@ class GroupRuns:
                 if provider_kind(turn['provider']) == 'antigravity': live_drop_bot(self, bot['id'], turn['job'])  # nothing of the Bot's is copied in while an agy of it still runs
                 if not turn.get('staged', True): raise OSError('attachments')
                 seen = sync_group_files_in(store, group_id, bot['id'], turn['skipFiles'])
+                if turn.get('check'): turn['prompt'] += named_check_copy(store, group_id, bot['id'], turn['job'], turn['check'])
             except (OSError, ValueError, RuntimeError) as exc:
                 return self._group_stage_failed(turn['job']['id'], str(exc) if isinstance(exc, RuntimeError) else '')
             self.run_job(turn['job']['id'], turn['prompt'], turn['provider'], turn['model'], bot, None)
@@ -432,6 +431,7 @@ class GroupRuns:
 
     def _group_stage_failed(self, job_id, why=''):
         """The files of a turn could not be put safely into the Bot's workspace: the turn does not run without them."""
+        agy_release(self, job_id)
         with self.store.lock:
             job = self.store.find('jobs', job_id)
             if not job or job['status'] != 'running': return

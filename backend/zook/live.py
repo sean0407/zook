@@ -127,10 +127,11 @@ class LiveCli:
         except OSError: pass  # it ended on its own just now
         if not wait: return
         try: self.proc.wait(timeout=wait)
-        except subprocess.TimeoutExpired:
-            try: os.killpg(self.proc.pid, signal.SIGKILL)
-            except OSError: pass
-            try: self.proc.wait(timeout=2)
+        except subprocess.TimeoutExpired: pass
+        end = time.monotonic() + 5
+        while group_alive(self.proc) and time.monotonic() < end:  # it, or a helper it started, is still there: ended by force
+            kill_group(self.proc); time.sleep(0.05)
+            try: self.proc.wait(timeout=0.2)
             except subprocess.TimeoutExpired: pass
 
 
@@ -279,6 +280,7 @@ def live_drop_bot(app, bot_id, job):
     and so is any agy of a reply that was stopped but has not ended yet. A group turn never uses a kept one, so for it every one
     of them goes. Raises when one cannot be ended."""
     store = getattr(app, 'store', None); running = set()
+    if store and job.get('id'): agy_hold(app, bot_id, job['id'])
     if store:
         with store.lock: running = {j['id'] for j in store.data['jobs'] if j.get('botId') == bot_id and j['status'] == 'running'}
     guard = app.__dict__.get('live_lock'); gone = []
@@ -290,6 +292,26 @@ def live_drop_bot(app, bot_id, job):
     for cli in gone: cli.close(wait=3)
     if store and not agy_wait_gone(app, bot_id, running): raise RuntimeError('這個 Bot 上一次的 Antigravity 還沒結束，這次先不執行。請稍後再試一次。')
     return len(gone)
+
+
+def agy_hold(app, bot_id, job_id):
+    """One agy of a Bot at a time, also when two replies of it would run together (two conversations, a conversation and a group):
+    the later one waits here until the earlier reply is over (agy_release). Raises when this reply was stopped while waiting."""
+    cond = app.__dict__.setdefault('agy_cond', threading.Condition()); slots = app.__dict__.setdefault('agy_slots', {})
+    with cond:
+        while slots.get(bot_id) not in (None, job_id):
+            with app.store.lock: waiting = (app.store.find('jobs', job_id) or {}).get('status') == 'running'
+            if not waiting: raise RuntimeError('已停止。')
+            cond.wait(0.5)
+        slots[bot_id] = job_id
+
+
+def agy_release(app, job_id):
+    cond = app.__dict__.get('agy_cond')
+    if not cond: return
+    with cond:
+        for bot_id in [b for b, j in app.agy_slots.items() if j == job_id]: del app.agy_slots[bot_id]
+        cond.notify_all()
 
 
 def agy_wait_gone(app, bot_id, running, limit=8.0):

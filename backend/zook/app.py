@@ -430,7 +430,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 except Exception: inventory = None  # each try reads it again
             self._run_job(job_id, prompt, provider, model, bot, inventory)
         finally:
-            self.finish_session(job_id)
+            self.finish_session(job_id); agy_release(self, job_id)  # the next agy of this Bot may start
             with self.store.lock:
                 job = self.store.find('jobs', job_id)
                 if job and job.get('long') and job['status'] != 'running':  # nobody is expected to be watching a long task
@@ -649,8 +649,9 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
                 live_drop_bot(self, bot['id'], job); prepare_antigravity_folder(workspace, scope, root, wait)  # one agy per Bot: they share its workspace
                 if scope != 'workspace': prompt += '\n你目前在 Bot 的工作資料夾，要處理的檔案在 %s。' % root
                 if not (native and scope == 'full'): prompt += '\n不要讀取工作資料夾以外的檔案，也不要使用你內建的記憶或知識資料夾；這類動作會被擋下。要記住事情就直接回覆，或使用 zook 工具。'
-                args = antigravity_args(binary, model, effort, native, planning, scope, root, web, () if native else agy_read_paths(store, bot['id'], job, fresh=True)) + (['--conversation', resume] if resume else [])  # only a turn that cannot change them
-                prompt = json.dumps({'event': 'user', 'message': {'content': prompt}}, ensure_ascii=False) + '\n'; live_settle(self, job, kind, args, cli_cwd, env, resume)
+                reads, note = ((), '') if native else agy_read_paths(store, bot['id'], job)  # only a turn that cannot change anything; copies of this turn alone
+                args = antigravity_args(binary, model, effort, native, planning, scope, root, web, reads) + (['--conversation', resume] if resume else [])
+                prompt = json.dumps({'event': 'user', 'message': {'content': prompt + note}}, ensure_ascii=False) + '\n'; live_settle(self, job, kind, args, cli_cwd, env, resume)
             elif kind == 'cursor':
                 prepare_cursor_folder(workspace, adapter, selected, wait)
                 if scope != 'workspace': prompt += '\n你目前在 Bot 的工作資料夾，要處理的檔案在 %s，請用完整路徑。' % root
@@ -809,7 +810,7 @@ class App(GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compactin
             with store.lock: busy = any(j['botId'] == bot['id'] and j['id'] != job_id and j['status'] == 'running' for j in store.data['jobs'])
             kept_turn = locals().get('kept')
             if isinstance(kept_turn, LiveTurn) and kept_turn.cli.kind == 'antigravity' and agy_touched(store.dir / 'workspaces' / bot['id']): kept_turn.cli.spoil('回覆中動到了 Antigravity 的設定資料夾')
-            if provider_kind(provider) == 'antigravity' and not busy: shutil.rmtree(str(store.dir / 'workspaces' / bot['id'] / '.agents'), ignore_errors=True)
+            if provider_kind(provider) == 'antigravity': agy_cleanup(store, bot['id'], job_id, busy)
             mine = self.__dict__.get('grok_dirs', {}).pop(job_id, None)  # the .grok Zook put into the user's chosen folder for this reply
             if mine and (mine / '.zook-owned').is_file(): shutil.rmtree(str(mine), ignore_errors=True)
             for leftover in (store.dir / 'workspaces').glob('*/.grok/.zook-prompt-%s.txt' % job_id):

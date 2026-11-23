@@ -84,23 +84,90 @@ def read_group_file(path):
 
 
 NAMED_CHECK_MAX = 5  # PDFs named in a checked reply that are copied for the checker
+NAMED_CHECK_KEEP = 50  # copies remembered per group, so the same file is not uploaded again at every check
 
 
-def named_for_check(store, group, message, given=()):
-    """Lock held. PDFs a reply being checked names by a path, which are neither attached nor among the group's files: each goes
-    through the same checks as a path the user attaches (upload_from_path: the user's own folders, no hidden files, links or hard
-    links, nothing of Zook's), and is then copied in for the checker. Returns them as attachments."""
+def named_check_plan(store, group, message, given=()):
+    """Lock held. What a check needs to copy, worked out from saved data only: the PDF paths the checked reply names that are
+    neither attached nor among the group's files, and what its author could read in that turn (the path is the model's words, so
+    only a file it could reach itself is ever copied). The copying is named_check_copy, outside the lock."""
     shared = {e.name for e in _plain_files(group_files_dir(store, group['id']))}
     known = shared | {a.get(k) for m in group['messages'] for a in m.get('attachments') or [] for k in ('name', 'origName')} | {a.get('name') for a in given}
-    found = []
-    for path in named_paths((message or {}).get('content')):
-        name = path.rsplit('/', 1)[-1]
-        if len(found) >= NAMED_CHECK_MAX: break
-        if not name.lower().endswith('.pdf') or name in known or upload_name(name) in known: continue
-        try: meta = upload_from_path(store, path)
-        except (OSError, ValueError): continue  # refused, or not there: the checker says it could not read it
-        found.append(dict(meta, named=True)); known.add(name)
-    return found
+    paths = [p for p in named_paths((message or {}).get('content')) if p.lower().endswith('.pdf') and p.rsplit('/', 1)[-1] not in known and upload_name(p.rsplit('/', 1)[-1]) not in known][:NAMED_CHECK_MAX]
+    if not paths: return None
+    author = next((j for j in store.data['jobs'] if j.get('messageId') == message['id'] and j.get('groupId') == group['id']), {})
+    access = author.get('nativeAccess') if isinstance(author.get('nativeAccess'), list) and len(author['nativeAccess']) == 4 else None
+    return dict(paths=paths, author=message.get('botId') or author.get('botId') or '', access=access, cache=copy.deepcopy((group.get('checkCopies') or {})))
+
+
+def named_check_reach(store, plan, path):
+    """'workspace' when the file is in the author's own workspace, 'path' when its access let it read there, '' when not."""
+    workspace = str(store.dir / 'workspaces' / plan['author']) if plan.get('author') else ''
+    if workspace and (path.startswith(workspace + '/') or os.path.realpath(path).startswith(os.path.realpath(workspace) + '/')): return 'workspace'
+    scope, root, _, native = plan.get('access') or ('workspace', '', '', False)
+    if not native: return ''  # 謹慎 and 先規劃 read only the workspace with Zook's tools
+    if scope == 'full': return 'path'
+    if scope == 'folder' and root and os.path.realpath(path).startswith(os.path.realpath(str(root)).rstrip('/') + '/'): return 'path'
+    return ''
+
+
+def named_check_copy(store, group_id, bot_id, job, plan):
+    """Outside the lock: copy each named PDF the author could reach into the checker's workspace, through the same checks as a path
+    the user attaches (upload_from_path) or, inside the author's own workspace, refusing links, hard links and hidden names on the
+    way. A file already copied and not changed since is not uploaded again. Returns the note for the checker's prompt."""
+    metas, missing, cache = [], [], {}
+    for path in plan['paths']:
+        reach = named_check_reach(store, plan, path)
+        if not reach: missing.append('%s（路徑在範圍外）' % path); continue
+        try: info = os.lstat(path); mark = [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns]
+        except OSError: missing.append('%s（找不到檔案）' % path); continue
+        kept = plan['cache'].get(path) or {}
+        meta = upload_meta(store, kept.get('id')) if kept.get('mark') == mark else None
+        if not meta:
+            try: meta = upload_from_path(store, path) if reach == 'path' else upload_from_workspace(store, plan['author'], path)
+            except (OSError, ValueError) as exc: missing.append('%s（%s）' % (path, str(exc).rstrip('。') if isinstance(exc, ValueError) else '無法讀取')); continue
+        metas.append(meta); cache[path] = dict(id=meta['id'], mark=mark)
+    copies = place_attachments(store, bot_id, metas) if metas else []
+    with store.lock:
+        group = store.find('groups', group_id)
+        if group and cache: group['checkCopies'] = dict(list(dict(group.get('checkCopies') or {}, **cache).items())[-NAMED_CHECK_KEEP:])
+        if copies:
+            job['attachments'] = (job.get('attachments') or []) + [str(x) for x in copies]
+            job['attachmentIds'] = (job.get('attachmentIds') or []) + [m['id'] for m in metas]
+        store.save()
+    note = attachment_note(copies, '受查核的回覆提到的檔案（已複製一份給你，請讀這份）') if copies else ''
+    return note + ('\n受查核的回覆提到、但沒附上的檔案：\n' + '\n'.join('- ' + x for x in missing) if missing else '')
+
+
+def upload_from_workspace(store, bot_id, path):
+    """A file in a Bot's own workspace, as a new upload: every step a real folder (no link, no hidden name), the file a plain one
+    with one name, at most 20 MB, counted while copying."""
+    workspace = str(store.dir / 'workspaces' / bot_id)
+    if not path.startswith(workspace + '/'): path = os.path.join(workspace, os.path.relpath(os.path.realpath(path), os.path.realpath(workspace)))
+    parts = os.path.relpath(path, workspace).split('/')
+    if '..' in parts or any(x.startswith('.') for x in parts): raise ValueError('這個位置的檔案不能複製')
+    fd = os.open(workspace, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for i, name in enumerate(parts):
+            last = i == len(parts) - 1
+            nxt = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | (os.O_NONBLOCK if last else os.O_DIRECTORY), dir_fd=fd)
+            os.close(fd); fd = nxt
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or not 0 < info.st_size <= MAX_UPLOAD: raise ValueError('這不是一般檔案或超過 20 MB')
+        upload_id = ID(); folder = store.dir / 'uploads' / upload_id; folder.mkdir(parents=True, mode=0o700); copied = 0
+        try:
+            with os.fdopen(os.dup(fd), 'rb') as source, open(str(folder / 'file'), 'wb') as out:
+                for chunk in iter(lambda: source.read(1 << 20), b''):
+                    copied += len(chunk)
+                    if copied > MAX_UPLOAD: raise ValueError('檔案超過 20 MB')
+                    out.write(chunk)
+            name = upload_name(parts[-1])
+            meta = dict(id=upload_id, name=name, origName=upload_original(parts[-1]), size=copied, kind='file', createdAt=NOW())
+            (folder / 'meta.json').write_text(json.dumps(meta, ensure_ascii=False), encoding='utf-8')
+            return meta
+        except BaseException:
+            shutil.rmtree(str(folder), ignore_errors=True); raise
+    finally: os.close(fd)
 
 
 def group_copy_folder(store, bot_id):
