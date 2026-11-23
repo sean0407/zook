@@ -17,6 +17,8 @@ open(os.environ['GROUP_LOG'], 'a').write(json.dumps(dict(name=name, role=role, k
 text = name + ' ' + role
 if role in ('verdict', 'split_merge', 'compare_diff', 'final'): text = '【結論】採用甲案\n【待你決定】無\n【行動項目】Alpha：寫計畫\n【未解問題】缺成本資料'
 if role == 'verify': text = '【判定】有疑慮\n數字沒有來源'
+if role == 'verify' and os.path.exists(os.environ['GROUP_LOG'] + '.fail'): sys.stderr.write('boom\n'); sys.exit(3)
+if name == 'solo' and os.path.exists(os.environ['GROUP_LOG'] + '.slow'): import time; time.sleep(4)
 found = re.search(r'要給群組的產出請存到 (.+?)（只放', s)
 if 'WRITEFILE' in s and found: open(os.path.join(found.group(1), name + '.txt'), 'w').write('from ' + name)
 if kind == 'claude': print(json.dumps({'type': 'result', 'result': text, 'is_error': False}))
@@ -156,8 +158,27 @@ class GroupModes(unittest.TestCase):
     def test_check_within_one_vendor_asks_first(self):
         g = self.group(('Alpha', 'Gamma'), hostId=''); found = self.say(g, mode='turns'); target = next(m for m in found['messages'] if m.get('botId') == self.bots['Alpha']['id'])
         path = '/api/groups/%s/messages/%s/verify' % (g['id'], target['id']); status, body = self.req('POST', path, {})
-        self.assertEqual((status, body['needsConfirm']), (200, True)); self.assertEqual(self.req('POST', path, {'confirm': True})[0], 202); self.settle(g)
+        self.assertEqual((status, body['needsConfirm']), (409, True)); self.assertIn('沒有別家的 Bot', body['error'])  # refused until confirmed: never 200 with nothing started
+        self.assertEqual(self.req('POST', path, {'confirm': True})[0], 202); self.settle(g)
         self.assertEqual(self.runs()[-1]['name'], 'Gamma')
+
+    def test_failed_check_says_why_under_the_reply_and_can_be_tried_again(self):
+        g = self.group(('Alpha', 'Beta'), hostId=''); found = self.say(g, mode='turns'); target = next(m for m in found['messages'] if m.get('botId') == self.bots['Alpha']['id'])
+        path = '/api/groups/%s/messages/%s/verify' % (g['id'], target['id']); Path(str(self.log) + '.fail').write_text('1')
+        self.assertEqual(self.req('POST', path, {})[0], 202); self.settle(g)
+        check = self.req('GET', '/api/groups/' + g['id'])[1]['group']['messages'][-1]  # read again, as after a reload
+        self.assertEqual((check['checkOf'], check['status'], check['botId']), (target['id'], 'failed', self.bots['Beta']['id']))
+        self.assertTrue(check['error']); self.assertNotIn('boom', check['error'])  # the plain reason, not what the CLI printed
+        os.remove(str(self.log) + '.fail'); self.assertEqual(self.req('POST', path, {})[0], 202); found = self.settle(g)
+        self.assertEqual([(m['status'], m.get('verdict')) for m in found['messages'] if m.get('checkOf') == target['id']], [('failed', None), ('completed', '有疑慮')])
+
+    def test_check_nobody_can_do_is_refused_with_the_reason(self):
+        g = self.group(('Alpha', 'Beta'), hostId=''); found = self.say(g, mode='turns'); target = next(m for m in found['messages'] if m.get('botId') == self.bots['Alpha']['id'])
+        path = '/api/groups/%s/messages/%s/verify' % (g['id'], target['id']); Path(str(self.log) + '.slow').write_text('1')
+        self.assertEqual(self.req('POST', '/api/chat', {'botId': self.bots['Beta']['id'], 'content': '你好'})[0], 202)
+        status, body = self.req('POST', path, {}); self.assertEqual(status, 409, body); self.assertIn('Beta 正在其他對話中工作', body['error'])
+        self.assertFalse([r for r in self.runs() if r['role'] == 'verify'])
+        self.assertFalse([m for m in self.req('GET', '/api/groups/' + g['id'])[1]['group']['messages'] if m.get('checkOf')])
 
     def upload(self, group, name, data=b'hello'):
         return self.req('POST', '/api/groups/%s/files' % group['id'], raw=data, headers={'X-File-Name': quote(name), 'Content-Type': 'application/octet-stream'})

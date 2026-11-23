@@ -388,7 +388,7 @@
     const b = state.data.bots.find(x => x.id === m.botId) || {name: '已刪除的 Bot', color: '#959595'};
     if (m.content) m = Object.assign({}, m, {content: hideInnerPaths(m.content)});
     const text = m.status==='running' ? '正在思考…' : m.status==='cancelled'&&!m.content ? '已停止回覆' : m.status==='failed'&&!m.content ? (Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。') : m.content;
-    return `<div class="message assistant" data-mid="${esc(m.id)}">${avatar(b)}<div class="speaker-wrap"><div class="speaker">${esc(b.name)}${m.taskId ? ` <span class="muted">· 任務 ${esc(String((g.taskRun?.tasks || []).find(t => t.id === m.taskId)?.n || ''))}${m.taskCheck ? ' 驗收' : ''}</span>` : ''}</div>${m.card&&m.status==='completed'?groupCardView(m):partialFor(m)?`<div class="bubble md streaming">${tag(markdown(partialFor(m)))}</div>`:m.content&&m.status!=='running'?`<div class="bubble md">${withAutoMark(tag(markdown(m.content)), m)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(text)}</div>`}${m.content&&m.status!=='running'?messageFiles(m.content, groupSharedFiles(g, fileMark).concat(botFiles(m.botId, 'g:' + fileMark).filter(f => !groupSharedFiles(g, fileMark).some(x => x.name === f.name && x.size === f.size)))):''}${groupChecks(g, m)}</div>${groupVerifyButton(g, m)}</div>`;
+    return `<div class="message assistant" data-mid="${esc(m.id)}">${avatar(b)}<div class="speaker-wrap"><div class="speaker">${esc(b.name)}${m.taskId ? ` <span class="muted">· 任務 ${esc(String((g.taskRun?.tasks || []).find(t => t.id === m.taskId)?.n || ''))}${m.taskCheck ? ' 驗收' : ''}</span>` : ''}</div>${m.card&&m.status==='completed'?groupCardView(m):partialFor(m)?`<div class="bubble md streaming">${tag(markdown(partialFor(m)))}</div>`:m.content&&m.status!=='running'?`<div class="bubble md">${withAutoMark(tag(markdown(m.content)), m)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(text)}</div>`}${m.content&&m.status!=='running'?messageFiles(m.content, groupSharedFiles(g, fileMark).concat(botFiles(m.botId, 'g:' + fileMark)).filter((f, i, all) => all.findIndex(x => x.name === f.name) === i)):''}${groupChecks(g, m)}</div>${groupVerifyButton(g, m)}</div>`;
   }
   function groupChat() {
     const g = activeGroup(), members = groupMembers(g), running = g.status === 'running';
@@ -417,6 +417,7 @@
         const i = groups.findIndex(g => g.id === groupId);
         let changed = i < 0 || JSON.stringify(groups[i]) !== JSON.stringify(data.group);
         if (i >= 0) groups[i] = data.group;
+        if (changed) state.loads = (state.loads || 0) + 1;  // a full refresh asked for before this is older: it must not put the group back as it was
         for (const j of data.jobs || []) {
           if (j.status === 'running') streamJob(j);
           const { partial, ...rest } = j;  // the words in progress are painted by the stream, not by redrawing the page
