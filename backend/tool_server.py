@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Per-job MCP stdio adapter; credentials exist only in its inherited environment."""
+import hmac
 import json
 import os
 import sys
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 MAX_LINE = 1024 * 1024
@@ -14,12 +17,20 @@ try: WAIT = max(30, int(os.environ.get('ZOOK_TOOL_WAIT') or 660))  # a tool call
 except ValueError: WAIT = 660
 
 
+def sign(*parts):
+    return hmac.new(TOKEN.encode(), b'\n'.join(p if isinstance(p, bytes) else str(p).encode() for p in parts), 'sha256').hexdigest()
+
+
 def forward(method, params):
-    req = urllib.request.Request(BASE, data=json.dumps({'method': method, 'params': params}).encode(),
-                                 headers={'Authorization': 'Bearer ' + TOKEN, 'Content-Type': 'application/json'})
+    """One call to Zook. The token is never sent: the call is signed with it, and only an answer proved with it counts."""
+    body, nonce, when = json.dumps({'method': method, 'params': params}).encode(), os.urandom(16).hex(), str(int(time.time() * 1000))
+    where = urllib.parse.urlsplit(BASE); target = '%s%s' % (where.port, where.path)  # for this address only: not usable at another
+    req = urllib.request.Request(BASE, data=body, headers={'Content-Type': 'application/json', 'X-Zook-Nonce': nonce, 'X-Zook-Time': when, 'X-Zook-Sig': sign('call', nonce, when, target, body)})
     try:
         with urllib.request.urlopen(req, timeout=WAIT) as response:
-            return json.loads(response.read(MAX_RESPONSE))
+            raw = response.read(MAX_RESPONSE); proof = response.headers.get('X-Zook-Proof') or ''; status = response.status
+        if not hmac.compare_digest(proof, sign('answer', nonce, status, raw)): raise ValueError('not Zook')
+        return json.loads(raw)
     except (urllib.error.URLError, ValueError, OSError):
         raise RuntimeError('Zook 工具連線已中斷，請重新執行工作。')
 

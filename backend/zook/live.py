@@ -372,13 +372,13 @@ def live_turn(app, job, provider, kind, args, cwd, env, resume, prompt, on_outpu
                 idle = sorted((c for c in lives.values() if c.turn is None), key=lambda c: c.used)
                 if not idle: return None
                 live_close(app, idle[0])
-            ident = 'live-' + secrets.token_hex(12); token = secrets.token_urlsafe(32)
+            ident = 'live-' + secrets.token_hex(12); token = bg_token(app, job, ident) or secrets.token_urlsafe(32)  # made again from Zook's key after a restart
             started = list(args) + (['--input-format', 'stream-json', '--replay-user-messages'] if kind == 'claude' else [])  # Antigravity's run already reads messages this way
             cli = LiveCli(key, started, cwd, dict(env, ZOOK_WORKER_URL='http://127.0.0.1:%d/api/worker/%s' % (app.server_address[1], ident), ZOOK_WORKER_TOKEN=token), mark, ident, token, kind, popen=lambda a, c, e: bg_popen(app, job, a, c, e, True, kind, live=True, name=ident))
             cli.gate = [env.get('ZOOK_GATE_MARK'), env.get('ZOOK_GATE_NONCE'), 0] if env.get('ZOOK_GATE_NONCE') else None  # its own word (gate.py)
             lives[key] = cli; ids[ident] = cli
         else: job['kept'] = True  # this reply did not have to start the CLI
-        bg_note(store, job, cli.proc, True, cli.cost)  # where this reply's output starts, for a later Zook (background.py)
+        bg_note(store, job, cli.proc, True, cli.cost); store.save()  # where this reply's output starts, on disk before the CLI gets the message (background.py)
         return cli.begin(job['id'], prompt, MAX_CLI_OUTPUT, on_output)
 
 
@@ -466,11 +466,11 @@ def interject_send(app, bot, body, by=''):
     return job, ''
 
 
-def live_worker(app, ident, auth):
+def live_worker(app, ident, check):
     """Lock held. (worker, job) for a tool call that came from a kept CLI: the reply it is answering right now, or (None, None).
     A call while it is answering nothing means it is working on its own: refused, and that CLI is not used again."""
     cli = app.__dict__.get('live_ids', {}).get(ident)
-    if not cli or not secrets.compare_digest(auth, 'Bearer ' + cli.token): return None, None
+    if not cli or not check(cli.token): return None, None  # signed with its token (background.py bg_worker)
     if not cli.job_id: cli.spoiled = cli.spoiled or '在兩則訊息之間呼叫工具'; return None, None
     return app.workers.get(cli.job_id), app.store.find('jobs', cli.job_id)
 

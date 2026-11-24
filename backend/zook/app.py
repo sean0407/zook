@@ -310,9 +310,10 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             run = self.schedule_run_for(job)
             if run: self.notify_run(run, '需要你核准：' + (approval.get('text') or describe_call(dict(approval, name=name))))
             self.store.save()
-        event.wait(bg_wait(schedule_approval_wait() if run else APPROVAL_TIMEOUT))  # no longer than the CLI still waits
+        gone = bg_await(event, schedule_approval_wait() if run else APPROVAL_TIMEOUT)  # no longer than the CLI still waits, nor once it stopped waiting
         with self.store.lock:
             self.approval_events.pop(approval_id, None)
+            if gone and approval['status'] in ('pending', 'approved'): approval.update(status='expired', withdrawn=True)  # the CLI no longer waits: nothing is done
             if approval['status'] == 'pending':
                 approval['status'] = 'expired'
                 if run: run['approvalExpired'] = True  # unattended and nobody answered: declined, and the history says why
@@ -484,10 +485,10 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                     lambda *a: self.approve(job_id, *a), lambda event: self.record_event(job_id, event), inventory=inventory,
                     extra_tools=(plan_safe if planning else list)(self.app_tools(bot, runtime, job.get('groupId'), job.get('origin') or 'user') + git_tools(store, bot, scope, root, runtime, kind) + ([] if job.get('groupId') or job.get('internal') else question_tools(self, job_id, runtime, job.get('origin') or 'user')) + browser_tools(self, job_id, bot, kind, job.get('origin') or 'user', runtime) + task_tools(self, job_id, runtime)), permission_mode=lambda bot_id=bot['id']: self.live_permission(bot_id, job_id))
                 session.read_only = planning; session.attachment_files = (job.get('attachments') or []) + ([str(group_copy_folder(store, bot['id']))] if job.get('groupFiles') else [])  # this reply's own
-                token = secrets.token_urlsafe(32)
                 with store.lock:
                     job = store.find('jobs', job_id)
                     if not job or job['status'] != 'running': return
+                    token = bg_token(self, job) or secrets.token_urlsafe(32)  # under a runner: made again from Zook's key after a restart (background.py)
                     self.workers[job_id] = {'token': token, 'session': session, 'tools': []}
                 tools = session.tools()  # May start external servers; never hold store.lock.
                 if session.lazy: prompt += '\n已連接的外部服務：%s。需要用到時，先用 zook_connector_tools 查它能做什麼，再用 zook_connector_call 執行；用不到就不必查。' % '、'.join(sorted(session.lazy))
@@ -633,6 +634,10 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                     elif now >= deadline: stopped_for = '已超過時間上限。'
                     if stopped_for: raise subprocess.TimeoutExpired(args, quiet_limit)
                 output, stderr = pipes.result()
+                ended_by = getattr(getattr(getattr(proc, 'cli', None), 'proc', None) or proc, 'stopped', '')  # its runner ended it (background.py)
+                if isinstance(ended_by, str) and ended_by and ended_by != 'stopped':
+                    with store.lock: job['mayHaveActed'] = True  # what it did before is unknown: not tried again on another model
+                    raise RuntimeError('執行中止：' + ended_by)
                 with store.lock: now_job = store.find('jobs', job_id) or {}; untouched = now_job.get('status') == 'running' and not now_job.get('toolCalls')
                 if kept and kept.lost() and untouched and not self.__dict__.get('closing'): raise LiveLost()
                 if kept and kept.finished: self.live_fails = 0
@@ -703,7 +708,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                     self.remember_session(job, provider, model, account, cli_cwd, cli_session(kind, output.decode('utf-8', errors='replace')))
                     store.finish_message(job, content, 'completed')
                     if options: (find_message(store.find('bots', job['botId']), job['messageId']) or {})['options'] = options
-                    if isinstance(kept, LiveTurn) and (kept.pending or kept.__dict__.get('unsure')): (find_message(store.find('bots', job['botId']), job['messageId']) or {})['note'] = '回覆途中補充的訊息它沒有讀到，請再傳一次。'
+                    if isinstance(kept, LiveTurn) and (kept.pending or kept.__dict__.get('unsure')): (find_message(store.find('bots', job['botId']), job['messageId']) or {})['note'] = '回覆途中補充的訊息它沒有讀到，請再傳一次。' if kept.pending else '回覆途中補充的訊息，Zook 關閉前不確定它有沒有讀到；回覆沒提到的話，請再傳一次。'
                     store.save()
         except LiveLost:
             self.live_fails = self.__dict__.get('live_fails', 0) + 1

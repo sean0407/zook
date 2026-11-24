@@ -102,6 +102,10 @@ def backup_restore(app, name):
     try: data = backup_check(backup_read(path))
     except (OSError, EOFError, UnicodeError, RecursionError): raise ValueError('這份備份無法讀取，資料沒有變動。')
     for bot in data['bots']: bot.pop('queue', None)  # messages that were waiting when the copy was made have been sent since
+    for job in data.get('jobs') or []:  # a reply running when the copy was made belongs to the Zook that ran it: never started again here
+        if isinstance(job, dict) and job.get('status') == 'running':
+            for key in ('runner', 'runnerSalt', 'cliPid', 'interrupted', 'reattach'): job.pop(key, None)
+            job.update(status='failed', error='備份當時這則回覆還沒完成。')
     safety = backup_write(store, 'safety', store.data)
     halted = sync_halt(store)  # saved first: if Zook stops halfway, the older data is never sent to the other Macs
     # This Mac's own pairing, sign-ins and sync stay as they are: they belong to the machine, not to the copy.

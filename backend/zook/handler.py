@@ -259,15 +259,10 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) == 3 and parts[:2] == ['api', 'worker']:
             port = self.server.server_address[1]
             if self.command != 'POST' or self.headers.get('Host', '').lower() not in ('127.0.0.1:%d' % port, 'localhost:%d' % port): return self.error(403, '禁止存取。')
-            with self.server.store.lock:
-                if parts[2].startswith('live-'):  # a CLI kept open between messages: the reply it is answering right now
-                    worker, job = live_worker(self.server, parts[2], self.headers.get('Authorization', '')); authorized = bool(worker and job and job['status'] == 'running')
-                else:
-                    worker = self.server.workers.get(parts[2]); job = self.server.store.find('jobs', parts[2])
-                    authorized = worker and job and job['status'] == 'running' and secrets.compare_digest(self.headers.get('Authorization', ''), 'Bearer '+worker['token'])
-            if not authorized: return self.error(403, '禁止存取。')
             try:
-                body = self.body(); method = body.get('method'); params = body.get('params', {}); bg_left(self)  # background.py
+                found = bg_worker(self, parts[2])  # signed with the reply's token (background.py)
+                if not found: return self.error(403, '禁止存取。')
+                worker, job, body = found; method = body.get('method'); params = body.get('params', {})
                 if method == 'tools/list': return bg_answer(self, {'tools': worker['tools']})
                 if method == 'tools/call' and isinstance(params, dict) and isinstance(params.get('name'), str) and isinstance(params.get('arguments', {}), dict):
                     return bg_answer(self, worker['session'].call(params['name'], params.get('arguments', {})))  # background.py
@@ -981,15 +976,7 @@ def main():
         for flow in list(app.logins.values()) + list(app.installs.values()): flow.cancel()
         for worker in workers:
             if worker: worker['session'].close()
-        for proc in processes:
-            try: os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError: pass
-        for proc in processes:
-            try: proc.wait(timeout=2)
-            except subprocess.TimeoutExpired: pass
-            # The leader may exit before its descendants.
-            try: os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError: pass
+        bg_end(processes)  # background.py
         app.server_close()
 
 if __name__ == '__main__': main()

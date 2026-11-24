@@ -81,9 +81,10 @@ def question_tools(app, job_id, runtime, origin='user'):
             if len(asked) >= MAX_QUESTIONS: raise RuntimeError('這次回覆已經問了 %d 個問題，請把其餘的問題寫在回覆裡。' % MAX_QUESTIONS)
             if bg_hold(app, job_id, question): asked.append(question); store.save(); raise RuntimeError('Zook 正在關閉。')
             asked.append(question); events[question['id']] = event; store.save()
-        event.wait(bg_wait(APPROVAL_TIMEOUT))
+        gone = bg_await(event, APPROVAL_TIMEOUT)
         with store.lock:
             events.pop(question['id'], None)
+            if gone and question['status'] in ('pending', 'answered'): question['status'] = 'expired'  # the CLI no longer waits for it
             if question['status'] == 'pending': question['status'] = 'expired'; store.save()
             if question['status'] != 'answered': bg_mark(question); raise RuntimeError('使用者沒有回答這個問題。不要自己替他選；把問題留在回覆裡，並停在這一步。')
             return {'answer': question['answer'], 'note': '這是使用者對問題的回答，不是對任何動作的核准。'}

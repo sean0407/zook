@@ -87,7 +87,8 @@ class Base(unittest.TestCase):
 
     def tearDown(self):
         if self.proc.poll() is None: self.proc.terminate(); self.proc.wait(timeout=10)
-        self.proc.stdout.close(); self.temp.cleanup()
+        from background_test import end_leftovers
+        self.proc.stdout.close(); end_leftovers(self.temp.name); self.temp.cleanup()  # a reply still running goes on under its runner (#35)
 
     def req(self, method, path, body=None):
         conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=15)

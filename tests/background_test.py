@@ -19,13 +19,36 @@ if 'SLOW' in text or 'TOOL' in text:
     said = '背景完成'
 if 'TOOL' in text:
     body = json.dumps({'method': 'tools/call', 'params': {'name': 'zook_create_schedule', 'arguments': {'content': '整理信箱', 'repeat': 'daily', 'time': '09:00'}}}).encode()
-    req = urllib.request.Request(os.environ['ZOOK_WORKER_URL'], data=body, headers={'Authorization': 'Bearer ' + os.environ['ZOOK_WORKER_TOKEN'], 'Content-Type': 'application/json'})
+    import hmac; nonce, when = os.urandom(16).hex(), str(int(time.time() * 1000))  # signed with the token, as tool_server.py does
+    import urllib.parse; where = urllib.parse.urlsplit(os.environ['ZOOK_WORKER_URL'])
+    sig = hmac.new(os.environ['ZOOK_WORKER_TOKEN'].encode(), b'\n'.join(x if isinstance(x, bytes) else x.encode() for x in ('call', nonce, when, '%s%s' % (where.port, where.path), body)), 'sha256').hexdigest()
+    req = urllib.request.Request(os.environ['ZOOK_WORKER_URL'], data=body, headers={'X-Zook-Nonce': nonce, 'X-Zook-Time': when, 'X-Zook-Sig': sig, 'Content-Type': 'application/json'})
     try:
         with urllib.request.urlopen(req, timeout=120) as r: result = json.loads(r.read())
         said = 'tool:' + ('error' if result.get('isError') else 'ok')
     except Exception as exc: said = 'tool:broken'
 print(json.dumps(dict(type='item.completed', item=dict(type='agent_message', text=said))), flush=True)
 '''
+
+
+def end_leftovers(root):
+    """A runner is made to outlive Zook: after a test, whatever still runs from its folder (runners, stand-in CLIs) is ended,
+    runners first (a runner's SIGTERM ends its CLI's whole group)."""
+    def mine():
+        lines = subprocess.run(['/bin/ps', '-axww', '-o', 'pid=,command='], capture_output=True, text=True).stdout.splitlines()
+        runner = str(SERVER.with_name('runner.py'))
+        def ours(l):  # its runners (this runner.py, for a folder of this test) and stand-in CLIs (a Python script in its bin)
+            w = l.split()
+            if len(w) < 3 or 'python' not in os.path.basename(w[1]).lower(): return False
+            if w[2] == '-I' and len(w) > 4 and w[3] == runner and w[4].startswith(str(root) + '/'): return True
+            return w[2].startswith(str(root) + '/bin/')
+        return [(int(l.split()[0]), l) for l in lines if ours(l) and int(l.split()[0]) != os.getpid()]
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for pid, line in sorted(mine(), key=lambda x: 'runner.py' not in x[1]):
+            try: os.kill(pid, sig)
+            except OSError: pass
+        end = time.time() + 5
+        while mine() and time.time() < end: time.sleep(0.1)
 
 
 class BackgroundRunTest(unittest.TestCase):
@@ -50,7 +73,7 @@ class BackgroundRunTest(unittest.TestCase):
     def tearDown(self):
         (self.root / 'bin/go').write_text('1')  # nothing waits on after the test
         if self.proc: self.stop()
-        time.sleep(0.3); self.temp.cleanup()
+        end_leftovers(self.root); self.temp.cleanup()
 
     def req(self, method, path, body=None):
         c = http.client.HTTPConnection('127.0.0.1', self.port, timeout=20); c.request(method, path, json.dumps(body).encode() if body is not None else None, {'Authorization': 'Bearer ' + self.token})
@@ -146,8 +169,8 @@ class BackgroundRunTest(unittest.TestCase):
         self.stop()
         record = next(j for j in self.data()['jobs'] if j['id'] == job)['runner']
         info = json.loads((self.root / 'data/runs' / record['dir'] / 'info').read_text())
-        os.kill(info['runner'], signal.SIGKILL); os.killpg(pid, signal.SIGKILL)  # as a Mac restart would
-        self.until(lambda: not self.alive(pid))
+        os.kill(info['runner'], signal.SIGKILL)  # ended by force: its CLI does not run on unwatched
+        self.until(lambda: not self.alive(pid), 10)
         self.go(); self.start()
         self.until(lambda: self.state()['messages'][-1].get('status') == 'completed')
         self.assertEqual(len(self.runs()), 2)  # 接著做 (#34) took over
@@ -192,12 +215,27 @@ class BackgroundRunTest(unittest.TestCase):
         self.stop(); self.assertTrue(self.alive(pid))
         self.env['ZOOK_RESUME_DELAY'] = '0.2'; self.start(); self.go(); self.finished('背景完成'); self.assertEqual(len(self.runs()), 1)
 
+    def test_a_command_signed_for_another_run_is_refused(self):
+        import hmac, secrets as s2
+        job = self.send('SLOW 寫一份長報告')
+        record = next(j for j in self.data()['jobs'] if j['id'] == job)['runner']
+        info = json.loads((self.root / 'data/runs' / record['dir'] / 'info').read_text())
+        body, nonce, when = b'{"action": "stop"}', s2.token_hex(16), str(int(time.time() * 1000))
+        key = (self.root / 'secrets/runner-key').read_text().strip()  # even Zook's own key: each run only takes its own
+        sig = hmac.new(key.encode(), b'\n'.join(x if isinstance(x, bytes) else x.encode() for x in ('control', nonce, when, record['dir'], body)), 'sha256').hexdigest()
+        req = urllib.request.Request('http://127.0.0.1:%d/control' % info['port'], data=body, headers={'X-Zook-Nonce': nonce, 'X-Zook-Time': when, 'X-Zook-Sig': sig})
+        with self.assertRaises(urllib.error.HTTPError) as caught: urllib.request.urlopen(req, timeout=5)
+        self.assertEqual(caught.exception.code, 403); self.assertTrue(self.alive(self.cli_pid()))
+        self.go(); self.finished('背景完成')
+
     def test_only_zooks_own_run_folders_are_cleaned_up(self):
         foreign = self.root / 'data/runs/someone-elses'; foreign.mkdir(parents=True); (foreign / 'keep.txt').write_text('mine')
         os.utime(str(foreign), (0, 0))
+        linked = self.root / 'data/runs/linked-mark'; linked.mkdir(); (linked / 'keep.txt').write_text('mine')
+        (self.root / 'elsewhere').write_text(''); (linked / '.zook-run').symlink_to(self.root / 'elsewhere'); os.utime(str(linked), (0, 0))  # a mark that is a link is not Zook's
         self.send('SLOW 寫一份長報告'); self.go(); self.finished('背景完成')
-        self.until(lambda: [p.name for p in (self.root / 'data/runs').iterdir()] == ['someone-elses'])
-        self.assertEqual((foreign / 'keep.txt').read_text(), 'mine')
+        self.until(lambda: sorted(p.name for p in (self.root / 'data/runs').iterdir()) == ['linked-mark', 'someone-elses'])
+        self.assertEqual((foreign / 'keep.txt').read_text(), 'mine'); self.assertEqual((linked / 'keep.txt').read_text(), 'mine')
 
 
 class KeptCliTest(unittest.TestCase):
@@ -224,7 +262,7 @@ class KeptCliTest(unittest.TestCase):
 
     def tearDown(self):
         if self.proc.poll() is None: self.proc.terminate(); self.proc.wait(timeout=10)
-        self.proc.stdout.close(); time.sleep(0.3); self.temp.cleanup()
+        self.proc.stdout.close(); end_leftovers(self.root); self.temp.cleanup()
 
     req = BackgroundRunTest.req
     until = BackgroundRunTest.until
