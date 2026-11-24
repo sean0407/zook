@@ -216,7 +216,9 @@ class Run:
                 now = time.monotonic()
                 if self.pending: self.last = now; self.limit_at += 1  # waiting for Zook or for the user does not count
                 timed = not self.cfg.get('live') or self.gone_at is not None
-                why = ('已超過時間上限。' if now >= self.limit_at else '太久沒有動靜。' if now - self.last >= quiet else '') if timed else ''
+                # While its Zook is there, Zook times the reply and explains why it stopped; this is only a late backstop then.
+                spare = 120 if self.zook_pid and pid_alive(self.zook_pid) else 0
+                why = ('已超過時間上限。' if now >= self.limit_at + spare else (self.cfg.get('quiet_why') or '太久沒有動靜。') if now - self.last >= quiet + spare else '') if timed else ''
             if why: self.stop(why); return
 
 

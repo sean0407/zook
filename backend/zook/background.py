@@ -279,7 +279,7 @@ def bg_popen(app, job, args, cwd, env, use_stdin, kind, live=False, name=None):
     url = env.get('ZOOK_WORKER_URL') or ''; long = bool(job.get('long')); salt = '' if live else (job.pop('runnerSalt', '') or secrets.token_hex(8))
     cfg = dict(dir=str(folder), args=[str(a) for a in args], cwd=str(cwd), env=dict(env, PWD=str(cwd)), stdin=bool(use_stdin or live), live=live,
                key=bg_secret(store, 'control', folder.name, salt), token=env.get('ZOOK_WORKER_TOKEN') or '', ident=url.rsplit('/', 1)[-1] if url else '', url=url,
-               quiet=LONG_JOB_TIMEOUT if long else agy_quiet(kind, JOB_TIMEOUT), limit=LONG_JOB_TIMEOUT if long else max(JOB_HARD_TIMEOUT, JOB_TIMEOUT),
+               quiet=LONG_JOB_TIMEOUT if long else agy_quiet(kind, JOB_TIMEOUT), quiet_why=quiet_reason(kind, LONG_JOB_TIMEOUT if long else agy_quiet(kind, JOB_TIMEOUT)), limit=LONG_JOB_TIMEOUT if long else max(JOB_HARD_TIMEOUT, JOB_TIMEOUT),
                wait=int(env.get('ZOOK_TOOL_WAIT') or tool_wait(False)), hold=int(env.get('ZOOK_TOOL_WAIT') or tool_wait(False)) + 60, zook_pid=os.getpid(),
                max_out=MAX_CLI_OUTPUT * (16 if live else 1) + 65536)  # a kept CLI's file holds every reply it gave
     log = os.open(str(folder / 'log'), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
