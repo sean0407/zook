@@ -46,9 +46,11 @@ def split_work_steps(store, ids, fixes=None):
 def _same_file(name, pool, owner=''):
     """A report's own file name: exactly that shared file, or the name Zook gave it when another member's file had that name
     (報表（專員）.xlsx, with this member's name)."""
-    want = _claim_key(name); stem, dot, ext = want.rpartition('.')
-    marked = _claim_key('%s（%s）.%s' % (stem, owner[:20], ext)) if owner and dot else None
-    return any(_claim_key(have) in (want, marked) for have in pool)
+    wants = set()
+    for given in {name, _short_name(name)}:  # the name as reported, and as Zook saves it (unsafe characters dropped, shortened)
+        want = _claim_key(given); stem, dot, ext = want.rpartition('.'); wants.add(want)
+        if owner and dot: wants.update({_claim_key('%s（%s）.%s' % (stem, owner[:20], ext)), _claim_key(_short_name('%s（%s）.%s' % (stem, owner[:20], ext)))})
+    return any(_claim_key(have) in wants for have in pool)
 
 
 def checked_present(store, group_id, names, exact=(), owner=''):

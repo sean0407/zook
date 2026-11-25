@@ -102,4 +102,10 @@ class GroupFileSafety(unittest.TestCase):
         self.assertEqual(server.group_card('完整成果\n【結論】甲')['body'], '完整成果')
 
 
+    def test_reported_files_are_looked_for_as_zook_saved_them(self):  # #245
+        (self.shared / 'ab.xlsx').write_text('x'); (self.shared / '報價單（甲）.xlsx').write_text('x'); (self.shared / '報價單（舊版）.pdf').write_text('x')
+        listed = ['a:b.xlsx', '報價單.xlsx', '報價單.pdf', 'README']
+        self.assertEqual(server.checked_present(self.store, 'g1', listed, exact=listed, owner='甲'), ['報價單.pdf', 'README'])
+        self.assertEqual(server.checked_present(self.store, 'g1', ['keep.txt', 'gone.docx']), ['gone.docx'])
+
 if __name__ == '__main__': unittest.main()
