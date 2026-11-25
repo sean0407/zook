@@ -300,7 +300,7 @@ class TaskChecks:
         """Lock held. Start a run's loop again after it ended (the user asked to retry one of its tasks)."""
         run_id = ID(); run = group['taskRun']
         group.update(status='running', runId=run_id, activeJobId=None, activeJobIds=[], runKind='steps')  # 插話 goes to the host while it runs (#94)
-        run.update(status='running', groupRunId=run_id, hostMissed=0)  # the counts stay as they are; the retry route gave its own room
+        run.update(status='running', groupRunId=run_id, hostMissed=0); run.pop('stopWhy', None)  # the counts stay as they are; the retry route gave its own room
         task_checkpoint_reset(run)  # pressing 重試 after the run stopped is going on: a check it stopped at is not asked again
         threading.Thread(target=self._task_resumed, args=(group['id'], run_id), daemon=True).start()
 

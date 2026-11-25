@@ -328,6 +328,16 @@ def backup_busy(store):
     return out
 
 
+def backup_stop_busy(app, store):
+    """Lock held. 停止後還原 (#50): stop every group and reply that is answering, in the same hold of the lock as the restore itself,
+    so a message waiting behind a stopped reply cannot start in between. Returns who was stopped."""
+    busy = backup_busy(store)
+    for x in busy:
+        if x['type'] == 'group': group_stop_now(app, store, store.find('groups', x['id']))
+        else: app.cancel_job(store.find('jobs', x['id']))
+    return busy
+
+
 def backup_busy_text(busy):
     names = '、'.join(('群組「%s」' if x['type'] == 'group' else 'Bot「%s」') % x['name'] for x in busy[:5]) + ('等 %d 個' % len(busy) if len(busy) > 5 else '')
     return '%s正在回覆，等它結束再還原，或按「停止後還原」。' % names

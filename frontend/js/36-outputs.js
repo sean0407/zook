@@ -34,21 +34,35 @@
     const show = () => frame.classList.add('ready');
     frame.addEventListener('load', show, {once: true}); setTimeout(show, 4000);
   }
+  // #153④⑥: what the preview window shows. A file that is gone says so and has nothing to download; one that cannot be read
+  // (a picture that is not one, a 「PDF」 that is not a PDF, an empty file) says so in plain words and can still be downloaded.
+  const CANT_OPEN = '這個檔案打不開，可能已損壞或副檔名不對。可以下載後用其他程式開啟。';
+  const imageOpens = src => new Promise(done => { const img = new Image(); img.onload = () => done(img.naturalWidth > 0); img.onerror = () => done(false); img.src = src; });
+  async function previewBody(url, kind, name) {
+    let res = null;
+    try { res = await fetch(url); } catch (_) {}
+    if (!res || res.status === 404) return {missing: true, body: '<p class="error-text">找不到這個檔案，可能已經被移走或刪除。</p>'};
+    if (!res.ok) return {body: `<p class="error-text">${esc((await res.json().catch(() => ({}))).error || '讀取失敗')}</p>`};
+    const blob = await res.blob();
+    if (!blob.size) return {body: '<p class="muted">這個檔案是空的（0 位元組），沒有內容可以顯示。</p>'};
+    if (kind === 'image') {
+      const local = URL.createObjectURL(blob);
+      return (await imageOpens(local)) ? {body: `<div class="image-view"><img src="${esc(local)}" alt="${esc(name)}"></div>`} : {body: `<p class="muted">${CANT_OPEN}</p>`};
+    }
+    if (kind === 'pdf') return (await blob.slice(0, 1024).text()).includes('%PDF-') ? {body: pdfFrame(url, name)} : {body: `<p class="muted">${CANT_OPEN}</p>`};
+    if (kind === 'text' || kind === 'markdown') {
+      const text = (await blob.text()).slice(0, 200000);
+      return {body: kind === 'markdown' ? `<div class="md output-text">${markdown(text)}</div>` : `<pre class="output-text">${esc(text)}</pre>`};
+    }
+    return {body: '<p class="muted">這種檔案無法在這裡預覽，可以下載或在 Finder 顯示。</p>'};
+  }
   async function openOutput(botId, id) {
     const o = (state.outputs[botId] || []).find(x => x.id === id);
     if (!o) return;
     const url = '/api/bots/' + encodeURIComponent(botId) + '/outputs/' + encodeURIComponent(o.id);
-    let body = '<p class="muted">這種檔案無法在這裡預覽，可以下載或在 Finder 顯示。</p>';
-    if (o.kind === 'image') body = `<div class="image-view"><img src="${url}" alt="${esc(o.name)}"></div>`;
-    else if (o.kind === 'pdf') body = pdfFrame(url, o.name);
-    else if (o.kind === 'text' || o.kind === 'markdown') {
-      try {
-        const res = await fetch(url); if (!res.ok) throw Error((await res.json().catch(() => ({}))).error || '讀取失敗');
-        const text = (await res.text()).slice(0, 200000);
-        body = o.kind === 'markdown' ? `<div class="md output-text">${markdown(text)}</div>` : `<pre class="output-text">${esc(text)}</pre>`;
-      } catch (error) { body = `<p class="error-text">${esc(error.message)}</p>`; }
-    }
-    modal(o.name, `<div class="modal-body">${body}<p class="muted small output-path">${esc(o.path)}</p></div><div class="modal-foot"><button type="button" class="secondary" data-action="output-reveal" data-id="${esc(o.id)}" data-bot="${esc(botId)}">在 Finder 顯示</button><a class="secondary button-link" href="${url}" download="${esc(o.name)}">下載</a><button type="button" class="primary" data-action="close-modal">關閉</button></div>`, '', true);
+    const {body, missing} = await previewBody(url, o.kind, o.name);
+    const keep = missing ? '' : `<button type="button" class="secondary" data-action="output-reveal" data-id="${esc(o.id)}" data-bot="${esc(botId)}">在 Finder 顯示</button><a class="secondary button-link" href="${url}" download="${esc(o.name)}">下載</a>`;
+    modal(o.name, `<div class="modal-body">${body}<p class="muted small output-path">${esc(o.path)}</p></div><div class="modal-foot">${keep}<button type="button" class="primary" data-action="close-modal">關閉</button></div>`, '', true);
     showPdfWhenReady();
   }
   // The output a link's path points at (/tmp and /private/tmp are one place). Only the exact file: another file with the same

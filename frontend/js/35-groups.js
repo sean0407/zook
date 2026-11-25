@@ -15,6 +15,14 @@
     const ids = new FormData(form).getAll('botIds'), slot = form.querySelector('[data-host-field]'), now = form.elements.hostId.value;
     slot.innerHTML = settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', ids.includes(now) ? now : '', hostOptions(ids)));
   }
+  // #96③: with many Bots the member list has a search box; the list itself does not scroll inside the window.
+  function filterGroupMembers(input) {
+    const q = input.value.trim().toLowerCase(), box = input.closest('form').querySelector('.member-pick');
+    let shown = 0;
+    box.querySelectorAll('.member-switch').forEach(row => { row.hidden = !!q && !row.dataset.find.includes(q); shown += !row.hidden; });
+    box.querySelector('[data-member-none]').hidden = shown > 0;
+  }
+  document.addEventListener('keydown', e => { if (e.key === 'Enter' && 'memberSearch' in (e.target.dataset || {})) e.preventDefault(); });  // Enter does not create the group
   // What the form shows under the settings: why 自動 cannot be saved yet, and a hint when every member is the same vendor (#218).
   const botFamily = b => { const p = b.provider || state.data.settings.provider || ''; return p === 'auto' ? '' : (state.providers || []).find(x => x.id === p)?.kind || p; };
   function groupFormNote(form) {
@@ -24,14 +32,21 @@
     const families = members.map(botFamily), one = members.length >= 2 && families.every(f => f && f === families[0]);
     const el = form.querySelector('[data-group-problem]'), hint = form.querySelector('[data-group-hint]');
     if (el) { el.textContent = problem; el.hidden = !problem; }
-    if (hint) { hint.textContent = one ? `成員都是 ${providerShort(families[0])}，沒有跨家驗收：結果要你自己看，或加一位別家的 Bot。` : ''; hint.hidden = !one; }
+    const kept = groupKeepsAuto(form) ? '這個群組設定為「自動」，但任務引擎已關閉，所以暫時用「自由」討論；儲存不會改掉，到「設定」打開任務引擎就會恢復。' : '';
+    const words = [kept, one ? `成員都是 ${providerShort(families[0])}，沒有跨家驗收：結果要你自己看，或加一位別家的 Bot。` : ''].filter(Boolean).join(' ');
+    if (hint) { hint.textContent = words; hint.hidden = !words; }
     return !problem;
+  }
+  // #223②: a group saved as 自動 while the task engine is off shows 自由; left on 自由 (and still with a host and two members), saving keeps 自動.
+  function groupKeepsAuto(form) {
+    const g = form.dataset.id && (state.data.groups || []).find(x => x.id === form.dataset.id), d = new FormData(form);
+    return !!g && g.mode === 'auto' && !taskEngineOn() && (d.get('mode') || 'free') === 'free' && !!d.get('hostId') && d.getAll('botIds').filter(id => state.data.bots.some(b => b.id === id)).length >= 2;
   }
   const groupModeControl = g => `<div class="effort-pick group-mode" title="討論方式">${dropdown('groupMode', currentGroupMode(g), groupModeOptions().filter(o => o.id !== 'auto' || autoReady(g)))}</div>`;
 
   // 預計用量: updated while typing, and never uses a model.
   function groupEstimateLine(g) {
-    if (g.status === 'running') return '<div class="group-estimate" id="group-estimate"></div>';  // 插話 is not a new round
+    if (g.status === 'running') return `<div class="group-estimate" id="group-estimate" role="status">${esc(groupWaitText(g))}</div>`;  // 插話 is not a new round
     const key = g.id + currentGroupMode(g) + ':' + (g.messages || []).length;
     if (state.groupEstimate?.key !== key) setTimeout(updateGroupEstimate, 0);
     return `<div class="group-estimate" id="group-estimate">${esc(state.groupEstimate?.key === key ? state.groupEstimate.text : '')}</div>`;
@@ -50,6 +65,18 @@
       if (el && activeGroup()?.id === g.id) el.textContent = text;
     } catch (_) {}
   }
+  // While it runs (#95, #203③): who is answering now and how far this ask is, e.g. 「正在等 研究助手 發言（2／3）」. The count is
+  // the members who have answered or are answering since the user's last message; once everyone has spoken it is left out.
+  function groupWaitText(g) {
+    const messages = groupMsgs(g), asked = messages.map(m => m.role === 'user' && !m.interjected).lastIndexOf(true);
+    const since = messages.slice(asked + 1).filter(m => m.role === 'assistant' && !m.checkOf), now = since.filter(m => m.status === 'running');
+    if (!now.length) return '';
+    const names = [...new Set(now.map(m => state.data.bots.find(b => b.id === m.botId)?.name).filter(Boolean))];
+    if (!names.length) return '';
+    const total = groupMembers(g).length, done = new Set(since.filter(m => m.status !== 'running' && m.content).map(m => m.botId));
+    const n = new Set([...done, ...now.map(m => m.botId)]).size;
+    return `正在等 ${names.join('、')} 發言` + (total > 1 && done.size < total && n <= total ? `（${n}／${total}）` : '');
+  }
   function scheduleGroupEstimate() { clearTimeout(scheduleGroupEstimate.timer); scheduleGroupEstimate.timer = setTimeout(updateGroupEstimate, 400); }
 
   function groupRunBar(g) {
@@ -57,7 +84,7 @@
     if (g.paused) return `<div class="group-bar"><span>這次詢問已達 ${esc(String(g.turnLimit || 4))} 回合上限，討論還沒結束。按「繼續」再進行 ${esc(String(g.turnLimit || 4))} 回合。</span><button type="button" class="secondary small-btn" data-action="group-discard">結束</button><button type="button" class="primary small-btn" data-action="group-continue">繼續</button></div>`;
     let after = g.afterAsk;  // worked out over the whole discussion by the Mac, since the page may hold only its newest part
     if (!after) { const messages = groupMsgs(g), lastAsk = messages.map(m => m.role).lastIndexOf('user'), since = messages.slice(lastAsk + 1).filter(m => m.role === 'assistant' && m.content && !m.checkOf); after = {replies: since.length, card: since.some(m => m.card)}; }
-    return after.replies >= 2 && !after.card ? `<div class="group-bar"><span></span><button type="button" class="secondary small-btn" data-action="group-summarize">整理結論（多用一次模型請求）</button></div>` : '';
+    return after.replies >= 2 && !after.card ? `<div class="group-bar"><span></span><button type="button" class="secondary small-btn" data-action="group-summarize" title="請主持人（沒有主持人時由第一位成員）把這次的討論整理成結論">請大家做個總結（會多用 1 次額度）</button></div>` : '';
   }
 
   const CARD_PARTS = [['conclusion', '結論'], ['decisions', '需要你決定'], ['actions', '待辦'], ['questions', '仍有疑問']];
@@ -91,7 +118,7 @@
     if (!othersIn(g, m)) return '';
     const last = checksOf(g, m).slice(-1)[0];
     if (last && (last.status === 'running' || checkFailed(last))) return '';
-    return `<div class="msg-actions"><button type="button" class="link" data-action="group-verify" data-id="${esc(m.id)}">請其他成員查核</button></div>`;
+    return `<div class="msg-actions"><button type="button" class="link" data-action="group-verify" data-id="${esc(m.id)}" title="請另一位成員（優先找別家的模型）核對這則回覆的事實、數字和檔案，結果寫在這則下面">請其他成員查核</button>${groupMsgs(g).filter(x => x.role === 'assistant' && !x.checkOf && x.content).slice(-1)[0]?.id === m.id ? '<span class="verify-hint">另一位成員核對事實、數字和檔案，會多用 1 次額度</span>' : ''}</div>`;  // said once, under the newest reply (#95)
   };
 
   async function verifyGroupMessage(g, id, anyway = false) {
@@ -104,9 +131,13 @@
   }
   // A check that is still running is read again every few seconds until it finishes or fails, even if the discussion's own
   // polling stopped early (a dropped request, a reply that arrived while an older full refresh was still on its way).
+  // #215②: a check still marked 「正在查核」 after the Mac said the run is over (left behind) is not asked about again and again;
+  // only when the discussion changes after that.
+  if (!state.groupQuiet) state.groupQuiet = {};
+  const groupNeedsPoll = g => g.status === 'running' || (groupMsgs(g).some(x => x.checkOf && x.status === 'running') && state.groupQuiet[g.id] !== groupFileMark(g));
   setInterval(() => {
     const g = state.data && state.page === 'chat' && state.groupId ? activeGroup() : null;
-    if (g && !state.groupPollers[g.id] && (g.status === 'running' || groupMsgs(g).some(x => x.checkOf && x.status === 'running'))) pollGroup(g.id);
+    if (g && !state.groupPollers[g.id] && groupNeedsPoll(g)) pollGroup(g.id);
   }, 2500);
 
   // 檔案 tab of the group's detail panel.

@@ -70,7 +70,7 @@ class CheckView(unittest.TestCase):
         self.assertIn(r"!/^(~\$|\.~lock\.)/.test(f.name)", self.js); self.assertIn(r"/[\w.\-$]/.test(before)", self.js)
 
     def test_running_check_is_read_again_until_it_ends(self):
-        self.assertRegex(self.js, r"setInterval\(\(\) => \{[^}]*x\.checkOf && x\.status === 'running'[^}]*pollGroup\(g\.id\)")
+        self.assertRegex(self.js, r"const groupNeedsPoll = g => g\.status === 'running' \|\| \(groupMsgs\(g\)\.some\(x => x\.checkOf && x\.status === 'running'\)"); self.assertRegex(self.js, r"setInterval\(\(\) => \{[^}]*groupNeedsPoll\(g\)\) pollGroup\(g\.id\)")  # a left-over check stops asking (#215②)
         self.assertIn('if (changed) state.loads = (state.loads || 0) + 1;', self.js)  # an older full refresh cannot undo what a poll brought
 
 

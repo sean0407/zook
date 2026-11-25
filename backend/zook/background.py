@@ -177,14 +177,52 @@ class TailFile:
         except OSError: pass
 
 
+class _AfterStart:
+    """A runner's input. Its first line is its settings (sent off to the side, bg_popen), so what Zook writes for the CLI waits
+    until the runner has reported its CLI (or failed to). fed: every message queued for it is written through (or never will be),
+    for bg_starting. A kept CLI's message, or one added during its reply, is counted when it is queued (expect) and when flushed."""
+    def __init__(self, pipe, settled, fed): self.pipe, self.settled, self.fed, self.waiting, self.lock = pipe, settled, fed, 0, threading.Lock()
+    def expect(self):
+        with self.lock: self.waiting += 1; self.fed.clear()
+    def write(self, data):
+        self.settled.wait(30)
+        try: return self.pipe.write(data)
+        except BaseException:
+            with self.lock: self.waiting = 0; self.fed.set()  # its writer stops: what is queued will never get there
+            raise
+    def flush(self):
+        try: self.pipe.flush()
+        finally:
+            with self.lock:
+                self.waiting = max(0, self.waiting - 1)
+                if not self.waiting: self.fed.set()  # written through to the runner, not only buffered here
+    def close(self):
+        try: self.pipe.close()
+        finally: self.fed.set()
+
+
 class HostedProc:
-    """A CLI under a runner, with the parts of a subprocess.Popen that Zook uses. pid is the CLI's own (its process group)."""
-    def __init__(self, folder, info, key, runner=None, offset=0, salt='', started=''):
+    """A CLI under a runner, with the parts of a subprocess.Popen that Zook uses. pid is the CLI's own (its process group).
+    Made without info, it is still starting (#290): pid and port are known once its runner reports them (load, bg_ready)."""
+    def __init__(self, folder, info, key, runner=None, offset=0, salt='', started='', runner_pid=0):
         self.folder, self.key, self.runner, self.salt, self.started = pathlib.Path(folder), key, runner, salt, started  # key: this run's control key
-        self.pid, self.runner_pid, self.port = int(info['cli']), int(info['runner']), int(info['port'])
+        self.pid = self.port = None; self.runner_pid = int(runner_pid or 0)
+        self.ready, self.settled, self.fed, self.start_by, self.job_id, self.adopting = threading.Event(), threading.Event(), threading.Event(), 0.0, '', False
+        if not runner: self.fed.set()  # taken up after a restart: nothing more is written to it
+        if info: self.take(info)
         self.returncode, self.stopped, self.checked = None, '', 0.0
-        self.stdin = runner.stdin if runner else _NoInput()
+        self.stdin = _AfterStart(runner.stdin, self.settled, self.fed) if runner else _NoInput()
         self.stdout, self.stderr = TailFile(self.folder / 'out', self, offset), TailFile(self.folder / 'err', self)
+
+    def take(self, info):
+        self.pid, self.runner_pid, self.port = int(info['cli']), int(info['runner']), int(info['port']); self.ready.set(); self.settled.set()
+
+    def load(self):
+        """Whether its runner has reported its CLI: read once it is there, only from this very runner."""
+        if self.ready.is_set(): return True
+        info = bg_info(self.folder)
+        if info and (not self.runner_pid or info['runner'] == self.runner_pid): self.take(info)
+        return self.ready.is_set()
 
     def poll(self):
         if self.returncode is not None: return self.returncode
@@ -196,7 +234,7 @@ class HostedProc:
         elif time.monotonic() - self.checked > 1:
             self.checked = time.monotonic()
             gone = self.runner.poll() is not None if self.runner else not runner_alive(self.folder, self.runner_pid, self.started)
-            if gone and not (self.folder / 'exit').exists() and not pid_alive(self.pid): self.returncode = -9  # ended by force, with its CLI
+            if gone and not (self.folder / 'exit').exists() and not (self.load() and pid_alive(self.pid)): self.returncode = -9  # ended by force, with its CLI
         return self.returncode
 
     def wait(self, timeout=None):
@@ -208,6 +246,7 @@ class HostedProc:
 
     def control(self, value):
         """Signed with the runner key (the key itself is never sent); the answer must prove it came from the runner."""
+        if not self.load(): raise OSError('the runner is still starting')
         body, nonce, when = json.dumps(value).encode(), secrets.token_hex(16), str(int(time.time() * 1000))
         conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
         try:
@@ -222,8 +261,11 @@ class HostedProc:
         A runner that cannot be reached is asked to end it with SIGTERM, when it is still that runner (pid and start time). The
         CLI's own number is never signalled from here. Nothing once it ended."""
         if self.poll() is not None: return False
+        if not self.load() and self.runner is not None:  # still starting, under this Zook: ended (its CLI never starts, or goes with it)
+            try: self.runner.send_signal(signal.SIGKILL if sig == signal.SIGKILL else signal.SIGTERM); return True
+            except OSError: return False
         try: return bool(self.control({'action': 'signal', 'sig': int(sig)}).get('sent'))
-        except (OSError, ValueError, http.client.HTTPException): return bg_kill_runner(self.folder, self.runner_pid, self.started)
+        except (OSError, ValueError, http.client.HTTPException): return bg_kill_runner(self.folder, self.runner_pid, self.started, signal.SIGKILL if sig == signal.SIGKILL else signal.SIGTERM)
 
     def size(self):
         try: return (self.folder / 'out').stat().st_size
@@ -250,10 +292,11 @@ def runner_state(folder, pid, started):
     return 'yes' if started and when == started and str(folder) in (command or '') else 'no'
 
 
-def bg_kill_runner(folder, pid, started):
-    """Ask a runner that cannot be reached to stop: its SIGTERM ends its CLI's whole group (runner.py). Only that very runner."""
+def bg_kill_runner(folder, pid, started, sig=signal.SIGTERM):
+    """Ask a runner that cannot be reached to stop: its SIGTERM ends its CLI's whole group (runner.py); a forced stop (SIGKILL)
+    ends it at once and its placeholder ends the group. Only that very runner."""
     if not runner_alive(folder, pid, started): return False
-    try: os.kill(int(pid), signal.SIGTERM); return True
+    try: os.kill(int(pid), sig); return True
     except OSError: return False
 
 
@@ -266,7 +309,8 @@ def bg_info(folder):
 
 def bg_popen(app, job, args, cwd, env, use_stdin, kind, live=False, name=None):
     """Lock held. The CLI for this reply: under a runner when it may go on while Zook is closed, otherwise started as before.
-    A reply being taken up after a restart gets its running CLI back instead."""
+    A reply being taken up after a restart gets its running CLI back instead. A runner's report of its CLI is waited for after the
+    lock is let go (bg_ready): only what must be on disk before the runner gets its settings is done here."""
     store = app.store
     if job.get('reattach') and job.get('runner'): return bg_adopt(app, job)
     base = store.dir / 'runs'
@@ -294,21 +338,61 @@ def bg_popen(app, job, args, cwd, env, use_stdin, kind, live=False, name=None):
     def send():
         try: runner.stdin.write(json.dumps(cfg, ensure_ascii=False).encode('utf-8') + b'\n'); runner.stdin.flush()
         except (OSError, ValueError): pass
-    threading.Thread(target=send, daemon=True).start()  # a runner that does not read never holds Zook here: the time below still runs
-    end = time.monotonic() + 15
-    while True:
-        info = bg_info(folder)
-        if info: break
-        if (folder / 'exit').exists() or runner.poll() is not None or time.monotonic() > end:
-            # The CLI may have started: the runner ends it (SIGTERM), or its placeholder does once the runner is gone.
-            try: runner.send_signal(signal.SIGTERM); runner.wait(timeout=5)
-            except (OSError, subprocess.TimeoutExpired):
-                try: runner.kill(); runner.wait(timeout=5)
-                except (OSError, subprocess.TimeoutExpired): pass
-            job['mayHaveActed'] = not (folder / 'exit').exists() or bool(bg_info(folder))  # not tried on another model unless it never started
-            bg_remove(folder); job.pop('runner', None); raise FileNotFoundError('無法啟動 CLI。')
+    threading.Thread(target=send, daemon=True).start()  # a runner that does not read never holds Zook here
+    # Its report is waited for after the lock is let go (bg_ready, #290): a slow start never holds up the rest of Zook.
+    proc = HostedProc(folder, None, cfg['key'], runner, 0, salt, started, runner.pid)
+    proc.start_by, proc.job_id = time.monotonic() + 15, job['id']
+    if not (use_stdin or live): proc.fed.set()  # its prompt is in its arguments: nothing is written to it
+    return proc
+
+
+def bg_ready(app, proc):
+    """Outside the store lock (#290): wait until the runner of a CLI just started (or taken up) reports it. Until then the run is
+    on disk already (job.runner) and in app.processes, so a stop finds it: its runner is ended (HostedProc.signal) and never starts
+    the CLI, or ends it. Zook closing waits for it (bg_starting). Raises when it does not get there, and nothing of it is left running."""
+    turn = proc if isinstance(proc, LiveTurn) else None
+    inner = getattr(getattr(proc, 'cli', None), 'proc', None) or proc
+    if not isinstance(inner, HostedProc) or inner.load(): return
+    folder = inner.folder
+    while not inner.load():
+        if inner.poll() is not None or time.monotonic() > inner.start_by: break
         time.sleep(0.01)
-    return HostedProc(folder, info, cfg['key'], runner, 0, salt, started)
+    if inner.load(): return
+    # The CLI may have started: the runner ends it (SIGTERM), or its placeholder does once the runner is gone.
+    if inner.runner is not None:
+        try: inner.runner.send_signal(signal.SIGTERM); inner.runner.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            try: inner.runner.kill(); inner.runner.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired): pass
+    else: bg_kill_runner(folder, inner.runner_pid, inner.started)
+    acted = True if inner.adopting else not (folder / 'exit').exists() or bool(bg_info(folder))
+    with app.store.lock:
+        job = app.store.find('jobs', inner.job_id)
+        if job is not None: job['mayHaveActed'] = acted  # not tried on another model unless it never started
+        if not inner.adopting:
+            if job is not None and (job.get('runner') or {}).get('dir') == folder.name: job.pop('runner', None)
+            bg_remove(folder)
+        app.store.save()
+    inner.settled.set(); inner.fed.set()
+    if turn is not None:  # a kept CLI that never came up is not used again
+        turn.cli.end(turn)
+        with app.__dict__.get('live_lock') or threading.Lock():
+            if app.__dict__.get('lives', {}).get(turn.cli.key) is turn.cli: live_close(app, turn.cli)
+    raise FileNotFoundError('無法接回背景中的回覆。' if inner.adopting else '無法啟動 CLI。')
+
+
+def bg_starting(app, seconds=20):
+    """Zook is closing, before bg_closing and outside the lock: a CLI whose runner has not reported it yet, or whose message is
+    not written yet, is waited for, as the lock once made Zook wait, so its message has reached it before what goes on in the
+    background is decided. From the snapshot on no CLI is started (no_starts, _run_attempt): bg_closing decides about the rest."""
+    with app.store.lock: procs = list(app.processes.values()); app.no_starts = True  # every CLI started so far is listed (same lock)
+    end = time.monotonic() + seconds; waited = False
+    for proc in procs:
+        inner = getattr(getattr(proc, 'cli', None), 'proc', None) or proc
+        if not isinstance(inner, HostedProc): continue
+        for event in (inner.settled, inner.fed):  # its runner has its settings and has reported, then its message is through
+            if not event.is_set(): waited = True; event.wait(max(0, end - time.monotonic()))
+    return waited
 
 
 def bg_note(store, job, proc, live, cost=0.0):
@@ -351,17 +435,14 @@ def bg_alive(store, job):
 
 def bg_adopt(app, job):
     """Lock held. The CLI of a reply that is being taken up. One that ended meanwhile is only read. A running one is told where
-    Zook is now, once it has proved it is that reply's runner (off to the side: the lock is held here)."""
+    Zook is now, once it has proved it is that reply's runner (off to the side: the lock is held here). One whose runner is still
+    starting its CLI is waited for after the lock is let go (bg_ready)."""
     store = app.store; folder = bg_folder(store, job); info = bg_info(folder) if folder else None; known = job['runner']
     job.pop('reattach', None)
     if not bg_alive(store, job): job['mayHaveActed'] = True; raise FileNotFoundError('無法接回背景中的回覆。')
-    end = time.monotonic() + 10
-    while not info and time.monotonic() < end: time.sleep(0.1); info = bg_info(folder)  # a runner still starting its CLI
-    if not info:  # it never got there: ended, and the reply is not tried again elsewhere (the CLI may have begun)
-        bg_kill_runner(folder, known['pid'], known.get('started') or ''); job['mayHaveActed'] = True
-        raise FileNotFoundError('無法接回背景中的回覆。')
     salt = str(known.get('salt') or '')
-    proc = HostedProc(folder, info, bg_secret(store, 'control', folder.name, salt), None, int(known.get('offset') or 0), salt, known.get('started') or ''); proc.live = bool(known.get('live'))
+    proc = HostedProc(folder, info, bg_secret(store, 'control', folder.name, salt), None, int(known.get('offset') or 0), salt, known.get('started') or '', known['pid']); proc.live = bool(known.get('live'))
+    proc.start_by, proc.job_id, proc.adopting = time.monotonic() + 10, job['id'], True  # one still starting its CLI: waited for in bg_ready
     if proc.poll() is None and app.workers.get(job['id']):
         attach = {'action': 'attach', 'url': 'http://127.0.0.1:%d/api/worker/%s' % (app.server_address[1], job['id']), 'pid': os.getpid()}  # no secret in it
         def tell():

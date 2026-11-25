@@ -42,6 +42,7 @@
   });
   document.addEventListener('input', e => {
     if (e.target.id === 'chat-input' && activeGroup()) scheduleGroupEstimate();
+    if ('memberSearch' in (e.target.dataset || {})) filterGroupMembers(e.target);
     if (e.target.closest('#bot-form')) saveBotDraft(e.target.closest('form'));
     if (e.target.name === 'modelCustom') {
       const f = e.target.closest('form');
@@ -290,7 +291,7 @@
         const sending = g ? sendingAdd(g.id, 'groups/' + encodeURIComponent(g.id) + '/messages', {content, attachments, effort: pickedEffort(), mode: currentGroupMode(g)}, g.id)
           : sendingAdd(botId + '/' + (b?.chatId || ''), 'chat', {botId, content, attachments, effort: pickedEffort(), plan: !!state.plan[botId], long: !!state.long[botId]});
         if (!g) chooseChat(botId);  // sending here makes this conversation this window's own
-        pendingList().length = 0; input.value = ''; updateInputMirror();
+        pendingList().length = 0; keepPending(); input.value = ''; updateInputMirror();
         if (g) { delete state.groupMode[g.id]; state.groupEstimate = null; } else { state.plan[botId] = false; state.long[botId] = false; }
         render(true); $('#chat-input')?.focus();
         await sendingSend(sending);
@@ -395,8 +396,8 @@
         toast('已送出授權碼');
         state.accounts = await api('accounts'); render(true); pollAccounts();
       } else if (form.id === 'group-form') {
-        const d = new FormData(form), id = form.dataset.id;
-        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds'), hostId: d.get('hostId') || '', mode: d.get('mode') || 'free', turnLimit: Number(d.get('turnLimit')) || 4, ...(id ? {} : {clientId: onceId(form)})}, id ? 'PATCH' : 'POST');
+        const d = new FormData(form), id = form.dataset.id, keepAuto = groupKeepsAuto(form);  // #223②: not quietly saved as 自由
+        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds'), hostId: d.get('hostId') || '', ...(keepAuto ? {} : {mode: d.get('mode') || 'free'}), turnLimit: Number(d.get('turnLimit')) || 4, ...(id ? {} : {clientId: onceId(form)})}, id ? 'PATCH' : 'POST');
         closeModal();
         state.groupId = result.id;
         state.page = 'chat';

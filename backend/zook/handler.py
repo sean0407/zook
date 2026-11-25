@@ -634,10 +634,11 @@ class Handler(BaseHTTPRequestHandler):
                     return self.respond(201, {'name': name})
                 finally:
                     if temp.exists(): temp.unlink()
+            if len(parts) == 3 and parts[:2] == ['api', 'uploads'] and self.command == 'DELETE' and not self.device:
+                with store.lock: return self.respond(200, {'removed': upload_drop(store, parts[2])})  # × in the message box (#153②)
             if len(parts) == 3 and parts[:2] == ['api', 'uploads'] and self.command == 'GET' and not self.device:
                 meta = upload_meta(store, parts[2])
-                if not meta: return self.error(404, '找不到這個檔案。')
-                data = (store.dir / 'uploads' / meta['id'] / 'file').read_bytes()
+                if not meta or (data := upload_bytes(store, meta)) is None: return self.error(404, '找不到這個檔案。')  # #153⑤: a file gone from the disk too
                 kind = IMAGE_TYPES.get(pathlib.Path(meta['name']).suffix.lower())
                 return self.respond(200, data, kind or 'application/octet-stream')
             if path == '/api/team/draft' and self.command == 'POST' and not self.device:  # one model call; never under the store lock
@@ -812,10 +813,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self.respond(200, group_estimate(store, group, body.get('content', ''), mode))
                     if len(parts) >= 5 and parts[3] in ('tasks', 'gates'): return task_route(self, store, group, parts)  # 任務引擎 (taskcheck.py)
                     if len(parts) == 4 and parts[3] == 'stop' and self.command == 'POST':
-                        ids = group.get('activeJobIds') or ([group['activeJobId']] if group.get('activeJobId') else [])
-                        group.update(status='idle', runId=None, activeJobId=None, activeJobIds=[]); group_stopped(store, group)
-                        for job in [j for j in (store.find('jobs', x) for x in ids) if j]: self.server.cancel_job(job)
-                        store.save(); return self.respond(200, group)
+                        group_stop_now(self.server, store, group); store.save(); return self.respond(200, group)
                     return self.error(404, '找不到資源。')
                 if len(parts) == 3 and parts[:2] == ['api', 'memories'] and self.command == 'DELETE':
                     item = store.find('memories', parts[2])
@@ -914,7 +912,7 @@ def main():
     signal.signal(signal.SIGTERM, stop_server)
     threading.Thread(target=app.sync_remote, daemon=True).start()
     threading.Thread(target=app.schedule_loop, daemon=True).start()
-    trim_jobs(app.store); recover_deleted_bots(app.store)
+    trim_jobs(app.store); recover_deleted_bots(app.store); sweep_uploads(app.store, force=True)
     app.store.save()
     try: app.script_api = ScriptApi(app)  # for scripts on this Mac; every Bot starts with it switched off
     except OSError: app.script_api = None
@@ -927,6 +925,7 @@ def main():
     except KeyboardInterrupt: pass
     finally:
         app.closing = True  # replies end now because Zook is closing: what is waiting in line stays there for next time
+        bg_starting(app)  # a CLI still starting is waited for, as the lock once made it (background.py, #290)
         if app.__dict__.get('script_api'):
             try: app.script_api.close()
             except Exception: pass

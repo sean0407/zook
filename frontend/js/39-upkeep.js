@@ -249,8 +249,8 @@
   });
   const backupNames = list => list.slice(0, 5).map(n => `「${n}」`).join('、') + (list.length > 5 ? ` 等 ${list.length} 個` : '');
   // 還原: say first what will be gone and who is busy; afterwards, what came back and what was held in (#50).
-  async function backupRestore(name) {
-    let p = await api('backups/' + encodeURIComponent(name) + '/preview');
+  async function backupRestore(name, again) {
+    const p = await api('backups/' + encodeURIComponent(name) + '/preview');
     const b = p.backup, item = (state.backups || []).find(x => x.name === name), lost = p.lost;
     const gone = [lost.bots.length ? `${lost.bots.length} 個 Bot（${backupNames(lost.bots)}）` : '', lost.groups.length ? `${lost.groups.length} 個群組（${backupNames(lost.groups)}）` : '', lost.chats ? `${lost.chats} 段對話` : '', lost.messages ? `${lost.messages} 則訊息` : '', lost.memories ? `${lost.memories} 則記憶` : ''].filter(Boolean);
     const busyNames = p.busy.map(x => x.type === 'group' ? `群組「${x.name}」` : `Bot「${x.name}」`).join('、');
@@ -262,12 +262,21 @@
       '還原前的資料會另存一份「還原前」備份，想反悔就還原那一份。',
       p.syncOn ? '多台 Mac 同步會先停止，確認資料後再重新開啟。' : '',
       busyNames ? `${busyNames}正在回覆。按「停止後還原」會先停止它們。` : ''];
-    if (!(await ask({title: '還原這份備份？', lines, ok: busyNames ? '停止後還原' : '還原', danger: !!gone.length}))) return;
-    if (p.busy.length) await backupStopAll(name, p.busy);
-    const done = await post('backups/' + encodeURIComponent(name) + '/restore');
+    // Stopping and restoring are one request (backupplus.py), so a message waiting in line cannot start in between. The button shows
+    // 還原中… meanwhile. Something that started answering after this was shown is asked about once more, now with its name.
+    let done;
+    try {
+      if (!(await ask({title: '還原這份備份？', lines, ok: busyNames ? '停止後還原' : '還原', working: '還原中…', danger: !!gone.length,
+                        run: async () => { done = await post('backups/' + encodeURIComponent(name) + '/restore', p.busy.length ? {stop: true} : {}); }}))) return;
+    } catch (err) {
+      // Asked again only when someone is answering now (not when files are still being put back): never by the words of the error.
+      if (err.status === 409 && !again && (await api('backups/' + encodeURIComponent(name) + '/preview').catch(() => ({busy: []}))).busy.length) return backupRestore(name, true);
+      throw err;
+    }
     await refresh(); await loadUpkeep('settings');
-    const r = done.restored;
+    const r = done.restored, halted = (done.stopped || []).map(x => x.type === 'group' ? `群組「${x.name}」` : `Bot「${x.name}」`).join('、');
     const body = [`<p>現在有 ${r.bots} 個 Bot、${r.groups} 個群組、${r.chats} 段對話。</p>`,
+      halted ? `<p>還原前先停止了${esc(halted)}的回覆。</p>` : '',
       done.held?.length ? `<p>${esc(backupNames(done.held))}的權限先收窄為只限工作資料夾、先問。要放寬請在 Bot 的「編輯設定」改。</p>` : '',
       done.filesPending ? '<p>正在補回備份裡不見的檔案，完成後會通知。</p>' : '',
       done.syncStopped ? '<p class="muted">多台 Mac 同步已停止，確認資料後再到設定重新開啟。</p>' : '',
@@ -275,19 +284,6 @@
     modal('已還原', `<div class="modal-body">${body}</div>`, '<div class="modal-foot"><button class="primary" data-action="close-modal">知道了</button></div>');
     if (done.filesPending) backupWatch();
   }
-  // 停止後還原: stop each busy group and reply, then wait until nothing answers any more.
-  async function backupStopAll(name, busy) {
-    for (const x of busy) {
-      try { await post(x.type === 'group' ? 'groups/' + encodeURIComponent(x.id) + '/stop' : 'jobs/' + encodeURIComponent(x.id) + '/cancel', {}); } catch (_) {}
-    }
-    for (let i = 0; i < 40; i++) {
-      await new Promise(ok => setTimeout(ok, 500));
-      const left = (await api('backups/' + encodeURIComponent(name) + '/preview')).busy;
-      if (!left.length) return;
-      if (i === 39) throw new Error(left.map(x => x.type === 'group' ? `群組「${x.name}」` : `Bot「${x.name}」`).join('、') + '還沒停下來，資料沒有變動。稍後再試。');
-    }
-  }
-  // The top of 設定 links here: the section is far down.
 
   // A backup is one compressed file; older ones are plain text.
   async function backupText(file) {

@@ -86,23 +86,25 @@ def backup_check(data):
     return data
 
 
-def backup_restore(app, name):
-    """Lock held. Put a copy back. What is there now is saved first, so a restore can itself be undone."""
+def backup_restore(app, name, stop=False):
+    """Lock held. Put a copy back. What is there now is saved first, so a restore can itself be undone.
+    stop (停止後還原): what is answering now is stopped first, once the copy is known to be readable and 還原前 is written."""
     store = app.store
     path = backup_path(store, name)
     if not path: raise ValueError('找不到這份備份。')
-    busy = backup_busy(store)
-    if busy: raise Busy(backup_busy_text(busy))
     if store.__dict__.get('backup_restoring'): raise Busy('上一次還原的檔案還在補回，完成後再試。')
     if backup_too_big(path): raise ValueError('備份檔太大。')
     try: data = backup_check(backup_read(path))
     except (OSError, EOFError, UnicodeError, RecursionError, KeyError, _zipfile.BadZipFile): raise ValueError('這份備份無法讀取，資料沒有變動。')
+    busy = backup_busy(store)
+    if busy and not stop: raise Busy(backup_busy_text(busy))
     for bot in data['bots']: bot.pop('queue', None)  # messages that were waiting when the copy was made have been sent since
     for job in data.get('jobs') or []:  # a reply running when the copy was made belongs to the Zook that ran it: never started again here
         if isinstance(job, dict) and job.get('status') == 'running':
             for key in ('runner', 'runnerSalt', 'cliPid', 'interrupted', 'reattach'): job.pop(key, None)
             job.update(status='failed', error='備份當時這則回覆還沒完成。')
     safety = backup_write(store, 'safety', store.data); held = held_marks(store)
+    stopped = backup_stop_busy(app, store) if busy else []  # 停止後還原: only once the copy of what is there now is safely written
     halted = sync_halt(store)  # saved first: if Zook stops halfway, the older data is never sent to the other Macs
     # This Mac's own pairing, sign-ins and sync stay as they are: they belong to the machine, not to the copy.
     keep = {key: copy.deepcopy(store.data.get(key)) for key in ('remoteDevices', 'sync') if key in store.data}
@@ -134,7 +136,7 @@ def backup_restore(app, name):
         store.chat_forget()
         try: store.save(everything=True)
         except OSError: pass
-        raise ValueError('這份備份無法讀取，資料沒有變動。')
+        raise ValueError('這份備份無法讀取，資料沒有變動' + ('，但%s的回覆已經停止。' % '、'.join(x['name'] for x in stopped) if stopped else '。'))
     shutil.rmtree(str(aside), ignore_errors=True)
     restore_keep_access(here, fresh.data)  # and after the upgrades the loaded file got
     store.data = fresh.data; _active['data'] = store.data
@@ -147,7 +149,7 @@ def backup_restore(app, name):
         threading.Thread(target=backup_files_restore, args=(store, path), daemon=True).start()
     else: knowledge_requeue(store)  # 處理中 in the copy: read again, or said to be missing (knowledge.py)
     # Older data must not be sent to the other Macs as if it were new, nor its gaps as deletions: syncing stops until it is switched on again.
-    return safety, halted, dict(restored=backup_counts(store.data), held=held_names, filesPending=files)
+    return safety, halted, dict(restored=backup_counts(store.data), held=held_names, filesPending=files, stopped=stopped)
 
 
 def sync_halt(store):
@@ -467,9 +469,10 @@ def upkeep_route(handler, store, parts, path):
         name = backup_write(store, 'file', backup_check(handler.body(MAX_BACKUP_FILE).get('data'))); log_activity(store, 'backup', '從檔案加入一份備份')
         return handler.respond(201, dict(name=name, items=backup_list(store)))
     if n == 4 and parts[3] == 'restore' and method == 'POST':
-        try: safety, stopped, more = backup_restore(handler.server, parts[2])
+        try: safety, stopped, more = backup_restore(handler.server, parts[2], stop=handler.body().get('stop') is True)
         except Busy as exc: return handler.error(409, str(exc))
-        log_activity(store, 'backup', '還原備份 %s（還原前的資料另存為 %s）%s' % (parts[2], safety, '，並停止同步' if stopped else ''))
+        halted = '、'.join(('群組「%s」' if x['type'] == 'group' else 'Bot「%s」') % x['name'] for x in more['stopped'])
+        log_activity(store, 'backup', '還原備份 %s（還原前的資料另存為 %s）%s%s' % (parts[2], safety, '，並停止同步' if stopped else '', '；還原前先停止了%s的回覆' % halted if halted else ''))
         return handler.respond(200, dict(more, ok=True, safety=safety, syncStopped=stopped))
     if n == 3 and method == 'DELETE':
         found = backup_path(store, parts[2])
