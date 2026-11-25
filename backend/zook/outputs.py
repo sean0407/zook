@@ -107,6 +107,8 @@ def bot_outputs(store, bot):
         mine = [j for j in store.data['jobs'] if j.get('botId') == bot['id']]
         wrote = [(str((c.get('arguments') or {}).get('path') or ''), j.get('createdAt'), j.get('finishedAt')) for j in mine
                  for c in (j.get('toolCalls') or []) + [dict(name='native_write', arguments={'path': p}) for p in j.get('wrote') or []] if c.get('name') == 'native_write']
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()  # #53: written so far, before the reply ends; changed up to now
+        wrote += [(p, j.get('createdAt'), now) for j in mine if j.get('status') == 'running' for p in list((PROGRESS.get(j['id']) or {}).get('paths') or [])]
         said = [(j.get('content'), j.get('createdAt'), j.get('finishedAt')) for j in mine if j.get('content') and not j.get('plan')][-40:]  # a read-only plan makes nothing
         asked = []  # the folder the user sent the work to
         for j in mine[-40:]:
@@ -131,6 +133,7 @@ def bot_outputs(store, bot):
         # A reply only says it tried to write. The file counts when it really changed during that reply, in a place the Bot may use, and is not Zook's own data.
         real = os.path.realpath(path)
         if _inside(real, data_dir) and not _inside(real, workspace): continue
+        if _inside(real, attached): continue  # the user's own files are not outputs, however a reply reported them
         if scope == 'workspace' and not _inside(real, workspace): continue
         if scope == 'folder' and not (_inside(real, workspace) or (folder and _inside(real, folder))): continue
         add(real, since, until)

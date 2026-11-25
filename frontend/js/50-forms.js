@@ -42,6 +42,7 @@
   });
   document.addEventListener('input', e => {
     if (e.target.id === 'chat-input' && activeGroup()) scheduleGroupEstimate();
+    if ('memberSearch' in (e.target.dataset || {})) filterGroupMembers(e.target);
     if (e.target.closest('#bot-form')) saveBotDraft(e.target.closest('form'));
     if (e.target.name === 'modelCustom') {
       const f = e.target.closest('form');

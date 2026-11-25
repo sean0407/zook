@@ -1424,6 +1424,10 @@ button {
 .switch:disabled { opacity: .5; cursor: default; }
 .switch:focus-visible { outline: 2px solid #9cc4ff; outline-offset: 2px; }
 .member-pick { display: grid; }
+#group-form .member-pick { max-height: none; overflow: visible; }
+.member-switch[hidden] { display: none; }
+.member-search { width: 100%; margin: 0 0 8px; padding: 9px 12px; border: 1px solid #e3e3e3; border-radius: 10px; font: inherit; font-size: 14px; }
+.member-pick [data-member-none] { margin: 10px 4px; }
 .member-switch { display: flex; align-items: center; gap: 10px; padding: 9px 2px; border-bottom: 1px solid #f0f0f0; cursor: pointer; }
 .member-switch .member-copy { flex: 1; display: grid; gap: 2px; min-width: 0; }
 .member-switch .avatar { flex: none; }
@@ -1626,9 +1630,13 @@ button.run-row:hover { background: #f1f1f1; }
 .pill.bad { background: #fde8e6; color: #b3261e; }
 .group-files { display: grid; gap: 8px; padding: 10px 14px; }
 .group-file { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px solid #f0f0f0; }
-.group-file a { display: grid; grid-template-columns: minmax(0, 1fr); flex: 1 1 auto; min-width: 0; color: inherit; text-decoration: none; }
+.group-file .group-file-name { display: grid; grid-template-columns: minmax(0, 1fr); flex: 1 1 auto; min-width: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; text-decoration: none; }
+button.group-file-name { cursor: pointer; }
+button.group-file-name:hover strong { text-decoration: underline; }
+.group-file-icon { flex: none; font-size: 18px; }
+.group-file > a { flex-shrink: 0; white-space: nowrap; }
 .group-file strong { min-width: 0; overflow: hidden; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.group-file > button { flex-shrink: 0; white-space: nowrap; }
+.group-file > a, .group-file > button.link { flex-shrink: 0; white-space: nowrap; font-size: 13px; }
 .group-file-note { padding: 8px 10px; border-radius: 8px; background: #f3f7f3; color: #2f5d34; font-size: 12.5px; overflow-wrap: anywhere; }
 .group-file-note.has-failed { background: #fdf4f2; color: #8a3a2b; }
 .group-file-note ul { margin: 4px 0 0; padding-left: 18px; }

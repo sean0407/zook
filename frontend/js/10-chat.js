@@ -164,7 +164,7 @@
     } catch {
       body = {}
     }
-    if (!res.ok) throw Error(body.error || `請求失敗 (${res.status})`);
+    if (!res.ok) throw Object.assign(Error(body.error || `請求失敗 (${res.status})`), {status: res.status});
     return body;
   }
   const post = (path, body = {}, method = 'POST') => api(path, {
@@ -441,7 +441,7 @@
   }
   const groupFileMark = g => { const all = g.messages || []; return all.length + ':' + all.filter(m => m.status === 'completed' || m.role === 'system').length + ':' + (all[all.length - 1]?.id || ''); };
   // A member's copy of the group's files lives inside Zook's own data; the person only needs the file's name.
-  const hideInnerPaths = text => String(text).replace(MD_LINK, (whole, label, inner) => { const {path} = mdTarget(inner); if (!/\/workspaces\/[0-9a-f]{32}\//.test(path)) return whole; let name = path.split('/').pop(); try { name = decodeURIComponent(name); } catch (_) {} label = label.split('\n').map(x => x.trim()).join(' '); return label.includes(name) ? label + '（群組檔案）' : label + '：' + name + '（群組檔案）'; }).replace(/(?:…|\.\.\.)?(?:\/[^\s`'"<>()（）「」，、：]*)?\/workspaces\/[0-9a-f]{32}\/(?:[^\s`'"<>()（）「」，、]*\/)?([^\s`'"<>()（）「」，、\/]+)/g, '$1（群組檔案）').replace(/(群組檔案\s*[：:「]\s*)([^\n（]{1,200}?)（群組檔案）/g, '$1$2');  // 「群組檔案：X（群組檔案）」 says it once
+  const hideInnerPaths = text => String(text).replace(MD_LINK, (whole, label, inner) => { const {path} = mdTarget(inner); if (!/\/workspaces\/[0-9a-f]{32}\//.test(path)) return whole; let name = path.split('/').pop(); try { name = decodeURIComponent(name); } catch (_) {} label = label.split('\n').map(x => x.trim()).join(' '); return label.includes(name) ? label + '（群組檔案）' : label + '：' + name + '（群組檔案）'; }).replace(/(?:…|\.\.\.)?(?:\/(?:[^\s`'"<>()（）「」，、：]| (?=Support\/))*)?\/workspaces\/[0-9a-f]{32}\/(?:[^\s`'"<>()（）「」，、]*\/)?([^\s`'"<>()（）「」，、\/]+)/g, '$1（群組檔案）').replace(/(群組檔案\s*[：:「]\s*)([^\n（]{1,200}?)（群組檔案）/g, '$1$2').replace(/（群組檔案）(?:\s*（群組檔案）)+/g, '（群組檔案）').replace(/([^\s（(\[\]]{1,200}?)(?:（群組檔案）)?\s*[（(]\1（群組檔案）[)）]/g, '$1（群組檔案）');  // 「群組檔案：X（群組檔案）」 and 「X (X（群組檔案）)」 say it once (#53②)
   function groupMessage(g, m) {
     if (m.compacted && !m.checkOf) return '<div class="compact-line"><span>前面的討論已整理成摘要，成員從這裡接續</span></div>' + groupMessage(g, Object.assign({}, m, {compacted: false}));
     if (m.checkOf) return '';
@@ -470,11 +470,11 @@
     const activeIds = g.activeJobIds?.length ? g.activeJobIds : g.activeJobId ? [g.activeJobId] : [];
     const activeNames = running ? activeIds.map(id => state.data.bots.find(b => b.id === state.jobDetails[id]?.botId)?.name).filter(Boolean) : [];
     const active = activeNames.length ? {name: activeNames.join('、')} : null;
-    return `${detailBackdrop()}<aside class="detail" aria-label="詳情"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatarStack(g,'big')}<h2>${esc(g.name)}</h2><p>${members.length} 位成員${running ? ' · 討論中' + (active ? '（' + esc(active.name) + ' 發言中）' : '') : ''}</p><button class="secondary detail-edit" data-action="edit-group">編輯群組</button></div><div class="tabs"><button data-action="group-tab" data-id="members" class="${state.groupTab==='files'?'':'active'}">成員</button><button data-action="group-tab" data-id="files" class="${state.groupTab==='files'?'active':''}">檔案</button></div>${state.groupTab==='files'?groupFilesTab(g):`${[...members].sort((a, b) => (b.id === hostId) - (a.id === hostId)).map(b => `<button class="member-row" data-member-work="${esc(b.id)}" data-group="${esc(g.id)}" title="${esc(permText(b))}">${avatar(b)}<span><strong>${esc(b.name)}${jobTitle(b)}${b.id === hostId ? ' <span class="pill host-pill">主持人</span>' : ''}</strong><small>${esc([providerShort(b.provider||state.data.settings.provider||'') + (b.model ? ' ' + b.model : ''), memberAccess(b), (g.memberCounts?.[b.id] ? '發言 ' + g.memberCounts[b.id] + ' 次' : '')].filter(Boolean).join(' · '))}</small></span></button>`).join('')}<div class="detail-empty">點成員會開啟他自己的對話視窗，可以看到他在這個討論中查了什麼、用了哪些 Skill；群組裡只有他的結論。</div>`}${usageDock()}</aside>`;
+    return `${detailBackdrop()}<aside class="detail" aria-label="詳情"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatarStack(g,'big')}<h2>${esc(g.name)}</h2><p>${members.length} 位成員${running ? ' · 討論中' + (active ? '（' + esc(active.name) + ' 發言中）' : '') : ''}</p><button class="secondary detail-edit" data-action="edit-group">編輯群組</button></div><div class="tabs"><button data-action="group-tab" data-id="members" class="${state.groupTab==='files'?'':'active'}">成員</button><button data-action="group-tab" data-id="files" class="${state.groupTab==='files'?'active':''}">檔案</button></div>${state.groupTab==='files'?groupFilesTab(g):`${[...members].sort((a, b) => (b.id === hostId) - (a.id === hostId)).map(b => `<button class="member-row" data-member-work="${esc(b.id)}" data-group="${esc(g.id)}" title="${esc(permText(b))}">${avatar(b)}<span><strong>${esc(b.name)}${jobTitle(b)}${b.id === hostId ? ' <span class="pill host-pill">主持人</span>' : ''}</strong><small>${esc([botModelLine(b, false), memberAccess(b), (g.memberCounts?.[b.id] ? '發言 ' + g.memberCounts[b.id] + ' 次' : '')].filter(Boolean).join(' · '))}</small></span></button>`).join('')}<div class="detail-empty">點成員會開啟他自己的對話視窗，可以看到他在這個討論中查了什麼、用了哪些 Skill；群組裡只有他的結論。</div>`}${usageDock()}</aside>`;
   }
   function groupModal(g = {}) {
     const editing = !!g.id, chosen = new Set(g.botIds || (state.selected && !state.groupId ? [state.selected] : []));
-    modal(editing ? '編輯群組' : '新增群組', `<form id="group-form"><div class="modal-body">${editing ? '' : teamLink()}<label class="field">名稱<input name="name" maxlength="100" placeholder="留空則以成員名稱命名" value="${esc(g.name||'')}"></label><label class="field">成員（2–10 個 Bot，人越多每輪越慢）</label><div class="member-pick">${state.data.bots.map(b => `<label class="member-switch">${avatar(b)}<span class="member-copy"><strong>${esc(b.name)}</strong><small>${esc((b.persona||b.instructions||'').slice(0,50))}</small></span>${toggle(`name="botIds" value="${esc(b.id)}"`, chosen.has(b.id), b.name)}</label>`).join('') || '<p class="muted">請先建立 Bot。</p>'}</div>${groupSettingRows(g, chosen)}</div><div class="modal-foot">${editing?'<button type="button" class="link" data-action="delete-group" style="margin-right:auto;color:#b55">刪除群組</button>':''}<button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">${editing?'儲存':'建立群組'}</button></div></form>`);
+    modal(editing ? '編輯群組' : '新增群組', `<form id="group-form"><div class="modal-body">${editing ? '' : teamLink()}<label class="field">名稱<input name="name" maxlength="100" placeholder="留空則以成員名稱命名" value="${esc(g.name||'')}"></label>${groupSettingRows(g, chosen)}<label class="field">成員（2–10 個 Bot，人越多每輪越慢）</label>${state.data.bots.length > 6 ? '<input type="search" class="member-search" data-member-search placeholder="搜尋 Bot 名稱或職稱" aria-label="搜尋成員" autocomplete="off">' : ''}<div class="member-pick">${state.data.bots.map(b => `<label class="member-switch" data-find="${esc((b.name + ' ' + (b.jobTitle || '')).toLowerCase())}">${avatar(b)}<span class="member-copy"><strong>${esc(b.name)}</strong><small>${esc((b.persona||b.instructions||'').slice(0,50))}</small></span>${toggle(`name="botIds" value="${esc(b.id)}"`, chosen.has(b.id), b.name)}</label>`).join('') || '<p class="muted">請先建立 Bot。</p>'}<p class="muted small" data-member-none hidden>沒有符合的 Bot。</p></div></div><div class="modal-foot">${editing?'<button type="button" class="link" data-action="delete-group" style="margin-right:auto;color:#b55">刪除群組</button>':''}<button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">${editing?'儲存':'建立群組'}</button></div></form>`);
     $('#group-form').dataset.id = g.id || '';
     groupFormNote($('#group-form'));
   }
@@ -497,7 +497,7 @@
         }
         for (const j of Object.values(state.jobDetails)) if (j.groupId === groupId && j.stopping && !(data.jobs || []).some(x => x.id === j.id)) { delete j.stopping; changed = true; }  // ended meanwhile
         if (changed) render(true);
-        if (data.group.status !== 'running' && !(data.jobs || []).some(j => j.stopping)) { if (state.groupTab === 'files') delete state.groupFiles[groupId]; if (state.groupId === groupId) render(true); break; }
+        if (data.group.status !== 'running' && !(data.jobs || []).some(j => j.stopping)) { state.groupQuiet[groupId] = groupFileMark(data.group); if (state.groupTab === 'files') delete state.groupFiles[groupId]; if (state.groupId === groupId) render(true); break; }
         await new Promise(r => setTimeout(r, 1200));
       }
     } catch (e) { toast(e.message); }
@@ -600,7 +600,10 @@
   const choiceOptions = (provider, account) => {
     const list = (state.providers || [{id: 'codex', name: 'Codex'}, {id: 'claude', name: 'Claude'}]);
     const picked = provider === 'auto' ? 'auto' : (provider || '') + (account ? '::' + account : '');
-    const mark = value => { const [p, a] = value.split('::'); return p === 'auto' ? '' : levelMark(accountLevel(p || state.data.settings.provider || 'codex', a || '')); };  // 已用完／剩不到 20%
+    // 已用完／剩不到 20% (#154③). Reading every account live can take a while; until it is back, a CLI's own sign-in goes by the
+    // figures the sidebar rings already have, so the words are in the list before anything is picked.
+    const ringMark = id => { const r = (state.data?.rings || []).find(x => x.id === id); return !r || r.left == null ? '' : r.left <= 0 ? '・已用完' : r.left < 20 ? '・剩不到 20%' : ''; };
+    const mark = value => { const [p, a] = value.split('::'), id = p || state.data.settings.provider || 'codex'; return p === 'auto' ? '' : !state.quota && !a ? ringMark(id) : levelMark(accountLevel(id, a || '')); };
     const opt = (value, label) => `<option value="${esc(value)}" ${picked === value ? 'selected' : ''}>${esc(label + mark(value))}</option>`;
     const kept = !provider && account ? list.flatMap(p => p.accounts || []).find(a => a.id === account) : null;  // an older Bot: the default CLI with one of its extra accounts
     const fallback = list.find(p => p.id === (state.data.settings.provider || 'codex')), short = String(fallback?.name || state.data.settings.provider || 'Codex').split('（')[0];
