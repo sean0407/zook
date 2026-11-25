@@ -265,7 +265,7 @@ def task_transcript(store, group, limit=12, bot_id=None):
     names = {b['id']: b['name'] for b in store.data['bots']}
     said = [m for m in group['messages'] if m.get('content') and m.get('role') in ('user', 'assistant') and not m.get('taskId') and not m.get('waiting')]  # 插話 waits for the end of the run
     def line(m):
-        text = ('使用者' if m['role'] == 'user' else names.get(m.get('botId'), '已刪除的 Bot')) + '：' + m['content'][:2000]
+        text = ('使用者' if m['role'] == 'user' else names.get(m.get('botId'), '已刪除的 Bot')) + '：' + m['content'][:2000] + (date_check_note(m) if m['role'] == 'user' else '')
         if m.get('attachments') and bot_id:  # the copies were put in this Bot's own folder: name them, the original path may be out of its reach
             folder = store.dir / 'workspaces' / bot_id / 'attachments'
             text += '\n（附上的檔案，已放在你的工作資料夾：%s）' % '、'.join(str(folder / ('%s-%s' % (a['id'][:8], a['name']))) for a in m['attachments'])
