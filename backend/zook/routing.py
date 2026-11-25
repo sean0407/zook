@@ -445,6 +445,7 @@ def auto_on_create(store, bot, instructions=True, grant=False):
 def auto_on_edit(store, before, after, body):
     """Lock held. Saving a Bot: choosing 自動選擇 matches it again; a model chosen by hand ends the automatic match; a Bot that was
     matched automatically and whose work changed is matched again. Returns what to tell the user, or ''."""
+    if after.get('localLimit') and not before.get('localLimit'): held_tell(store, [after.get('name')], '在手機上換了這個 Bot 的模型')  # local_choice(local=False)
     if after.get('provider') == AUTO:
         if body.get('provider') != AUTO: return ''
         reason = auto_on_create(store, after, grant=True)  # the user chose 自動選擇 here, now
@@ -546,9 +547,10 @@ def auto_migrate(store):
 def auto_retry(store):
     """Lock held. Bots still waiting to be matched (no model could be picked before) get one now if one can; each is recorded by
     itself, so a Bot left waiting is tried again after the next sign-in check, and one that is matched is told once."""
-    changed = False
+    changed, held, quiet = False, held_marks(store), set()
     for bot in store.data['bots']:
-        if bot.get('autoRematch'): changed = _auto_rematch_old(store, bot) or changed
+        if bot.get('autoRematch'):
+            changed = _auto_rematch_old(store, bot) or changed; quiet.add(bot.get('id'))  # its own line already says it was held in (_held_note)
         if bot.get('provider') != AUTO or not bot.get('autoPending'): continue
         reason = auto_assign(store, bot)
         if reason: changed = True; log_activity(store, 'bot', 'Bot「%s」原本用自動選擇，現在固定配好：%s。可以在編輯 Bot 改。' % (bot['name'], reason), by='Zook')
@@ -556,6 +558,7 @@ def auto_retry(store):
             bot['autoPendingTold'] = True; changed = True
             log_activity(store, 'bot', 'Bot「%s」用自動選擇，目前沒有能配的模型，先維持每則訊息自動挑；帳號可用時會再配。' % bot['name'], by='Zook')
         if reason: bot.pop('autoPendingTold', None)
+    held_told(store, held, '自動選擇幫這些 Bot 配了模型或改配', quiet)
     if changed: store.save()
 
 

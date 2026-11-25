@@ -287,7 +287,7 @@ def sync_pass(app):
         with store.lock:
             if sync_state(store) is not state or state.get('folder') != folder: return dict(on=False)  # switched off, moved or put back from a backup meanwhile
             marks = sync_marks(store); stamps, tombs = marks['stamps'], marks['tombs']
-            before = _digest([stamps, tombs])
+            before = _digest([stamps, tombs]); held = held_marks(store)
             joining = not stamps  # first round on this Mac: where both sides have the same item, the folder's version is taken
             local = sync_items(store); busy = _busy_bots(store)
             waiting = lambda key: key.split(':')[0] in ('bots', 'chats') and key.split(':')[1] in busy
@@ -343,6 +343,7 @@ def sync_pass(app):
             if took or conflicts or state.get('lastError') or names != state.get('others'):
                 state.update(lastAt=NOW(), lastError='', others=names); store._chat_swept = 0; store.save()  # another Mac's changes can be in any conversation: look at all of them now
             else: state['lastAt'] = NOW()  # nothing to write down: the time is only shown
+            held_told(store, held, '從另一台 Mac 同步來的 Bot，或另一台 Mac 換了它的模型')
         target = os.path.join(folder, 'zook-sync-%s.json' % own)
         if changed or took or folder in _sync_unwritten or not os.path.exists(target):
             with store.lock:  # written under the lock: a backup put back meanwhile has stopped syncing, and nothing from before it is published

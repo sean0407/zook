@@ -15,6 +15,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
         self.installs = {}
         self.updater = Updater(lambda: bg_busy(self))  # a reply that goes on under its runner does not hold an update back (background.py)
         self.notices, self.notice_seq = [], 0  # for Mac notifications; the window asks for new ones
+        held_attach(self)  # Bots Zook held in while it started are told now (gate.py)
 
     def notify(self, title, body, kind, target_id, message_id, always=False):
         """Queue a Mac notification. Lock held. Schedule notices follow the 通知 switch; the others are always shown."""
@@ -786,6 +787,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 update(new, dict({k: args[k] for k in ('name', 'jobTitle', 'persona', 'instructions', 'color') if args.get(k)}, **chosen), 'bot')
                 hold_in(new)  # made by a Bot, not by the user: never the whole Mac
                 auto_on_create(store, new); ensure_chats(new); store.data['bots'].append(new); store.save(); watch_auto_status(store, new)  # 自動選擇: its model is fixed now
+                held_tell(store, [new['name']], '管理員 Bot「%s」建立了新 Bot' % bot['name'])
             self.want_intro(new['id'])  # its greeting, from the persona just written
             done = dict(provider=new.get('provider') or AUTO, model=new.get('model') or '', account=(find_account(new.get('account')) or {}).get('name') or '預設帳號', effort=new.get('effort') or '預設')
             return dict({'created': new['name'], 'id': new['id'], 'applied': done}, **({'notApplied': notes} if notes else {}))  # say only what is in 'applied'
