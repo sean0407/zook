@@ -1,5 +1,5 @@
   // Group discussions: host, discussion mode, turn limit, conclusion cards, cross-checks and shared files.
-  const GROUP_MODE_OPTIONS = [{id: 'free', name: '自由', hint: '相關成員回覆，可以互相 @'}, {id: 'turns', name: '輪流', hint: '依序各發言一次'}, {id: 'debate', name: '辯論', hint: '正反交鋒，最後裁定'}, {id: 'split', name: '分工', hint: '拆開工作，最後彙整'}, {id: 'compare', name: '比較', hint: '各自獨立回答，列出異同'}];
+  const GROUP_MODE_OPTIONS = [{id: 'free', name: '自由', hint: '相關成員回覆，可以互相 @'}, {id: 'turns', name: '輪流', hint: '依序各發言一次'}, {id: 'debate', name: '辯論', hint: '正反交鋒，最後裁定'}, {id: 'split', name: '主持人分工', hint: '主持人拆開工作，驗收後彙整'}, {id: 'compare', name: '比較', hint: '各自獨立回答，列出異同'}];
   if (!state.groupMode) state.groupMode = {};
   if (!state.groupFiles) state.groupFiles = {};
   const currentGroupMode = g => { const mode = state.groupMode[g.id] || g.mode || 'free'; return mode === 'auto' && !taskEngineOn() ? 'free' : mode; };
@@ -28,7 +28,7 @@
     const key = g.id + currentGroupMode(g) + ':' + (g.messages || []).length;
     try {
       const e = await post('groups/' + encodeURIComponent(g.id) + '/estimate', {content: $('#chat-input')?.value || '', mode: currentGroupMode(g)});
-      const text = `預計${e.upTo ? '最多 ' : ' '}${e.replies} 次回覆`;  // the token figure meant nothing to people and looked alarming
+      const text = `預計${e.upTo ? '最多 ' : ' '}${e.replies} 次回覆${e.most ? `（主持人退回修正時最多 ${e.most} 次）` : ''}`;  // the token figure meant nothing to people and looked alarming
       state.groupEstimate = {key, text};
       const el = $('#group-estimate');
       if (el && activeGroup()?.id === g.id) el.textContent = text;
@@ -135,7 +135,7 @@
   document.addEventListener('click', e => { const el = e.target.closest?.('[data-member-older]'); if (el && state.memberWork) { const g = state.data.groups.find(x => x.id === state.memberWork.group), b = state.data.bots.find(x => x.id === state.memberWork.bot); if (g && b) loadMemberTurns(g, b, true); } });
   // Everything one member did for one turn, in order: Skills, connectors, tools, pages and files it looked at.
   function workSteps(calls, running) {
-    return `<ol class="work-list">${calls.slice(0, 200).map(c => { let [cls, label] = callStatus(c); if ((cls === 'wait' || cls === 'run') && !running) [cls, label] = ['bad', '已中斷']; return `<li class="tool-event ${cls}" title="${esc(label + (c.name === 'native_command' && (c.arguments?.summary || c.arguments?.command) ? '：' + (c.arguments.summary || c.arguments.command) : ''))}"><span class="ev-dot ${cls}" role="img" aria-label="${esc(label)}"></span><span class="ev-text">${esc(describeCall(c))}</span></li>`; }).join('')}</ol>`;
+    return `<ol class="work-list">${calls.slice(0, 200).map(c => { let [cls, label] = callStatus(c); if ((cls === 'wait' || cls === 'run') && !running) [cls, label] = ['bad', '已中斷']; return `<li class="tool-event ${cls}" title="${esc(label + (c.name === 'native_command' && c.arguments?.summary ? '：' + c.arguments.summary : ''))}"><span class="ev-dot ${cls}" role="img" aria-label="${esc(label)}"></span><span class="ev-text">${esc(describeCall(c))}${evNote(cls, label)}</span></li>`; }).join('')}</ol>`;
   }
   function memberWork(b, g) {
     const jobs = {}; for (const j of Object.values(state.jobDetails)) if (j.groupId === g.id && j.botId === b.id) jobs[j.messageId] = j;

@@ -195,6 +195,7 @@ class StoreBase:
         remote_expiry_repair(self.data['settings'])  # mobile.py
         self.data.setdefault('remoteDevices', [])
         drop_removed_providers(self)  # OpenCode, GitHub Copilot and Kimi are no longer supported
+        plain_old_records(self)  # activity saved by earlier versions or a restored backup, in today's words (actwords.py)
         if 'sections' not in self.data['settings']:
             # Sidebar groups keep their own order, including groups that are empty for now.
             self.data['settings']['sections'] = list(dict.fromkeys(b.get('section') or '我的 Bots' for b in self.data.get('bots', []) if not b.get('pinned')))
@@ -785,7 +786,7 @@ def describe_call(call):
     if name == 'web_fetch':
         match = re.match(r'https?://([^/]+)', str(a.get('url') or '')); return '讀取網頁「%s」' % (match.group(1) if match else '網頁')
     if name == 'native_write': return '修改檔案「%s」' % base(a.get('path'))
-    if name == 'native_command': return '在工作資料夾執行指令'
+    if name == 'native_command': return str(a['summary'])[:200] if isinstance(a.get('summary'), str) and a['summary'] not in ('', '執行指令') else '在工作資料夾執行指令'
     fixed = {'zook_read_skill': '閱讀 Skill「%s」的說明' % (call.get('sourceLabel') or 'Skill'), 'zook_read_skill_resource': '查看 Skill 的參考資料「%s」' % base(a.get('path')),
              'zook_run_skill_helper': '執行 Skill 附帶的小程式', 'zook_native_gate': str(a.get('title') or '做需要核准的動作')[:200], 'zook_workspace_list': '查看工作區裡有哪些檔案', 'zook_group_file_read': '讀取群組共用檔案「%s」' % (a.get('name') or ''), 'zook_workspace_read': '讀取檔案「%s」' % base(a.get('path')),
              'zook_workspace_write': '把內容存成檔案「%s」' % base(a.get('path')), 'zook_list_team': '查看團隊裡有哪些 Bot 和群組', 'zook_create_bot': '新增 Bot「%s」' % (a.get('name') or ''),
@@ -965,6 +966,7 @@ def provider_chain(store, bot, provider, model):
 
 def fallback_reason(error):
     error = error or ''
+    if 'macOS' in error: return 'macOS 權限擋住'
     if '額度' in error or '上限' in error: return '額度已用完'
     if '尚未登入' in error or '重新登入' in error: return '尚未登入'
     if '找不到' in error or '安裝' in error: return '尚未安裝'

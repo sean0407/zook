@@ -17,6 +17,7 @@ open(os.environ['GROUP_LOG'], 'a').write(json.dumps(dict(name=name, role=role, k
 text = name + ' ' + role
 if role in ('verdict', 'split_merge', 'compare_diff', 'final'): text = '【結論】採用甲案\n【待你決定】無\n【行動項目】Alpha：寫計畫\n【未解問題】缺成本資料'
 if role in ('split_merge', 'split_remerge') and os.path.exists(os.environ['GROUP_LOG'] + '.sendback'): text = '【退回】Beta：申報欄改成公式\n' + text
+if role in ('split_merge', 'final') and os.path.exists(os.environ['GROUP_LOG'] + '.mention'): text += '\n@Beta 請修正申報欄'
 if role == 'verify': text = '【判定】有疑慮\n數字沒有來源'
 if role == 'verify' and os.path.exists(os.environ['GROUP_LOG'] + '.fail'): sys.stderr.write('boom\n'); sys.exit(3)
 if name == 'solo' and os.path.exists(os.environ['GROUP_LOG'] + '.slow'): import time; time.sleep(4)
@@ -157,6 +158,27 @@ class GroupModes(unittest.TestCase):
         self.assertEqual(self.req('POST', '/api/groups/%s/estimate' % g['id'], {'content': '@Beta 看一下', 'mode': 'debate'})[1]['replies'], 1)
         self.assertFalse(self.log.exists()); self.say(g, mode='turns')
         self.assertGreater(self.req('POST', '/api/groups/%s/estimate' % g['id'], {'content': '', 'mode': 'turns'})[1]['tokens'], 0)
+
+    def test_estimate_says_how_many_more_a_send_back_takes(self):
+        """#68⑦: 分工 with two members is 3 replies, but the host's check can send work back (fix, then merge again): up to 5."""
+        g = self.group(names=('Alpha', 'Beta'), hostId='')
+        e = self.req('POST', '/api/groups/%s/estimate' % g['id'], {'content': '', 'mode': 'split'})[1]
+        self.assertEqual((e['replies'], e['most']), (3, 5))
+        e = self.req('POST', '/api/groups/%s/estimate' % self.group(hostId='')['id'], {'content': '', 'mode': 'split'})[1]
+        self.assertEqual((e['replies'], e['most']), (4, 7))
+        self.assertNotIn('most', self.req('POST', '/api/groups/%s/estimate' % g['id'], {'content': '', 'mode': 'debate'})[1])
+        Path(str(self.log) + '.sendback').write_text('x'); self.say(g, mode='split'); self.assertEqual(len(self.runs()), 5)  # what the estimate said
+
+    def test_a_closing_mention_is_said_not_to_start_anyone(self):
+        """#68④: a host's 「@成員 請修」 in a closing reply never starts that member; Zook says so, with how to ask."""
+        Path(str(self.log) + '.mention').write_text('x')
+        found = self.say(self.group(hostId='', mode='split')); roles = self.order()
+        self.assertEqual(roles[-1], ('Alpha', 'split_merge'))  # nobody after the merge
+        said = [m['content'] for m in found['messages'] if m['role'] == 'system']
+        self.assertTrue(any('Beta' in x and '不會自動' in x and '@Beta' in x for x in said), said)
+        self.log.unlink(); Path(str(self.log) + '.sendback').write_text('x')
+        found = self.say(self.group(hostId='', mode='split'))  # sent back: Beta is started by the send-back, nothing else to say
+        self.assertFalse(any('不會自動' in m['content'] for m in found['messages'] if m['role'] == 'system'))
 
     def test_summary_on_request_is_read_only_and_makes_a_card(self):
         g = self.group(hostId=''); self.say(g, mode='turns')

@@ -155,6 +155,25 @@ class TaskPickupTest(unittest.TestCase):
         prompt = m.task_worker_prompt.__globals__['interrupt_note'](store.find('jobs', 'j1'))
         self.assertIn('寫入 report.md', prompt)
 
+    def test_a_finished_report_is_checked_again_even_after_an_outward_step(self):
+        # #179: the work had already reported success; going on only checks it again, so nothing outward is repeated.
+        m = load()
+        class Store:
+            def __init__(self): self.stopped_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            data = {'jobs': [dict(id='j1', ranOn='codex', toolCalls=[dict(name='gmail_send', category='external_write', status='completed')])]}
+            def find(self, kind, x): return next((j for j in self.data['jobs'] if j['id'] == x), None)
+        store = Store()
+        group = dict(id='g', status='idle', messages=[], taskRun=dict(id='r', status='running', tasks=[
+            dict(id='c', n=1, status='running', attempts=[dict(state='reported', outcome='succeeded', jobId='j1')])]))
+        m.task_board_update = lambda *a: None
+        m.task_recover(group, store)
+        class App(m.Resuming):
+            def task_resume(self, g): pass
+        app = App(); app.store = store
+        app.task_pickup(group)
+        self.assertEqual(group['taskRun']['tasks'][0]['status'], 'verifying')
+        self.assertEqual(m.task_worker_kind(store, group['taskRun']['tasks'][0]), 'codex')  # cut off before the turn wrote it: a checker of another vendor can still be chosen
+
     def test_an_old_run_waits_for_the_user(self):
         m = load()
         class Store:
