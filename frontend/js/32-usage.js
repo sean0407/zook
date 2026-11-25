@@ -13,7 +13,7 @@
     return `<svg viewBox="0 0 40 40" aria-hidden="true">${both ? ringArc(17.5, x.fiveHour, x.week <= 0) + ringArc(13, x.week) : ringArc(17.5, only)}<text class="ring-num" x="20" y="23.2" text-anchor="middle">${x.left == null ? '–' : Math.round(x.left)}</text></svg>`;
   }
   const ringPart = (label, v) => `${label}${v == null ? '沒有資料' : '剩餘 ' + Math.round(v) + '%'}`;
-  const ringText = x => !x.known ? `${x.name}：尚未登入` : x.left == null ? `${x.name}：沒有額度資料` : `${x.name}：${[x.fiveHour != null ? (x.week != null && x.week <= 0 ? '5 小時被每週額度擋住' : ringPart('5 小時', x.fiveHour)) : '', x.week != null ? ringPart('每週', x.week) : ''].filter(Boolean).join('，')}`;
+  const ringText = x => !x.known ? `${x.name}：尚未登入` : x.out ? `${x.name}：額度已用完` : x.left == null ? `${x.name}：沒有額度資料` : `${x.name}：${[x.fiveHour != null ? (x.week != null && x.week <= 0 ? '5 小時被每週額度擋住' : ringPart('5 小時', x.fiveHour)) : '', x.week != null ? ringPart('每週', x.week) : ''].filter(Boolean).join('，')}`;
   function leftBars(x) {
     if (!x.known) return '<p class="quota-empty">登入後才能查看額度。</p>';
     if (!x.windows.length) return '<p class="quota-empty">這個模型不提供額度資料。</p>';
