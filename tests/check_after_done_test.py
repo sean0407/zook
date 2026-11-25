@@ -143,7 +143,7 @@ class CheckAfterDone(unittest.TestCase):
         self.assertEqual([r for n, r in self.order() if n == '查核員'], ['split_check'])
 
     def test_a_persona_that_says_it_does_not_check_is_a_maker(self):
-        self.bots['報價'] = self.req('POST', '/api/bots', {'name': '報價', 'provider': 'codex', 'persona': '我不是負責查核的，主要做報價單。'})[1]
+        self.bots['報價'] = self.req('POST', '/api/bots', {'name': '報價', 'provider': 'codex', 'persona': '主要不負責查核，做報價單。'})[1]
         self.bots['審'] = self.req('POST', '/api/bots', {'name': '小審', 'provider': 'codex', 'persona': '負責驗收其他成員的成果。'})[1]
         self.bots['驗'] = self.req('POST', '/api/bots', {'name': '小驗', 'provider': 'codex', 'persona': '你擔任驗收角色，看別人的成果。'})[1]
         g = self.req('POST', '/api/groups', {'botIds': [self.bots[n]['id'] for n in ('Alpha', '報價', '審', '驗')], 'hostId': self.bots['Alpha']['id'], 'mode': 'split'})[1]

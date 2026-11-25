@@ -24,7 +24,7 @@ class CheckAfterDoneTask(base.TaskEngineTest):
         self.engine()
         self.rules([{'match': PLAN, 'calls': [create(1, '甲')], 'reply': '分好了'},
                     {'match': CHECK, 'calls': [{'name': 'zook_task_verdict', 'arguments': {'result': 'pass', 'reasons': '都對得上'}}]},
-                    {'match': '這項工作上一次沒有完成', 'calls': [handed('這次只交文字。', [])]},
+                    {'match': '這項工作上一次沒有完成', 'write': '報價單.xlsx', 'calls': [handed('補存好了。', ['報價單.xlsx'])]},
                     {'match': '=== 工作 1', 'calls': [handed('做好了。', ['報價單.xlsx'])]},
                     {'match': WAKE, 'reply': SUMMARY}])
         group = self.send()
@@ -41,15 +41,28 @@ class CheckAfterDoneTask(base.TaskEngineTest):
         checker = self.req('POST', '/api/bots', {'name': '查核員', 'provider': 'claude'})[1]
         self.group = self.req('POST', '/api/groups', {'name': '查核', 'botIds': [self.bots['主持']['id'], self.bots['甲']['id'], checker['id']], 'hostId': self.bots['主持']['id']})[1]
         self.engine()
-        check = create(2, '查核員'); late = dict(check, arguments=dict(check['arguments'], title='工作3', after=['1']))
+        check = create(2, '查核員'); late = dict(check, arguments=dict(check['arguments'], title='工作3'))  # after filled in by Zook
         self.rules([{'match': PLAN, 'calls': [check, create(1, '甲'), late], 'reply': '分好了'},
                     {'match': '=== 工作', 'calls': [handed('做好了。', [])]}, {'match': WAKE, 'reply': SUMMARY}])
         group = self.send()
         answers = next(r for r in self.runs() if r['match'] == PLAN)['answers']
-        self.assertTrue(answers[0]['error'] and 'after' in answers[0]['text'], answers[0])
+        self.assertTrue(answers[0]['error'] and '先建立它要查的工作' in answers[0]['text'], answers[0])
         self.assertFalse(answers[2]['error'], answers[2])
         tasks = group['taskRun']['tasks']
         self.assertEqual([(t['title'], t.get('deps')) for t in tasks], [('工作1', []), ('工作3', [1])])
         self.assertEqual(tasks[1]['changes'], 'none')  # a 查核員's task only reads
+
+    def test_a_retry_that_leaves_the_file_out_is_still_not_checked(self):
+        codex = self.req('POST', '/api/bots', {'name': '丁', 'provider': 'codex'})[1]
+        self.group = self.req('POST', '/api/groups', {'name': '混合', 'botIds': [self.bots['主持']['id'], self.bots['甲']['id'], codex['id']], 'hostId': self.bots['主持']['id']})[1]
+        self.engine()
+        self.rules([{'match': PLAN, 'calls': [create(1, '甲')], 'reply': '分好了'},
+                    {'match': CHECK, 'calls': [{'name': 'zook_task_verdict', 'arguments': {'result': 'pass', 'reasons': '都對得上'}}]},
+                    {'match': '這項工作上一次沒有完成', 'calls': [handed('這次只交文字。', [])]},
+                    {'match': '=== 工作 1', 'calls': [handed('做好了。', ['報價單.xlsx'])]},
+                    {'match': WAKE, 'reply': SUMMARY}])
+        task = self.send()['taskRun']['tasks'][0]
+        self.assertEqual((task['status'], task['failures']), ('stuck', 3))
+        self.assertEqual([r for r in self.runs() if CHECK in r['prompt']], [])
 
 if __name__ == '__main__': unittest.main()

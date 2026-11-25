@@ -246,7 +246,7 @@ def group_steps(store, group, mode):
     if mode == 'turns': return [step('turn', [x]) for x in members] + ([step('final', [host])] if host else [])
     if mode == 'compare': return [step('compare', members, True), step('compare_diff', [closer])]
     others = [x for x in members if x != closer] or members
-    if mode == 'split': return [step('split_plan', [closer])] + split_work_steps(store, others) + [step('split_merge', [closer])]  # #71: a busy member's share waits for it; #245: a 查核員 after the work
+    if mode == 'split': return [step('split_plan', [closer])] + split_work_steps(store, others, host=closer) + [step('split_merge', [closer])]  # #71: a busy member's share waits for it; #245: a 查核員 after the work
     sides = others if len(members) >= 3 else members
     steps = []
     for stage in ('open', 'rebut'):
@@ -531,10 +531,11 @@ class GroupRuns:
             self.run_job(turn['job']['id'], turn['prompt'], turn['provider'], turn['model'], bot, None)
             if not turn['writable'] or turn['job']['status'] != 'completed': return
             if seen is None: turn['published'] = False; return
-            try: saved, skipped = sync_group_files_out(store, group_id, bot['name'], bot['id'], seen)
+            kept = []
+            try: saved, skipped = sync_group_files_out(store, group_id, bot['name'], bot['id'], seen, kept)
             except (OSError, ValueError): saved, skipped = [], []; turn['published'] = False
             if skipped: turn['published'] = False
-            turn['saved'] = saved
+            turn['saved'] = saved; turn['kept'] = kept
         with store.lock:
             done = store.find('jobs', turn['job']['id']) or {}; said = done.get('content') or ''
             given = {a.get(k) for m in (store.find('groups', group_id) or {}).get('messages') or [] for a in m.get('attachments') or [] for k in ('name', 'origName')}
@@ -555,7 +556,7 @@ class GroupRuns:
                 said_msg = find_message(group, turn['msg']['id'])
                 if said_msg: said_msg['unrenderedClaim'] = True
             said_msg = find_message(group, turn['msg']['id'])
-            if said_msg: said_msg.update(savedFiles=list(saved), skippedFiles=list(skipped))  # #245: what really reached the group's files, for the check
+            if said_msg: said_msg.update(savedFiles=list(dict.fromkeys(list(saved) + list(turn.get('kept') or []))), skippedFiles=list(skipped))  # #245: what really reached the group's files, for the check
             for name in saved: group.setdefault('fileInfo', {})[name] = dict(by=bot['name'], **{k: v for k, v in (group.get('fileInfo', {}).get(name) or {}).items() if k == 'origName'})  # the uploaded name stays known
             if saved: group['messages'].append(dict(id=ID(), role='system', content='%s 存了共用檔案：%s' % (bot['name'], '、'.join(saved)), createdAt=NOW()))
             if skipped: group['messages'].append(dict(id=ID(), role='system', content='%s 的檔案太大沒有存進群組：%s' % (bot['name'], '、'.join(skipped)), createdAt=NOW()))
@@ -609,7 +610,7 @@ class GroupRuns:
             if not work: return steps
             group['messages'].append(dict(id=ID(), role='system', content='主持人照分工派給 %s，做完再由主持人彙整。' % '、'.join(b['name'] for b in bots if b['id'] in work), createdAt=NOW()))
             self.store.save()
-        return split_work_steps(self.store, [b['id'] for b in bots if b['id'] in work], work) + [dict(role='split_merge', bots=[host], blind=False)] + steps
+        return split_work_steps(self.store, [b['id'] for b in bots if b['id'] in work], work, host) + [dict(role='split_merge', bots=[host], blind=False)] + steps
 
     def _wait_free(self, group_id, run_id, step):
         """#71 (decisions #5): a 分工 member that was busy in another conversation does its share once it is free. Returns the
@@ -879,6 +880,7 @@ class GroupRuns:
                             group['messages'] = [m for m in group['messages'] if m['id'] != msg['id']]; continue
                         spoke = True
                         mentioned = [] if still_blind else [x for x in group_mentions(content, members) if x != bot_id]  # the rest of this independent round is still to come
+                        if gate and still_blind: gate['bots'] += [x for x in group_mentions(content, members) if x in gate.get('held', []) and x not in gate['bots']]  # #245: kept for the check
                         if role == 'final': rounds = GROUP_MODERATION_ROUNDS + 1; pending.clear(); closing_mention_note(store, group, t)
                         elif role in ('kickoff', 'moderate'):
                             if role == 'kickoff':

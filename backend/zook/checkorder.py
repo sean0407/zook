@@ -25,7 +25,7 @@ def group_is_checker(bot):
     """Whether a member's role is checking others' work: its name says so, or its persona starts by saying that is its job."""
     if CHECKER_NAME.search(str((bot or {}).get('name') or '')): return True
     persona = str((bot or {}).get('persona') or (bot or {}).get('instructions') or '')[:80]
-    return any(not CHECKER_NOT.search(persona[max(0, hit.start() - 4):hit.start()]) for hit in CHECKER_DUTY.finditer(persona))
+    return any(not CHECKER_NOT.search(persona[max(0, hit.start() - 4):hit.end()]) for hit in CHECKER_DUTY.finditer(persona))
 
 
 def split_checkers(store, ids):
@@ -40,12 +40,13 @@ def check_step(checkers, producers, fixes=None):
     return dict(role='split_check', bots=list(checkers), blind=False, waitBusy=True, noSave=True, gate=list(producers), fixes=dict(fixes or {}))
 
 
-def split_work_steps(store, ids, fixes=None):
-    """分工's work: the members who make it at the same time, then those who check it (#245)."""
+def split_work_steps(store, ids, fixes=None, host=None):
+    """分工's work: the members who make it at the same time, then those who check it (#245). With no member making anything,
+    the check waits for the host's own share."""
     fixes = fixes or {}
     producers, checkers = split_checkers(store, ids)
     work = dict(role='split_work', bots=producers, blind=True, waitBusy=True, **({'fixes': {k: v for k, v in fixes.items() if k in producers}} if fixes else {}))
-    return ([work] if producers else []) + ([check_step(checkers, producers, {k: v for k, v in fixes.items() if k in checkers})] if checkers else [])
+    return ([work] if producers else []) + ([check_step(checkers, producers or ([host] if host else []), {k: v for k, v in fixes.items() if k in checkers})] if checkers else [])
 
 
 def _same_file(name, pool, owner=''):
@@ -106,7 +107,8 @@ class CheckOrder:
             group = store.find('groups', group_id)
             if not group or group.get('runId') != run_id: return False
             start = _ask_start(group); last = {}
-            for m in group['messages'][start:]:  # each member's newest reply: a redo or 補存 that failed means the work was not handed in again
+            since = max(start, step['since']) if isinstance(step.get('since'), int) else start  # after a send-back: only what came after it
+            for m in group['messages'][since:]:  # each member's newest reply: a redo or 補存 that failed means the work was not handed in again
                 if m.get('role') == 'assistant' and m.get('botId') in step.get('gate', []) and not m.get('checkOf') and m.get('status') != 'running': last[m['botId']] = m
             latest = {b: m for b, m in last.items() if m.get('status') == 'completed' and m.get('content')}
             unfinished = [b for b in step.get('gate', []) if b not in latest and store.find('bots', b) and b in group['botIds']]  # no reply, or one that did not finish: not handed in
@@ -158,9 +160,9 @@ class CheckOrder:
         if not checkers: return dict(role='split_redo', bots=[b['id'] for b in bots if b['id'] in fixes], blind=False, fixes=fixes), None
         redo = [x for x in producers if x in fixes]
         checked = checkers if redo else [x for x in checkers if x in fixes]  # redone work is checked, also when the first check did not run
-        step = dict(role='split_redo', bots=redo, blind=False, fixes={k: fixes[k] for k in redo}) if redo else None
+        step = dict(role='split_redo', bots=redo, blind=False, waitBusy=True, fixes={k: fixes[k] for k in redo}) if redo else None  # a busy member redoes it once free
         again = check_step(checked, redo or producers, {k: v for k, v in fixes.items() if k in checkers}) if checked and (redo or any(x in fixes for x in checkers)) else None
-        if again and redo: again['fresh'] = True
+        if again and redo: again.update(fresh=True, since=len(group['messages']))
         return step, again
 
 

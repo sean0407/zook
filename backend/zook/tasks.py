@@ -394,7 +394,7 @@ def task_host_prompt(store, group, run, bot, kind):
                  '「怎樣算完成」要寫成可以檢查的條件，例如「列出 3 個景點，每個附一句理由」。',
                  '交給最適合的成員，一項工作一位；不要自己做成員的工作。互不相關的工作會同時進行。',
                  '你自己也可以接其中一項（assignee 寫你自己的名稱「%s」）：先把成員的工作建立好，主持人最多接一項，不要把工作都留給自己。成員正在忙也照樣派給他，Zook 會等他有空再開始。' % bot['name'],
-                 '要等別的工作做完才能開始的，在 after 填那些工作的編號；Zook 會把它們的回報交給這項工作。只在真的需要前面的結果時才填，其餘讓它們同時進行。查核或驗收別人成果的工作一定要在 after 填被查的工作，等它交件後才開始。',
+                 '要等別的工作做完才能開始的，在 after 填那些工作的編號；Zook 會把它們的回報交給這項工作。只在真的需要前面的結果時才填，其餘讓它們同時進行。查核或驗收別人成果的工作，先建立被查的工作再建立它；Zook 會讓查核等所有製作的工作交件後才開始，查核只能讀。',
                  'Zook 會依成員的額度覆核你的指派；額度不夠時會改派，並告訴你改了什麼。',
                  'changes 寫這項工作會動到什麼：none（只讀、只查資料）、files（會建立或修改檔案）、external（會對外動作，例如寄信）。寫 none 的工作會在只能讀的狀態下進行。',
                  '每項工作完成後，Zook 會請另一家模型的成員依「怎樣算完成」驗收；沒通過會帶著意見重做，連續三次沒完成就停下來交給使用者。',
@@ -521,9 +521,11 @@ def task_tools(app, job_id, runtime):
                     dep = next((t for t in run['tasks'] if str(t['n']) == str(key).strip().lstrip('#')), None)  # by number only: a title may look like a number
                     if not dep: raise RuntimeError('after 裡的「%s」不是已建立的工作編號。先建立前面的工作。' % key)
                     if dep['n'] not in deps: deps.append(dep['n'])
-                if group_is_checker(bot) and any(not group_is_checker(store.find('bots', x)) for x in group['botIds'] if x != bot['id']) \
-                        and not any(not group_is_checker(store.find('bots', t['assignee'])) for t in run['tasks'] if t['n'] in deps):  # #245: a check starts after the work it checks
-                    raise RuntimeError('%s 負責查核：先建立它要查的工作，再在 after 填那些工作的編號，等交件後才開始。' % bot['name'])
+                checking = group_is_checker(bot)  # #245: a check waits for all the work there is (later work too, below) and only reads
+                if checking and any(not group_is_checker(store.find('bots', x)) for x in group['botIds'] if x != bot['id']):
+                    work = [t['n'] for t in run['tasks'] if not group_is_checker(store.find('bots', t['assignee'])) and t['status'] not in ('cancelled', 'failed')]
+                    if not work: raise RuntimeError('%s 負責查核：先建立它要查的工作，再建立查核工作，等交件後才開始。' % bot['name'])
+                    deps += [n for n in work if n not in deps]
                 changes = str(args.get('changes') or 'files').strip().lower()
                 if changes not in TASK_CHANGES: raise RuntimeError('changes 只能是 none、files 或 external。')
                 suggested, moved = bot, ''
@@ -541,12 +543,15 @@ def task_tools(app, job_id, runtime):
                 basis = '依剩餘額度改派' if bot is not suggested else label
                 if bot is suggested and task_learn_on(store) and bot['id'] != run['hostId']: bot, basis = task_pick_by_record(store, group, run, bot, kind, label, changes)  # #71: the host's own share stays its own
                 if group_is_checker(bot) and not group_is_checker(suggested): bot, moved, basis = suggested, '', label  # #245: work is never moved onto a 查核員
-                if group_is_checker(bot): changes = 'none'  # a 查核員's task only reads
+                if checking or group_is_checker(bot): changes = 'none'  # a 查核員's task only reads, also when it went to someone else
                 # New work waits for the user's 「照這個做」, unless 設定 lets work that changes nothing start by itself.
                 confirmed = task_execution(store) == 'lowrisk' and changes == 'none' and not any(t['status'] == 'stuck' for t in run['tasks'])
                 task = dict(id=ID(), n=len(run['tasks']) + 1, title=title, spec=spec, doneWhen=done_when, assignee=bot['id'], suggested=suggested['name'], deps=deps,
                             why=moved, basis=basis, kind=kind, depth=1, status='pending' if deps else 'ready', attempts=[], failures=0, question='', answer='', changes=changes, confirmed=confirmed, staged=True, createdAt=NOW())
                 run['tasks'].append(task); run['log'].append(dict(at=NOW(), what='create', task=task['n'])); acted()
+                for t in run['tasks'] if not checking else []:  # work added later: a check that has not started waits for it too
+                    if t is not task and t['status'] in ('pending', 'ready') and not t['attempts'] and t['n'] not in deps and group_is_checker(store.find('bots', t['assignee'])):
+                        t['deps'] = list(t.get('deps') or []) + [task['n']]; t['status'] = 'pending'
                 task_board_update(store, group); store.save()
             app.task_poke(group_id)
             out = dict(created=task['n'], assignee=bot['name'], next='已建立。全部建立好就結束這一輪；有結果時 Zook 會叫醒你。')

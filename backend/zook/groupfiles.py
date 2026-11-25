@@ -305,8 +305,9 @@ def _read_bot_file(folder_fd, name, target):
     return size, digest.hexdigest()
 
 
-def sync_group_files_out(store, group_id, bot_name, bot_id, seen):
-    """Bring back what the Bot added or changed. A file someone else changed meanwhile is kept, and this version gets its own name."""
+def sync_group_files_out(store, group_id, bot_name, bot_id, seen, kept=None):
+    """Bring back what the Bot added or changed. A file someone else changed meanwhile is kept, and this version gets its own name.
+    kept, when given, gets the shared files that already held what the Bot saved (not saved twice), so the work still counts as handed in."""
     shared = group_files_dir(store, group_id); shared.mkdir(parents=True, exist_ok=True, mode=0o700)
     try:
         with bot_folder(store, bot_id) as workspace:
@@ -328,12 +329,16 @@ def sync_group_files_out(store, group_id, bot_name, bot_id, seen):
                     name = _short_name(entry_name); current = shared / name
                     now = _file_hash(current) if os.path.lexists(str(current)) else None
                     if now is not None and now != seen.get(entry_name):
-                        if now == digest: continue  # someone saved the very same file meanwhile: no second copy named after this Bot (#176)
+                        if now == digest:  # someone saved the very same file meanwhile: no second copy named after this Bot (#176)
+                            if kept is not None: kept.append(name)
+                            continue
                         name = free_group_file_name(shared, name, bot_name)
                     if now is None or name != _short_name(entry_name):  # a new file: one with the very same content already shared is not kept twice (#170)
-                        if same is None: same = {_file_hash(e.path) for e in _plain_files(shared)}
-                        if digest in same: continue
-                    if same is not None: same.add(digest)
+                        if same is None: same = {_file_hash(e.path): e.name for e in _plain_files(shared)}
+                        if digest in same:
+                            if kept is not None: kept.append(same[digest])
+                            continue
+                    if same is not None: same[digest] = name
                     if size > MAX_UPLOAD or group_files_size(store, group_id, name) + size > GROUP_FILES_TOTAL: skipped.append(name); continue
                     os.replace(str(temp), str(shared / name)); saved.append(name)
             finally:
