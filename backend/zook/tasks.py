@@ -521,6 +521,8 @@ def task_tools(app, job_id, runtime):
                     dep = next((t for t in run['tasks'] if str(t['n']) == str(key).strip().lstrip('#')), None)  # by number only: a title may look like a number
                     if not dep: raise RuntimeError('after 裡的「%s」不是已建立的工作編號。先建立前面的工作。' % key)
                     if dep['n'] not in deps: deps.append(dep['n'])
+                if not deps and group_is_checker(bot) and any(not group_is_checker(store.find('bots', x)) for x in group['botIds'] if x != bot['id']):  # #245: a check starts after the work it checks
+                    raise RuntimeError('%s 負責查核：先建立它要查的工作，再在 after 填那些工作的編號，等交件後才開始。' % bot['name'])
                 changes = str(args.get('changes') or 'files').strip().lower()
                 if changes not in TASK_CHANGES: raise RuntimeError('changes 只能是 none、files 或 external。')
                 suggested, moved = bot, ''

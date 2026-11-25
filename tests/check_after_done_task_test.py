@@ -37,4 +37,18 @@ class CheckAfterDoneTask(base.TaskEngineTest):
         self.assertTrue(any('報價單.xlsx' in m.get('content', '') and '找不到' in m.get('content', '') for m in group['messages'] if m['role'] == 'system'))
 
 
+    def test_a_check_task_must_wait_for_the_work(self):
+        checker = self.req('POST', '/api/bots', {'name': '查核員', 'provider': 'claude'})[1]
+        self.group = self.req('POST', '/api/groups', {'name': '查核', 'botIds': [self.bots['主持']['id'], self.bots['甲']['id'], checker['id']], 'hostId': self.bots['主持']['id']})[1]
+        self.engine()
+        check = create(2, '查核員'); late = dict(check, arguments=dict(check['arguments'], title='工作3', after=['1']))
+        self.rules([{'match': PLAN, 'calls': [check, create(1, '甲'), late], 'reply': '分好了'},
+                    {'match': '=== 工作', 'calls': [handed('做好了。', [])]}, {'match': WAKE, 'reply': SUMMARY}])
+        group = self.send()
+        answers = next(r for r in self.runs() if r['match'] == PLAN)['answers']
+        self.assertTrue(answers[0]['error'] and 'after' in answers[0]['text'], answers[0])
+        self.assertFalse(answers[2]['error'], answers[2])
+        tasks = group['taskRun']['tasks']
+        self.assertEqual([(t['title'], t.get('deps')) for t in tasks], [('工作1', []), ('工作3', [1])])
+
 if __name__ == '__main__': unittest.main()

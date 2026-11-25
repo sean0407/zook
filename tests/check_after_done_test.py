@@ -25,14 +25,14 @@ text = name + ' ' + role
 def save(): open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('quote')
 if name == '專員' and role in ('split_work', 'work', 'split_redo'):
     if flag('fail') or (role == 'split_redo' and flag('redofail')): time.sleep(0.2); sys.exit(3)
-    if not flag('claim') and folder: save()
-    text = '已存到群組檔案：報價單.xlsx' + ('\n@查核員 請幫我看' if flag('mention') else '')
+    if not flag('claim') and not flag('vague') and folder: save()
+    text = ('已存好了。' if flag('vague') else '已存到群組檔案：報價單.xlsx') + ('\n@查核員 請幫我看' if flag('mention') else '')
 if name == '設計' and role in ('split_work', 'work') and flag('designfail'): time.sleep(0.2); sys.exit(3)
 if name == '專員' and role == 'split_resave':
     if flag('resave') and folder: save()
     text = '已存到群組檔案：報價單.xlsx' if not flag('cannot') else '這次存不了，權限不足。'
 if name == '查核員': text = '【判定】同意\n看過報價單.xlsx'
-if role == 'kickoff': text = '目標：報價\n@專員：做報價單' + ('' if flag('nocheck') else '\n@查核員：檢查報價單')
+if role == 'kickoff': text = '目標：報價\n@查核員：檢查使用者給的報價單' if flag('onlycheck') else '目標：報價\n@專員：做報價單' + ('' if flag('nocheck') else '\n@查核員：檢查報價單')
 if role in ('split_merge', 'split_remerge', 'final', 'moderate'): text = '【結論】好\n【待你決定】無\n【行動項目】無\n【未解問題】無'
 if role == 'split_merge' and flag('sendback'): text = '【退回】專員：合計改成公式\n' + text
 if 'DUPWRITE' in s and folder: open(os.path.join(folder.group(1), name + '-copy.txt'), 'w').write('same content')
@@ -147,6 +147,27 @@ class CheckAfterDone(unittest.TestCase):
         g = self.req('POST', '/api/groups', {'botIds': [self.bots[n]['id'] for n in ('Alpha', '報價', '審')], 'hostId': self.bots['Alpha']['id'], 'mode': 'split'})[1]
         self.say(g)
         self.assertEqual([x[0] for x in self.order()], ['Alpha', '報價', '小審', 'Alpha'])
+
+    def test_saying_saved_with_nothing_saved_goes_back_first(self):
+        self.flag('vague'); self.flag('resave')
+        found = self.say(self.group())
+        self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('專員', 'split_work'), ('專員', 'split_resave'), ('查核員', 'split_check'), ('Alpha', 'split_merge')])
+        self.assertTrue(any('先退回給 專員' in x for x in self.said(found)), self.said(found))
+
+    def test_a_checker_named_alone_still_only_reads(self):
+        self.flag('onlycheck')
+        self.say(self.group(mode='free'))
+        self.assertEqual(self.order()[:2], [('Alpha', 'kickoff'), ('查核員', 'split_check')])
+        self.assertNotIn(('專員', 'work'), self.order())
+        self.assertIn('read-only', self.runs()[1]['args'])
+
+    def test_a_cli_that_cannot_only_read_does_not_check(self):
+        cli = self.root / 'bin/echo-cli'; cli.write_text('#!/bin/sh\necho custom >> "$GROUP_LOG.custom"\necho ok\n'); cli.chmod(0o755)
+        status, item = self.req('POST', '/api/accounts/custom', {'name': 'Echo CLI', 'command': 'echo-cli', 'status': 'echo-cli'}); self.assertEqual(status, 201, item)
+        self.assertEqual(self.req('PATCH', '/api/bots/' + self.bots['查核員']['id'], {'provider': item['id']})[0], 200)
+        found = self.say(self.group())
+        self.assertFalse(Path(str(self.log) + '.custom').exists())  # never started: it could have changed files
+        self.assertTrue(any('查核員' in x and '只讀' in x for x in self.said(found)), self.said(found))
 
     def test_nothing_handed_in_means_no_check(self):
         self.flag('fail')

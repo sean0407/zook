@@ -465,7 +465,7 @@ class GroupRuns:
                 if (step or {}).get('waitBusy'): return 'busy'  # a task waits for its member instead of skipping it
                 group_skip_turn(group, bot, '%s 正在其他對話中工作，這次沒有查核，請等它完成後再試一次。' % bot['name'] if (step or {}).get('targetId') else ' 正在其他對話中工作，這次略過。', step)
                 store.save(); return None
-            step = step or {}; readonly = bool(step.get('readonly')); auto_chain, auto_mark = None, {}
+            step = step or {}; readonly = bool(step.get('readonly') or step.get('noSave')); auto_chain, auto_mark = None, {}
             if step.get('use'): auto_chain = [list(step['use'])]  # a check stays on the model that was chosen for it
             elif bot.get('provider') == AUTO:
                 asked = next((m for m in reversed(group['messages']) if m.get('role') == 'user'), {})
@@ -475,7 +475,6 @@ class GroupRuns:
                     group['messages'].append(dict(id=ID(), role='system', content='%s 這次略過：%s' % (bot['name'], exc), createdAt=NOW()))
                     store.save(); return None
             provider, model = auto_chain[0][:2] if auto_chain else bot_model(store, bot)
-            if step.get('noSave') and provider_kind(provider) in PLAN_KINDS: readonly = True  # #170: a 查核員 really only reads where its CLI can be held to that
             if readonly and provider_kind(provider) not in PLAN_KINDS:
                 group_skip_turn(group, bot, '%s 的模型無法限制成只讀，沒辦法查核。' % bot['name'] if step.get('targetId') else ' 的模型無法限制成只讀，這次略過。', step)
                 store.save(); return None
@@ -555,6 +554,8 @@ class GroupRuns:
                 group['messages'].append(dict(id=ID(), role='system', content='%s 說逐頁看過版面，但這次回覆沒有把任何一頁轉成圖片，版面其實還沒看過。可以請它把每一頁轉成圖片再檢查一次。' % bot['name'], createdAt=NOW()))
                 said_msg = find_message(group, turn['msg']['id'])
                 if said_msg: said_msg['unrenderedClaim'] = True
+            said_msg = find_message(group, turn['msg']['id'])
+            if said_msg: said_msg.update(savedFiles=list(saved), skippedFiles=list(skipped))  # #245: what really reached the group's files, for the check
             for name in saved: group.setdefault('fileInfo', {})[name] = dict(by=bot['name'], **{k: v for k, v in (group.get('fileInfo', {}).get(name) or {}).items() if k == 'origName'})  # the uploaded name stays known
             if saved: group['messages'].append(dict(id=ID(), role='system', content='%s 存了共用檔案：%s' % (bot['name'], '、'.join(saved)), createdAt=NOW()))
             if skipped: group['messages'].append(dict(id=ID(), role='system', content='%s 的檔案太大沒有存進群組：%s' % (bot['name'], '、'.join(skipped)), createdAt=NOW()))
@@ -882,7 +883,7 @@ class GroupRuns:
                                 mentioned = mentioned or [b['id'] for b in members if b['id'] != bot_id]; blind_next = True
                                 held = split_checkers(store, [b['id'] for b in members if b['id'] != bot_id])[1]  # every 查核員 waits for the work, named now or later
                                 makers = [x for x in mentioned if x not in held]
-                                if makers and held: mentioned, gate = makers, dict(bots=[x for x in mentioned if x in held], gate=makers, held=held)
+                                if held: mentioned, gate, blind_next = makers, dict(bots=[x for x in mentioned if x in held], gate=makers, held=held), bool(makers)  # named alone: it checks what is there now, still only reading
                             if role == 'moderate' and not mentioned: rounds = GROUP_MODERATION_ROUNDS + 1  # host already wrapped up
                             for target in mentioned:
                                 if target not in [x[0] for x in pending]: pending.append((target, False, None))

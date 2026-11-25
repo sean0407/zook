@@ -1,5 +1,8 @@
 # 群組「做完才查」(#245, 併 #145、#170、#226). Loaded by backend/server.py into one shared namespace, after groups.py.
 #
+# Who checks is, for now, told by the member's name or persona (group_is_checker): a temporary fallback until the group form lets
+# the user choose the checker, and Zook picks a member of another vendor when nobody is chosen (queue #296).
+#
 # A member whose role is checking (查核員、驗收、審核…) is asked only after the members who make the work have handed it in, and
 # only when the files they said they handed in are there: a file said to be handed in but missing goes back to that member once
 # first; nothing handed in means no check. The check only reads, so it never saves a second copy of the work (#170). In 主持人分工
@@ -8,7 +11,7 @@
 # before another vendor checks it.
 CHECKER_NAME = re.compile(r'查核|驗收|審核|審查|校對|稽核|覆核|複核|把關|品管|(?<![A-Za-z])(?:QA|reviewer|checker)(?![A-Za-z])', re.I)
 CHECKER_DUTY = re.compile(r'(?<![不沒没非無无])(?:負責|專門|主要)(?:做|進行)?(?:查核|驗收|審核|審查|校對|稽核|覆核|複核|把關)')
-MODERATOR_RULES['split_check'] = ['其他成員已經交出他們的部分，現在輪到你查核。照主持人分派給你的查核工作，實際打開他們交的檔案逐項核對，不要只看他們的說法。',
+MODERATOR_RULES['split_check'] = ['現在輪到你查核。照主持人分派給你的查核工作，實際打開要查的檔案（成員交的，或使用者給的）逐項核對，不要只看別人的說法。',
                                   '第一行只寫【判定】同意、【判定】有疑慮 或 【判定】有錯誤 其中之一，接著用最多 4 點說明依據；有檔案沒打開，就寫明哪個沒看，不能判定通過。',
                                   '要給客戶或外部的內容，核對有沒有內部註記、計算過程、內部折扣或報價規則、【待確認】。',
                                   '只讀：不要修改、重做或另存任何檔案，也不要對外動作。', _NO_MENTION]
@@ -68,6 +71,21 @@ def checked_present(store, group_id, names, exact=(), owner=''):
     return gone[:10]
 
 
+SAVE_SAID = ('已存', '存到', '存好', '存成', '存進', '另存', '已上傳', '上傳到')  # a reply that says it saved something
+
+
+def _nothing_saved(replies, pool):
+    """Whether a member said it saved files while none of its replies in this ask brought one into the group's files, and none
+    names a file that is already there (saved earlier, unchanged). Only replies whose files Zook brought back count; one that could
+    not save, such as in 謹慎, is not asked to."""
+    looked = [m for m in replies if 'savedFiles' in m]
+    if not looked or any(m.get('savedFiles') for m in looked) or not any(w in (m.get('content') or '') for m in looked for w in SAVE_SAID): return False
+    return not any(_claim_present(n, pool) for m in looked for n in CLAIM_WORD.findall(m.get('content') or ''))
+
+
+NOTHING_SAVED = '（說存了的檔案）'
+
+
 def _ask_start(group):
     return next((i for i in range(len(group['messages']) - 1, -1, -1) if group['messages'][i].get('role') == 'user' and not group['messages'][i].get('interjected')), 0)
 
@@ -81,7 +99,8 @@ class CheckOrder:
         """Before a 查核員's turn (steps[0] is it): returns steps to run it, steps[1:] when there is nothing to check, a 補存 turn
         for the members whose files are missing followed by this check again, or False when the run ended."""
         store = self.store
-        with store.lock:
+        if not step.get('gate'): return steps  # nobody makes anything for it: it checks what is already there
+        with store.lock:  # the files are looked at with the lock held, so what is decided is what was seen
             group = store.find('groups', group_id)
             if not group or group.get('runId') != run_id: return False
             start = _ask_start(group); last = {}
@@ -90,16 +109,16 @@ class CheckOrder:
             latest = {b: m for b, m in last.items() if m.get('status') == 'completed' and m.get('content')}
             unfinished = [b for b in step.get('gate', []) if b not in latest and store.find('bots', b) and b in group['botIds']]  # no reply, or one that did not finish: not handed in
             earlier = step.get('missing') if isinstance(step.get('missing'), dict) else {}  # what was missing before 補存 is looked for again, whatever the new reply says
-            said = {b: list(dict.fromkeys(list(m.get('missingFiles') or []) + list(earlier.get(b) or []))) for b, m in latest.items()}
+            said = {b: [n for n in dict.fromkeys(list(m.get('missingFiles') or []) + list(m.get('skippedFiles') or []) + list(earlier.get(b) or [])) if n != NOTHING_SAVED] for b, m in latest.items()}
             checkers = _names(store, step['bots'])
-        gone = {b: checked_present(store, group_id, names) for b, names in said.items() if names}
-        gone = {b: names for b, names in gone.items() if names}
-        with store.lock:
-            group = store.find('groups', group_id)
-            if not group or group.get('runId') != run_id: return False
+            gone = {b: checked_present(store, group_id, names) for b, names in said.items() if names}
+            pool = [e.name for e in _plain_files(group_files_dir(store, group_id))]
+            for b in latest:
+                if not gone.get(b) and _nothing_saved([m for m in group['messages'][start:] if m.get('role') == 'assistant' and m.get('botId') == b and not m.get('checkOf')], pool): gone[b] = [NOTHING_SAVED]
+            gone = {b: names for b, names in gone.items() if names}
             note = lambda text: group['messages'].append(dict(id=ID(), role='system', content=text, createdAt=NOW()))
             if gone and not step.get('resaved'):  # 補存 first, also while another member's part is still missing
-                fixes = {b: '你說交了 %s，但群組檔案裡找不到，可能沒有存成功。把這些檔案存到群組檔案。' % '、'.join(names) for b, names in gone.items()}
+                fixes = {b: ('你說存了檔案，但這次沒有任何檔案存進群組檔案。' if names == [NOTHING_SAVED] else '你說交了 %s，但群組檔案裡找不到，可能沒有存成功（或太大存不進去）。' % '、'.join(names)) + '把這些檔案存到群組檔案。' for b, names in gone.items()}
                 who = _names(store, list(gone))
                 note('%s 說交了 %s，但群組檔案裡找不到；先退回給 %s 補存，補好再請 %s 查核。' % (who, '、'.join(n for v in gone.values() for n in v), who, checkers))
                 store.save()
@@ -138,6 +157,6 @@ class CheckOrder:
 
 
 def task_files_missing(store, group_id, run, task, attempt, msg):
-    """Outside the lock, with copies of what is read. The files a task's report lists, or its reply says it saved, that are not there."""
+    """Lock held. The files a task's report lists, or its reply says it saved, that are not there."""
     listed = list(attempt.get('files') or [])
     return checked_present(store, group_id, listed + list(msg.get('missingFiles') or []), exact=listed, owner=run.get('owner') or '')
