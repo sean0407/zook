@@ -86,7 +86,7 @@ SCRATCH = re.compile(r'(?:/private/tmp|/private/var/folders/[^/]+/[^/]+/T)/')
 SCRATCH_COMPANIONS = {'rm', 'unlink', 'echo', 'printf', 'cat', 'ls', 'test', '[', '[[', 'true', 'false', ':', 'sleep', 'mkdir', 'touch', 'wc',
                       'head', 'tail', 'grep', 'file', 'stat', 'du', 'date', 'pwd', 'mktemp', 'sort', 'uniq', 'cut', 'tr', 'diff', 'cmp', 'shasum', 'md5'}
 SCRATCH_RUNNERS = {'python', 'python3', 'node', 'ruby', 'swift'}  # running a file: what a program does is never read (see the top)
-MKTEMP_SET = re.compile(r'(?:^|(?<=[;&|\n]))[ \t]*([A-Za-z_]\w*)=("?)\$\(mktemp((?:[ \t]+[\w./+-]+)*)[ \t]*\)\2[ \t]*(?=$|[;&|\n])')
+MKTEMP_SET = re.compile(r'(?:^|(?<=[;\n]))[ \t]*([A-Za-z_]\w*)=("?)\$\(mktemp((?:[ \t]+[\w./+-]+)*)[ \t]*\)\2[ \t]*(?=$|[;&|\n])')
 SHELL_VARS = {'PATH', 'HOME', 'PWD', 'OLDPWD', 'IFS', 'TMPDIR', 'CDPATH', 'ENV', 'BASH_ENV', 'SHELL', 'ZDOTDIR', 'FPATH', 'PS4', 'PROMPT_COMMAND',
               'REPLY', 'reply', 'path', 'cdpath', 'fpath', 'manpath', 'module_path', 'mailpath', 'fignore', 'psvar', 'argv', 'status',
               'pipestatus', 'options', 'parameters', 'functions', 'aliases', 'commands', 'builtins'}
@@ -109,7 +109,7 @@ def _into_scratch(dest, whole):
 
 def _moves_folder(whole):
     """The line changes the folder it runs in to one that may be a scratch folder (cd to a variable, a link, a relative path, cd -)."""
-    if re.search(r'\benv\b[^;&|\n]*\s-C', whole): return True
+    if re.search(r'\benv\b[^;&|\n]*\s(?:-C|--chdir)', whole): return True
     for part in _split(_without_inner(whole))[0]:
         words = _strip(_redirects(part)[0])
         if words and words[0] in ('cd', 'pushd', 'popd', 'chdir'):
@@ -146,7 +146,9 @@ def _scratch_line(command):
     if not clear: return None
     for part in parts:
         words, _, written = _redirects(part)
-        if any(t != '/dev/null' and not _scratch_place(t) and not re.fullmatch(r'\$(?:\{(\w+)\}|(\w+))/[^/]+', t) for t in written): return None  # rm x > ~/a empties ~/a
+        for t in written:  # rm x > ~/a empties ~/a: only /dev/null, a written-out scratch path, or a file in this line's mktemp folder
+            m = re.fullmatch(r'\$(?:\{(\w+)\}|(\w+))/[^/]+', t)
+            if t != '/dev/null' and not (m and (m.group(1) or m.group(2)) in names) and not ('$' not in t and os.path.isabs(_expand(t)) and _scratch_place(t)): return None
         while words and words[0] in SHELL_WORDS: words = words[1:]
         if not words or len(words) == 1 and re.fullmatch(r'([A-Za-z_]\w*)=\$_', words[0]) and words[0][:-3] in names: continue  # d=$(mktemp …)
         word = words[0]; name = os.path.basename(word)
@@ -427,8 +429,9 @@ def _strip(argv):
     while argv:
         word = argv[0]
         if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*=.*', word): argv.pop(0); continue
+        if word == 'coproc' and len(argv) > 2 and re.fullmatch(r'\w+', argv[1]) and not shutil.which(argv[1]): del argv[:2]; continue  # coproc NAME …
         if word in SHELL_WORDS: argv.pop(0); continue
-        if word == 'repeat': del argv[:2]; continue  # zsh: repeat N command
+        if word == 'repeat' or word == 'function': del argv[:2]; continue  # zsh: repeat N command; function name { … }
         name = os.path.basename(word)
         if name in WRAPPERS:
             argv.pop(0)
@@ -609,15 +612,17 @@ def _argv_boundaries(argv, whole, depth, scratch=None):
                     if sub and os.path.basename(sub[0]) not in DELETE_COMMANDS: found += _argv_boundaries(_strip(sub), whole, depth + 1)
     if name == 'mv' and plain and ('.Trash' in plain[-1] or plain[-1].rstrip('/').endswith('/Trash')):
         found.append(_hit('delete', '%s（移到垃圾桶）' % _names(plain[:-1])))
-    moved = _positional(args, {'-t', '--target-directory'} if name in ('mv', 'gmv') else set()) if name in ('mv', 'gmv') or name == 'rsync' and any(a in ('--remove-source-files', '--remove-sent-files') for a in args) else \
-        plain[1:] + plain[:1] if name == 'zip' and any(a in ('-m', '--move') or re.fullmatch(r'-[a-zA-Z]*m[a-zA-Z]*', a) for a in args) else []
+    moved = _positional(args, {'-t', '--target-directory'} if name in ('mv', 'gmv') else set()) if name in ('mv', 'gmv') or name == 'rsync' and any(a.startswith('--remove-s') for a in args) else \
+        plain[1:] + plain[:1] if name == 'zip' and any(a in ('-m', '--move') or re.fullmatch(r'-[a-zA-Z0-9]*m[a-zA-Z0-9]*', a) for a in args) else []
     into = next((args[i + 1] for i, a in enumerate(args[:-1]) if name in ('mv', 'gmv') and re.fullmatch(r'-[a-zA-Z]*t|--target-directory', a)), None) or \
         next((a.split('=', 1)[1] for a in args if name in ('mv', 'gmv') and a.startswith('--target-directory=')), None)
     if into is not None: moved = [m for m in moved if m != into] + [into]  # mv -t folder files…
-    if name == 'tar' and any(a == '--remove-files' for a in args): found.append(_hit('delete', '（tar 打包後刪除原檔）'))
+    if into is not None and len(moved) == 1 and _into_scratch(into, whole): found.append(_hit('delete', '（xargs 等傳來的檔案，移到暫存區）'))
+    if name in ('tar', 'gtar', 'gnutar', 'bsdtar') and any(a.startswith('--remove') for a in args): found.append(_hit('delete', '（tar 打包後刪除原檔）'))
     if name == 'rsync' and any(a.startswith('--delete') for a in args): found.append(_hit('delete', '（rsync 刪除目的地多出來的檔案）'))
-    if len(moved) > 1 and _into_scratch(moved[-1], whole) and any(not _scratch_place(s) for s in moved[:-1]):  # scratch files are deleted without asking
-        found.append(_hit('delete', '%s（移到暫存區）' % _names([s for s in moved[:-1] if not _scratch_place(s)])))
+    held = lambda s: '$' not in s and os.path.isabs(_expand(s)) and not _moves_folder(whole) and _scratch_place(s)  # surely already scratch
+    if len(moved) > 1 and _into_scratch(moved[-1], whole) and any(not held(s) for s in moved[:-1]):  # scratch files are deleted without asking
+        found.append(_hit('delete', '%s（移到暫存區）' % _names([s for s in moved[:-1] if not held(s)])))
     if name == 'git': found += _git(args)
     if name == 'gh' and args: found += _gh(args)
     if name == 'curl':

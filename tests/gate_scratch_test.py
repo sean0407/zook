@@ -85,7 +85,8 @@ class ScratchDelete(unittest.TestCase):
                         'mktemp() { echo ~; }; d=$(mktemp -d); rm "$d/x"', 'd=$(mktemp -d); : ${d:=~}; rm "$d/x"', 'd=$(mktemp -d); rm "${d:-~}/x"',
                         'd=$(mktemp -d ~/Documents/XXXXXX); rm "$d/a"', 'd=$(mktemp -d ../XXXXXX); rm "$d/a"', 'd=$(mktemp -d .); rm "$d/a"',
                         'd=$(mktemp -d ~/Documents/Claude); rm "$d/Zook"', 'echo "a; d=$(mktemp -d); b"; rm $d/.file',
-                        'rm -f %s > ~/Desktop/a.txt' % self.tmp, 'rm -f %s 2> ~/Desktop/a.txt' % self.tmp,
+                        'rm -f %s > ~/Desktop/a.txt' % self.tmp, 'rm %s >$HOME/important' % self.tmp, 'rm %s > f' % self.tmp,
+                        'false && d=$(mktemp -d); rm $d/.file', 'rm -f %s 2> ~/Desktop/a.txt' % self.tmp,
                         'TMPDIR=~/Documents; rm "$TMPDIR/r.docx"', ': ${TMPDIR:=~}; rm "$TMPDIR/r"', 'export TMPDIR=~; rm $TMPDIR/r',
                         'rm "$TMPDIR/../x"', 'rm "$HOME/x"', 'cat <<EOF\nd=$(mktemp -d)\nEOF\nrm "$d/x"'):
             self.asked(command)
@@ -99,7 +100,10 @@ class ScratchDelete(unittest.TestCase):
                         '(cd /tmp; mv ~/a y)', 'pushd /tmp; mv ~/a y', 'env -C /tmp mv ~/a y', 'cd /private; cd tmp; mv ~/a b',
                         'a=/private/t; mv ~/a ${a}mp/', 'mv ~/a /pr*/tm*', 'mv ~/a /tm[p]/', 'mv ~/a {/private/tmp,}', 'mv ~/a $(echo /pr)ivate/t""mp',
                         'rsync -a --remove-sent-files ~/x /tmp/', 'tar --remove-files -cf /tmp/x.tar ~/x', 'rsync -a --delete /tmp/e/ ~/dir/',
-                        'coproc rm ~/x', 'repeat 1 rm ~/x'):
+                        'coproc rm ~/x', 'repeat 1 rm ~/x', 'zip -9m /tmp/x.zip ~/a', 'zip -r9m /tmp/x.zip ~/a', 'ls ~/old | xargs mv -t /tmp',
+                        'gtar --remove-files -cf /tmp/x.tar ~/a', 'bsdtar --remove-f -cf /tmp/x.tar ~/a', 'rsync --remove-source-f ~/a /tmp/',
+                        'env --chdir=/tmp mv ~/a y', 'cd ~ && mv a.txt /tmp', 'cd ~; mv -t /tmp a.txt', 'mv a.txt /tmp',
+                        'coproc foo { rm ~/a; }', 'coproc foo rm ~/a', 'function f { rm ~/a; }; f'):
             self.asked(command)
         for command in ('node -e "require(\'fs\').renameSync(\'a\', \'/tmp/a\')"', 'swift -e "try FileManager.default.moveItem(atPath: p, toPath: t)"'):
             self.assertIn('unclear', kinds(command), command)
