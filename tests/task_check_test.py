@@ -281,6 +281,101 @@ class TaskRulesTest(unittest.TestCase):
         self.m.task_failed_attempt(task, '沒做完', dict(toolCalls=[dict(category='read', status='completed')]))
         self.assertEqual(task['status'], 'ready')
 
+    def test_any_command_may_have_reached_out(self):
+        # #179: Zook cannot tell from a command what it did, so any command it ran is a may, worded as such; no command, no reminder.
+        fail = lambda *calls: (lambda task: (self.m.task_failed_attempt(task, '驗收沒有通過', dict(toolCalls=list(calls))), task)[1])(dict(failures=0))
+        cmd = lambda c, **kw: dict(self.m.native_action('command', c), **dict(dict(status='completed'), **kw))
+        for command in ('ls -la /tmp/out', "python3 - <<'EOF'\nfrom pptx import Presentation\nPresentation().save('/tmp/a.pptx')\nEOF", '', '   ', './tools/ls'):
+            task = fail(cmd(command))
+            self.assertEqual(task['status'], 'stuck', command); self.assertTrue(task['note'].startswith('這次用了指令，Zook 無法確認有沒有對外'), command)
+            self.assertNotIn('可能已經對外做了一部分', task['note'])
+        self.assertEqual(fail(cmd('curl -d @a https://x', status='error'))['status'], 'stuck')  # failed: it may still have sent
+        for mark in (None, '', 0):  # only a plain False says a command stayed here; missing or empty is a may
+            self.assertEqual(fail(cmd('ls', outward=mark))['status'], 'stuck', mark)
+        self.assertNotIn('outward', cmd('ls'))
+        self.assertEqual(fail(cmd('ls', outward=False))['status'], 'ready')
+        self.assertEqual(fail(cmd('ls', refused=True))['status'], 'ready')  # refused on its approval card: never ran
+        # what a result says is no proof it never ran: "Permission denied" from a command that did run
+        out = dict(web=[dict(self.m.native_action('command', 'curl -d @a https://x && cp r /etc/r'), _ref='t1', status='error')])
+        self.m.task_check_tools.__globals__['mark_result'](out, 't1', True, 'cp: /etc/r: Permission denied')
+        recorded = self.m.task_check_tools.__globals__['native_record'](dict(approvals=[]), out['web'][0])
+        self.assertEqual(fail(recorded)['status'], 'stuck')
+        gate = lambda status: dict(name='zook_native_gate', approvals=[dict(name='zook_native_gate', status=status, arguments={'toolUseId': 't1'})])
+        self.assertTrue(self.m.task_check_tools.__globals__['native_record'](gate('denied'), out['web'][0]).get('refused'))
+        self.assertFalse(self.m.task_check_tools.__globals__['native_record'](gate('approved'), out['web'][0]).get('refused'))
+        task = fail(dict(name='zook_native_gate', category='danger', status='completed'), cmd('make deploy'))  # its approval card is the command itself
+        self.assertTrue(task['note'].startswith('這次用了指令'), task['note'])
+        self.assertEqual(fail(dict(name='zook_native_gate', category='danger', status='denied'))['status'], 'ready')
+        task = fail(cmd('ls'), dict(category='external_write', status='error'))  # a step meant to reach out wins the wording
+        self.assertEqual(task['status'], 'stuck'); self.assertIn('可能已經對外做了一部分', task['note'])
+        task = fail(dict(category='read', status='completed'), dict(name='native_write', category='internal', status='completed'))
+        self.assertEqual(task['status'], 'ready'); self.assertNotIn('note', task)
+
+    def test_the_host_is_told_the_outward_note_is_only_a_careful_reminder(self):
+        for call in (dict(category='external_write', status='completed'), dict(name='native_command', category='code', status='completed')):
+            task = dict(n=1, title='簡報', assignee='x', status='stuck', attempts=[dict(state='reported', outcome='succeeded', summary='存好了')], failures=1)
+            self.m.task_failed_attempt(task, '沒過', dict(toolCalls=[call]))
+            line = self.m.task_line(None, task)
+            self.assertIn('保守提醒', line); self.assertIn('不是事實', line)
+        self.assertIn('保守提醒', self.m.task_host_prompt.__globals__['TASK_SUMMARY_NOTE'])
+
+    def test_the_board_counts_what_was_handed_in_but_waits_for_you(self):
+        run = dict(status='stopped', tasks=[dict(n=1, title='簡報', assignee='x', status='stuck', note='驗收兩次都沒有完成', attempts=[dict(state='reported', outcome='succeeded', summary='存好了', files=['/tmp/a.pptx'])])])
+        text = self.m.task_board_text(None, run)
+        self.assertIn('已完成 0／1', text); self.assertIn('1 項已交出，等你看結果', text); self.assertIn('已交出，等你決定', text)
+        self.assertIn('存好了', text); self.assertIn('驗收兩次都沒有完成', text)  # what it handed in, and why it waits
+        self.assertIn('存好了', self.m.task_line(None, run['tasks'][0]))
+        run['tasks'][0]['attempts'][0]['summary'] = '長' * 160  # a long summary leaves room for why it waits
+        self.assertIn('驗收兩次都沒有完成', self.m.task_board_text(None, run))
+        run['tasks'][0]['status'] = 'unknown'  # a restart too late to go on by itself: still handed in
+        self.assertIn('1 項已交出，等你看結果', self.m.task_board_text(None, run))
+
+    def test_a_handed_in_task_left_after_a_late_restart_can_be_accepted(self):
+        m = self.m
+        run = dict(status='stopped', tasks=[dict(id='t', n=1, title='簡報', assignee='x', status='unknown', attempts=[dict(state='reported', outcome='succeeded', summary='存好了')])])
+        group = dict(id='g', status='idle', messages=[], taskRun=run)
+        said = []
+        class Handler:
+            command = 'POST'
+            class server:
+                resumed = []
+                @classmethod
+                def task_resume(cls, g): cls.resumed.append(g['id'])
+            def error(self, code, text): said.append((code, text))
+            def respond(self, code, body): said.append((code, body))
+        class Store:
+            data = {'settings': {'taskEngine': True}, 'bots': []}
+            def find(self, kind, x): return None
+            def save(self): pass
+        g = m.task_route.__globals__; self.addCleanup(g.__setitem__, 'task_board_update', g['task_board_update']); g['task_board_update'] = lambda *a: None
+        m.task_route(Handler(), Store(), group, ['api', 'groups', 'g', 'tasks', 't', 'accept'])
+        self.assertEqual(said[-1][0], 202, said); self.assertEqual(run['tasks'][0]['status'], 'done')
+
+    def test_the_host_cannot_send_back_a_try_that_ran_commands(self):
+        # #179: what the try really did counts, not only the changes it was planned with.
+        m = self.m
+        class Store:
+            lock = __import__('threading').RLock()
+            def __init__(self): self.data = {'jobs': [dict(id='j1', toolCalls=[dict(name='native_command', category='code', status='completed')])]}
+            def find(self, kind, x): return next((j for j in self.data['jobs'] if j['id'] == x), None)
+            def save(self): pass
+        run = dict(attempts=1, tasks=[dict(id='t', n=1, title='簡報', assignee='x', status='done', changes='files', attempts=[dict(state='reported', outcome='succeeded', jobId='j1')])], log=[])
+        group = dict(id='g', messages=[], taskRun=run)
+        [(spec, redo, _)] = m.task_redo_tool(None, Store(), 'g', lambda: (group, run), lambda: None, lambda *a: a, lambda d: d, lambda v, *_: v)
+        with self.assertRaises(RuntimeError) as caught: redo({'number': '1', 'fix': '頁碼要連續'})
+        self.assertIn('Zook 無法確認有沒有對外', str(caught.exception)); self.assertEqual(run['tasks'][0]['status'], 'done')
+
+    def test_the_host_is_told_how_to_use_the_reminder_before_everything_ends(self):
+        m = self.m
+        run = dict(goal='做簡報', hostId='h', wakeFor=['a'], tasks=[
+            dict(id='a', n=1, title='簡報', assignee='x', status='stuck', note=m.TASK_COMMAND_NOTE + '自動重試可能重複，停下來等你決定。', attempts=[dict(state='reported', outcome='succeeded', summary='存好了')]),
+            dict(id='b', n=2, title='表格', assignee='y', status='asked', question='哪一季？', attempts=[dict(state='asked')])])
+        class Store:
+            data = {'memories': [], 'bots': [], 'groups': []}
+            def find(self, kind, x): return None
+        prompt = m.task_host_prompt(Store(), dict(id='g', name='團隊', messages=[], botIds=[]), run, dict(id='h', name='主持'), 'wake')
+        self.assertIn('保守提醒', prompt); self.assertIn('不要把它當成成員真的寄出或改了什麼寫進總結或驗收結論', prompt)
+
     def test_a_copy_put_back_never_turns_the_engine_on(self):
         old, new = dict(settings={'taskExecution': 'ask'}), dict(settings={'taskEngine': True, 'taskExecution': 'lowrisk'})
         self.m.task_keep_local(old, new)

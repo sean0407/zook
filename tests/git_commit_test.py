@@ -44,7 +44,7 @@ class GitCommit(unittest.TestCase):
         self.assertEqual(self.m.git_commit(self.repo, 'x'), {'committed': False, 'reason': '沒有變更可以提交。'})
 
     def test_settings_that_run_programs_are_refused(self):
-        for key, value in (('filter.x.clean', 'touch /tmp/zook-should-not-run'), ('core.fsmonitor', 'true'), ('include.path', '/tmp/x'), ('gpg.program', '/bin/echo'),
+        for key, value in (('filter.x.clean', 'touch /tmp/zook-should-not-run'), ('core.fsmonitor', 'true'), ('include.path', str(self.root / 'no-such-include')), ('gpg.program', '/bin/echo'),
                            ('hook.e.command', 'touch /tmp/zook-should-not-run'), ('alias.x', '!touch /tmp/zook-should-not-run')):
             with self.subTest(key=key):
                 git(self.repo, 'config', key, value); (self.repo / 'a.txt').write_text(key)

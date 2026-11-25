@@ -112,6 +112,7 @@ def sync_clean(key, value):
                     one[k] = m[k]
             for k in ('plan', 'long', 'compacted'):
                 if m.get(k) is True: one[k] = True
+            date_check_copy(m, one)  # the reminder under a mismatched date: worked out again here, not copied (datecheck.py)
             if m.get('attachments'):
                 files = m['attachments']
                 if not isinstance(files, list) or len(files) > 20: return None
