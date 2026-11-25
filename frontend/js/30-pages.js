@@ -141,7 +141,7 @@
       await loadUpTo(b, messageId);
     }
     if (state.modal) closeModal();
-    if (kind === 'group') state.groupId = id; else { state.groupId = null; state.selected = id; }
+    if (kind === 'group') state.groupId = id; else { state.groupId = null; state.selected = id; chooseChat(id); }  // what this window now shows is its own
     state.page = 'chat'; state.launcher = false;
     state.focus = messageId ? {id: messageId, until: Date.now() + 5000} : null;
     render();
@@ -216,10 +216,7 @@
     if (!state.data.groups) state.data.groups = [];
     if (!state.lastRestored) {  // after a reload, the conversation or group that was open before
       state.lastRestored = true;
-      let last = {};
-      try { last = JSON.parse(localStorage.getItem('zook-last-chat') || '{}') || {}; } catch (_) {}
-      if (last.group && state.data.groups.some(g => g.id === last.group)) state.groupId = last.group;
-      if (last.bot && state.data.bots.some(b => b.id === last.bot)) state.selected = last.bot;
+      restoreLastOpen();
     }
     if (state.groupId && !activeGroup()) state.groupId = null;
     for (const job of state.data.jobs || []) state.jobDetails[job.id] = job;

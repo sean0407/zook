@@ -447,7 +447,7 @@
       if (cursor !== null) { $('#chat-input').focus(); $('#chat-input').setSelectionRange(cursor[0], cursor[1]); }
     }
     updateMentionMenu();
-    if (state.page === 'chat' && state.lastRestored) { try { localStorage.setItem('zook-last-chat', JSON.stringify({bot: state.selected || '', group: state.groupId || ''})); } catch (_) {} }
+    saveLastOpen();
     if (localOpen && $('.usage-local')) $('.usage-local').open = true;
     if (pageY && $('.page')) $('.page').scrollTop = pageY;
     if (state.page === 'usage') drawOverviewChart();  // sized to its column, so it is drawn after the page is in place
