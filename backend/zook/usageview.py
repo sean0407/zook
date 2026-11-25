@@ -19,12 +19,13 @@ def usage_rings(store):
     for provider in P.active_ids(data):
         snap = quota.get(provider) if isinstance(quota.get(provider), dict) else {}
         windows = [w for w in snap.get('windows') or [] if isinstance(w, dict)]
-        rows = [dict(label=str(w.get('label') or ''), left=_left(w, snap, now), resetsAt=w.get('resetsAt')) for w in windows]
+        out_now = limit_reached_now(snap)  # #184②: the CLI just said the limit is reached; what the bars last read does not count (same as 已用完 in the Bot form)
+        rows = [dict(label=str(w.get('label') or ''), left=0.0 if out_now and _left(w, snap, now) is not None else _left(w, snap, now), resetsAt=w.get('resetsAt')) for w in windows]
         rows = [r for r in rows if r['left'] is not None]
         main = [r for r in rows if 'gemini' in r['label'].lower()] or rows if provider == 'antigravity' else rows  # the rings follow the model Zook runs by default
         short = [r['left'] for r in main if '小時' in r['label']]; long = [r['left'] for r in main if '週' in r['label']]
         out.append(dict(id=provider, name=provider_label(provider).split('（')[0], fiveHour=min(short) if short else None, week=min(long) if long else None,
-                        left=min(r['left'] for r in main) if main else None, windows=rows, updatedAt=snap.get('updatedAt'),
+                        left=min(r['left'] for r in main) if main else 0.0 if out_now else None, windows=rows, updatedAt=snap.get('updatedAt'), out=out_now,
                         known=bool(rows) or (status.get(provider) or {}).get('signedIn') is True or provider in used))
     return out
 

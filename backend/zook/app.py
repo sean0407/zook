@@ -184,7 +184,8 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
         date_check_message(asked)  # a date and weekday that do not match: said under the message and to the Bot
         prompt, short = build()
         msg = resume_reply(place) if place else dict(id=ID(), role='assistant', content='', createdAt=NOW(), status='running')
-        if use and not place: msg['note'] = '這次用 %s 回答' % provider_label(provider).split('（')[0]
+        redo_who = None
+        if use and not place: msg['note'], redo_who = redo_note(store, bot, replaces, provider, model)  # 原本：X／這次：Y (redonote.py, #143)
         msg.update(auto_mark)
         if effort != 'standard': msg['effort'] = effort
         if plan: msg['plan'] = True
@@ -199,6 +200,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
         job = dict(id=ID(), botId=bot['id'], chatId=chat_id, messageId=msg['id'], status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[])
         if placed or earlier: job.update(attachments=[str(x) for x in (earlier + placed)[-MAX_ATTACHMENTS:]], attachmentIds=[a['id'] for a in before + (attachments or [])][-MAX_ATTACHMENTS:])
         if replaces: job.update(redoOf=replaces, askedId=asked['id'])
+        if redo_who and not model: job.update(redoWho=redo_who, redoNote=msg['note'])  # the model is added when the CLI says which it ran
         job['effort'] = effort
         if use and bot.get('provider') == AUTO: job.update(autoChain=[[provider, model, (resume_of.get('ran') or ['', '', ''])[2] if place else '']], autoNamed=True)  # 換模型重答 stays on the model the user named, on its own sign-in
         if auto_chain: job['autoChain'] = auto_chain; refresh_auto(self)
@@ -722,6 +724,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 if parsed['usage'] and kind == 'codex' and not model: parsed['usage']['model'] = codex_default_model(env) or parsed['usage'].get('model')  # so the reply can be priced
                 if parsed['usage']: parsed['usage'] = live_usage(kept, parsed['usage'])
                 if parsed['usage']: job['usage'] = dict(parsed['usage'], provider=provider, account=account['id'] if account else ''); budget_add(self, provider, parsed['usage']); compact_note_usage(store, job, kind, parsed['usage']); (job.get('autoNamed') or model) or auto_pin_model(store, job['botId'], provider, parsed['usage'])
+                if parsed['usage'] and job.get('redoWho'): redo_model_seen(store, job, provider, parsed['usage'])
                 if job['status'] == 'running':
                     content, options = split_choices(content) if choices_for(store, job) else (content, None)
                     job.update(status='completed', content=content, finishedAt=NOW())

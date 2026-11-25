@@ -1,5 +1,32 @@
   // ---- Attachments: each file is uploaded as soon as it is added, then sent with the message.
-  if (!state.pendingBy) state.pendingBy = {};  // files waiting to be sent, per Bot or group
+  // #153①: the files already uploaded are kept in this window's sessionStorage, so reloading the page does not drop them silently.
+  const PENDING_STORE = 'zook-pending-files';
+  function keepPending() {
+    const kept = {};
+    for (const [key, list] of Object.entries(state.pendingBy || {})) {
+      const done = (list || []).filter(f => f.id && !f.uploading).map(f => ({key: f.key, id: f.id, name: f.name, size: f.size, kind: f.kind || '', fromPath: f.fromPath || ''}));
+      if (done.length) kept[key] = done;
+    }
+    try { Object.keys(kept).length ? sessionStorage.setItem(PENDING_STORE, JSON.stringify(kept)) : sessionStorage.removeItem(PENDING_STORE); } catch (_) {}
+  }
+  function restorePending() {
+    let saved = {};
+    try { saved = JSON.parse(sessionStorage.getItem(PENDING_STORE) || '{}') || {}; } catch (_) {}
+    const out = {};
+    for (const [key, list] of Object.entries(saved)) {
+      if (!Array.isArray(list)) continue;
+      out[key] = list.filter(f => f && /^[0-9a-f]{32}$/.test(String(f.id))).slice(0, 10).map(f => ({key: String(f.key || Math.random().toString(36).slice(2)), id: f.id, name: String(f.name || '檔案'), size: Number(f.size) || 0, kind: f.kind === 'image' ? 'image' : 'file', fromPath: String(f.fromPath || ''), uploading: false, url: f.kind === 'image' ? '/api/uploads/' + f.id : ''}));
+    }
+    return out;
+  }
+  // × in the message box: the file is taken out, and Zook deletes its upload (it keeps one that a sent message uses).
+  function dropPending(key) {
+    const list = pendingList(), at = list.findIndex(f => f.key === key);
+    if (at < 0) return;
+    const [f] = list.splice(at, 1); keepPending();
+    if (f.id) api('uploads/' + encodeURIComponent(f.id), {method: 'DELETE'}).catch(() => {});
+  }
+  if (!state.pendingBy) state.pendingBy = restorePending();  // files waiting to be sent, per Bot or group
   const pendingKey = () => activeGroup() ? effortKey() : effortKey() + ':' + ((state.data?.bots || []).find(b => b.id === state.selected)?.chatId || '');  // each conversation has its own
   const pendingList = () => state.pendingBy[pendingKey()] || (state.pendingBy[pendingKey()] = []);
   const kb = n => n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1024 / 1024).toFixed(1) + ' MB';
@@ -14,7 +41,7 @@
       : `<a class="att-file" href="/api/uploads/${esc(a.id)}" download="${esc(a.name)}">📄 ${esc(a.name)}</a>`).join('')}</div>`;
   }
   async function addFiles(files) {
-    const list = pendingList(), failed = []; let ok = 0;
+    const list = pendingList(), failed = [], renamed = []; let ok = 0;
     for (const f of files) {
       if (list.length >= 10) { failed.push({name: f.name, reason: '每則訊息最多 10 個檔案'}); continue; }
       if (f.size > 20 * 1024 * 1024) { failed.push({name: f.name, reason: '超過 20 MB'}); continue; }
@@ -28,10 +55,13 @@
         const meta = await res.json();
         if (!res.ok) throw new Error(meta.error || '上傳失敗');
         Object.assign(item, {id: meta.id, kind: meta.kind, uploading: false}); ok++;
+        if (meta.name && meta.name !== name) { item.name = meta.name; renamed.push(`「${midName(name)}」已改名為「${midName(meta.name)}」`); }  // #153③: a name the Mac cannot keep as it is
+        if (!list.includes(item)) api('uploads/' + encodeURIComponent(meta.id), {method: 'DELETE'}).catch(() => {});  // × pressed while it was uploading
       } catch (e) { if (list.includes(item)) list.splice(list.indexOf(item), 1); failed.push({name, reason: e.message || '上傳失敗'}); }
       render(true);
     }
-    if (failed.length) toast(fileSummary(ok, failed, '附上'));  // one summary at the end (#150), not one note per file that the next one covers
+    keepPending();
+    if (failed.length || renamed.length) toast([failed.length ? fileSummary(ok, failed, '附上') : '', renamed.length ? renamed.join('、') + '（檔名裡有不能用的字元或太長）' : ''].filter(Boolean).join('；'));  // one summary at the end (#150), not one note per file that the next one covers
   }
   // A file path typed or pasted into the message box: offer to attach that file. Nothing is read until the user clicks 附上.
   state.pathSkip = state.pathSkip || new Set();
@@ -68,8 +98,9 @@
     try {
       const meta = await post('uploads/path', {path});
       Object.assign(item, {id: meta.id, name: meta.name, size: meta.size, kind: meta.kind, uploading: false, url: meta.kind === 'image' ? '/api/uploads/' + meta.id : ''});
+      if (!list.includes(item)) api('uploads/' + encodeURIComponent(meta.id), {method: 'DELETE'}).catch(() => {});  // × pressed while it was copied
     } catch (err) { if (list.includes(item)) list.splice(list.indexOf(item), 1); toast(err.message || '附上失敗'); }  // removed already if the user pressed ×
-    render(true); showPathOffers();
+    keepPending(); render(true); showPathOffers();
   });
   document.addEventListener('paste', e => {
     const files = [...(e.clipboardData?.files || [])];

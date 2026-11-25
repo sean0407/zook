@@ -633,10 +633,11 @@ class Handler(BaseHTTPRequestHandler):
                     return self.respond(201, {'name': name})
                 finally:
                     if temp.exists(): temp.unlink()
+            if len(parts) == 3 and parts[:2] == ['api', 'uploads'] and self.command == 'DELETE' and not self.device:
+                with store.lock: return self.respond(200, {'removed': upload_drop(store, parts[2])})  # × in the message box (#153②)
             if len(parts) == 3 and parts[:2] == ['api', 'uploads'] and self.command == 'GET' and not self.device:
                 meta = upload_meta(store, parts[2])
-                if not meta: return self.error(404, '找不到這個檔案。')
-                data = (store.dir / 'uploads' / meta['id'] / 'file').read_bytes()
+                if not meta or (data := upload_bytes(store, meta)) is None: return self.error(404, '找不到這個檔案。')  # #153⑤: a file gone from the disk too
                 kind = IMAGE_TYPES.get(pathlib.Path(meta['name']).suffix.lower())
                 return self.respond(200, data, kind or 'application/octet-stream')
             if path == '/api/team/draft' and self.command == 'POST' and not self.device:  # one model call; never under the store lock
@@ -921,7 +922,7 @@ def main():
     signal.signal(signal.SIGTERM, stop_server)
     threading.Thread(target=app.sync_remote, daemon=True).start()
     threading.Thread(target=app.schedule_loop, daemon=True).start()
-    trim_jobs(app.store); recover_deleted_bots(app.store)
+    trim_jobs(app.store); recover_deleted_bots(app.store); sweep_uploads(app.store, force=True)
     app.store.save()
     try: app.script_api = ScriptApi(app)  # for scripts on this Mac; every Bot starts with it switched off
     except OSError: app.script_api = None
