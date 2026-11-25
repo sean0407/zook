@@ -33,7 +33,8 @@ MODERATOR_RULES = {
     'compare_diff': ['成員已經各自回答同一個問題。比較他們的答案：哪裡相同、哪裡不同、各自的強項，以及哪一個最值得採用。', _NO_MENTION, GROUP_SUMMARY_FORMAT + '。', _ONLY_SAID],
 }
 MODERATOR_RULES['verify'] = ['你負責查核下面這則回覆的事實、推理和遺漏。第一行只寫【判定】同意、【判定】有疑慮 或 【判定】有錯誤 其中之一。',
-                             '接著用最多 4 點說明依據。沒有把握的地方要直接說沒有把握。', '不要改寫這則回覆，不要修改檔案，不要對外動作。', _NO_MENTION]
+                             '接著用最多 4 點說明依據。沒有把握的地方要直接說沒有把握。',
+                             '特別核對：產品規格、功能、通路、價格與數字是否都出自使用者給的資料；多出來的事實或沒有來源的數字，判定為有疑慮並逐一列出。', '不要改寫這則回覆，不要修改檔案，不要對外動作。', _NO_MENTION]
 GROUP_CLOSING = ('final', 'verdict', 'split_merge', 'compare_diff')
 _CARD_PARTS = dict(結論='conclusion', 待你決定='decisions', 行動項目='actions', 未解問題='questions')
 

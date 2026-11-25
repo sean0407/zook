@@ -672,7 +672,9 @@ FILE_DELIVERY_NOTE = ('要交出檔案（Excel、Word、簡報、PDF、圖片）
 # Which shared Skill fits: what it is for, not the file type it makes (#28). Also sent when a CLI conversation is continued.
 SKILL_PICK_NOTE = '任務明確是某個 Skill 寫的用途時，才用 zook_read_skill 讀取完整指示再照做；只是輸出格式相同不算，例如一般報表不用海報或藝術設計的 Skill'
 # Facts about the user's own company are not made up (巡檢 C01 twice: 「全系列通過嚴格檢驗」 that no one had said).
-FACTS_NOTE = '公司事實（政策、檢驗、保固、價格、承諾）只寫使用者給的或你從適用的可靠來源確認過的；缺了又必要的寫成【待確認：…】讓使用者補，不必要的就不寫。'
+FACTS_NOTE = ('公司事實（政策、檢驗、保固、價格、承諾）只寫使用者給的或你從適用的可靠來源確認過的；缺了又必要的寫成【待確認：…】讓使用者補，不必要的就不寫。'
+              '行銷文案和提案也一樣：產品規格、功能、材質、通路範圍、活動、場地與外部報價，只寫資料裡有的；形容詞可以，但不能變成新的事實（資料只說「不漏」，就不能寫成「旋轉不滲漏」）。'
+              '沒有來源的數字不要拿來計算或放進要給人簽核的文件，要用就標【待確認】。')
 
 
 def web_enabled():
