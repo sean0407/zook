@@ -80,6 +80,10 @@
   };
   const svg = n => `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[n]||''}</svg>`;
   const colors = ['#111111', '#a47545', '#ff284b', '#ff6d0c', '#f59a0a', '#13bf78', '#14b8a6', '#2585f6', '#9254ff', '#ed2f9b', '#959595'];
+  // At or below this width the side panel covers the page instead of squeezing the conversation (#118, #60, #152); style.css uses the same number.
+  const DETAIL_WIDE = 1100;
+  const narrowDetail = () => window.matchMedia(`(max-width: ${DETAIL_WIDE}px)`).matches;
+  const detailBackdrop = () => '<div class="detail-backdrop" data-action="toggle-detail" aria-hidden="true"></div>';
   const state = {
     data: {
       bots: [],
@@ -93,7 +97,7 @@
     groupPollers: {},
     page: 'chat',
     detail: 'activity',
-    detailOpen: window.innerWidth > 1100,  // a narrow window keeps the conversation readable
+    detailOpen: !narrowDetail(),  // a narrow window keeps the conversation readable; the panel opens over it on request
     query: '',
     launcher: false,
     collapsed: {},
@@ -425,7 +429,7 @@
     const activeIds = g.activeJobIds?.length ? g.activeJobIds : g.activeJobId ? [g.activeJobId] : [];
     const activeNames = running ? activeIds.map(id => state.data.bots.find(b => b.id === state.jobDetails[id]?.botId)?.name).filter(Boolean) : [];
     const active = activeNames.length ? {name: activeNames.join('、')} : null;
-    return `<aside class="detail"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatarStack(g,'big')}<h2>${esc(g.name)}</h2><p>${members.length} 位成員${running ? ' · 討論中' + (active ? '（' + esc(active.name) + ' 發言中）' : '') : ''}</p><button class="secondary detail-edit" data-action="edit-group">編輯群組</button></div><div class="tabs"><button data-action="group-tab" data-id="members" class="${state.groupTab==='files'?'':'active'}">成員</button><button data-action="group-tab" data-id="files" class="${state.groupTab==='files'?'active':''}">檔案</button></div>${state.groupTab==='files'?groupFilesTab(g):`${members.map(b => `<button class="member-row" data-member-work="${esc(b.id)}" data-group="${esc(g.id)}">${avatar(b)}<span><strong>${esc(b.name)}${jobTitle(b)}</strong><small>${esc([(b.provider||state.data.settings.provider||'') + (b.model ? ' ' + b.model : ''), permText(b), (g.memberCounts?.[b.id] ? '發言 ' + g.memberCounts[b.id] + ' 次' : '')].filter(Boolean).join(' · '))}</small></span></button>`).join('')}<div class="detail-empty">點成員會開啟他自己的對話視窗，可以看到他在這個討論中查了什麼、用了哪些 Skill；群組裡只有他的結論。</div>`}${usageDock()}</aside>`;
+    return `${detailBackdrop()}<aside class="detail" aria-label="詳情"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatarStack(g,'big')}<h2>${esc(g.name)}</h2><p>${members.length} 位成員${running ? ' · 討論中' + (active ? '（' + esc(active.name) + ' 發言中）' : '') : ''}</p><button class="secondary detail-edit" data-action="edit-group">編輯群組</button></div><div class="tabs"><button data-action="group-tab" data-id="members" class="${state.groupTab==='files'?'':'active'}">成員</button><button data-action="group-tab" data-id="files" class="${state.groupTab==='files'?'active':''}">檔案</button></div>${state.groupTab==='files'?groupFilesTab(g):`${members.map(b => `<button class="member-row" data-member-work="${esc(b.id)}" data-group="${esc(g.id)}">${avatar(b)}<span><strong>${esc(b.name)}${jobTitle(b)}</strong><small>${esc([(b.provider||state.data.settings.provider||'') + (b.model ? ' ' + b.model : ''), permText(b), (g.memberCounts?.[b.id] ? '發言 ' + g.memberCounts[b.id] + ' 次' : '')].filter(Boolean).join(' · '))}</small></span></button>`).join('')}<div class="detail-empty">點成員會開啟他自己的對話視窗，可以看到他在這個討論中查了什麼、用了哪些 Skill；群組裡只有他的結論。</div>`}${usageDock()}</aside>`;
   }
   function groupModal(g = {}) {
     const editing = !!g.id, chosen = new Set(g.botIds || (state.selected && !state.groupId ? [state.selected] : []));
