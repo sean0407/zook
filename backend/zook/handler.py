@@ -647,7 +647,8 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/team' and self.command == 'POST' and not self.device:
                 body = self.body()
                 with store.lock: return self.respond(201, self.server.create_team(body))
-            inventory = None
+            inventory, chat_body = None, self.body() if path == '/api/chat' and self.command == 'POST' else None
+            if chat_body is not None: send_order_wait(self.server, chat_body)  # #142: after the message the app sent just before it
             if (path in ('/api/chat', '/api/chat/redo', '/api/chat/resume') and self.command == 'POST') or (parts[:2] == ['api', 'bots'] and self.command in ('POST', 'PATCH')) or (len(parts) == 4 and parts[:2] == ['api', 'schedules']):
                 inventory = inventory_for(store, tokens=path not in ('/api/chat', '/api/chat/redo', '/api/chat/resume'))  # a message only checks its Bot's choices; the reply signs in to connectors itself
             with store.lock:
@@ -691,7 +692,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.server.cancel_job(job, progress_asks_force(self))
                     return self.respond(200, job_view(job))
                 if path == '/api/chat' and self.command == 'POST':
-                    body = self.body(); bot = store.find('bots', body.get('botId'))
+                    body = chat_body; send_order_taken(self.server, body); bot = store.find('bots', body.get('botId'))
                     if not bot: return self.error(404, '找不到機器人。')
                     if self.device and isinstance(body.get('attachments'), list) and len(body['attachments']) > MOBILE_PHOTOS: return self.error(400, '手機每則訊息最多 %d 張照片。' % MOBILE_PHOTOS)
                     once = send_key('bot:' + bot['id'], body); sent = send_seen(self.server, once)
