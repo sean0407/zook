@@ -91,12 +91,16 @@
   const forget = s => { state.sending = state.sending.filter(x => x !== s); };
   // Drawn until the conversation itself has it, so it never blinks out between the answer and the refresh, and never shows twice.
   const arrived = (s, messages, waiting) => [...messages.filter(m => m.role === 'user'), ...waiting].some(m => m.content === (s.body.content && s.body.content.trim() ? s.body.content : '（請看附件）') && Date.parse(m.createdAt) >= s.at - 2000);
-  window.sendingView = (where, messages, waiting = []) => (state.sending = state.sending.filter(s => !(s.accepted && s.where === where && arrived(s, messages, waiting)))).filter(s => s.where === where && !(!s.error && arrived(s, messages, waiting))).map(s => `<div class="message user sending" data-sending="${esc(s.id)}"><div class="bubble">${esc(s.body.content || '（請看附件）')}</div>${s.error ? `<div class="interject-note error-text">沒有送出：${esc(s.error)}<button class="link" data-sending-retry="${esc(s.id)}">重新傳送</button><button class="link" data-sending-drop="${esc(s.id)}">移除</button></div>` : `<div class="interject-note">${s.done ? '已送出' : '傳送中…'}</div>`}</div>`).join('');
+  window.sendingView = (where, messages, waiting = []) => (state.sending = state.sending.filter(s => !(s.accepted && s.where === where && arrived(s, messages, waiting)))).filter(s => s.where === where && !(!s.error && arrived(s, messages, waiting))).map(s => `<div class="message user sending" data-sending="${esc(s.id)}"><div class="bubble">${esc(s.body.content || '（請看附件）')}</div>${s.error ? `<div class="interject-note error-text">沒有送出：${esc(s.error)}<button class="link" data-sending-retry="${esc(s.id)}">重新傳送</button><button class="link" data-sending-drop="${esc(s.id)}">移除</button></div>` : `<div class="interject-note">${s.done ? '已送出' : s.slow ? '已送出，Bot 準備中…' : '傳送中…'}</div>`}</div>`).join('');
+  // #169: the Mac answers once the reply is set up, which can take a while; past a moment the message is on its way, not stuck.
+  const SLOW_AFTER = 1500;
   window.sendingSend = async s => {
-    s.error = ''; s.done = false;
+    s.error = ''; s.done = false; s.slow = false;
+    const timer = setTimeout(() => { if (!s.done && !s.error) { s.slow = true; render(true); } }, SLOW_AFTER);
     let result;
     try { result = await post(s.path, s.body); }
     catch (err) { s.error = err.message || '沒有送出'; render(true); return null; }
+    finally { clearTimeout(timer); }
     s.done = true; s.accepted = !!result.accepted;  // taken in, still being got ready on the Mac: kept (as 已送出) until the conversation shows it
     try { await refresh(); if (!s.accepted) forget(s); } catch (_) { render(true); }  // kept (as 已送出) until a later refresh shows it
     if (s.group) pollGroup(s.group);
