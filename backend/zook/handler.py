@@ -228,7 +228,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.error(404, '找不到資源。')
     def respond(self, code, data, content_type='application/json; charset=utf-8'):
         raw = json.dumps(data, ensure_ascii=False).encode() if isinstance(data, (dict, list)) else data
-        note_request(self, code, data)
+        note_request(self, code, data); create_done(self, code, data)
         self.send_response(code); self.send_header('Content-Type', content_type); self.send_header('Content-Length', str(len(raw)))
         self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors %s" % ("'self'" if content_type == 'application/pdf' else "'none'")); self.send_header('Cache-Control', 'private, max-age=86400' if content_type == 'image/png' else 'no-store'); self.send_header('X-Content-Type-Options', 'nosniff'); self.end_headers(); self.wfile.write(raw)
     def error(self, code, message): self.respond(code, {'error': message})
@@ -664,7 +664,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.command == 'GET' and path == '/api/usage': return self.respond(200, usage())
                 if self.command == 'POST' and path == '/api/export': return self.respond(200, store.data)
                 if parts[:2] == ['api', 'backups'] or path in ('/api/activity', '/api/budget'): return upkeep_route(self, store, parts, path)
-                if self.command == 'GET' and (path == '/api/search' or (len(parts) == 4 and parts[:2] == ['api', 'bots'] and parts[3] == 'messages')): return paging_route(self, store, parts, path)
+                if self.command == 'GET' and (path == '/api/search' or (len(parts) == 4 and parts[:2] == ['api', 'bots'] and parts[3] in ('messages', 'export'))): return paging_route(self, store, parts, path)
                 if len(parts) == 3 and parts[:2] == ['api', 'jobs'] and self.command == 'GET':
                     job = store.find('jobs', parts[2]); return self.respond(200, job_view(job)) if job else self.error(404, '找不到工作。')
                 if len(parts) == 3 and parts[:2] == ['api', 'approvals'] and self.command == 'POST':
@@ -751,8 +751,10 @@ class Handler(BaseHTTPRequestHandler):
                         messages.extend(removed); raise
                     return self.respond(202, {'jobId': job['id']})
                 if path == '/api/schedules' and self.command == 'POST':
+                    body = self.body()
+                    if (again := create_seen(self, 'schedules', body)): return self.respond(200, dict(again, duplicate=True))
                     if len(store.data['schedules']) >= MAX_SCHEDULES: return self.error(409, '排程已達上限 %d 個，請先刪除不用的排程。' % MAX_SCHEDULES)
-                    item = schedule_fields(store, self.body(), dict(id=ID(), botId='', content='', time='', repeat='daily', on=True, catchUp=True, createdAt=NOW()))
+                    item = schedule_fields(store, body, dict(id=ID(), botId='', content='', time='', repeat='daily', on=True, catchUp=True, createdAt=NOW()))
                     if not self.device: trigger_fields(store, self.last_body, item)
                     store.data['schedules'].append(item); store.save(); return self.respond(201, item)
                 if len(parts) == 3 and parts[:2] == ['api', 'schedules'] and self.command in ('PATCH', 'DELETE'):
@@ -773,6 +775,7 @@ class Handler(BaseHTTPRequestHandler):
                     item.update(lastAt=NOW(), lastStatus='sent', lastError=''); store.save(); return self.respond(202, item)
                 if path == '/api/groups' and self.command == 'POST':
                     body = self.body(); group = dict(id=ID(), name='', botIds=[], messages=[], status='idle', runId=None, activeJobId=None, createdAt=NOW())
+                    if (again := create_seen(self, 'groups', body)): return self.respond(200, dict(again, duplicate=True))
                     set_group_fields(store, group, body, creating=True)
                     store.data['groups'].append(group); store.save(); return self.respond(201, group)
                 if len(parts) >= 3 and parts[:2] == ['api', 'groups']:
@@ -783,6 +786,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self.respond(200, {'group': page_group(group), 'jobs': [job_view(j) for j in (store.find('jobs', x) for x in ids) if j]})
                     if len(parts) == 4 and parts[3] == 'messages' and self.command == 'GET':
                         return self.respond(200, page_group_messages(group, parse_qs(urlsplit(self.path).query), store))
+                    if len(parts) == 4 and parts[3] == 'export' and self.command == 'GET': return self.respond(200, export_group(store.data, group))
                     if len(parts) == 3 and self.command == 'PATCH':
                         candidate = copy.deepcopy(group); set_group_fields(store, candidate, self.body())
                         added = candidate['messages'][len(group['messages']):]  # the discussion may still be running, so its messages stay as they are
@@ -849,6 +853,7 @@ class Handler(BaseHTTPRequestHandler):
                     store.data['memories'].remove(item); store.save(); return self.respond(200, {'ok': True})
                 if path == '/api/bots' and self.command == 'POST':
                     body = self.body(); name = body.get('name', '')
+                    if (again := create_seen(self, 'bots', body)): return self.respond(200, dict(again, duplicate=True))
                     if not isinstance(name, str) or not name.strip() or len(name)>100: raise ValueError('名稱無效。')
                     bot = dict(id=ID(), name=name, color='#8275f4', shape='circle', instructions='', persona='', provider='', model='', pinned=False, section='團隊', messages=[], enabledSkills=[], enabledMcp=[], allowCommands=True)
                     update(bot, body, 'bot'); validate_selection(bot, inventory); set_gate_full(bot); auto_on_create(store, bot, grant=True); ensure_chats(bot); store.data['bots'].append(bot); store.save(); watch_auto_status(store, bot); self.server.want_intro(bot['id']); return self.respond(201, bot)
@@ -912,8 +917,9 @@ class Handler(BaseHTTPRequestHandler):
                     if 'permissionMode' in body: self.server.release_approvals()
                     return self.respond(200, store.data['settings'])
                 if path == '/api/knowledge' and self.command == 'POST':
-                    item = dict(id=ID(), title='', content='', tags=[], botId='', createdAt=NOW(), updatedAt=NOW())
-                    update(item, self.body(), 'knowledge'); store.data['knowledge'].append(item); store.save(); return self.respond(201, item)
+                    item = dict(id=ID(), title='', content='', tags=[], botId='', createdAt=NOW(), updatedAt=NOW()); body = self.body()
+                    if (again := create_seen(self, 'knowledge', body)): return self.respond(200, dict(again, duplicate=True))
+                    update(item, body, 'knowledge'); store.data['knowledge'].append(item); store.save(); return self.respond(201, item)
                 if len(parts) == 3 and parts[:2] == ['api', 'knowledge']:
                     item = store.find('knowledge', parts[2])
                     if not item: return self.error(404, '找不到知識項目。')
@@ -946,9 +952,6 @@ def main():
     signal.signal(signal.SIGTERM, stop_server)
     threading.Thread(target=app.sync_remote, daemon=True).start()
     threading.Thread(target=app.schedule_loop, daemon=True).start()
-    for job in app.store.data['jobs']:  # activity saved by earlier versions
-        for call in job.get('toolCalls') or []:
-            if call.get('name') == 'native_command' and isinstance((call.get('arguments') or {}).get('command'), str): call['arguments'] = {'summary': command_summary(call['arguments']['command'])}  # older records: the summary only
     trim_jobs(app.store); recover_deleted_bots(app.store)
     app.store.save()
     try: app.script_api = ScriptApi(app)  # for scripts on this Mac; every Bot starts with it switched off

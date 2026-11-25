@@ -328,7 +328,7 @@
     const panel = document.querySelector('#bot-form .avatar-panel');
     if (panel && !panel.hidden && !e.target.closest?.('.avatar-panel') && !e.target.closest?.('[data-action="avatar-pick"]')) panel.hidden = true;
   }, true);
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.launcher) { state.launcher = false; render(true); } });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && state.launcher) { e.preventDefault(); state.launcher = false; render(true); } });
   document.addEventListener('click', e => {
     const opt = e.target.closest?.('.dd-opt'), btn = e.target.closest?.('.dd-btn');
     if (btn) {

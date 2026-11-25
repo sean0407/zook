@@ -34,7 +34,7 @@ class NamedOutputs(unittest.TestCase):
                  dict(event='step_update', step_update=dict(step_index=6, state='DONE', step_type='tool', tool_name='read_file', tool_info=dict(name='read_file', parameters=dict(Path='/tmp/x/a.csv')))),
                  dict(event='result', result=dict(status='SUCCESS', response='好了'))]
         out = self.m.parse_cli_output('antigravity', '\n'.join(json.dumps(x, ensure_ascii=False) for x in lines), 'm')
-        self.assertEqual([(w['name'], list(w['arguments'].values())[0]) for w in out['web']], [('native_write', '/tmp/x/報表.xlsx'), ('native_command', '執行指令：python3')])  # a summary, never the command
+        self.assertEqual([(w['name'], list(w['arguments'].values())[0]) for w in out['web']], [('native_write', '/tmp/x/報表.xlsx'), ('native_command', '執行 Python 程式「make.py」')])  # a summary, never the command
 
     def test_a_file_the_reply_names_counts_when_it_changed_during_the_reply(self):
         made = self.root / 'out' / '第三季業績.xlsx'; made.parent.mkdir(); start = time.time(); made.write_bytes(b'x'); end = time.time() + 1

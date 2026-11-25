@@ -87,6 +87,7 @@ def backup_check(data):
     if data.get('layout') is not None: raise ValueError('這個檔案是 Zook 的主檔，裡面沒有對話內容，不能當成備份。請改用「備份與還原」建立的備份檔。')
     for key, rel, messages, _ in chat_conversations(data):
         if any(not isinstance(m, dict) or any(not isinstance(m.get(k), (str, type(None))) for k in ('id', 'role', 'status', 'content', 'note')) for m in messages): raise ValueError('備份檔的內容不完整。')
+        date_check_restored(messages)
     return data
 
 
@@ -563,9 +564,32 @@ def send_seen(app, key):
     return sends[key][1] if key and key in sends else None
 
 
-def send_remember(app, key, result):
+def send_remember(app, key, result, seconds=SEND_ONCE_SECONDS):
     """Lock held. Only an accepted send is remembered: one that was refused can simply be tried again."""
-    if key: app.__dict__.setdefault('recent_sends', {})[key] = (time.monotonic() + SEND_ONCE_SECONDS, result)
+    if key: app.__dict__.setdefault('recent_sends', {})[key] = (time.monotonic() + seconds, result)
+
+
+# ---- Making once (#63): the window sends an id with what a form makes (a Bot, a group, a schedule, a note), new each time the
+# form opens. Making a Bot can take a few seconds; a second press before the first answered sends the same request again and
+# gets what the first one made instead of a second Bot of the same name. Requests without an id are made as before.
+CREATE_ONCE_SECONDS = 120
+
+
+def create_seen(handler, kind, body):
+    """Lock held. What an earlier request from the same form made, while it is still there; otherwise None, and what this
+    request makes is remembered when it is answered (create_done)."""
+    client = body.get('clientId')
+    handler.create_key = key = ('make:' + kind, client) if isinstance(client, str) and SEND_ID.fullmatch(client) else None
+    made = send_seen(handler.server, key)
+    item = handler.server.store.find(kind, made) if made else None
+    if item: handler.noted = True  # nothing new was made: no second line in the activity record
+    return item
+
+
+def create_done(handler, code, result):
+    """Called for every answer (lock held for the ones create_seen looked at)."""
+    key, handler.create_key = getattr(handler, 'create_key', None), None
+    if key and code == 201 and isinstance(result, dict) and isinstance(result.get('id'), str): send_remember(handler.server, key, result['id'], CREATE_ONCE_SECONDS)
 
 
 # ---- Deleted Bots: a Bot that is deleted is kept aside with its conversations, so it can be brought back with one click.
