@@ -228,7 +228,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.error(404, '找不到資源。')
     def respond(self, code, data, content_type='application/json; charset=utf-8'):
         raw = json.dumps(data, ensure_ascii=False).encode() if isinstance(data, (dict, list)) else data
-        note_request(self, code, data)
+        note_request(self, code, data); create_done(self, code, data)
         self.send_response(code); self.send_header('Content-Type', content_type); self.send_header('Content-Length', str(len(raw)))
         self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors %s" % ("'self'" if content_type == 'application/pdf' else "'none'")); self.send_header('Cache-Control', 'private, max-age=86400' if content_type == 'image/png' else 'no-store'); self.send_header('X-Content-Type-Options', 'nosniff'); self.end_headers(); self.wfile.write(raw)
     def error(self, code, message): self.respond(code, {'error': message})
@@ -750,8 +750,10 @@ class Handler(BaseHTTPRequestHandler):
                         messages.extend(removed); raise
                     return self.respond(202, {'jobId': job['id']})
                 if path == '/api/schedules' and self.command == 'POST':
+                    body = self.body()
+                    if (again := create_seen(self, 'schedules', body)): return self.respond(200, dict(again, duplicate=True))
                     if len(store.data['schedules']) >= MAX_SCHEDULES: return self.error(409, '排程已達上限 %d 個，請先刪除不用的排程。' % MAX_SCHEDULES)
-                    item = schedule_fields(store, self.body(), dict(id=ID(), botId='', content='', time='', repeat='daily', on=True, catchUp=True, createdAt=NOW()))
+                    item = schedule_fields(store, body, dict(id=ID(), botId='', content='', time='', repeat='daily', on=True, catchUp=True, createdAt=NOW()))
                     if not self.device: trigger_fields(store, self.last_body, item)
                     store.data['schedules'].append(item); store.save(); return self.respond(201, item)
                 if len(parts) == 3 and parts[:2] == ['api', 'schedules'] and self.command in ('PATCH', 'DELETE'):
@@ -772,6 +774,7 @@ class Handler(BaseHTTPRequestHandler):
                     item.update(lastAt=NOW(), lastStatus='sent', lastError=''); store.save(); return self.respond(202, item)
                 if path == '/api/groups' and self.command == 'POST':
                     body = self.body(); group = dict(id=ID(), name='', botIds=[], messages=[], status='idle', runId=None, activeJobId=None, createdAt=NOW())
+                    if (again := create_seen(self, 'groups', body)): return self.respond(200, dict(again, duplicate=True))
                     set_group_fields(store, group, body, creating=True)
                     store.data['groups'].append(group); store.save(); return self.respond(201, group)
                 if len(parts) >= 3 and parts[:2] == ['api', 'groups']:
@@ -848,6 +851,7 @@ class Handler(BaseHTTPRequestHandler):
                     store.data['memories'].remove(item); store.save(); return self.respond(200, {'ok': True})
                 if path == '/api/bots' and self.command == 'POST':
                     body = self.body(); name = body.get('name', '')
+                    if (again := create_seen(self, 'bots', body)): return self.respond(200, dict(again, duplicate=True))
                     if not isinstance(name, str) or not name.strip() or len(name)>100: raise ValueError('名稱無效。')
                     bot = dict(id=ID(), name=name, color='#8275f4', shape='circle', instructions='', persona='', provider='', model='', pinned=False, section='團隊', messages=[], enabledSkills=[], enabledMcp=[], allowCommands=True)
                     update(bot, body, 'bot'); validate_selection(bot, inventory); set_gate_full(bot); auto_on_create(store, bot, grant=True); ensure_chats(bot); store.data['bots'].append(bot); store.save(); watch_auto_status(store, bot); self.server.want_intro(bot['id']); return self.respond(201, bot)
@@ -911,8 +915,9 @@ class Handler(BaseHTTPRequestHandler):
                     if 'permissionMode' in body: self.server.release_approvals()
                     return self.respond(200, store.data['settings'])
                 if path == '/api/knowledge' and self.command == 'POST':
-                    item = dict(id=ID(), title='', content='', tags=[], botId='', createdAt=NOW(), updatedAt=NOW())
-                    update(item, self.body(), 'knowledge'); store.data['knowledge'].append(item); store.save(); return self.respond(201, item)
+                    item = dict(id=ID(), title='', content='', tags=[], botId='', createdAt=NOW(), updatedAt=NOW()); body = self.body()
+                    if (again := create_seen(self, 'knowledge', body)): return self.respond(200, dict(again, duplicate=True))
+                    update(item, body, 'knowledge'); store.data['knowledge'].append(item); store.save(); return self.respond(201, item)
                 if len(parts) == 3 and parts[:2] == ['api', 'knowledge']:
                     item = store.find('knowledge', parts[2])
                     if not item: return self.error(404, '找不到知識項目。')

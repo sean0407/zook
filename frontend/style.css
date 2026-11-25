@@ -2018,3 +2018,7 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .danger-btn { background: #c0392b; color: #fff; border-radius: 9px; padding: 10px 15px; font-weight: 550; }
 .danger-btn:hover { background: #a93226; }
 .danger-btn:disabled, .modal.ask .secondary:disabled { opacity: .5; cursor: default; }
+
+/* #63: a required field left empty says so right under it */
+.field-error { display: block; color: #c0392b; font-size: 12px; margin-top: 4px; font-weight: 500; }
+.modal [aria-invalid="true"] { border-color: #d33; box-shadow: 0 0 0 1px #d33; }
