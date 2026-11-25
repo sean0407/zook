@@ -5,7 +5,7 @@
   const kb = n => n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1024 / 1024).toFixed(1) + ' MB';
   function pendingFiles() {
     if (!pendingList().length) return '';
-    return `<div class="pending-files">${pendingList().map(f => `<div class="pending-file">${f.url ? `<img src="${esc(f.url)}" alt="">` : '<span class="file-icon">📄</span>'}<span class="pending-name">${esc(f.name)}<small>${f.uploading ? '上傳中…' : kb(f.size)}</small></span><button type="button" class="icon-btn mini" data-action="unattach" data-id="${esc(f.key)}" aria-label="移除 ${esc(f.name)}">×</button></div>`).join('')}</div>`;
+    return `<div class="pending-files">${pendingList().map(f => `<div class="pending-file">${f.url ? `<img src="${esc(f.url)}" alt="">` : '<span class="file-icon">📄</span>'}<span class="pending-name" title="${esc(f.name)}">${esc(midName(f.name, 24))}<small>${f.uploading ? '上傳中…' : kb(f.size)}</small></span><button type="button" class="icon-btn mini" data-action="unattach" data-id="${esc(f.key)}" aria-label="移除 ${esc(f.name)}">×</button></div>`).join('')}</div>`;
   }
   function attachmentsView(m) {
     if (!m.attachments || !m.attachments.length) return '';
@@ -14,11 +14,11 @@
       : `<a class="att-file" href="/api/uploads/${esc(a.id)}" download="${esc(a.name)}">📄 ${esc(a.name)}</a>`).join('')}</div>`;
   }
   async function addFiles(files) {
-    const list = pendingList();
+    const list = pendingList(), failed = []; let ok = 0;
     for (const f of files) {
-      if (list.length >= 10) { toast('每則訊息最多 10 個檔案'); break; }
-      if (f.size > 20 * 1024 * 1024) { toast(`「${f.name}」超過 20 MB，沒有加入`); continue; }
-      if (!f.size) { toast(`「${f.name}」是空的`); continue; }
+      if (list.length >= 10) { failed.push({name: f.name, reason: '每則訊息最多 10 個檔案'}); continue; }
+      if (f.size > 20 * 1024 * 1024) { failed.push({name: f.name, reason: '超過 20 MB'}); continue; }
+      if (!f.size) { failed.push({name: f.name, reason: '檔案是空的'}); continue; }
       const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
       const name = f.name && f.name !== 'image.png' ? f.name : `截圖-${stamp}.png`;
       const item = {key: Math.random().toString(36).slice(2), name, size: f.size, uploading: true, url: /^image\//.test(f.type) ? URL.createObjectURL(f) : ''};
@@ -27,10 +27,11 @@
         const res = await fetch('/api/uploads', {method: 'POST', headers: {'X-File-Name': encodeURIComponent(name), 'Content-Type': 'application/octet-stream'}, body: f});
         const meta = await res.json();
         if (!res.ok) throw new Error(meta.error || '上傳失敗');
-        Object.assign(item, {id: meta.id, kind: meta.kind, uploading: false});
-      } catch (e) { if (list.includes(item)) list.splice(list.indexOf(item), 1); toast(`「${name}」${e.message}`); }
+        Object.assign(item, {id: meta.id, kind: meta.kind, uploading: false}); ok++;
+      } catch (e) { if (list.includes(item)) list.splice(list.indexOf(item), 1); failed.push({name, reason: e.message || '上傳失敗'}); }
       render(true);
     }
+    if (failed.length) toast(fileSummary(ok, failed, '附上'));  // one summary at the end (#150), not one note per file that the next one covers
   }
   // A file path typed or pasted into the message box: offer to attach that file. Nothing is read until the user clicks 附上.
   state.pathSkip = state.pathSkip || new Set();

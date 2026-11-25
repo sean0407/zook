@@ -600,7 +600,8 @@ def trash_bot(store, bot):
     kept = copy.deepcopy(bot); kept['deletedAt'] = NOW(); kept.pop('queue', None)  # what was waiting for it is not sent later by surprise
     trash = store.data.setdefault('deletedBots', [])
     trash[:] = [b for b in trash if b.get('id') != bot['id']] + [kept]
-    del trash[:-TRASH_KEEP]
+    gone = trash[:-TRASH_KEEP]; del trash[:-TRASH_KEEP]
+    forget_trashed_copies(store, gone)  # gone for good: Zook's copies of group files in its workspace go too (#213)
 
 
 def restore_bot(store, bot_id):
@@ -646,5 +647,6 @@ def recover_deleted_bots(store):
                 wanted.discard(bot['id'])
                 found = dict(copy.deepcopy(bot), deletedAt='', recovered=path.name); found.pop('queue', None); hold_in(found)  # an old copy is not what this Mac allows now
                 store.data.setdefault('deletedBots', []).append(found)
-    del store.data.get('deletedBots', [])[:-TRASH_KEEP]
+    trash = store.data.get('deletedBots', []); gone = trash[:-TRASH_KEEP]; del trash[:-TRASH_KEEP]
+    forget_trashed_copies(store, gone)
     return True

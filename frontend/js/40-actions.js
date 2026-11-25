@@ -184,7 +184,7 @@
         case 'group-verify-dismiss': delete (state.verifyNotes || {})[id]; render(true); break;
         case 'card-copy': { const m = groupMsgs(activeGroup()).find(x => x.id === id); await navigator.clipboard.writeText(cardText(m.card)); toast('已複製結論'); break; }
         case 'card-save': { const g = activeGroup(), m = groupMsgs(g).find(x => x.id === id); await post('knowledge', {title: g.name + ' 討論結論', content: cardText(m.card)}); toast('已存到知識庫'); break; }
-        case 'group-tab': state.groupTab = id; if (activeGroup()) delete state.groupFiles[activeGroup().id]; render(true); break;
+        case 'group-tab': state.groupTab = id; if (activeGroup()) { delete state.groupFiles[activeGroup().id]; if (state.groupFileNote) delete state.groupFileNote[activeGroup().id]; } render(true); break;
         case 'group-file-pick': $('#group-file-input').click(); break;
         case 'group-file-delete': { const g = activeGroup(); if (!(await ask({title: `刪除「${id}」？`, lines: ['這個檔案會從群組檔案刪除，無法復原。'], run: () => api('groups/' + encodeURIComponent(g.id) + '/files/' + encodeURIComponent(id), {method: 'DELETE'})}))) break; await loadGroupFiles(g); toast('已刪除檔案'); break; }
         case 'stop-group':
