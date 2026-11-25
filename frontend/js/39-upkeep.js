@@ -1,5 +1,5 @@
   // Backups, the activity record, usage budgets and the rules every Bot follows.
-  const fmtTokens = n => n >= 1e8 ? (n / 1e8).toFixed(n % 1e8 ? 1 : 0) + ' 億' : n >= 1e4 ? Math.round(n / 1e4).toLocaleString() + ' 萬' : String(n);
+  const fmtTokens = n => fmtTok(n);  // the usage page's one unit (32-usage.js)
   const fmtSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
 
   function rulesSection() {
@@ -53,8 +53,8 @@
     try {
       if (el.dataset.up === 'backup-now') { state.backups = (await post('backups')).items; render(true); toast('已備份'); }
       if (el.dataset.up === 'backup-pick') $('#backup-file')?.click();
-      if (el.dataset.up === 'backup-delete' && confirm('確定刪除這份備份？')) { state.backups = (await post('backups/' + encodeURIComponent(id), {}, 'DELETE')).items; render(true); }
-      if (el.dataset.up === 'backup-restore' && confirm('現在的資料會換成這份備份的內容。\n還原前的資料會另存一份，之後可以再還原回來。')) {
+      if (el.dataset.up === 'backup-delete') await ask({title: '刪除這份備份？', lines: ['刪除後無法復原。現在的資料和其他備份不受影響。'], run: async () => { state.backups = (await post('backups/' + encodeURIComponent(id), {}, 'DELETE')).items; render(true); }});
+      if (el.dataset.up === 'backup-restore' && await ask({title: '還原這份備份？', lines: ['現在的資料會換成這份備份的內容。', '還原前的資料會另存一份，之後可以再還原回來。'], ok: '還原', danger: false})) {
         const done = await post('backups/' + encodeURIComponent(id) + '/restore');
         await refresh(); await loadUpkeep('settings'); toast(done.syncStopped ? '已還原。同步已停止，確認資料後再重新開啟' : '已還原');
       }
@@ -202,7 +202,7 @@
         modal('加入同步', `<form id="sync-form" data-folder="${esc(found.folder)}"><div class="modal-body"><p class="muted">這個資料夾已有其他 Mac 的資料：${esc(found.others.map(o => o.name).join('、'))}。</p><div class="field">這台 Mac 現有的資料${dropdown('join', 'replace', SYNC_JOIN)}</div></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">開始同步</button></div></form>`);
       }
       if (el.dataset.up === 'sync-now') { el.disabled = true; state.sync = await post('sync/now'); await refresh(); toast(state.sync.lastError || '已同步'); }
-      if (el.dataset.up === 'sync-stop' && confirm('停止後，這台 Mac 的資料會留著，只是不再和其他 Mac 同步。')) { state.sync = await post('sync', {}, 'DELETE'); render(true); toast('已停止同步'); }
+      if (el.dataset.up === 'sync-stop' && await ask({title: '停止同步？', lines: ['這台 Mac 的資料會留著，只是不再和其他 Mac 同步。'], ok: '停止同步'})) { state.sync = await post('sync', {}, 'DELETE'); render(true); toast('已停止同步'); }
     } catch (err) { toast(err.message); render(true); }
   });
   document.addEventListener('submit', async e => {

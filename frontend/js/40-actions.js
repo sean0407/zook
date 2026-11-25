@@ -22,8 +22,8 @@
           groupModal(activeGroup());
           break;
         case 'delete-group':
-          if (confirm('確定刪除這個群組及其對話？成員 Bot 不會被刪除。')) {
-            await api('groups/' + encodeURIComponent($('#group-form').dataset.id), {method: 'DELETE'});
+          if (await ask({title: '刪除這個群組？', lines: ['群組的對話、群組檔案和它的排程會一起刪除，無法復原。', '成員 Bot 不會被刪除，它們自己的對話都還在。'],
+                         run: () => api('groups/' + encodeURIComponent($('#group-form').dataset.id), {method: 'DELETE'})})) {
             closeModal();
             state.groupId = null;
             await refresh();
@@ -47,7 +47,7 @@
           break;
         case 'update-all': {
           const list = (state.accounts?.providers || []).filter(p => p.installed && p.canInstall && p.version?.updateAvailable);
-          if (list.length && !confirm(`將更新 ${list.map(p => p.name.split('（')[0] + ' ' + p.version.latest).join('、')}，完成後重新偵測使用量。\n\n確定更新？`)) break;
+          if (list.length && !(await ask({title: '更新 CLI？', lines: [`將更新 ${list.map(p => p.name.split('（')[0] + ' ' + p.version.latest).join('、')}，完成後重新偵測使用量。`], ok: '更新', danger: false}))) break;
           if (state.usageBusy) break;
           state.usageBusy = 'update'; render(true);
           try {
@@ -90,7 +90,7 @@
           profileModal(state.accounts.providers.find(x => x.id === id));
           break;
         case 'profile-delete':
-          if (!confirm(`移除帳號「${el.dataset.name}」？使用它的 Bot 會改用預設帳號。`)) break;
+          if (!(await ask({title: `移除帳號「${el.dataset.name}」？`, lines: ['使用它的 Bot 會改用預設帳號。'], ok: '移除'}))) break;
           await post('accounts/' + encodeURIComponent(id) + '/profiles/delete', {account: el.dataset.account});
           closeModal(); await reloadAccounts(); toast('已移除帳號');
           break;
@@ -111,8 +111,8 @@
         case 'provider-install': {
           const p = state.accounts.providers.find(x => x.id === id);
           const domain = (el.dataset.command.match(/https?:\/\/([^/\s]+)/) || [])[1];
-          const msg = el.dataset.command ? `將在這台電腦執行 ${p.name} 的官方安裝程式${domain ? '（來自 ' + domain + '）' : ''}。\n\n確定安裝？` : `確定把 ${p.name} 更新到最新版？`;
-          if (!confirm(msg)) break;
+          const msg = el.dataset.command ? `將在這台電腦執行 ${p.name} 的官方安裝程式${domain ? '（來自 ' + domain + '）' : ''}。` : `會把 ${p.name} 更新到最新版。`;
+          if (!(await ask({title: el.dataset.command ? `安裝 ${p.name}？` : `更新 ${p.name}？`, lines: [msg], ok: el.dataset.command ? '安裝' : '更新', danger: false}))) break;
           el.disabled = true;
           await post('accounts/' + encodeURIComponent(id) + '/install');
           closeModal(); await reloadAccounts();
@@ -124,7 +124,7 @@
           break;
         case 'provider-remove': {
           const p = state.accounts.providers.find(x => x.id === id);
-          if (!confirm(`從 Zook 移除 ${p.name}？這不會解除安裝 CLI，也不會登出。`)) break;
+          if (!(await ask({title: `從 Zook 移除 ${p.name}？`, lines: ['這不會解除安裝 CLI，也不會登出。'], ok: '移除'}))) break;
           await post('accounts/' + encodeURIComponent(id) + '/remove');
           closeModal(); await reloadAccounts(); toast('已從 Zook 移除');
           break;
@@ -134,7 +134,7 @@
           await reloadAccounts();
           break;
         case 'account-logout':
-          if (confirm('確定登出？使用它的 Bot 會無法回覆。')) {
+          if (await ask({title: '登出這個帳號？', lines: ['使用它的 Bot 會無法回覆，要再登入才能用。'], ok: '登出'})) {
             await post('accounts/' + encodeURIComponent(id) + '/logout');
             closeModal(); await reloadAccounts(); toast('已登出');
           }
@@ -165,8 +165,7 @@
           break;
         }
         case 'delete-memory':
-          if (confirm('確定刪除這則記憶？')) {
-            await api('memories/' + encodeURIComponent(id), {method: 'DELETE'});
+          if (await ask({title: '刪除這則記憶？', lines: ['刪除後無法復原，Bot 之後不會再參考它。'], run: () => api('memories/' + encodeURIComponent(id), {method: 'DELETE'})})) {
             await refresh();
             toast('已刪除記憶')
           }
@@ -181,7 +180,7 @@
         case 'card-save': { const g = activeGroup(), m = groupMsgs(g).find(x => x.id === id); await post('knowledge', {title: g.name + ' 討論結論', content: cardText(m.card)}); toast('已存到知識庫'); break; }
         case 'group-tab': state.groupTab = id; if (activeGroup()) delete state.groupFiles[activeGroup().id]; render(true); break;
         case 'group-file-pick': $('#group-file-input').click(); break;
-        case 'group-file-delete': { const g = activeGroup(); if (!confirm(`刪除「${id}」？刪除後無法復原。`)) break; await api('groups/' + encodeURIComponent(g.id) + '/files/' + encodeURIComponent(id), {method: 'DELETE'}); await loadGroupFiles(g); toast('已刪除檔案'); break; }
+        case 'group-file-delete': { const g = activeGroup(); if (!(await ask({title: `刪除「${id}」？`, lines: ['這個檔案會從群組檔案刪除，無法復原。'], run: () => api('groups/' + encodeURIComponent(g.id) + '/files/' + encodeURIComponent(id), {method: 'DELETE'})}))) break; await loadGroupFiles(g); toast('已刪除檔案'); break; }
         case 'stop-group':
           await post('groups/' + encodeURIComponent(id) + '/stop');
           toast('已停止討論');
@@ -214,7 +213,7 @@
           break;
         case 'remote-revoke': {
           const d = state.remote?.devices.find(x => x.id === id);
-          if (!d || !confirm(`撤銷「${d.name}」？這台裝置會立刻無法連線，要再使用必須重新配對。`)) break;
+          if (!d || !(await ask({title: `撤銷「${d.name}」？`, lines: ['這台裝置會立刻無法連線，要再使用必須重新配對。'], ok: '撤銷'}))) break;
           state.remote = await api('remote/devices/' + encodeURIComponent(id), {method: 'DELETE'});
           render(true); toast('已撤銷「' + d.name + '」');
           break;
@@ -276,8 +275,7 @@
           scheduleModal(state.data.schedules.find(x => x.id === id));
           break;
         case 'delete-schedule':
-          if (confirm('確定刪除這個排程？')) {
-            await api('schedules/' + encodeURIComponent(id), {method: 'DELETE'});
+          if (await ask({title: '刪除這個排程？', lines: ['之後不會再自動執行，刪除後無法復原。'], run: () => api('schedules/' + encodeURIComponent(id), {method: 'DELETE'})})) {
             await refresh();
             toast('已刪除排程');
           }
@@ -314,7 +312,7 @@
         }
         case 'redo-again': {
           const b = activeBot();
-          if (redoAllowed(b)) await redo(b, {mode: 'again'});
+          if (await redoAllowed(b)) await redo(b, {mode: 'again'});
           break;
         }
         case 'edit-last': {
@@ -356,8 +354,7 @@
         }
         case 'delete-chat': {
           const b = activeBot(), c = b.chats.find(x => x.id === id);
-          if (!confirm(`確定刪除「${chatName(b, c)}」？刪除後無法復原。`)) break;
-          await api(`bots/${encodeURIComponent(b.id)}/chats/${encodeURIComponent(id)}`, {method: 'DELETE'});
+          if (!(await ask({title: `刪除「${chatName(b, c)}」？`, lines: ['這段對話會刪除，無法復原。Bot 的其他對話不受影響。'], run: () => api(`bots/${encodeURIComponent(b.id)}/chats/${encodeURIComponent(id)}`, {method: 'DELETE'})}))) break;
           await refresh(); chatsModal(activeBot()); toast('已刪除對話');
           break;
         }
@@ -373,21 +370,21 @@
           noteModal(state.data.knowledge.find(n => n.id === id));
           break;
         case 'delete-note':
-          if (confirm('確定刪除這則知識？')) {
-            await api('knowledge/' + encodeURIComponent(id), {
-              method: 'DELETE'
-            });
+          if (await ask({title: '刪除這則知識？', lines: ['刪除後無法復原，Bot 之後不會再參考它。'], run: () => api('knowledge/' + encodeURIComponent(id), {method: 'DELETE'})})) {
             await refresh();
             toast('已刪除知識')
           }
           break;
         case 'delete-bot': {
-          const inGroups = (state.data.groups || []).filter(g => (g.botIds || []).includes($('#bot-form').dataset.id));
+          const botId = $('#bot-form').dataset.id, name = state.data.bots.find(b => b.id === botId)?.name || '這個 Bot';
+          const inGroups = (state.data.groups || []).filter(g => (g.botIds || []).includes(botId));
           const tooFew = inGroups.filter(g => g.botIds.filter(id => state.data.bots.some(b => b.id === id)).length <= 2).map(g => g.name);
-          if (confirm('確定刪除這個 Bot 及其對話？' + (inGroups.length ? `\n它在這些群組裡：${inGroups.map(g => g.name).join('、')}，刪除後會少一位成員。` + (tooFew.length ? `\n${tooFew.join('、')} 會只剩 1 位，要再加成員才能討論。` : '') : ''))) {
-            await api('bots/' + encodeURIComponent($('#bot-form').dataset.id), {
-              method: 'DELETE'
-            });
+          const schedules = (state.data.schedules || []).filter(s => s.botId === botId).length;
+          if (await ask({title: `刪除「${name}」？`, lines: [
+            '它和它的對話會先收起來，之後可以到「各模型使用量」的 Bot Token 用量按「喚回」找回（回覆過的 Bot 才會列在那裡）。',
+            inGroups.length ? `它在這些群組裡：${inGroups.map(g => g.name).join('、')}，刪除後會少一位成員，喚回後也不會自動加回。` + (tooFew.length ? `${tooFew.join('、')} 會只剩 1 位，要再加成員才能討論。` : '') : '',
+            schedules ? `它的 ${schedules} 個排程會一起刪除，喚回後不會回來。` : ''],
+            run: () => api('bots/' + encodeURIComponent(botId), {method: 'DELETE'})})) {
             closeModal();
             await refresh();
             toast('已刪除 Bot')
@@ -454,7 +451,7 @@
           break;
         }
         case 'google-remove':
-          if (!confirm('登出這個 Google 帳號？還有其他帳號時會改用下一個。')) break;
+          if (!(await ask({title: '登出這個 Google 帳號？', lines: ['還有其他帳號時會改用下一個。'], ok: '登出'}))) break;
           await api('google', {method: 'DELETE'}); delete state.mcpTests['builtin:google'];
           state.integrations = await api('integrations'); await refresh(); toast('已登出 Google');
           break;
@@ -462,7 +459,7 @@
           gmailModal();
           break;
         case 'gmail-remove':
-          if (!confirm('中斷 Gmail 連接？所有 Bot 都會無法使用 Gmail。')) break;
+          if (!(await ask({title: '中斷 Gmail 連接？', lines: ['所有 Bot 都會無法使用 Gmail，要再連接才能用。'], ok: '中斷連接'}))) break;
           await api('gmail', {method: 'DELETE'});
           delete state.mcpTests['builtin:gmail'];
           state.integrations = await api('integrations'); await refresh(); toast('已中斷 Gmail 連接');
@@ -484,7 +481,7 @@
           state.integrations = await api('integrations'); render(true); toast('已更新成原來源的最新內容');
           break;
         case 'skill-remove':
-          if (!confirm(`從 Zook 移除 Skill「${el.dataset.name}」？原本工具裡的那一份不受影響。`)) break;
+          if (!(await ask({title: `從 Zook 移除 Skill「${el.dataset.name}」？`, lines: ['所有 Bot 都不會再用到它。原本工具裡的那一份不受影響。'], ok: '移除'}))) break;
           await api('skills/' + encodeURIComponent(id.split(':')[1]), {method: 'DELETE'});
           state.integrations = await api('integrations'); await refresh(); toast('已從 Zook 移除');
           break;
@@ -516,7 +513,7 @@
             const file = input.files[0];
             if (!file) return;
             if (file.size > 150 * 1024 * 1024) { toast('設定包超過 150 MB，無法匯入'); return; }
-            if (!confirm(`匯入「${file.name}」？\n\n設定包可以在這台 Mac 上執行程式，只匯入你自己匯出的檔案。`)) return;
+            if (!(await ask({title: `匯入「${file.name}」？`, lines: ['設定包可以在這台 Mac 上執行程式，只匯入你自己匯出的檔案。'], ok: '匯入'}))) return;
             try {
               const text = await new Promise((done, fail) => { const reader = new FileReader(); reader.onload = () => done(reader.result); reader.onerror = fail; reader.readAsDataURL(file); });
               const r = await post('pack', {data: String(text).split(',')[1] || ''});
@@ -544,7 +541,7 @@
         }
         case 'connector-retest': await retestConnector(id); render(true); break;
         case 'connector-logout':
-          if (!confirm('登出目前使用的這個帳號？它的授權會從鑰匙圈刪除。')) break;
+          if (!(await ask({title: '登出目前使用的這個帳號？', lines: ['它的授權會從鑰匙圈刪除，要再登入才能用。'], ok: '登出'}))) break;
           await post('connectors/' + encodeURIComponent(id.split(':')[1]) + '/logout');
           state.integrations = await api('integrations'); render(true); toast('已登出');
           break;
@@ -552,7 +549,7 @@
           connectorModal((state.integrations?.mcp || []).find(i => i.id === id));
           break;
         case 'connector-delete':
-          if (!confirm(`移除連接器「${el.dataset.name}」？所有 Bot 都會無法再使用它。`)) break;
+          if (!(await ask({title: `移除連接器「${el.dataset.name}」？`, lines: ['所有 Bot 都會無法再使用它。'], ok: '移除'}))) break;
           await api('connectors/' + encodeURIComponent(id.split(':')[1]), {method: 'DELETE'});
           delete state.mcpTests[id];
           state.integrations = await api('integrations'); await refresh(); toast('已移除連接器');

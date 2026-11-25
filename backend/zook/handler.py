@@ -946,9 +946,6 @@ def main():
     signal.signal(signal.SIGTERM, stop_server)
     threading.Thread(target=app.sync_remote, daemon=True).start()
     threading.Thread(target=app.schedule_loop, daemon=True).start()
-    for job in app.store.data['jobs']:  # activity saved by earlier versions
-        for call in job.get('toolCalls') or []:
-            if call.get('name') == 'native_command' and isinstance((call.get('arguments') or {}).get('command'), str): call['arguments'] = {'summary': command_summary(call['arguments']['command'])}  # older records: the summary only
     trim_jobs(app.store); recover_deleted_bots(app.store)
     app.store.save()
     try: app.script_api = ScriptApi(app)  # for scripts on this Mac; every Bot starts with it switched off

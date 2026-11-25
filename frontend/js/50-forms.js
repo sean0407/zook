@@ -373,11 +373,11 @@
       } else if (form.id === 'edit-last-form') {
         const b = activeBot(), content = new FormData(form).get('content');
         if (!String(content).trim()) return;
-        if (!redoAllowed(b)) return;
+        if (!(await redoAllowed(b))) return;
         closeModal(); await redo(b, {mode: 'edit', content});
       } else if (form.id === 'redo-model-form') {
         const b = activeBot(), provider = new FormData(form).get('provider');
-        if (!redoAllowed(b)) return;
+        if (!(await redoAllowed(b))) return;
         closeModal(); await redo(b, {mode: 'again', provider});
       } else if (form.id === 'chat-rename-form') {
         const b = activeBot();

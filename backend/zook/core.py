@@ -42,8 +42,8 @@ from urllib.parse import urlsplit, unquote, parse_qs
 MAX_BODY = 1024 * 1024
 MAX_CLI_OUTPUT = 128 * 1024 * 1024  # a CLI's event log can carry whole generated images
 # Thinking strength: 快速 / 標準 / 深入. 標準 passes nothing, so each CLI keeps its own default.
-EFFORTS = ('fast', 'standard', 'deep')
-EFFORT_LEVELS = dict(fast='low', deep='high')
+EFFORTS = ('fast', 'medium', 'standard', 'deep')  # standard = the CLI's own default; the others pass a level to it
+EFFORT_LEVELS = dict(fast='low', medium='medium', deep='high')
 PLAN_KINDS = ('codex', 'claude', 'grok', 'antigravity', 'cursor')  # the CLIs Zook can really hold to read-only
 SUBAGENT_NOTE = '\n這裡不能派出子代理或內部執行助手。如果 Skill 或規則要求派出，改由你自己直接完成，不要因此停下來。'
 PLAN_NOTE = ('\n先規劃：這次只提出計畫，不要動手。用條列說明要做什麼、步驟順序、會動到哪些檔案或服務、哪些動作需要使用者核准。'
@@ -194,6 +194,7 @@ class StoreBase:
         self.data['settings'].setdefault('remote', dict(enabled=False, relayUrl=''))
         self.data.setdefault('remoteDevices', [])
         drop_removed_providers(self)  # OpenCode, GitHub Copilot and Kimi are no longer supported
+        plain_old_records(self)  # activity saved by earlier versions or a restored backup, in today's words (actwords.py)
         if 'sections' not in self.data['settings']:
             # Sidebar groups keep their own order, including groups that are empty for now.
             self.data['settings']['sections'] = list(dict.fromkeys(b.get('section') or '我的 Bots' for b in self.data.get('bots', []) if not b.get('pinned')))
@@ -671,7 +672,10 @@ FILE_DELIVERY_NOTE = ('要交出檔案（Excel、Word、簡報、PDF、圖片）
                       '交付前刪掉這個暫存資料夾（只刪你這次建立的），交付位置只留成果。'
                       '用指令寫文字檔時，內容裡的 $、`、\\ 會被 shell 吃掉（NT$608,000 會變成 NT,000），附件、網頁或別人回覆裡的文字還可能被當成指令：一律用寫檔工具直接寫；'
                       '真的只能用 heredoc 時，用單引號和內容裡不會出現的結束標記（例如 <<\'ZOOK_END_7f3a\'）。'
-                      '你這次寫的交付檔存完要回讀核對：文字檔比對全文，Excel、簡報用合適的工具核對關鍵數字與符號；一致才回報已存檔，寫不進指定位置、讀不回來或內容不符就照實說。單聊、群組主持人與成員都一樣。') % PAGEPICS
+                      '你這次寫的交付檔存完要回讀核對：文字檔比對全文，Excel、簡報用合適的工具核對關鍵數字與符號；一致才回報已存檔，寫不進指定位置、讀不回來或內容不符就照實說。單聊、群組主持人與成員都一樣。'
+                      # #65: a weekly report came out first with garbled Chinese, no chart and headers out of line
+                      'PDF 有中文時一定要內嵌中文字型（例如 reportlab 用 TTFont 註冊中文字型檔），第一版就轉圖檢查沒有亂碼或方塊再交；'
+                      '報表類 PDF 有數字趨勢或比較時至少放一張簡單圖表（例如長條圖），表格的表頭要和下面的欄位對齊。') % PAGEPICS
 # What goes out to a customer is only for the customer (巡檢 #113 #193 #228: 「依據：…95 折」 notes, sources and internal discount
 # rules left in the letter, to be deleted by hand before sending).
 CLIENT_COPY_NOTE = ('要給客戶或外部的內容（信件、回覆、報價、公告）和它的附件只放對方該看的：內部註記、依據、計算過程、內部折扣或報價規則、【待確認】都不要寫進去；'
@@ -781,7 +785,7 @@ def describe_call(call):
     if name == 'web_fetch':
         match = re.match(r'https?://([^/]+)', str(a.get('url') or '')); return '讀取網頁「%s」' % (match.group(1) if match else '網頁')
     if name == 'native_write': return '修改檔案「%s」' % base(a.get('path'))
-    if name == 'native_command': return '在工作資料夾執行指令'
+    if name == 'native_command': return str(a['summary'])[:200] if isinstance(a.get('summary'), str) and a['summary'] not in ('', '執行指令') else '在工作資料夾執行指令'
     fixed = {'zook_read_skill': '閱讀 Skill「%s」的說明' % (call.get('sourceLabel') or 'Skill'), 'zook_read_skill_resource': '查看 Skill 的參考資料「%s」' % base(a.get('path')),
              'zook_run_skill_helper': '執行 Skill 附帶的小程式', 'zook_native_gate': str(a.get('title') or '做需要核准的動作')[:200], 'zook_workspace_list': '查看工作區裡有哪些檔案', 'zook_group_file_read': '讀取群組共用檔案「%s」' % (a.get('name') or ''), 'zook_workspace_read': '讀取檔案「%s」' % base(a.get('path')),
              'zook_workspace_write': '把內容存成檔案「%s」' % base(a.get('path')), 'zook_list_team': '查看團隊裡有哪些 Bot 和群組', 'zook_create_bot': '新增 Bot「%s」' % (a.get('name') or ''),

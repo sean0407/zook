@@ -27,7 +27,7 @@ class SmallFixesTest(unittest.TestCase):
 
     def test_account_and_thinking_level_are_applied(self):
         fields, notes = self.m.tool_bot_fields(self.store, dict(provider='codex', model='gpt-6.2-astra', account='waifdance', effort='medium'))
-        self.assertEqual(fields, dict(provider='codex', model='gpt-6.2-astra', account=EXTRA, effort='standard'))
+        self.assertEqual(fields, dict(provider='codex', model='gpt-6.2-astra', account=EXTRA, effort='medium'))  # 中 is its own level since #103
         self.assertEqual(notes, [])
         self.assertEqual(self.m.tool_bot_fields(self.store, dict(provider='codex', effort='深入'))[0]['effort'], 'deep')
 
