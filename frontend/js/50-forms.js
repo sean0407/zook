@@ -5,7 +5,8 @@
       else body = {access: input.value, accessFolder: st.accessFolder || ''};
     } else if (key === 'effort') body = {effort: input.value};
     else body = {features: {...(st.features || {}), [key]: input.checked}};
-    try { state.data.settings = await post('settings', body, 'PATCH'); toast('已更新 Bot 預設'); } catch (error) { toast(error.message); }
+    const title = rowTitle(input.closest('.setting-row')) || 'Bot 預設';  // say which one (#76③)
+    try { state.data.settings = await post('settings', body, 'PATCH'); toast('已更新「' + title + '」'); } catch (error) { toast(error.message); }
     render(true);
   }
   async function switchConnectorAccount(input) {

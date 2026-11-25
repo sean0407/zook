@@ -13,6 +13,7 @@ with open(os.path.join(here, 'runs.jsonl'), 'a') as f: f.write(json.dumps(dict(a
 n = len(open(os.path.join(here, 'runs.jsonl')).readlines())
 print(json.dumps(dict(type='thread.started', thread_id=a[a.index('resume') + 1] if 'resume' in a else 'thread-%d' % n)), flush=True)
 said = '一般回覆'
+if 'CMD' in text: print(json.dumps(dict(type='item.started', item=dict(id='i1', type='command_execution', command='curl -X POST x'))), flush=True)
 if 'SLOW' in text or 'TOOL' in text:
     open(os.path.join(here, 'started'), 'w').write(str(os.getpid()))
     while not os.path.exists(os.path.join(here, 'go')): time.sleep(0.05)
@@ -120,6 +121,16 @@ class BackgroundRunTest(unittest.TestCase):
         self.go(); self.finished('背景完成')
         self.assertEqual(len(self.runs()), 1)  # never started again
         self.until(lambda: not list((self.root / 'data/runs').iterdir()))  # the run's files are gone once the reply is in
+
+    def test_a_reply_that_ran_a_command_is_still_taken_up_not_done_again(self):
+        # #285 stops a cut-off reply that ran a command; one that went on under its runner was never cut off and is taken up as before.
+        job = self.send('CMD SLOW 寄出週報'); pid = self.cli_pid()
+        self.until(lambda: next(j for j in self.data()['jobs'] if j['id'] == job).get('usedTools'))
+        self.stop(); time.sleep(0.5); self.assertTrue(self.alive(pid))
+        self.start()
+        self.assertEqual(self.state()['messages'][-1]['status'], 'running'); self.assertFalse(self.state()['messages'][-1].get('resumable'))
+        self.go(); self.finished('背景完成'); self.assertEqual(len(self.runs()), 1)
+        self.assertNotIn('interrupted', next(j for j in self.data()['jobs'] if j['id'] == job))
 
     def test_a_reply_that_finished_while_closed_is_simply_done(self):
         self.send('SLOW 寫一份長報告'); pid = self.cli_pid()

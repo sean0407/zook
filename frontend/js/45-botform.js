@@ -99,7 +99,7 @@
     form.querySelector('[data-auto-reason]')?.toggleAttribute('hidden', e.target.value !== form.dataset.firstChoice);
     // A different CLI: the model menu still lists the last one's models until the new list comes, so it is emptied now (#43⑥).
     const provider = e.target.value.split('::')[0];
-    if (provider !== form.elements.provider.value && provider !== 'auto') form.elements.modelSelect.innerHTML = '<option value="">正在讀取這一家的模型…</option><option value="__custom__">自訂模型…</option>';
+    if (provider !== form.elements.provider.value && provider !== 'auto') form.elements.modelSelect.innerHTML = '<option value="">正在讀取這一家的模型…</option><option value="__custom__">自己輸入型號…</option>';
   });
   // Picking a model by hand ends the 「換了一家，型號已改回…」 line: it is about the model Zook chose (#43⑤).
   document.addEventListener('change', e => {
