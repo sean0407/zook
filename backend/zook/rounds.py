@@ -176,6 +176,14 @@ def task_checkpoint_ask(app, store, group, run):
     app.notify(group['name'], '已進行 %d 回合，目標還沒達成，等你決定要不要繼續。' % (task_rounds(run) - 1), 'group', group['id'], '', always=True)
 
 
+def task_converge_missed(run):
+    """Lock held. The host did not sum up (its reply failed, or Zook hit an error): the reports are news again and the summing up is
+    tried at the next look; two misses in a row stop the run (hostMissed)."""
+    if (run.get('checkpoint') or {}).get('state') != 'converging': return
+    run.pop('checkpoint', None); run['wakes'] = max(0, int(run.get('wakes') or 1) - 1); told = set(run.get('wakeFor') or [])
+    run['delivered'] = [k for k in run.get('delivered') or [] if k.split(':')[0] not in told]
+
+
 def task_checkpoint_answer(store, group, run, item, answer):
     """Lock held. The user's answer at a check: 繼續 gives another TASK_CHECK_EVERY rounds (and the room for their work); anything
     else ends the run there."""

@@ -85,6 +85,7 @@ class TaskRuns:
                         for t in run.get('tasks') or []:
                             if not t.get('parent'): t.pop('staged', None)  # a helper waits for its own member's turn
                         run['hostMissed'] = run.get('hostMissed', 0) + 1
+                        task_converge_missed(run)  # it was summing up: tried again, not left waiting
                         if group: group['messages'].append(dict(id=ID(), role='system', content='主持人這一輪出錯了：%s' % str(exc)[:150], createdAt=NOW()))
                         self.store.save()
                 elif len(args) == 3:
@@ -254,9 +255,7 @@ class TaskRuns:
                     if not t.get('parent'): t.pop('staged', None)  # the host's turn is over: what it planned may start (or be confirmed); a helper waits for its member's turn
                 if kind == 'converge':  # summed up: now the user decides. Not summed up: tried again (the reports are news again); two misses stop the run
                     if turn and turn['job']['status'] == 'completed' and group.get('runId') == run_id and run.get('status') == 'running': task_checkpoint_ask(self, store, group, run)
-                    elif (run.get('checkpoint') or {}).get('state') == 'converging':
-                        run.pop('checkpoint', None); run['wakes'] = max(0, run.get('wakes', 1) - 1); told = set(run.get('wakeFor') or [])
-                        run['delivered'] = [k for k in run.get('delivered') or [] if k.split(':')[0] not in told]
+                    else: task_converge_missed(run)
             if run.get('id') == run_ref and (not turn or turn['job']['status'] != 'completed') and kind == 'user':
                 # 插話 the host could not answer: tried once more, then left with a line in the chat; the run itself goes on
                 run['userMissed'] = run.get('userMissed', 0) + 1
