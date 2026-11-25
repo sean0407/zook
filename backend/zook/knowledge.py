@@ -70,13 +70,17 @@ def knowledge_view(store):
 
 
 def _knowledge_folder(store, item_id):
-    return store.dir / 'knowledge' / item_id if re.fullmatch(r'[0-9a-f]{32}', str(item_id)) else None
+    """<data folder>/knowledge/<id>, or None for an id Zook did not make or a knowledge folder that is a link (never followed out)."""
+    root = store.dir / 'knowledge'
+    if not re.fullmatch(r'[0-9a-f]{32}', str(item_id)) or root.is_symlink(): return None
+    folder = root / item_id
+    return None if folder.is_symlink() else folder
 
 
 def knowledge_drop_file(store, item_id):
     """The uploaded file of an item that is gone (deleted here or on another Mac). Never follows a link out of the data folder."""
     folder, root = _knowledge_folder(store, item_id), store.dir / 'knowledge'
-    if not folder or root.is_symlink() or folder.is_symlink() or not folder.is_dir(): return
+    if not folder or not folder.is_dir(): return
     shutil.rmtree(str(folder), ignore_errors=True)
 
 
@@ -113,7 +117,7 @@ def knowledge_upload(handler, store):
     if size > MAX_UPLOAD: handler.close_connection = True; return handler.error(413, '單一檔案不能超過 20 MB。')
     sent = unquote(handler.headers.get('X-File-Name', ''))
     suffix = pathlib.Path(upload_name(sent.replace('\\', '/').split('/')[-1][-20:])).suffix.lower()  # from the end of the name, before it is shortened
-    name = upload_name(sent)
+    name = re.sub(r'[\x7f-\x9f]+', '', upload_name(sent)) or 'file'  # the same plain name other Macs accept (sync.py)
     if suffix and not name.lower().endswith(suffix): name = name[:120 - len(suffix)] + suffix  # a long name keeps its type
     title = unquote(handler.headers.get('X-Title', '')).strip() or pathlib.Path(name).stem or name
     bot_id = unquote(handler.headers.get('X-Bot-Id', ''))
@@ -124,6 +128,7 @@ def knowledge_upload(handler, store):
         if bot_id and not store.find('bots', bot_id): return refuse(400, '找不到這個 Bot，請重新選擇「給誰用」。')
         if sum(1 for x in store.data['knowledge'] if x.get('source')) >= KNOWLEDGE_FILES: return refuse(400, '知識庫最多放 %d 個檔案，請先刪掉不用的再上傳。' % KNOWLEDGE_FILES)
     item_id = ID(); folder = _knowledge_folder(store, item_id)
+    if not folder: return refuse(500, '知識庫的資料夾位置不安全，沒有上傳。')
     folder.mkdir(parents=True, mode=0o700)
     remaining = size
     with open(folder / ('source' + suffix), 'wb') as out:

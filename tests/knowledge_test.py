@@ -167,6 +167,9 @@ class KnowledgeUnits(unittest.TestCase):
             with zipfile.ZipFile(d / 'empty.pptx', 'w') as z:
                 z.writestr('ppt/slides/slide1.xml', '<p:sld xmlns:p="x"/>')
             self.assertEqual(self.ns['knowledge_extract'](d / 'empty.pptx'), '')  # page headings alone are not content: the item fails
+            (d / 'outside').mkdir(); (d / 'data').mkdir(); (d / 'data/knowledge').symlink_to(d / 'outside')
+            class S: dir = d / 'data'
+            self.assertIsNone(self.ns['_knowledge_folder'](S, 'a' * 32))  # a linked knowledge folder is never written to or emptied
 
     def test_synced_file_name_is_checked(self):
         ns = {'__file__': str(ROOT / 'backend/server.py')}
@@ -174,7 +177,7 @@ class KnowledgeUnits(unittest.TestCase):
             f = ROOT / 'backend/zook' / (part + '.py'); exec(compile(f.read_text(encoding='utf-8'), str(f), 'exec'), ns)
         clean = lambda source: ns['sync_clean']('knowledge:' + 'a' * 32, dict(title='t', content='c', botId='', tags=[], source=source))
         self.assertEqual(clean('手冊.pdf')['source'], '手冊.pdf')
-        for bad in ('\ud800.pdf', 'a/b.pdf', 'a\nb.pdf', 5): self.assertIsNone(clean(bad), bad)
+        for bad in ('\x85.pdf', '\ud800.pdf', 'a/b.pdf', 'a\nb.pdf', 5): self.assertIsNone(clean(bad), bad)
 
     def test_prompts_use_the_shared_choice(self):
         for name in ('app.py', 'groups.py'):

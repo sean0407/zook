@@ -133,7 +133,7 @@ def sync_clean(key, value):
         tags = value.get('tags', [])
         if not _text(value.get('title'), 300) or not _text(value.get('content'), 100000) or not _text(value.get('botId', ''), 100): return None
         if not isinstance(tags, list) or len(tags) > 30 or any(not _text(t, 100) for t in tags) or not _text(value.get('source', ''), 300): return None
-        if value.get('source') and (re.search(r'[\x00-\x1f\x7f/\\]', value['source']) or not _sync_encodes(value['source'])): return None  # only a plain file name
+        if value.get('source') and (re.search(r'[\x00-\x1f\x7f-\x9f/\\]', value['source']) or not _sync_encodes(value['source'])): return None  # only a plain file name
         out = dict(title=value['title'], content=value['content'], botId=value.get('botId', ''), tags=tags, createdAt=str(value.get('createdAt') or '')[:40], updatedAt=str(value.get('updatedAt') or '')[:40])
         if value.get('source'): out['source'] = value['source']  # only the name of the file it was read from, shown on its card
         return out
