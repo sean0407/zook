@@ -164,7 +164,7 @@
     } catch {
       body = {}
     }
-    if (!res.ok) throw Error(body.error || `請求失敗 (${res.status})`);
+    if (!res.ok) throw Object.assign(Error(body.error || `請求失敗 (${res.status})`), {status: res.status});
     return body;
   }
   const post = (path, body = {}, method = 'POST') => api(path, {
