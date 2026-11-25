@@ -15,7 +15,7 @@ def scratch_name(name):
 
 def _output_kind(name):
     suffix = pathlib.Path(name).suffix.lower()
-    return 'image' if suffix in IMAGE_TYPES else OUTPUT_PREVIEW.get(suffix, 'file')
+    return 'image' if suffix in IMAGE_TYPES else 'office' if suffix in OFFICE_TYPES else OUTPUT_PREVIEW.get(suffix, 'file')  # office: pictures of its pages (officeview.py)
 
 
 def _inside(path, folder):
@@ -172,7 +172,7 @@ def output_response(item):
     if item['kind'] == 'image': return data, IMAGE_TYPES[suffix]
     if item['kind'] == 'pdf': return data, 'application/pdf'
     if item['kind'] in ('text', 'markdown'): return data, 'text/plain; charset=utf-8'
-    return data, 'application/octet-stream'
+    return data, OFFICE_TYPES.get(suffix, 'application/octet-stream')  # #201: a Word file downloads as one
 
 
 # 這段對話的資料夾 (#241): where a conversation's files go when the user names no place, instead of the real Desktop. Inside the

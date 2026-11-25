@@ -20,7 +20,7 @@
   function outputsPanel(b) {
     const list = state.outputs[b.id];
     if (!list) { setTimeout(() => loadOutputs(b.id), 0); return '<div class="detail-empty">正在讀取產出…</div>'; }
-    const icon = {image: '🖼', pdf: '📕', markdown: '📝', text: '📄', file: '📎'};
+    const icon = {image: '🖼', pdf: '📕', office: '📊', markdown: '📝', text: '📄', file: '📎'};
     const [files, scripts] = splitScripts(list), showScripts = !!state.showScripts?.[b.id];
     const row = o => `<button class="note-row output-row" data-action="output-open" data-id="${esc(o.id)}" title="${esc(o.path)}"><strong>${icon[o.kind] || '📎'} ${esc(o.name)}</strong><small>${esc(fileSize(o.size))} · ${esc(formatDate(o.at))}</small></button>`;
     const more = scripts.length ? `<label class="output-scripts">${toggle('data-show-scripts="' + esc(b.id) + '"', showScripts, '顯示製作用的程式')}<span>顯示製作用的程式（${scripts.length}）</span></label>${showScripts ? scripts.map(row).join('') : ''}` : '';
@@ -38,7 +38,14 @@
   // (a picture that is not one, a 「PDF」 that is not a PDF, an empty file) says so in plain words and can still be downloaded.
   const CANT_OPEN = '這個檔案打不開，可能已損壞或副檔名不對。可以下載後用其他程式開啟。';
   const imageOpens = src => new Promise(done => { const img = new Image(); img.onload = () => done(img.naturalWidth > 0); img.onerror = () => done(false); img.src = src; });
+  // #239: Excel, Word and PowerPoint as pictures of their pages, made by Zook on this Mac (Quick Look). The window opens at once with
+  // 「正在產生預覽…」; the pictures come in when ready (fillOfficeView), or a plain reason when they cannot be made.
+  const officeShell = url => `<div class="office-view" data-src="${esc(url)}"><p class="muted office-wait">正在產生預覽…</p></div>`;
   async function previewBody(url, kind, name) {
+    if (kind === 'office') {
+      let res = null; try { res = await fetch(url + '/pages'); } catch (_) {}
+      return res && res.status === 404 ? {missing: true, body: '<p class="error-text">找不到這個檔案，可能已經被移走或刪除。</p>'} : {body: officeShell(url)};
+    }
     let res = null;
     try { res = await fetch(url); } catch (_) {}
     if (!res || res.status === 404) return {missing: true, body: '<p class="error-text">找不到這個檔案，可能已經被移走或刪除。</p>'};
@@ -62,8 +69,28 @@
     const url = '/api/bots/' + encodeURIComponent(botId) + '/outputs/' + encodeURIComponent(o.id);
     const {body, missing} = await previewBody(url, o.kind, o.name);
     const keep = missing ? '' : `<button type="button" class="secondary" data-action="output-reveal" data-id="${esc(o.id)}" data-bot="${esc(botId)}">在 Finder 顯示</button><a class="secondary button-link" href="${url}" download="${esc(o.name)}">下載</a>`;
-    modal(o.name, `<div class="modal-body">${body}<p class="muted small output-path">${esc(o.path)}</p></div><div class="modal-foot">${keep}<button type="button" class="primary" data-action="close-modal">關閉</button></div>`, '', true);
-    showPdfWhenReady();
+    modal(o.name, `<div class="modal-body">${body}</div><div class="modal-foot">${keep}<button type="button" class="primary" data-action="close-modal">關閉</button></div>`, '', true);  // #70④: no full path on this Mac
+    showPdfWhenReady(); fillOfficeView();
+  }
+  async function fillOfficeView() {
+    const box = document.querySelector('.modal .office-view');
+    if (!box) return;
+    const src = box.dataset.src, until = Date.now() + 200000;
+    while (box.isConnected) {
+      let res = null, info = {};
+      try { res = await fetch(src + '/pages'); info = await res.json(); } catch (_) {}
+      if (!box.isConnected) return;
+      if (info.status === 'ready') {
+        const n = info.pages, more = info.total > n ? `，只顯示前 ${n} 頁` : '';
+        box.innerHTML = `<p class="muted small office-note">這是預覽圖，版面可能和原檔略有不同${n > 1 ? `。共 ${info.total} 頁${more}` : ''}。${esc(info.note || '')}</p><div class="office-pages">${Array.from({length: n}, (_, i) => `<figure class="office-page"><img src="${esc(src + '/pages/' + (i + 1) + '?v=' + info.version)}" alt="第 ${i + 1} 頁" loading="lazy">${n > 1 ? `<figcaption>${i + 1} / ${n}</figcaption>` : ''}</figure>`).join('')}</div>`;
+        return;
+      }
+      if (info.status !== 'working' || Date.now() > until) {
+        box.innerHTML = `<p class="muted">${esc(info.reason || info.error || '無法產生預覽，可以下載後用其他程式開啟。')}</p>`;
+        return;
+      }
+      await new Promise(done => setTimeout(done, 1000));
+    }
   }
   // The output a link's path points at (/tmp and /private/tmp are one place). Only the exact file: another file with the same
   // name elsewhere is a different file. Each list is [owner, outputs]; returns [owner, output].

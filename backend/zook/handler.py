@@ -405,7 +405,7 @@ class Handler(BaseHTTPRequestHandler):
                 with store.lock: return self.respond(200, usage_overview(store, span))
             if path == '/api/usage/bots' and self.command == 'GET':
                 with store.lock: return self.respond(200, bot_usage(store))
-            if len(parts) in (4, 5, 6) and parts[:2] == ['api', 'bots'] and parts[3] == 'outputs' and not self.device:
+            if len(parts) in (4, 5, 6, 7) and parts[:2] == ['api', 'bots'] and parts[3] == 'outputs' and not self.device:
                 with store.lock: bot = copy.deepcopy(store.find('bots', parts[2]))
                 if not bot: return self.error(404, '找不到機器人。')
                 if len(parts) == 4 and self.command == 'GET': return self.respond(200, {'outputs': bot_outputs(store, bot)})
@@ -416,6 +416,7 @@ class Handler(BaseHTTPRequestHandler):
                     except ValueError as exc: return self.error(413, str(exc))
                     except OSError: return self.error(404, '找不到這個檔案，可能已經被移走或刪除。')
                     return self.respond(200, data, kind)
+                if len(parts) in (6, 7) and parts[5] == 'pages' and self.command == 'GET': return preview_route(self, store, item['path'], parts[6:], strict=True)  # Office 預覽 (officeview.py)
                 if len(parts) == 6 and parts[5] == 'reveal' and self.command == 'POST':
                     subprocess.run(['/usr/bin/open', '-R', item['path']], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
                     return self.respond(200, {'ok': True})
@@ -609,6 +610,10 @@ class Handler(BaseHTTPRequestHandler):
                 (folder / 'meta.json').write_text(json.dumps(meta, ensure_ascii=False), encoding='utf-8')
                 return self.respond(201, meta)
             if path == '/api/knowledge/file' and self.command == 'POST' and not self.device: return knowledge_upload(self, store)  # read in the background (knowledge.py)
+            if len(parts) in (6, 7) and parts[:2] == ['api', 'groups'] and parts[3] == 'files' and parts[5] == 'pages' and self.command == 'GET' and not self.device:  # Office 預覽, outside the store lock
+                with store.lock: found = bool(store.find('groups', parts[2]))
+                found = found and group_preview_path(store, parts[2], parts[4])
+                return preview_route(self, store, found, parts[6:], strict=True) if found else self.error(404, '找不到這個檔案。')
             if len(parts) == 4 and parts[:2] == ['api', 'groups'] and parts[3] == 'files' and self.command == 'POST' and not self.device:
                 try: size = int(self.headers.get('Content-Length', '0'))
                 except ValueError: size = 0
@@ -801,11 +806,11 @@ class Handler(BaseHTTPRequestHandler):
                         if not found: return self.error(404, '找不到這個檔案。')
                         kind, data = _output_kind(found.name), read_group_file(found)  # shown in the conversation: a picture as a picture, a page or SVG only as text
                         if data is None: return self.error(404, '找不到這個檔案。')
-                        return self.respond(200, data, IMAGE_TYPES[found.suffix.lower()] if kind == 'image' else 'application/pdf' if kind == 'pdf' else 'text/plain; charset=utf-8' if kind in ('text', 'markdown') else 'application/octet-stream')
+                        return self.respond(200, data, IMAGE_TYPES[found.suffix.lower()] if kind == 'image' else 'application/pdf' if kind == 'pdf' else 'text/plain; charset=utf-8' if kind in ('text', 'markdown') else OFFICE_TYPES.get(found.suffix.lower(), 'application/octet-stream'))
                     if len(parts) == 5 and parts[3] == 'files' and self.command == 'DELETE' and not self.device:
                         found = group_file_path(store, group, parts[4])
                         if not found: return self.error(404, '找不到這個檔案。')
-                        found.unlink(); (group.get('fileInfo') or {}).pop(parts[4], None); store.save()
+                        found.unlink(); (group.get('fileInfo') or {}).pop(parts[4], None); store.save(); sweep_previews_later(store, force=True)  # its preview pictures go with it
                         return self.respond(200, {'ok': True})
                     if len(parts) == 4 and parts[3] == 'estimate' and self.command == 'POST':
                         body = self.body(); mode = body.get('mode') or group.get('mode') or 'free'
@@ -912,7 +917,7 @@ def main():
     signal.signal(signal.SIGTERM, stop_server)
     threading.Thread(target=app.sync_remote, daemon=True).start()
     threading.Thread(target=app.schedule_loop, daemon=True).start()
-    trim_jobs(app.store); recover_deleted_bots(app.store); sweep_uploads(app.store, force=True)
+    trim_jobs(app.store); recover_deleted_bots(app.store); sweep_uploads(app.store, force=True); sweep_previews(app.store, force=True)
     app.store.save()
     try: app.script_api = ScriptApi(app)  # for scripts on this Mac; every Bot starts with it switched off
     except OSError: app.script_api = None

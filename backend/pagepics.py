@@ -3,12 +3,13 @@
 
 Bots run this to look at what they made: `/usr/bin/python3 pagepics.py <file> <out folder>`.
 PDF pages are drawn with macOS CoreGraphics (standard library only, through ctypes); each slide of a .pptx is cut into
-a one-slide copy that Quick Look (qlmanage, no window) turns into a picture. Other formats get Quick Look's first page.
+a one-slide copy that Quick Look (qlmanage, no window) turns into a picture; a .docx is laid out on A4 pages by macOS's text
+system and drawn like a PDF. Other formats get Quick Look's first page.
 It prints each picture and the page size with its ratio (16:9 slides should say 16:9), and leaves no other files behind:
 the one-slide copies sit in a hidden folder inside the output folder (the Bot's own scratch folder), removed on exit and on SIGTERM.
 Pages that could not be pictured are listed and the exit code is 1, so no page goes unchecked.
 """
-import ctypes, ctypes.util, os, re, shutil, signal, subprocess, sys, tempfile, zipfile
+import ctypes, ctypes.util, os, re, shutil, signal, subprocess, sys, tempfile, threading, time, zipfile
 
 # PresentationML, transitional and strict: the prefix bound to it is whatever the file chose (p:, ps:, or the default namespace).
 PML = ('http://schemas.openxmlformats.org/presentationml/2006/main', 'http://purl.oclc.org/ooxml/presentationml/main')
@@ -117,11 +118,50 @@ def pptx_pages(path, out, width=1600):
     return done, missing
 
 
+# A Word file's text laid out on A4 pages by macOS's own text system (no app window), saved as a PDF. Quick Look only pictures
+# the first page of a .docx; this gives every page. Pictures inside the document may be left out: it is a preview, not the file.
+DOCX_TO_PDF = '''ObjC.import('AppKit');
+function run(argv) {
+  var text = $.NSAttributedString.alloc.initWithURLOptionsDocumentAttributesError($.NSURL.fileURLWithPath(argv[0]), $({}), null, null);
+  if (!text || text.isNil()) return 'unreadable';
+  var info = $.NSPrintInfo.sharedPrintInfo.copy;
+  info.paperSize = $.NSMakeSize(595, 842); info.topMargin = 56; info.bottomMargin = 56; info.leftMargin = 56; info.rightMargin = 56;
+  info.horizontalPagination = $.NSFitPagination; info.verticalPagination = $.NSAutoPagination; info.jobDisposition = $.NSPrintSaveJob;
+  info.dictionary.setObjectForKey($.NSURL.fileURLWithPath(argv[1]), $.NSPrintJobSavingURL);
+  var view = $.NSTextView.alloc.initWithFrame($.NSMakeRect(0, 0, 483, 730));
+  view.textStorage.setAttributedString(text);
+  var job = $.NSPrintOperation.printOperationWithViewPrintInfo(view, info);
+  job.showsPrintPanel = false; job.showsProgressPanel = false;
+  return job.runOperation ? 'ok' : 'failed';
+}'''
+
+
+def docx_pages(path, out, width=1600):
+    """Every page of a Word file: laid out as a PDF by macOS, then drawn like any PDF. Returns ([(png, w, h)], [pages not written])."""
+    work = tempfile.mkdtemp(prefix='.zook-pagepics-', dir=out)
+    try:
+        stem = os.path.splitext(os.path.basename(path))[0]
+        script, pdf = os.path.join(work, 'layout.js'), os.path.join(work, stem + '.pdf')
+        with open(script, 'w', encoding='utf-8') as f: f.write(DOCX_TO_PDF)
+        subprocess.run(['/usr/bin/osascript', '-l', 'JavaScript', script, os.path.abspath(path), pdf], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+        if not os.path.exists(pdf) or not os.path.getsize(pdf): return [], []
+        try: return pdf_pages(pdf, out, width)
+        except SystemExit: return [], []  # an unreadable layout: Quick Look's first page instead
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def pml_prefix(xml):
     """'p:' or whatever prefix (or '' for the default namespace) the file bound to PresentationML."""
     for found in re.finditer(r'\bxmlns(?::([A-Za-z_][\w.-]*))?\s*=\s*["\']([^"\']*)["\']', xml):
         if found.group(2) in PML: return found.group(1) + ':' if found.group(1) else ''
     return 'p:'
+
+
+def _orphaned(parent):
+    """Whoever started this (Zook, a Bot's shell) quit without stopping it: stop too, removing the one-slide copies."""
+    while os.getppid() == parent: time.sleep(2)
+    os.kill(os.getpid(), signal.SIGTERM)
 
 
 def _stop(signum, frame):
@@ -132,11 +172,13 @@ def main(argv):
     if len(argv) != 3: raise SystemExit('用法：python3 pagepics.py <檔案> <輸出資料夾>')
     path, out = argv[1], argv[2]
     for sig in (signal.SIGTERM, signal.SIGHUP): signal.signal(sig, _stop)
+    threading.Thread(target=_orphaned, args=(os.getppid(),), daemon=True).start()
     os.makedirs(out, exist_ok=True)
     kind = os.path.splitext(path)[1].lower()
     if kind == '.pdf': pages, missing = pdf_pages(path, out)
     elif kind in ('.pptx', '.potx', '.ppsx'): pages, missing = pptx_pages(path, out)
-    else:
+    else: pages, missing = docx_pages(path, out) if kind == '.docx' else ([], [])
+    if not pages and kind not in ('.pdf', '.pptx', '.potx', '.ppsx'):  # a Word file macOS could not lay out still gets its first page
         made = quicklook(path, out)
         pages, missing = [(made, 0, 0)] if made else [], []
         if made: print('（這個格式只能轉第一頁；其餘內容請直接讀檔確認）')
