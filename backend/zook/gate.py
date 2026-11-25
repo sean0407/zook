@@ -94,10 +94,36 @@ def claude_scope(store, provider, bot, scope, root, workspace, job=None):
     return 'workspace', workspace
 
 
-def claude_gate_env(store, env, tools, scope, root, workspace, files=(), group_bot=None):
+def held_reason(job, scope, tools=True):
+    """Why a reply does not have the whole Mac, for the words of a refusal (zook_gate.HELD). The same for a Bot as host or member."""
+    if not tools: return 'plan' if job.get('plan') else 'careful'
+    if job.get('gateProbe'): return 'probe'
+    return 'folder' if scope == 'folder' else 'workspace'
+
+
+def held_save_folder(store, job, bot_id, scope, root, workspace):
+    """Where a held reply saves instead: the group's files, this conversation's folder (#241), or the Bot's chosen folder. Always
+    inside what the reply may reach already."""
+    if job.get('groupFiles'): return group_copy_folder(store, bot_id)
+    if scope == 'folder': return pathlib.Path(root)
+    if job.get('chatId'): return chat_folder(store, bot_id, job['chatId'], make=False)
+    return pathlib.Path(workspace)
+
+
+def scope_save_note(scope, root, save, job, kind):
+    """For a reply without the whole Mac: where it can save, and what to say when the user asks for a place outside (#86 #88)."""
+    if scope == 'full': return ''
+    reason, then = gate_module().HELD.get(held_reason(job, scope), ('這一則只能動到 Zook 允許的資料夾', '使用者可以在「編輯 Bot」查看存取範圍'))
+    temp = '暫存檔也放在可以存的資料夾裡（例如在裡面建 tmp 子資料夾），指令裡寫完整路徑，不要用 mktemp、/tmp 或 $變數，這些會被擋下。' if kind in GATED_KINDS else ''
+    return ('\n存檔範圍：%s。使用者要你存到範圍以外（例如 /tmp、桌面、下載）時，不要只回做不到：先存到 %s 並寫出實際位置，'
+            '再白話說明擋在哪裡、為什麼，以及：%s。%s' % (reason, save, then, temp))
+
+
+def claude_gate_env(store, env, tools, scope, root, workspace, files=(), group_bot=None, job=None):
     """The hook's environment for this reply: a new random word and a new file for its mark (claude_gate_after), and, without the whole
     Mac, what it may reach (ZOOK_GATE_ROOTS). A reply that only reads what was attached gets this reply's own files, one by one (and
-    its group's shared files), never the whole attachments folder, and never an allow (ZOOK_GATE_DEFER). Returns the mark to check."""
+    its group's shared files), never the whole attachments folder, and never an allow (ZOOK_GATE_DEFER). Returns the mark to check.
+    With the job, a refusal can also say why and where to save instead (ZOOK_GATE_WHY, ZOOK_GATE_SAVE); neither changes what is reached."""
     folder = store.dir / 'tools' / 'claude-gate'; folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     for old in folder.iterdir():  # marks of replies long done
         try:
@@ -110,6 +136,9 @@ def claude_gate_env(store, env, tools, scope, root, workspace, files=(), group_b
     if not tools:
         env['ZOOK_GATE_ROOTS'] = json.dumps([str(f) for f in files] + ([str(group_copy_folder(store, group_bot))] if group_bot else []))
         env['ZOOK_GATE_DEFER'] = '1'
+    if job is not None and 'ZOOK_GATE_ROOTS' in env:
+        env['ZOOK_GATE_WHY'] = held_reason(job, scope, bool(tools))
+        if tools: env['ZOOK_GATE_SAVE'] = str(held_save_folder(store, job, job.get('botId') or group_bot or '', scope, root, workspace))
     return gate
 
 

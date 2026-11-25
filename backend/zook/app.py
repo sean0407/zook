@@ -517,7 +517,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 if choices_for(store, job): prompt += ASK_NOTE
                 if 'zook_browser_open' in [t.get('name') for t in tools]: prompt += BROWSER_PROMPT
                 if kind == 'grok': prompt += '\nZook 工具在這裡的完整名稱是 zook__ 加上工具名，例如 zook__zook_create_schedule。'
-                if native: prompt += '\n工具說明：' + gate_access_note(access_note(scope, root, kind in ('codex', 'antigravity') or (kind == 'cursor' and scope == 'full'), kind == 'grok'), kind) + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。'
+                if native: prompt += '\n工具說明：' + gate_access_note(access_note(scope, root, kind in ('codex', 'antigravity') or (kind == 'cursor' and scope == 'full'), kind == 'grok'), kind) + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。' + (scope_save_note(scope, root, held_save_folder(store, job, bot['id'], scope, root, workspace), job, kind) if kind != 'claude' or claude_hooks_allowed(env=env) else '')  # where to save instead (#86 #88); Claude only with its tools
                 else: prompt += '\n工具說明：檔案讀寫與其他動作請使用 zook 工具。zook 工具會依使用者設定的主動性決定是否先請使用者核准，與本機 CLI 沙箱是否唯讀無關；需要時直接呼叫，被拒絕再說明即可。'
             if not selected and scope != 'workspace': prompt += '\n工具說明：' + access_note(scope, root, True)
             if choices_for(store, job): prompt += CHOICE_NOTE
@@ -601,7 +601,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 if claude_tools and scope == 'full': args += ['--add-dir', '/']
                 # Every built-in tool, reads too, goes through the gate (gate.py): it blocks when it fails, and nothing is allowed in advance.
                 if claude_tools or attach_read: args += ['--permission-mode', 'manual', '--settings', claude_gate_settings(wait)]
-                gate_before = claude_gate_env(store, env, claude_tools, scope, root, workspace, job.get('attachments') or [], bot['id'] if job.get('groupFiles') else None)
+                gate_before = claude_gate_env(store, env, claude_tools, scope, root, workspace, job.get('attachments') or [], bot['id'] if job.get('groupFiles') else None, job=job)
                 if attach_read or (job.get('groupFiles') and scope == 'folder'): args += ['--add-dir', str(workspace / 'attachments')]  # its working folder may be elsewhere
                 if selected:
                     args += ['--mcp-config', json.dumps({'mcpServers': {'zook': {'command': sys.executable, 'args': [adapter]}}}), '--allowedTools', ','.join(['mcp__zook__'+tool['name'] for tool in tools] + (['WebSearch', 'WebFetch'] if web and hooks_ok else []))]
