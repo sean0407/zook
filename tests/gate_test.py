@@ -77,8 +77,11 @@ class BoundaryTest(unittest.TestCase):
             self.assertEqual(self.kind(command), kind, command)
 
     def test_review_findings_are_asked(self):
-        # deleting is asked anywhere, temporary folders too; redirections; every starting point; options with values; unreadable commands
-        for command, kind in (('rm /tmp/zook-scratch.py', 'delete'), ('rm -f "/private/tmp/a b.png"', 'delete'), ('find /tmp ~/Desktop -name x -delete', 'delete'),
+        # deleting is asked anywhere; redirections; every starting point; options with values; unreadable commands. An earlier security
+        # review asked for /tmp deletes to be asked too; the user changed that (decisions #28, queue #261): the Bot's own scratch FILES are
+        # not asked (gate_scratch_test), but a /tmp folder, a wildcard, or a /tmp path that is not a plain file of the Bot's still is.
+        for command, kind in (('rm -rf /tmp/zook-scratch', 'delete'), ('rm -f "/private/tmp/a b-not-there.png"', 'delete'), ('rm /tmp/zook-*.py', 'delete'),
+                              ('find /tmp ~/Desktop -name x -delete', 'delete'),
                               ('cat < ~/.ssh/id_rsa', 'secret'), ('wc -l < ~/.aws/credentials', 'secret'), ('echo x >> ~/.ssh/authorized_keys', 'secret'),
                               ('find /tmp ~/.ssh -name "*.pub"', 'secret'), ('find ~ -name "*" -exec cat {} +', 'secret'), ('grep -r token ~', 'secret'),
                               ('grep -R password /', 'secret'), ('rg -i key ~', 'secret'), ('tar czf all.tgz ~', 'secret'), ('cp -r ~ /Volumes/USB', 'secret'),

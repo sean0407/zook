@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Extra Antigravity accounts: agy only moves its sign-in with HOME, so each account gets its own home folder with the user's
 everyday folders linked in. Zook's own checks keep using the real home folder."""
-import http.client, importlib.util, json, os, pwd, shlex, shutil, signal, subprocess, sys, tempfile, threading, time, unittest
+import http.client, importlib.util, json, os, pwd, re, shlex, shutil, signal, subprocess, sys, tempfile, threading, time, unittest
 from unittest import mock
 from pathlib import Path
 
@@ -124,6 +124,7 @@ class Units(Base):
         os.environ['ZOOK_DATA_DIR'] = str(self.root / 'data')
         try:
             spec.loader.exec_module(gate)
+            gate.SCRATCH = re.compile(r'(?!)')  # this fake home is in the Mac's temporary folder: judge it as the user's real files (decisions #28)
             kinds = lambda tool, data: sorted(k for k, _ in gate.boundaries(tool, data, str(self.root)))
             self.assertEqual(kinds('Bash', {'command': 'rm %s' % (folder / 'Desktop/keep.txt')}), kinds('Bash', {'command': 'rm %s' % (self.home / 'Desktop/keep.txt')}))
             self.assertIn('delete', kinds('Bash', {'command': 'rm %s' % (folder / 'Desktop/keep.txt')}))
