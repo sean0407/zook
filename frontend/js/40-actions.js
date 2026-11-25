@@ -422,14 +422,19 @@
         case 'composer-menu':
           modal('更多選項', '<div class="modal-body more-options"><button class="secondary" data-action="pick-files">📎 附加檔案或圖片</button><p class="muted">也可以拖進對話或貼上截圖。最多 10 個，單檔 20 MB。</p><button class="secondary" data-action="new-note">＋ 新增知識</button><p class="muted">新增知識，為 Bot 提供相關背景。</p>' + `<div class="setting-list mode-rows">${effortRow()}</div>` + (activeGroup() ? '' : '<p class="muted">在訊息框輸入 <b>/goal</b> 開啟長任務、<b>/plan</b> 開啟先規劃。</p>') + '</div>');
           break;
+        case 'dismiss-approval': state.seenApprovals[id] = true; render(true); break;
         case 'approve':
         case 'deny':
           if (state.deciding[id]) break;
           state.deciding[id] = true;
           el.disabled = true;
           try {
-            await post('approvals/' + encodeURIComponent(id), {decision: action === 'approve' ? 'approve' : 'deny'});
-            for (const j of Object.values(state.jobDetails)) for (const a of j.approvals || []) if (a.id === id) a.status = action === 'approve' ? 'approved' : 'denied';
+            try { await post('approvals/' + encodeURIComponent(id), {decision: action === 'approve' ? 'approve' : 'deny'}); }
+            catch (e) {
+              if (!/已結束/.test(e.message)) throw e;
+              toast('這張核准卡已經結束：可能已在別處決定，或 Bot 不再等它。'); break;  // the next refresh shows what really happened
+            }
+            for (const j of Object.values(state.jobDetails)) for (const a of j.approvals || []) if (a.id === id) Object.assign(a, {status: action === 'approve' ? 'approved' : 'denied', decidedAt: new Date().toISOString(), callsAt: (j.toolCalls || []).length});
             render(true);
           } finally { delete state.deciding[id]; if (el.isConnected) el.disabled = false; }
           break;

@@ -103,6 +103,7 @@
     pollers: {},
     jobDetails: {},
     deciding: {},
+    seenApprovals: {},  // 已失效 cards the user closed with 知道了
     mcpTests: {}
   };
   const app = $('#app'),
@@ -295,6 +296,21 @@
       const call = (a.job.toolCalls || []).find(c => c.id === a.toolCallId) || {name: a.name, label: a.label, sourceLabel: a.sourceLabel, arguments: a.arguments};
       const who = state.data.bots.find(x => x.id === a.job.botId)?.name || 'Bot';
       return `<section class="approval-card" aria-label="需要你的核准"><strong>${esc(who)}${a.job.taskTitle ? `（任務 ${esc(a.job.taskTitle)}）` : ''} 想要${esc(a.text || describeCall({...call, arguments: a.arguments})).replace(/\n/g, '<br>')}</strong>${approvalReason(a) ? `<small class="approval-reason">${esc(approvalReason(a))}</small>` : ''}<details data-approval-details="${esc(a.id)}"><summary>查看詳細內容</summary>${argsList(a.arguments)}</details><div class="actions"><button class="primary" data-action="approve" data-id="${esc(a.id)}" ${state.deciding[a.id]?'disabled':''}>允許這次</button><button class="secondary" data-action="deny" data-id="${esc(a.id)}" ${state.deciding[a.id]?'disabled':''}>不要</button></div></section>`;
+    }).join('') + approvalAfter(jobs || jobsForBot(botId));
+  }
+  // A card the CLI stopped waiting for stays in sight, greyed, with why; after 允許這次 the wait is shown, not a silent 正在思考….
+  function approvalAfter(jobs) {
+    const now = Date.now();
+    return jobs.filter(j => j.status === 'running').map(j => {
+      const who = state.data.bots.find(x => x.id === j.botId)?.name || 'Bot';
+      const what = a => a.text || describeCall({...((j.toolCalls || []).find(c => c.id === a.toolCallId) || {name: a.name, label: a.label}), arguments: a.arguments});
+      const gone = (j.approvals || []).filter(a => a.status === 'expired' && a.withdrawn && !state.seenApprovals[a.id]).map(a =>
+        `<section class="approval-card stale" role="status"><strong>${esc(who)} 已不再等這個核准：${esc(what(a))}</strong><small class="approval-reason">它可能改用別的做法，或已經停下。這張卡已失效，不會執行。</small><div class="actions"><button class="secondary" data-action="dismiss-approval" data-id="${esc(a.id)}">知道了</button></div></section>`).join('');
+      const moved = a => (j.toolCalls || []).length > (a.callsAt ?? Infinity);  // it has done something since: no longer waiting on this
+      const last = (j.approvals || []).some(a => a.status === 'pending') ? null : (j.approvals || []).filter(a => a.status === 'approved' && a.decidedAt).sort((x, y) => String(x.decidedAt).localeCompare(String(y.decidedAt))).slice(-1).filter(a => !moved(a))[0];
+      const mins = last ? Math.floor((now - new Date(last.decidedAt).getTime()) / 60000) : 0;
+      const after = last ? `<div class="approval-after" role="status">已允許「${esc(what(last))}」，等 ${esc(who)} 繼續${mins >= 1 ? `（已過 ${mins} 分鐘）` : '…'}${mins >= 3 ? '。如果一直沒有進展，可以按 ■ 停止後再試一次。' : ''}</div>` : '';
+      return gone + after;
     }).join('');
   }
   // Everything a Bot did (Skills, connectors, web) shows in that Bot's own panel, including work done inside groups.
