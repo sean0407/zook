@@ -447,9 +447,9 @@
     if (m.checkOf) return '';
     if (m.taskBoard) return taskBoardView(g, m);
     const fileMark = groupFileMark(g);
-    if (m.role === 'system' && g.paused && m.id === (g.messages || []).filter(x => x.role === 'system').slice(-1)[0]?.id && /發言上限/.test(m.content)) return '';  // the bar below says it
-    if (m.role === 'system') {  // 「… 存了共用檔案」: a file the reply right above already shows is not shown twice
-      const all = groupMsgs(g), prev = all[all.indexOf(m) - 1], said = prev?.role === 'assistant' ? String(prev.content || '') : '';
+    if (m.role === 'system' && g.paused && m.id === (g.messages || []).filter(x => x.role === 'system').slice(-1)[0]?.id && /發言上限|回合上限/.test(m.content)) return '';  // the bar below says it
+    if (m.role === 'system') {  // 「… 存了共用檔案」: a file a reply of this round already shows is not shown twice (#229: members answering at once, a note in between)
+      const all = groupMsgs(g), at = all.indexOf(m), asked = all.slice(0, at).map(x => x.role).lastIndexOf('user'), said = all.slice(asked + 1, at).filter(x => x.role === 'assistant').map(x => String(x.content || '')).join('\n');
       return `<div class="system-note">${esc(m.content)}</div>${messageFiles(m.content, groupSharedFiles(g, fileMark).filter(f => !said.includes(f.name)))}`;
     }
     const tag = html => highlightMentions(html, groupMembers(g));

@@ -109,7 +109,7 @@ def task_delegate_tool(app, store, job_id, group_id, run_id, task_id, mine, acte
             group, run, task, attempt = mine()
             if (task.get('depth') or 1) >= TASK_DEPTH: raise RuntimeError('最多兩層：你自己就是助手，不能再派助手。自己完成，或用 zook_task_done 回報做不到。')
             if len([t for t in run['tasks'] if t.get('parent') == task['n']]) >= TASK_HELPERS: raise RuntimeError('一項工作最多派 %d 位助手。' % TASK_HELPERS)
-            if len(run['tasks']) >= TASK_MAX: raise RuntimeError('這個目標的工作已經到上限 %d 項。' % TASK_MAX)
+            if len(run['tasks']) >= task_max(run): raise RuntimeError('這個目標的工作已經到上限 %d 項。' % task_max(run))
             if any(t['title'] == title for t in run['tasks']): raise RuntimeError('已經有同名的工作，換一個標題。')
             name = ' '.join(str(args.get('assignee') or '').split()).lstrip('@').lower()
             bot = next((b for b in (store.find('bots', x) for x in group['botIds']) if b and b['name'].strip().lower() == name), None)

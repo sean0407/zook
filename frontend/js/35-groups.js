@@ -8,8 +8,8 @@
   const currentGroupMode = g => { const mode = state.groupMode[g.id] || g.mode || 'free'; return mode === 'auto' && (!taskEngineOn() || !autoReady(g)) ? 'free' : mode; };
   const hostOptions = ids => [{id: '', name: '不設主持人'}, ...ids.map(id => state.data.bots.find(b => b.id === id)).filter(Boolean).map(b => ({id: b.id, name: b.name}))];
   function groupSettingRows(g, chosen) {
-    const host = g.id ? groupHostId(g) : '', limit = g.turnLimit || (host ? 16 : 8);
-    return `<div class="setting-list in-form"><div data-host-field>${settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', host, hostOptions([...chosen])))}</div>${settingRow('討論方式', '送出時也能在輸入框旁，只對這一則訊息改用別的方式', dropdown('mode', g.mode === 'auto' && !taskEngineOn() ? 'free' : g.mode || 'free', groupModeOptions()))}${settingRow('回合上限', '每則訊息最多幾次發言，到了就先停下', dropdown('turnLimit', String(limit), [4, 8, 12, 16].map(n => ({id: String(n), name: n + ' 次'}))))}</div><p class="small error-text" data-group-problem role="alert" hidden></p><p class="muted small" data-group-hint hidden></p>`;
+    const host = g.id ? groupHostId(g) : '', limit = g.turnLimit || 4;
+    return `<div class="setting-list in-form"><div data-host-field>${settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', host, hostOptions([...chosen])))}</div>${settingRow('討論方式', '送出時也能在輸入框旁，只對這一則訊息改用別的方式', dropdown('mode', g.mode === 'auto' && !taskEngineOn() ? 'free' : g.mode || 'free', groupModeOptions()))}${settingRow('回合上限', '要回答的成員都回一次算 1 回合；自動轉交和追問也算在內，到了就先停下（「自動」做到目標達成為止）', dropdown('turnLimit', String(limit), [4, 5, 8, 12, 16].map(n => ({id: String(n), name: n + ' 回合'}))))}</div><p class="small error-text" data-group-problem role="alert" hidden></p><p class="muted small" data-group-hint hidden></p>`;
   }
   function syncGroupHost(form) {
     const ids = new FormData(form).getAll('botIds'), slot = form.querySelector('[data-host-field]'), now = form.elements.hostId.value;
@@ -42,8 +42,9 @@
     const key = g.id + currentGroupMode(g) + ':' + (g.messages || []).length;
     try {
       const e = await post('groups/' + encodeURIComponent(g.id) + '/estimate', {content: $('#chat-input')?.value || '', mode: currentGroupMode(g)});
-      const text = currentGroupMode(g) === 'auto' && e.upTo ? `預計至少 ${e.replies} 次回覆：主持人規劃、每位成員做事各算一次，驗收和重做會再多幾次`  // #223①: 自動 has no upper bound
-        : `預計${e.upTo ? '最多 ' : ' '}${e.replies} 次回覆${e.most ? `（主持人退回修正時最多 ${e.most} 次）` : ''}`;  // the token figure meant nothing to people and looked alarming
+      const fallback = currentGroupMode(g) === 'auto' && e.upTo ? `預計至少 ${e.replies} 次回覆：主持人規劃、每位成員做事各算一次，驗收和重做會再多幾次`  // #223①: 自動 has no upper bound
+        : `預計${e.upTo ? '最多 ' : ' '}${e.replies} 次回覆${e.most ? `（主持人退回修正時最多 ${e.most} 次）` : ''}`;
+      const text = e.text || fallback;  // in rounds, worded by the Mac (#174); the token figure meant nothing to people and looked alarming
       state.groupEstimate = {key, text};
       const el = $('#group-estimate');
       if (el && activeGroup()?.id === g.id) el.textContent = text;
@@ -53,7 +54,7 @@
 
   function groupRunBar(g) {
     if (g.status === 'running') return '';
-    if (g.paused) return `<div class="group-bar"><span>這輪已達發言上限，討論還沒結束。</span><button type="button" class="secondary small-btn" data-action="group-discard">結束</button><button type="button" class="primary small-btn" data-action="group-continue">繼續</button></div>`;
+    if (g.paused) return `<div class="group-bar"><span>這次詢問已達 ${esc(String(g.turnLimit || 4))} 回合上限，討論還沒結束。按「繼續」再進行 ${esc(String(g.turnLimit || 4))} 回合。</span><button type="button" class="secondary small-btn" data-action="group-discard">結束</button><button type="button" class="primary small-btn" data-action="group-continue">繼續</button></div>`;
     let after = g.afterAsk;  // worked out over the whole discussion by the Mac, since the page may hold only its newest part
     if (!after) { const messages = groupMsgs(g), lastAsk = messages.map(m => m.role).lastIndexOf('user'), since = messages.slice(lastAsk + 1).filter(m => m.role === 'assistant' && m.content && !m.checkOf); after = {replies: since.length, card: since.some(m => m.card)}; }
     return after.replies >= 2 && !after.card ? `<div class="group-bar"><span></span><button type="button" class="secondary small-btn" data-action="group-summarize">整理結論（多用一次模型請求）</button></div>` : '';
@@ -206,7 +207,7 @@
       `${esc(hostName)} 會把工作拆成幾項，列在對話裡的「任務板」：每項寫明誰負責、做到哪裡，最上面的「下一步」會說要不要你做什麼。`,
       state.data.settings.taskExecution === 'lowrisk' ? '只讀資料的工作會直接開始；會改檔案或對外動作的，要你按「照這個做」才開始。' : '工作排好後，要你按「照這個做」才會開始；不想做就按「不要，停止」。',
       '成員各自做，交出後由別家的模型驗收；全部完成後主持人整理結果。',
-      '輸入框下方的「預計至少 N 次回覆」是估計：主持人規劃、每位成員做事各算一次，驗收和重做會再多幾次。'
+      '輸入框下方會寫預計幾次回覆和回合上限；驗收和重做會再多幾次。'
     ] : [
       `目前的討論方式是「${esc(opt.name)}」：${esc(opt.hint)}。`,
       host ? `主持人是 ${esc(host.name)}，負責開場分派、收斂討論和總結。` : '沒有設主持人：按上方群組名稱可以指定一位。',
