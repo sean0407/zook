@@ -86,7 +86,10 @@ class KnowledgeFiles(unittest.TestCase):
         self.assertEqual(doc['status'], 'ready'); self.assertIn('會議室在三樓', doc['content'])
         big5 = self.settled(self.upload('舊檔.txt', '繁體中文舊檔案'.encode('cp950'))[1]['id'])
         self.assertEqual(big5['content'], '繁體中文舊檔案')
+        page = self.settled(self.upload('說明.html', '<html><head><script>steal()</script><img src="https://example.invalid/x.png"></head><body><h1>營業時間</h1><p>週一到週五 9 點</p></body></html>'.encode())[1]['id'])
+        self.assertEqual(page['status'], 'ready'); self.assertIn('週一到週五 9 點', page['content']); self.assertNotIn('steal', page['content'])  # read here, never opened in WebKit
         # Failures say why.
+        self.assertEqual(self.settled(self.upload('假的.rtf', b'<html>not rtf</html>')[1]['id'])['status'], 'failed')
         empty = self.settled(self.upload('scan.pdf', pdf_bytes(''))[1]['id'])
         self.assertEqual(empty['status'], 'failed'); self.assertIn('讀不到文字', empty['error'])
         broken = self.settled(self.upload('壞掉.docx', b'not a word file')[1]['id'])

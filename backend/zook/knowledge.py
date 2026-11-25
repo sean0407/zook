@@ -10,9 +10,11 @@
 # Reading a file's text uses only what macOS and Python already have:
 #   .txt .md .csv …   read as text (UTF-8, UTF-16 or Big5)
 #   .pdf              PDFKit, through osascript (JavaScript for Automation)
-#   .docx .doc .rtf .odt .html   /usr/bin/textutil
+#   .docx .doc .rtf .odt  /usr/bin/textutil (after checking the file is what its name says)
+#   .html .htm        Python's html.parser (textutil would open it in WebKit, which may fetch what the page links to)
 #   .xlsx .xlsm .pptx  unzipped and read here (standard library)
 import zipfile as _kzip
+from html.parser import HTMLParser as _KHTMLParser
 import xml.etree.ElementTree as _KET
 
 KNOWLEDGE_FILES = 50                # files in the knowledge base at once
@@ -22,9 +24,10 @@ KNOWLEDGE_RECENT = 10               # items a Bot reads with a reply: the newest
 KNOWLEDGE_SECONDS = 120             # reading one file's text
 KNOWLEDGE_UNPACKED = 100 * 1024 * 1024  # all XML read from one .xlsx or .pptx
 KNOWLEDGE_TEXT_TYPES = ('.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.log', '.yaml', '.yml', '.xml')
-KNOWLEDGE_TEXTUTIL_TYPES = ('.docx', '.doc', '.rtf', '.odt', '.html', '.htm')
+KNOWLEDGE_TEXTUTIL_TYPES = ('.docx', '.doc', '.rtf', '.odt')
+KNOWLEDGE_HTML_TYPES = ('.html', '.htm')
 KNOWLEDGE_ZIP_TYPES = ('.xlsx', '.xlsm', '.pptx')
-KNOWLEDGE_TYPES = KNOWLEDGE_TEXT_TYPES + ('.pdf',) + KNOWLEDGE_TEXTUTIL_TYPES + KNOWLEDGE_ZIP_TYPES
+KNOWLEDGE_TYPES = KNOWLEDGE_TEXT_TYPES + ('.pdf',) + KNOWLEDGE_TEXTUTIL_TYPES + KNOWLEDGE_HTML_TYPES + KNOWLEDGE_ZIP_TYPES
 KNOWLEDGE_TYPE_WORDS = 'txt、md、csv、pdf、docx、doc、rtf、xlsx、pptx、html'
 _KNOWLEDGE_PDF = '''ObjC.import('PDFKit');
 function run(argv) {
@@ -194,8 +197,11 @@ def knowledge_extract(path):
     suffix = path.suffix.lower()
     if suffix in KNOWLEDGE_TEXT_TYPES: return _knowledge_decode(path.read_bytes())
     if suffix == '.pdf': return _knowledge_pdf(path)
+    if suffix in KNOWLEDGE_HTML_TYPES: return _knowledge_html(_knowledge_decode(path.read_bytes()))
     if suffix in KNOWLEDGE_TEXTUTIL_TYPES:
-        if suffix in ('.docx', '.odt') and not _kzip.is_zipfile(str(path)): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔。' % suffix[1:].upper())  # textutil would read anything as plain text
+        with open(path, 'rb') as f: head = f.read(8)
+        looks = {'.docx': head.startswith(b'PK'), '.odt': head.startswith(b'PK'), '.doc': head.startswith(b'\xd0\xcf\x11\xe0'), '.rtf': head.startswith(b'{\\rtf')}[suffix]
+        if not looks: raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔。' % suffix[1:].upper())  # textutil would read anything (HTML too, through WebKit)
         done = subprocess.run(['/usr/bin/textutil', '-convert', 'txt', '-stdout', '--', str(path)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=KNOWLEDGE_SECONDS)
         if done.returncode != 0: raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔。' % suffix[1:].upper())
         return done.stdout.decode('utf-8', 'replace')
@@ -209,6 +215,31 @@ def _knowledge_decode(raw):
         try: return raw.decode(codec)
         except UnicodeDecodeError: pass
     raise KnowledgeUnreadable('看不懂這個檔案的文字編碼，請另存成 UTF-8 再上傳。')
+
+
+class _KnowledgeHTML(_KHTMLParser):
+    SKIP = {'script', 'style', 'head', 'template', 'noscript'}
+    BREAK = {'p', 'div', 'br', 'li', 'tr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'section', 'article', 'table', 'ul', 'ol'}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True); self.parts, self.skip = [], 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.SKIP: self.skip += 1
+        elif tag in self.BREAK: self.parts.append('\n')
+        elif tag in ('td', 'th'): self.parts.append('\t')
+
+    def handle_endtag(self, tag):
+        if tag in self.SKIP: self.skip = max(0, self.skip - 1)
+        elif tag in self.BREAK: self.parts.append('\n')
+
+    def handle_data(self, data):
+        if not self.skip: self.parts.append(data)
+
+
+def _knowledge_html(text):
+    page = _KnowledgeHTML(); page.feed(text); page.close()
+    return re.sub(r'[ \t]*\n[ \t]*', '\n', ''.join(page.parts))
 
 
 def _knowledge_pdf(path):
