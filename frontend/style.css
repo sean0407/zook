@@ -1620,6 +1620,7 @@ button.run-row:hover { background: #f1f1f1; }
 .pdf-loading { position: absolute; top: 40%; left: 0; right: 0; text-align: center; margin: 0; }
 .output-path { margin: 10px 0 0; word-break: break-all; }
 .output-link { font: inherit; text-decoration: underline; text-decoration-style: dotted; }
+.local-link { font: inherit; color: #2563eb; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; text-align: left; }
 .button-link { display: inline-flex; align-items: center; text-decoration: none; }
 .catalog-item.off { opacity: 0.55; }
 .catalog-item .dir-icon, .catalog-item .item-icon { flex: none; }

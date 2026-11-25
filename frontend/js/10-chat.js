@@ -9,19 +9,49 @@
     "'": '&#39;'
   } [c]));
 
-  // Minimal Markdown → HTML. Everything is escaped first; only known tags are produced and links must be http(s).
+  // A Markdown link's target → the opening tag, '' (show only its words) or null (not a link: leave the text as it is).
+  // Bots write paths with spaces or Chinese inside <…> (CommonMark), and sometimes break it: `(</tmp/a.docx> >)`, `(/tmp/a b.docx>)`.
+  // Only http(s) becomes a real link; a file on this Mac is a button that opens Zook's preview, never a page address.
+  const MD_LINK = /\[([^[\]]+)\]\((\s*<[^<>\n]*>[^()\n]*|(?:[^()\n]|\([^()\n]*\))*)\)/g;
+  // The target of a link without its <…>, title and stray '>'; and the file on this Mac it names ('' when it names none).
+  function mdTarget(inner) {
+    let t = inner.trim();
+    const q = t.slice(-1), from = /["']/.test(q) ? t.lastIndexOf(q, t.length - 2) : -1;
+    if (from > 0 && /\s/.test(t[from - 1])) t = t.slice(0, from).trim();  // a title: [a](<b> "title")
+    const angled = t.startsWith('<');
+    if (angled) { t = t.slice(1); const close = t.indexOf('>'); if (close >= 0) t = t.slice(0, close); }
+    let end = t.length; while (end && /[\s>]/.test(t[end - 1])) end--;  // a loop, not a regex: no slow backtracking on long spaces
+    t = t.slice(0, end).trim();
+    let path = '';
+    if (/^file:\/?\//i.test(t)) { path = t.replace(/^file:(\/\/(localhost)?)?/i, ''); try { path = decodeURIComponent(path); } catch (_) {} }
+    else if (/^(\/(?!\/)|~\/)/.test(t)) path = t;  // kept as written: a %20 may be part of the real name (the preview also tries it decoded)
+    if (!(path.startsWith('/') && !path.startsWith('//') || path.startsWith('~/'))) path = '';
+    return {t, angled, path};
+  }
+  function mdLinkOpen(inner) {
+    const {t, angled, path} = mdTarget(inner);
+    if (/^https?:\/\/[^\s<>"]+$/i.test(t) || (angled && /^https?:\/\/[^<>"]+$/i.test(t))) return `<a href="${esc(t.replace(/\s/g, '%20'))}" rel="noopener noreferrer">`;
+    if (path) return `<button type="button" class="link local-link" data-path="${esc(path)}" title="${esc(path)}">`;
+    if (angled || /^[a-z][a-z0-9+.-]*:/i.test(t) || /^[^\s]+\.[A-Za-z0-9]{1,8}$/.test(t)) return '';  // a bare file name or an unsafe kind of link: just its words
+    return null;
+  }
+  // Minimal Markdown → HTML. Everything is escaped; only known tags are produced (links: see mdLinkOpen).
   function mdInline(text) {
-    const codes = [];
-    let s = esc(text).replace(/`([^`\n]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`);
-    s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => `<a href="${u}" rel="noopener noreferrer">${t}</a>`)
-      .replace(/\[([^\]\n]+)\]\(((?:file:\/\/)?\/[^\s)]+)\)/g, (_, t, u) => `<a href="${u}" class="local-link" title="${u}">${t}</a>`)
-      .replace(/\[([^\]\n]+)\]\(([^\s)]+\.[A-Za-z0-9]{1,8})\)/g, '$1')  // a link to a bare file name cannot open here: just its words
-      .replace(/(^|[\s(（])(https?:\/\/[^\s<)）]+)/g, (_, p, u) => `${p}<a href="${u}" rel="noopener noreferrer">${u}</a>`)
+    const held = [], raw = [], hold = (html, was) => { raw.push(was); return `\u0000${held.push(html) - 1}\u0000`; };
+    let s = String(text ?? '').replace(/\u0000/g, '').replace(/`([^`\n]+)`/g, (whole, c) => hold(`<code>${esc(c)}</code>`, whole));
+    s = s.replace(MD_LINK, (whole, label, inner) => {
+      const open = mdLinkOpen(inner.replace(/\u0000(\d+)\u0000/g, (_, i) => raw[i]));  // a ` in a file name is part of the name
+      if (open === null) return whole;
+      label = label.split('\n').map(x => x.trim()).join(' ');  // a long name the Bot wrapped onto two lines
+      return open ? hold(open) + label + hold(open.startsWith('<a') ? '</a>' : '</button>') : label;
+    });
+    s = esc(s)
+      .replace(/(^|[\s(（])(https?:\/\/[^\s<)）\u0000]+)/g, (_, p, u) => `${p}<a href="${u}" rel="noopener noreferrer">${u}</a>`)
       .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<strong>$1</strong>')
       .replace(/__(?=\S)([\s\S]*?\S)__/g, '<strong>$1</strong>')
       .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '<del>$1</del>')
       .replace(/(^|[^*\w])\*(?=\S)([^*\n]*?\S)\*(?!\*)/g, '$1<em>$2</em>');
-    return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[i]}</code>`);
+    return s.replace(/\u0000(\d+)\u0000/g, (_, i) => held[i]);
   }
   function markdown(src) {
     const lines = String(src ?? '').replace(/\r\n?/g, '\n').split('\n'), out = [];
@@ -397,7 +427,7 @@
   }
   const groupFileMark = g => { const all = g.messages || []; return all.length + ':' + all.filter(m => m.status === 'completed' || m.role === 'system').length + ':' + (all[all.length - 1]?.id || ''); };
   // A member's copy of the group's files lives inside Zook's own data; the person only needs the file's name.
-  const hideInnerPaths = text => String(text).replace(/\[([^\]\n]+)\]\((?:file:\/\/|file:)?[^)\s]*\/workspaces\/[0-9a-f]{32}\/[^)\s]*\)/g, '$1（群組檔案）').replace(/(?:…|\.\.\.)?(?:\/[^\s`'"<>()（）「」，、：]*)?\/workspaces\/[0-9a-f]{32}\/(?:[^\s`'"<>()（）「」，、]*\/)?([^\s`'"<>()（）「」，、\/]+)/g, '$1（群組檔案）').replace(/(群組檔案\s*[：:「]\s*)([^\n（]{1,200}?)（群組檔案）/g, '$1$2');  // 「群組檔案：X（群組檔案）」 says it once
+  const hideInnerPaths = text => String(text).replace(MD_LINK, (whole, label, inner) => { const {path} = mdTarget(inner); if (!/\/workspaces\/[0-9a-f]{32}\//.test(path)) return whole; let name = path.split('/').pop(); try { name = decodeURIComponent(name); } catch (_) {} label = label.split('\n').map(x => x.trim()).join(' '); return label.includes(name) ? label + '（群組檔案）' : label + '：' + name + '（群組檔案）'; }).replace(/(?:…|\.\.\.)?(?:\/[^\s`'"<>()（）「」，、：]*)?\/workspaces\/[0-9a-f]{32}\/(?:[^\s`'"<>()（）「」，、]*\/)?([^\s`'"<>()（）「」，、\/]+)/g, '$1（群組檔案）').replace(/(群組檔案\s*[：:「]\s*)([^\n（]{1,200}?)（群組檔案）/g, '$1$2');  // 「群組檔案：X（群組檔案）」 says it once
   function groupMessage(g, m) {
     if (m.compacted && !m.checkOf) return '<div class="compact-line"><span>前面的討論已整理成摘要，成員從這裡接續</span></div>' + groupMessage(g, Object.assign({}, m, {compacted: false}));
     if (m.checkOf) return '';
