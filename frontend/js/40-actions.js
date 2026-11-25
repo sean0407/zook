@@ -207,6 +207,7 @@
           state.selected = id;
           state.page = 'chat';
           state.launcher = false;
+          chooseChat(id);  // picking the Bot here: the conversation this window now shows is its own
           render();
           break;
         case 'remote-pair':
@@ -353,13 +354,13 @@
           const b = activeBot(); state.memberWork = null;  // from a group's work page: back to a conversation with the Bot
           await post(`bots/${encodeURIComponent(b.id)}/chats`, {});
           if (state.modal) closeModal();
-          await refresh(); $('#chat-input')?.focus();
+          await refresh(); chooseChat(b.id); $('#chat-input')?.focus();
           break;
         }
         case 'open-chat': {
           const b = activeBot(); state.memberWork = null;
           if (id !== b.chatId) { await post(`bots/${encodeURIComponent(b.id)}/chats/${encodeURIComponent(id)}/open`, {}); }
-          closeModal(); await refresh();
+          closeModal(); await refresh(); chooseChat(b.id);
           break;
         }
         case 'rename-chat': {
@@ -370,7 +371,7 @@
         case 'delete-chat': {
           const b = activeBot(), c = b.chats.find(x => x.id === id);
           if (!(await ask({title: `刪除「${chatName(b, c)}」？`, lines: ['這段對話會刪除，無法復原。Bot 的其他對話不受影響。'], run: () => api(`bots/${encodeURIComponent(b.id)}/chats/${encodeURIComponent(id)}`, {method: 'DELETE'})}))) break;
-          await refresh(); chatsModal(activeBot()); toast('已刪除對話');
+          await refresh(); chooseChat(b.id); chatsModal(activeBot()); toast('已刪除對話');
           break;
         }
         case 'run-schedule':

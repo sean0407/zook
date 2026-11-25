@@ -279,6 +279,7 @@
         const botId = state.selected, b = activeBot();
         const sending = g ? sendingAdd(g.id, 'groups/' + encodeURIComponent(g.id) + '/messages', {content, attachments, effort: pickedEffort(), mode: currentGroupMode(g)}, g.id)
           : sendingAdd(botId + '/' + (b?.chatId || ''), 'chat', {botId, content, attachments, effort: pickedEffort(), plan: !!state.plan[botId], long: !!state.long[botId]});
+        if (!g) chooseChat(botId);  // sending here makes this conversation this window's own
         pendingList().length = 0; input.value = ''; updateInputMirror();
         if (g) { delete state.groupMode[g.id]; state.groupEstimate = null; } else { state.plan[botId] = false; state.long[botId] = false; }
         render(true); $('#chat-input')?.focus();
