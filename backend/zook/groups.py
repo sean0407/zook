@@ -1,6 +1,6 @@
 # Group discussions: who hosts, how a discussion runs, and when it stops. Loaded by backend/server.py into one shared namespace.
 GROUP_MODES = dict(free='自由', turns='輪流', debate='辯論', split='主持人分工', compare='比較', auto='自動（主持人決定）')  # auto: 任務引擎 (taskrun.py), only while it is on
-GROUP_LIMITS = (4, 8, 12, 16)
+GROUP_LIMITS = (4, 5, 8, 12, 16)  # 回合上限 (#174): rounds of one ask, see rounds.py
 GROUP_KEEP = 20  # the most recent messages every member is given word for word
 try: GROUP_COMPACT_AT = max(GROUP_KEEP + 2, int(os.environ.get('ZOOK_GROUP_COMPACT_AT') or 40))  # past this many since the last summary, the older part is summarised
 except ValueError: GROUP_COMPACT_AT = 40
@@ -211,9 +211,9 @@ def group_closer(store, group):
 
 
 def group_limit(store, group):
+    """回合上限: how many rounds one ask may take (rounds.py says what a round is)."""
     limit = group.get('turnLimit')
-    if limit in GROUP_LIMITS: return limit
-    return GROUP_MAX_TURNS_MODERATED if group_host(store, group) and len(group['botIds']) > 1 else GROUP_MAX_TURNS
+    return limit if limit in GROUP_LIMITS else GROUP_ROUNDS_DEFAULT
 
 
 def group_steps(store, group, mode):
@@ -267,8 +267,9 @@ def group_estimate(store, group, content, mode):
     members = [b for b in (store.find('bots', x) for x in group['botIds']) if b]
     targets = group_mentions(content or '', members)
     everyone = not targets or group_everyone(content, members)
-    limit = group_limit(store, group); open_ended = False; more = 0
+    open_ended = False; more = 0
     if mode == 'auto' and not task_on(store): mode = 'free'  # 任務引擎 is off: it runs as 自由
+    rounds = group_limit(store, group); people = group_responders(store, group, targets, everyone, mode); limit = round_cap(rounds, people)
     if not everyone and mode == 'split' and len(members) > 1 and targets == [group_host(store, group)]: count, open_ended = len(members) + 1, True  # #71: the host may hand out work, then merges
     elif not everyone: count = len(targets)
     elif mode == 'auto' and len(members) > 1: count, open_ended = len(members) + 1, True  # the host plans, each member works, the host sums up
@@ -284,8 +285,11 @@ def group_estimate(store, group, content, mode):
         if usage and job.get('botId') in group['botIds'] and len(used.setdefault(job['botId'], [])) < 20:
             used[job['botId']].append(int(usage.get('input') or 0) + int(usage.get('output') or 0))
     averages = [sum(v) / len(v) for v in used.values() if v]
-    out = dict(replies=count, upTo=open_ended, limit=limit, tokens=int(sum(averages) / len(averages) * count) if averages else None)
+    out = dict(replies=count, upTo=open_ended, limit=rounds, rounds=rounds, responders=people, cap=limit, tokens=int(sum(averages) / len(averages) * count) if averages else None)
     if more and min(count + more, limit) > count: out['most'] = min(count + more, limit)
+    if mode == 'auto' and len(members) > 1: out['auto'] = True
+    if mode == 'split' and everyone and len(members) > 1: out['split'] = True
+    out['text'] = group_estimate_text(out, mode)
     return out
 
 
@@ -365,6 +369,9 @@ class GroupRuns:
         date_check_message(message)
         group['messages'].append(message)
         run = group.get('taskRun')
+        if isinstance(run, dict) and run.get('status') == 'running' and run.get('groupRunId') == group.get('runId') and task_checkpoint_typed(self.store, group, run, content):
+            message['interjected'] = True; message['interjectTo'] = '任務（回答要不要繼續）'; self.task_poke(group['id'])  # 「繼續」 typed while the check waits (#174)
+            return dict(runId=group.get('runId'), interjected=True, queued=False, waiting=False, next=[], to=message['interjectTo'])
         if isinstance(run, dict) and run.get('status') == 'running' and run.get('groupRunId') == group.get('runId'):  # 任務: to the host
             message['interjected'] = True; run.setdefault('userAdded', []).append(message['id'])
             handler = [task_member_name(self.store, run['hostId'])]
@@ -401,6 +408,7 @@ class GroupRuns:
         paused = group.pop('paused', None)
         if not paused: raise ValueError('這個討論沒有可以繼續的內容。')
         paused = current_paused(self.store, group, paused)
+        round_continue(group)  # 「繼續」: the same ask gets its rounds again
         return self.start_group(group, [], bool(paused.get('broadcast')), paused)
 
     def summarize_group(self, group):
@@ -410,7 +418,7 @@ class GroupRuns:
         group_enough(self.store, group)
         closer = group_closer(store=self.store, group=group)
         if not closer: raise ValueError('群組沒有可用的 Bot。')
-        return self.start_group(group, [], True, dict(kind='steps', broadcast=True, steps=[dict(role='final', bots=[closer], readonly=True)]))
+        return self.start_group(group, [], True, dict(kind='steps', broadcast=True, own=True, steps=[dict(role='final', bots=[closer], readonly=True)]))
 
     def verify_group_message(self, group, message_id, confirmed):
         """請其他成員查核. Returns the run id, or what the user must confirm first. Caller holds the store lock."""
@@ -421,7 +429,7 @@ class GroupRuns:
         if not pick: raise RuntimeError(verifier_missing(self.store, group, message))  # refused with the reason, never an answer that does nothing
         if pick[3] and not confirmed: return dict(needsConfirm=True, message='群組裡沒有別家的 Bot，無法交叉查核。仍要請同一家模型的成員查核嗎？效果有限。')
         step = dict(role='verify', bots=[pick[0]], readonly=True, use=[pick[1], pick[2]] + ([pick[4]] if pick[4] is not None else []), targetId=message_id)  # with the account 自動選擇 picked
-        return dict(runId=self.start_group(group, [], True, dict(kind='steps', broadcast=True, steps=[step])))
+        return dict(runId=self.start_group(group, [], True, dict(kind='steps', broadcast=True, own=True, steps=[step])))
 
     def _group_turn(self, group_id, run_id, bot_id, may_pass, role, moderated, blind, step=None):
         """Create the reply placeholder and job for one Bot turn. Returns None when the turn is skipped, False when the run ended."""
@@ -668,11 +676,11 @@ class GroupRuns:
 
     def _pause_group(self, group, limit, paused):
         group['paused'] = paused
-        group['messages'].append(dict(id=ID(), role='system', content='本輪已達 %d 次發言上限，按「繼續」可以接著討論。' % limit, createdAt=NOW()))
+        group['messages'].append(dict(id=ID(), role='system', content=round_pause_text(group, limit), createdAt=NOW()))
 
-    def _run_steps(self, group_id, run_id, steps, limit):
-        """A structured discussion: every step in order, stopping at the turn limit."""
-        store = self.store; turns = 0
+    def _run_steps(self, group_id, run_id, steps, limit, spent=None):
+        """A structured discussion: every step in order, stopping when the ask has used its rounds (spent: what it has used)."""
+        store = self.store; spent = spent if spent is not None else dict(n=0); turns = spent['n']
         while steps:
             step = steps[0]; room = limit - turns
             if room <= 0: break
@@ -684,7 +692,7 @@ class GroupRuns:
             now, later, busy = step['bots'][:room], step['bots'][room:], []
             done = self._group_batch(group_id, run_id, [(x, False, step['role']) for x in now], True, step.get('blind'), step, busy)
             if done is False: return
-            turns += len(now) - len(busy)
+            turns += len(now) - len(busy); spent['n'] = turns
             # Members who answer independently still do not see each other's answers after 繼續.
             unseen = dict(hide=list(step.get('hide') or []) + [t['msg']['id'] for t in done], hideFiles=list(step.get('hideFiles') or []) + [n for t in done for n in t['saved']])
             steps = ([dict(step, bots=later, **unseen)] if later else []) + steps[1:]
@@ -775,8 +783,9 @@ class GroupRuns:
             group = store.find('groups', group_id) or {'botIds': []}
             members = [b for b in (store.find('bots', x) for x in group['botIds']) if b]
             host = group_host(store, group) if group.get('botIds') else None
-            limit = group_limit(store, group) if group.get('botIds') else GROUP_MAX_TURNS
             mode = group.get('runMode') or 'free'
+            budget = group_round_budget(store, group, targets, broadcast, mode, resume) if group.get('botIds') else None  # 回合 (#174)
+            limit, turns = (round_cap(budget['rounds'], budget['responders']), budget['used']) if budget else (GROUP_MAX_TURNS, 0)
             planned = (resume or {}).get('steps') if (resume or {}).get('kind') == 'steps' else group_steps(store, group, mode) if not resume and broadcast and mode not in ('free', 'auto') and len(members) > 1 else None
             engine = mode == 'auto' and not resume and broadcast and len(members) > 1 and task_on(store)
             asked = next((m for m in reversed(group.get('messages') or []) if m.get('role') == 'user'), {})  # the user really named the host (not 插話 handed to whoever closes)
@@ -796,10 +805,11 @@ class GroupRuns:
         if resume and planned is None: pending = [tuple(x) for x in resume.get('pending') or []]
         elif moderated: pending = [(host, False, 'kickoff')]
         else: pending = [(t, broadcast, None) for t in targets]
+        spent = dict(n=turns); began = turns
         rounds = (resume or {}).get('rounds', 0); blind_next = (resume or {}).get('blind', False); hidden = list((resume or {}).get('hide') or []); hidden_files = list((resume or {}).get('hideFiles') or [])
         try:
             if engine or planned is not None:
-                result = self.run_task_engine(group_id, run_id) if engine else self._run_steps(group_id, run_id, planned, limit)
+                result = self.run_task_engine(group_id, run_id) if engine else self._run_steps(group_id, run_id, planned, limit, spent)
                 ended = True; return result  # one that raised is told as not finished
             while turns < limit:
                 with store.lock:
@@ -820,7 +830,7 @@ class GroupRuns:
                 hidden = hidden + [t['msg']['id'] for t in turns_here] if still_blind else []
                 hidden_files = hidden_files + [n for t in turns_here for n in t['saved']] if still_blind else []
                 blind_next = still_blind
-                turns += len(batch)
+                turns += len(batch); spent['n'] = turns
                 with store.lock:
                     group = store.find('groups', group_id)
                     if not group or group.get('runId') != run_id: return
@@ -850,13 +860,14 @@ class GroupRuns:
                 unfinished = pending or (moderated and rounds <= GROUP_MODERATION_ROUNDS)
                 if group and group.get('runId') == run_id and turns >= limit and unfinished:
                     self._pause_group(group, limit, dict(kind='free', pending=pending, rounds=rounds, moderated=moderated, blind=blind_next, hide=hidden, hideFiles=hidden_files, broadcast=broadcast))
-                elif group and group.get('runId') == run_id and turns and not spoke and broadcast:
+                elif group and group.get('runId') == run_id and turns > began and not spoke and broadcast:
                     group['messages'].append(dict(id=ID(), role='system', content='沒有成員認為需要回覆。可以用 @ 指定由誰回答。', createdAt=NOW()))
             ended = True
         finally:
             with store.lock:
                 group = store.find('groups', group_id)
                 if group and group.get('runId') == run_id:
+                    round_spend(group, budget, spent['n'])
                     group.update(status='idle', runId=None, activeJobId=None, activeJobIds=[])
                     if not group.get('paused'):
                         for m in group['messages']: m.pop('waiting', None)

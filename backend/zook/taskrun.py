@@ -68,6 +68,7 @@ class TaskRuns:
                         if t.get('parent') and t.get('staged'): task_handoff_abort(run, t['parent'])
                     for t in run['tasks']:
                         if t['status'] not in TASK_SETTLED: t['status'] = 'cancelled'
+                    task_checkpoint_close(run)  # a check nobody can answer any more is not left waiting
                     left = task_user_added(group, run) if group.get('runId') == run_id else []  # a stop by the user has already cleared the run
                     if left: group.setdefault('interjectQueued', []).extend(m['id'] for m in left)  # 插話 that came as the run ended: answered right after it
                     run.pop('userAdded', None)
@@ -84,6 +85,7 @@ class TaskRuns:
                         for t in run.get('tasks') or []:
                             if not t.get('parent'): t.pop('staged', None)  # a helper waits for its own member's turn
                         run['hostMissed'] = run.get('hostMissed', 0) + 1
+                        task_converge_missed(run)  # it was summing up: tried again, not left waiting
                         if group: group['messages'].append(dict(id=ID(), role='system', content='主持人這一輪出錯了：%s' % str(exc)[:150], createdAt=NOW()))
                         self.store.save()
                 elif len(args) == 3:
@@ -104,6 +106,9 @@ class TaskRuns:
         if run.get('hostMissed', 0) >= 2:
             out['stop'] = '主持人連續兩次沒有完成，任務先停在這裡。'
             return out
+        if (run.get('checkpoint') or {}).get('state') == 'ended':  # the user chose 到此為止 (#174)
+            out['stop'] = '任務停在這裡；主持人整理的進度在上面。'
+            return out
         if not task_on(store) and (run.get('awaitingConfirm') or any(g.get('status') == 'pending' for g in run.get('gates') or []) or any(t['status'] == 'review' for t in run['tasks'])):
             out['stop'] = '任務引擎已關閉，等你確認或決定的工作不會開始。'
             return out
@@ -119,6 +124,9 @@ class TaskRuns:
                 g['status'] = 'timeout'
                 for t in run['tasks']:
                     if t.get('gate') == g['id'] and t['status'] == 'waiting': t['status'] = 'failed'; t['note'] = '沒有等到你的決定。'
+                if g.get('kind') == 'checkpoint':
+                    out['stop'] = '沒有等到你決定要不要繼續，任務停在這裡；主持人整理的進度在上面。'
+                    return out
         task_resolve_deps(run)
         unconfirmed = [t for t in run['tasks'] if not t.get('confirmed', True) and t['status'] in ('pending', 'ready', 'waiting') and not t.get('staged')]
         run['awaitingConfirm'] = bool(unconfirmed) and not host_busy  # shown once the host has finished planning
@@ -137,13 +145,14 @@ class TaskRuns:
             for t in ready: t['status'] = 'failed'; t.setdefault('note', '這個目標的嘗試次數已到上限 %d 次。' % task_limit(run, 'attempts'))
             ready = []
         delivered = set(run.get('delivered') or [])
-        if not host_busy and not running and not ready:
+        waiting = task_checkpoint_waiting(run)  # summing up, or the user decides whether to go on: nothing new starts, no question is given up on
+        if not host_busy and not running and not ready and not waiting and not run.get('goOn'):  # after 繼續 the host answers first
             # Nothing else can happen: a question or block the host was told about and left unanswered ends that task here,
             # and the host hears about it (and about what waited for it) at one last wake.
             for t in run['tasks']:
                 if t['status'] in ('asked', 'blocked') and task_key(t) in delivered: t['status'] = 'failed'; t.setdefault('note', '主持人沒有回答，這項工作停在這裡。')
             task_resolve_deps(run)
-        chosen = self._task_choose(store, run, running, ready)
+        chosen = [] if waiting else self._task_choose(store, run, running, ready)
         working = {j['botId'] for j in store.data['jobs'] if j.get('status') == 'running'} | {t['assignee'] for t, _, _ in chosen}
         most, per_cli = task_limits(store); lanes = task_busy_lanes(store)
         for _, lane, _ in chosen: lanes[tuple(lane)] = lanes.get(tuple(lane), 0) + 1
@@ -163,12 +172,13 @@ class TaskRuns:
         news = [t for t in run['tasks'] if t['status'] in TASK_SETTLED + ('asked', 'blocked') and task_key(t) not in delivered]
         checking = [t for t in run['tasks'] if t['status'] in ('verifying', 'review')]  # a result still being checked or looked at belongs to this batch
         busy = running or chosen or checking
-        if not host_busy and news and (any(t['status'] in ('asked', 'blocked') for t in news) or not busy):
-            if run['wakes'] >= task_limit(run, 'wakes'):
-                out['stop'] = '主持人已經被叫醒 %d 次，任務先停在這裡，避免一直派工下去。' % run['wakes']
-                return out
-            run['wakes'] += 1; run['wakeFor'] = [t['id'] for t in news]; run['delivered'] = sorted(delivered | {task_key(t) for t in news})
+        if not host_busy and not waiting and news and (any(t['status'] in ('asked', 'blocked') for t in news) or not busy):
+            # No count of wakes stops a run (#174): every TASK_CHECK_EVERY rounds the host sums up first and the user decides.
             out['wake'] = True
+            if task_rounds(run) >= task_round_cap(run): run['checkpoint'] = dict(state='converging'); out['wake'] = 'converge'
+            run['wakes'] += 1; run['wakeFor'] = [t['id'] for t in news]; run['delivered'] = sorted(delivered | {task_key(t) for t in news}); run.pop('goOn', None)
+        if not host_busy and not out['wake'] and run.get('goOn'):  # the user said 繼續: the host goes on from where it summed up
+            run.pop('goOn'); run['wakes'] += 1; run['wakeFor'] = []; out['wake'] = 'resume'
         if not host_busy and not out['wake'] and task_user_added(group, run):
             out['wake'] = 'user'  # 插話 (#94): the host answers the user now, also while a result waits for 「接受結果」; not counted as a wake for reports
         if chosen:
@@ -179,7 +189,7 @@ class TaskRuns:
                 if use: run.setdefault('use', {})[t['id']] = list(use)
                 else: run.get('use', {}).pop(t['id'], None)
             out['soon'] = any(t['status'] == 'ready' for t in run['tasks'])  # more could start: look again shortly, not all in one go
-        held = unconfirmed or [t for t in run['tasks'] if t['status'] in ('waiting', 'review') or t.get('staged')]  # waiting for the user: the run is not over
+        held = unconfirmed or waiting or [t for t in run['tasks'] if t['status'] in ('waiting', 'review') or t.get('staged')]  # waiting for the user: the run is not over
         if not out['wake'] and not host_busy and not running and not chosen and not checking and not held and not [t for t in run['tasks'] if t['status'] == 'ready']:
             for t in run['tasks']:
                 if t['status'] == 'pending': t['status'] = 'failed'; t.setdefault('note', '前面的工作沒有完成，這項沒有開始。')
@@ -224,7 +234,7 @@ class TaskRuns:
             group = store.find('groups', group_id); run = (group or {}).get('taskRun')
             if not run: return
             host, run_ref = run['hostId'], run['id']
-        origin = run['origin'] if run['origin'] != 'user' else 'bot' if kind == 'wake' else None  # a wake answers reports a Bot wrote
+        origin = run['origin'] if run['origin'] != 'user' else 'bot' if kind in ('wake', 'converge', 'resume') else None  # a wake answers reports a Bot wrote
         heard = []  # the 插話 this turn's prompt holds (#94); what comes in while it answers is answered by the next turn
         def prompt(bot, writable):  # called by _group_turn, lock held
             group = store.find('groups', group_id); found = task_user_added(group, group['taskRun'])
@@ -243,6 +253,9 @@ class TaskRuns:
             if run.get('id') == run_ref:
                 for t in run.get('tasks') or []:
                     if not t.get('parent'): t.pop('staged', None)  # the host's turn is over: what it planned may start (or be confirmed); a helper waits for its member's turn
+                if kind == 'converge':  # summed up: now the user decides. Not summed up: tried again (the reports are news again); two misses stop the run
+                    if turn and turn['job']['status'] == 'completed' and group.get('runId') == run_id and run.get('status') == 'running': task_checkpoint_ask(self, store, group, run)
+                    else: task_converge_missed(run)
             if run.get('id') == run_ref and (not turn or turn['job']['status'] != 'completed') and kind == 'user':
                 # 插話 the host could not answer: tried once more, then left with a line in the chat; the run itself goes on
                 run['userMissed'] = run.get('userMissed', 0) + 1
@@ -258,7 +271,7 @@ class TaskRuns:
             if not turn: store.save(); self.task_poke(group_id); return
             group['activeJobIds'] = [x for x in group.get('activeJobIds') or [] if x != turn['job']['id']]; group['activeJobId'] = (group['activeJobIds'] or [None])[0]
             run = group.get('taskRun') or {}
-            if turn['job']['status'] == 'completed' and run.get('tasks') and all(t['status'] in TASK_SETTLED for t in run['tasks']):
+            if turn['job']['status'] == 'completed' and run.get('tasks') and (kind == 'converge' or all(t['status'] in TASK_SETTLED for t in run['tasks'])):
                 card = group_card(turn['job'].get('content'))
                 if card: turn['msg']['card'] = card
             store.save()

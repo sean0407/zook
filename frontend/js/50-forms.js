@@ -28,6 +28,7 @@
   }
   document.addEventListener('change', e => {
     if (e.target.name === 'providerChoice' && e.target.closest('#bot-form')) syncFeatureRows(e.target.closest('#bot-form'));
+    if (e.target.dataset.showScripts) { state.showScripts = {...state.showScripts, [e.target.dataset.showScripts]: e.target.checked}; render(true); }  // 產出: a Bot's build scripts (#176)
     if (e.target.dataset.autoModel) saveAutoModel(e.target);
     if (e.target.dataset.botDefault) saveBotDefault(e.target);
     if (e.target.name === 'connectorAccount') switchConnectorAccount(e.target);
@@ -395,7 +396,7 @@
         state.accounts = await api('accounts'); render(true); pollAccounts();
       } else if (form.id === 'group-form') {
         const d = new FormData(form), id = form.dataset.id;
-        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds'), hostId: d.get('hostId') || '', mode: d.get('mode') || 'free', turnLimit: Number(d.get('turnLimit')) || 8, ...(id ? {} : {clientId: onceId(form)})}, id ? 'PATCH' : 'POST');
+        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds'), hostId: d.get('hostId') || '', mode: d.get('mode') || 'free', turnLimit: Number(d.get('turnLimit')) || 4, ...(id ? {} : {clientId: onceId(form)})}, id ? 'PATCH' : 'POST');
         closeModal();
         state.groupId = result.id;
         state.page = 'chat';

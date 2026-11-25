@@ -29,6 +29,10 @@ else: print(json.dumps({'type': 'item.completed', 'item': {'type': 'agent_messag
 '''
 
 
+PAUSING = {'test_turn_limit_pauses_and_continues', 'test_paused_discussion_can_be_ended', 'test_turn_limit_is_never_exceeded_and_answers_stay_independent',
+           'test_refused_continue_keeps_the_paused_discussion', 'test_verdict_moves_when_the_closer_leaves_during_a_pause'}
+
+
 class GroupModes(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name); self.log = self.root / 'runs.log'
@@ -36,6 +40,8 @@ class GroupModes(unittest.TestCase):
         for name in ('codex', 'claude'):
             cli = self.root / 'bin' / name; cli.write_text(CLI); cli.chmod(0o755)
         env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', GROUP_LOG=str(self.log), ZOOK_SECRETS_DIR=str(self.root / 'secrets'))
+        env.pop('ZOOK_GROUP_REPLY_CAP', None)
+        if self._testMethodName in PAUSING: env['ZOOK_GROUP_REPLY_CAP'] = '4'  # 4 rounds hold 12 replies here (#174): these test the pause itself, at 4
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
         self.bots = {n: self.req('POST', '/api/bots', {'name': n, 'provider': p})[1] for n, p in (('Alpha', 'codex'), ('Beta', 'claude'), ('Gamma', 'codex'))}
