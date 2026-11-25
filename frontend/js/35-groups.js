@@ -1,5 +1,6 @@
   // Group discussions: host, discussion mode, turn limit, conclusion cards, cross-checks and shared files.
-  const GROUP_MODE_OPTIONS = [{id: 'free', name: '自由', hint: '相關成員回覆，可以互相 @'}, {id: 'turns', name: '輪流', hint: '依序各發言一次'}, {id: 'debate', name: '辯論', hint: '正反交鋒，最後裁定'}, {id: 'split', name: '主持人分工', hint: '主持人拆開工作，驗收後彙整'}, {id: 'compare', name: '比較', hint: '各自獨立回答，列出異同'}];
+  // #106: what each way does, in plain words; 主持人分工 (one pass, in the conversation) and 自動 (a task board, several rounds) say how they differ.
+  const GROUP_MODE_OPTIONS = [{id: 'free', name: '自由', hint: '跟問題有關的成員回覆，彼此可以 @ 接話；有主持人時由他帶討論和收尾'}, {id: 'turns', name: '輪流', hint: '每位成員依序各講一次，後面的人看得到前面說的'}, {id: 'debate', name: '辯論', hint: '成員分正反兩方，各講兩輪互相反駁，最後裁定哪邊站得住'}, {id: 'split', name: '主持人分工', hint: '一輪做完：主持人在對話裡分好工，成員同時各做一部分，主持人核對後合成一份答案'}, {id: 'compare', name: '比較', hint: '每位成員各自回答同一題、互相看不到，最後列出異同和最值得採用的'}];
   if (!state.groupMode) state.groupMode = {};
   if (!state.groupFiles) state.groupFiles = {};
   const currentGroupMode = g => { const mode = state.groupMode[g.id] || g.mode || 'free'; return mode === 'auto' && !taskEngineOn() ? 'free' : mode; };
@@ -28,7 +29,8 @@
     const key = g.id + currentGroupMode(g) + ':' + (g.messages || []).length;
     try {
       const e = await post('groups/' + encodeURIComponent(g.id) + '/estimate', {content: $('#chat-input')?.value || '', mode: currentGroupMode(g)});
-      const text = `預計${e.upTo ? '最多 ' : ' '}${e.replies} 次回覆${e.most ? `（主持人退回修正時最多 ${e.most} 次）` : ''}`;  // the token figure meant nothing to people and looked alarming
+      const text = currentGroupMode(g) === 'auto' && e.upTo ? `預計至少 ${e.replies} 次回覆：主持人規劃、每位成員做事各算一次，驗收和重做會再多幾次`  // #223①: 自動 has no upper bound
+        : `預計${e.upTo ? '最多 ' : ' '}${e.replies} 次回覆${e.most ? `（主持人退回修正時最多 ${e.most} 次）` : ''}`;  // the token figure meant nothing to people and looked alarming
       state.groupEstimate = {key, text};
       const el = $('#group-estimate');
       if (el && activeGroup()?.id === g.id) el.textContent = text;
@@ -160,3 +162,25 @@
     else { state.memberWork = null; if (row.dataset.back === 'group' && group) { state.groupId = group; state.page = 'chat'; } }
     render();
   });
+
+  // #223①: a group with nothing in it yet says what happens when you send, in the way it is set to discuss.
+  function groupEmptyView(g) {
+    const mode = currentGroupMode(g), opt = groupModeOptions().find(o => o.id === mode) || GROUP_MODE_OPTIONS[0];
+    const host = groupMembers(g).find(b => b.id === groupHostId(g)), hostName = host ? host.name : '主持人';
+    const steps = mode === 'auto' ? [
+      '在下方說出要完成的事，例如「整理這三份報價，做成一張比較表」。',
+      `${esc(hostName)} 會把工作拆成幾項，列在對話裡的「任務板」：每項寫明誰負責、做到哪裡，最上面的「下一步」會說要不要你做什麼。`,
+      state.data.settings.taskExecution === 'lowrisk' ? '只讀資料的工作會直接開始；會改檔案或對外動作的，要你按「照這個做」才開始。' : '工作排好後，要你按「照這個做」才會開始；不想做就按「不要，停止」。',
+      '成員各自做，交出後由別家的模型驗收；全部完成後主持人整理結果。',
+      '輸入框下方的「預計至少 N 次回覆」是估計：主持人規劃、每位成員做事各算一次，驗收和重做會再多幾次。'
+    ] : [
+      `目前的討論方式是「${esc(opt.name)}」：${esc(opt.hint)}。`,
+      host ? `主持人是 ${esc(host.name)}，負責開場分派、收斂討論和總結。` : '沒有設主持人：按上方群組名稱可以指定一位。',
+      '直接發訊息就會開始；用 @ 可以只問某位成員。輸入框旁的下拉可以只對下一則換別的討論方式。'
+    ];
+    return `<div class="empty-chat">${avatarStack(g, 'hero')}<h1>${esc(g.name)}</h1><ol class="group-howto">${steps.map(s => `<li>${s}</li>`).join('')}</ol></div>`;
+  }
+  // Another way picked beside the message box: an empty group's explanation follows it (after 50-forms.js has noted the choice).
+  document.addEventListener('change', e => { if (e.target.name === 'groupMode' && activeGroup() && !(activeGroup().messages || []).length) setTimeout(() => render(true), 0); });
+  // #132②: the member list says the access in a few words; the full sentence is in the tooltip.
+  const memberAccess = b => b.provider !== 'auto' && gatedCli(b.provider) && b.gateFull ? '整台 Mac（危險動作先問你）' : permText(b);
