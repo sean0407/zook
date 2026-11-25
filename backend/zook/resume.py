@@ -312,7 +312,7 @@ class Resuming:
                                    origin=old.get('origin') or 'user', resume_of=old)
         except BaseException: old.pop('resumedBy', None); raise
         old['resumedBy'] = job['id']
-        added = [m['content'] for m in messages[place[3] + 1:-1] if m.get('interjected')][-10:]  # what the user added while it answered, kept for a later restart too
+        added = [m['content'] + date_check_note(m) for m in messages[place[3] + 1:-1] if m.get('interjected')][-10:]  # what the user added while it answered, kept for a later restart too
         if added: job['addedText'] = added
         return job
 

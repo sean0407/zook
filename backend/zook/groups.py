@@ -123,7 +123,7 @@ def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, 
     for m in group['messages'][(at + 1 if at is not None else 0):][-GROUP_KEEP:]:
         if not m.get('content') or m.get('role') == 'system' or m['id'] in hidden or m.get('waiting'): continue
         speaker = '使用者' if m['role'] == 'user' else names.get(m.get('botId'), '已刪除的 Bot')
-        transcript.append(speaker + '：' + (local(m['content'][:3000], m.get('botId') or '') if m['role'] == 'assistant' and m.get('botId') != bot['id'] else m['content'][:3000]) + ('\n（Zook 檢查：這則回覆說交了 %s，但實際上沒有存成。）' % '、'.join(m['missingFiles']) if m.get('missingFiles') else '')
+        transcript.append(speaker + '：' + (local(m['content'][:3000], m.get('botId') or '') if m['role'] == 'assistant' and m.get('botId') != bot['id'] else m['content'][:3000] + (date_check_note(m) if m['role'] == 'user' else '')) + ('\n（Zook 檢查：這則回覆說交了 %s，但實際上沒有存成。）' % '、'.join(m['missingFiles']) if m.get('missingFiles') else '')
                           + ('\n（Zook 檢查：這則回覆說逐頁看過版面，但這次沒有執行任何轉成圖片的指令，版面其實沒看過。）' if m.get('unrenderedClaim') else ''))
         if m.get('attachments'):  # the files were copied into every member's workspace when the message was sent
             folder = store.dir / 'workspaces' / bot['id'] / 'attachments'
@@ -320,6 +320,7 @@ class GroupRuns:
         if not targets: targets = [b['id'] for b in members]
         message = dict(id=ID(), role='user', content=content, createdAt=NOW())
         if author: message['author'] = author
+        date_check_message(message)  # a date and weekday that do not match: said under the message and to every member
         if attachments: message['attachments'] = attachments  # each member receives the files on its turn
         group['messages'].append(message)
         group['runMode'] = mode or group.get('mode') or 'free'
@@ -345,6 +346,7 @@ class GroupRuns:
         open_run = group.get('runKind') == 'free'
         joins = open_run and interject_wanted(content, [b['name'] for b in members])  # the same rule as with one Bot: a correction joins, anything new waits
         message = dict(id=ID(), role='user', content=content.strip(), createdAt=NOW())
+        date_check_message(message)
         group['messages'].append(message)
         if joins: self._join_run(group, message, members); log_activity(self.store, 'group', '在討論途中插話（%s）' % group.get('name', ''))
         else:  # 排在後面: turns of this round do not read it; it is answered in a round of its own when this one ends

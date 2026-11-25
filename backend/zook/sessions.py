@@ -7,7 +7,7 @@ def conversation_context(messages):
     lines, used = [], 0
     for m in reversed(messages):
         if not m.get('content'): continue
-        line = (m['role'] + '（由%s送出，不是使用者本人）: ' % m['author'] if m.get('author') and m['role'] == 'user' else m['role'] + ': ') + m['content'][:4000]
+        line = (m['role'] + '（由%s送出，不是使用者本人）: ' % m['author'] if m.get('author') and m['role'] == 'user' else m['role'] + ': ') + m['content'][:4000] + (date_check_note(m) if m['role'] == 'user' else '')
         if used + len(line) > MAX_CONTEXT: break
         lines.append(line); used += len(line)
     return '\n'.join(reversed(lines))

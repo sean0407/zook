@@ -20,6 +20,9 @@ class ClaimedChecks(unittest.TestCase):
         self.assertTrue(m.native_action('command', "/bin/zsh -lc 'qlmanage -t -s 1600 -o /tmp/p ~/a.docx'").get('rendered'))
         self.assertTrue(m.native_action('command', 'cd /tmp && /usr/bin/python3 "/Users/me/Zook App/backend/pagepics.py" "簡報 v2.pptx" /tmp/o').get('rendered'))
         self.assertTrue(m.native_action('command', 'pdftoppm -png a.pdf /tmp/p/page').get('rendered'))
+        self.assertTrue(m.native_action('command', "/bin/zsh -lc 'pdftoppm -png a.pdf /tmp/p/page'").get('rendered'))  # the shell around it is taken off first
+        self.assertTrue(m.native_action('command', '/bin/bash -lc "pdftocairo -png \\"my file.pdf\\" /tmp/p"').get('rendered'))
+        self.assertFalse(m.native_action('command', "/bin/zsh -lc 'which pdftoppm'").get('rendered'))
         self.assertFalse(m.native_action('command', 'ls -la /tmp').get('rendered'))
         self.assertTrue(m.native_action('command', 'python3.11 pagepics.py a.pdf /tmp/o').get('rendered'))
         self.assertTrue(m.native_action('command', 'soffice --headless --convert-to png a.docx').get('rendered'))
