@@ -565,10 +565,35 @@
     if (x.repeat === 'once') return `${x.date ? dayLabel(x.date) : ''} ${x.time}`;
     return `${repeatName(x.repeat)} ${x.time}`;
   }
+  // What a schedule is called: its name, or the first words of what it does (also schedule_title in backend/zook/library.py).
+  function scheduleTitle(x) {
+    if (String(x.name || '').trim()) return String(x.name).trim();
+    const text = String(x.content || '').replace(/[*_`>#|]+/g, '').replace(/\s+/g, ' ').trim();
+    return text.length <= 18 ? text : text.slice(0, 18) + '…';
+  }
+  // When a schedule runs next, in this Mac's time; null when it is off, finished, or waits for a file or a mail. Same rules as schedule_last_due in backend/zook/library.py.
+  function scheduleNext(x, now = new Date()) {
+    if (!x.on || x.done || (x.trigger || 'time') !== 'time' || !/^\d\d:\d\d$/.test(x.time || '')) return null;
+    const [h, m] = x.time.split(':').map(Number);
+    if (x.repeat === 'hourly') { const d = new Date(now); d.setMinutes(m, 0, 0); if (d <= now) d.setHours(d.getHours() + 1); return d; }
+    if (x.repeat === 'once') { const d = new Date(`${x.date}T${x.time}:00`); return isNaN(d) || d <= now ? null : d; }
+    if (x.repeat === 'monthly') {
+      for (let i = 0; i < 3; i++) {
+        const y = now.getFullYear(), mo = now.getMonth() + i, last = new Date(y, mo + 1, 0).getDate(), d = new Date(y, mo, Math.min(Number(x.day) || 1, last), h, m);
+        if (d > now) return d;
+      }
+      return null;
+    }
+    const days = {weekdays: [1, 2, 3, 4, 5], sun: [0], mon: [1], tue: [2], wed: [3], thu: [4], fri: [5], sat: [6]}[x.repeat] || [0, 1, 2, 3, 4, 5, 6];
+    for (let i = 0; i < 8; i++) { const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i, h, m); if (d > now && days.includes(d.getDay())) return d; }
+    return null;
+  }
+  const nextLabel = d => { const two = n => String(n).padStart(2, '0'), today = new Date(), diff = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - new Date(today.getFullYear(), today.getMonth(), today.getDate())) / 864e5); return `${diff === 0 ? '今天 ' : diff === 1 ? '明天 ' : ''}${d.getMonth() + 1}/${d.getDate()}（週${WEEKDAY[d.getDay()]}）${two(d.getHours())}:${two(d.getMinutes())}`; };
+  const longText = t => String(t || '').length > 120 || String(t || '').split('\n').length > 3;
   function schedulesPage() {
     const items = state.data.schedules || [];
     const intro = '<p class="muted sched-intro">時間到，或有新檔案、新信件時，自動送出訊息。Mac 和 Zook 要開著。</p>';
     if (!items.length) return intro + '<div class="blank">還沒有排程。</div>';
     const last = x => x.done ? '已完成' : !x.lastStatus ? '尚未執行' : (x.lastStatus === 'sent' ? '上次執行：' : x.lastStatus === 'missed' ? '上次錯過：' : '上次失敗：') + formatDate(x.lastAt) + (x.lastStatus !== 'sent' && x.lastError ? '（' + x.lastError + '）' : '');
-    return intro + `<div class="cards">${items.map(x => `<article class="card sched-card"><div class="sched-head"><h3>${esc(scheduleWhen(x))}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><p>${esc(x.content)}</p>${scheduleTarget(x)}<span class="status ${x.lastStatus && x.lastStatus !== 'sent' && !x.done ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button>${(x.runs || []).length ? `<button class="link" data-action="schedule-history" data-id="${esc(x.id)}">紀錄</button>` : ''}<button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`).join('')}</div>`;
+    return intro + `<div class="cards">${items.map(x => `<article class="card sched-card"><div class="sched-head"><h3>${esc(scheduleTitle(x))}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><div class="sched-meta"><span class="sched-state ${x.on ? 'on' : ''}">${x.on ? '已啟用' : x.done ? '已完成' : '已關閉'}</span><span>${esc(scheduleWhen(x))}</span>${scheduleNext(x) ? `<span>下次執行：${esc(nextLabel(scheduleNext(x)))}</span>` : ''}</div><p class="sched-content${longText(x.content) ? ' folded' : ''}">${esc(x.content)}</p>${longText(x.content) ? '<button class="link sched-more" data-action="sched-more" aria-expanded="false">展開</button>' : ''}${scheduleTarget(x)}<span class="status ${x.lastStatus && x.lastStatus !== 'sent' && !x.done ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button>${(x.runs || []).length ? `<button class="link" data-action="schedule-history" data-id="${esc(x.id)}">紀錄</button>` : ''}<button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`).join('')}</div>`;
   }

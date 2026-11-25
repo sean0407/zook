@@ -5,7 +5,7 @@ MOBILE_PHOTO_BYTES = 700 * 1024   # the phone shrinks a photo before sending
 
 
 def mobile_schedules(store):
-    return dict(schedules=[dict(id=x['id'], content=(x.get('content') or '')[:120], when=schedule_when(x), target=schedule_target_name(store, x), on=bool(x.get('on', True)),
+    return dict(schedules=[dict(id=x['id'], name=schedule_title(x), content=(x.get('content') or '')[:120], when=schedule_when(x), target=schedule_target_name(store, x), on=bool(x.get('on', True)),
                                 group=bool(x.get('groupId'))) for x in store.data['schedules']])
 
 

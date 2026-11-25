@@ -518,6 +518,9 @@ def schedule_fields(store, body, record):
     if 'content' in body:
         if not isinstance(body['content'], str) or not body['content'].strip() or len(body['content']) > 30000: raise ValueError('請填寫要 Bot 做的事。')
         record['content'] = body['content'].strip()
+    if 'name' in body:  # may be empty: the list then shows the first words of what it does
+        if not isinstance(body['name'], str) or len(body['name'].strip()) > SCHEDULE_NAME_MAX: raise ValueError('名稱最多 %d 個字。' % SCHEDULE_NAME_MAX)
+        record['name'] = body['name'].strip()
     if 'time' in body:
         if not isinstance(body['time'], str) or not re.fullmatch(r'([01]\d|2[0-3]):[0-5]\d', body['time']): raise ValueError('時間格式無效。')
         record['time'] = body['time']
@@ -547,6 +550,15 @@ def schedule_fields(store, body, record):
 
 
 SCHEDULE_HISTORY = 20
+SCHEDULE_NAME_MAX = 60
+SCHEDULE_TITLE_WORDS = 18
+
+
+def schedule_title(item):
+    """What a schedule is called: its name, or the first words of what it does (also frontend/js/20-models.js scheduleTitle)."""
+    if (item.get('name') or '').strip(): return item['name'].strip()
+    text = re.sub(r'\s+', ' ', re.sub(r'[*_`>#|]+', '', item.get('content') or '')).strip()
+    return text if len(text) <= SCHEDULE_TITLE_WORDS else text[:SCHEDULE_TITLE_WORDS] + '…'
 MAX_SCHEDULES = 50
 SCHEDULE_TOOLS = ('zook_create_schedule', 'zook_update_schedule', 'zook_delete_schedule')
 REPEAT_NAMES = dict(daily='每天', weekdays='週一到週五', mon='每週一', tue='每週二', wed='每週三', thu='每週四', fri='每週五', sat='每週六', sun='每週日',
@@ -580,7 +592,7 @@ def schedule_tool_body(store, bot, group_id, args, creating):
         body['groupId' if groups else 'botId'] = (groups or bots)[0]['id']
     elif creating:  # by default: the conversation the request came from
         body['groupId' if group_id else 'botId'] = group_id or bot['id']
-    for key in ('content', 'repeat', 'time', 'date'):
+    for key in ('name', 'content', 'repeat', 'time', 'date'):
         if key in args: body[key] = args[key]
     if 'day' in args:
         try: body['day'] = int(str(args['day']).strip())
@@ -600,12 +612,13 @@ def describe_schedule_call(store, bot, group_id, name, args):
             return '建立排程：%s，在「%s」執行「%s」' % (schedule_when(item), schedule_target_name(store, item), str(args.get('content') or '')[:80])
         item = store.find('schedules', args.get('schedule_id'))
         if not item: return '修改排程' if name == 'zook_update_schedule' else '刪除排程'
-        what = '「%s」（%s）' % (item.get('content', '')[:40], schedule_when(item))
+        what = '「%s」（%s）' % (schedule_title(item), schedule_when(item))
         if name == 'zook_delete_schedule': return '刪除排程' + what
         body = schedule_tool_body(store, bot, group_id, args, False)
         after = dict(item, **{k: v for k, v in body.items() if k in ('repeat', 'time', 'date', 'day')})
         changes = []
         if schedule_when(after) != schedule_when(item): changes.append('改成' + schedule_when(after))
+        if 'name' in body: changes.append('名稱改成「%s」' % str(body['name'])[:60])
         if 'content' in body: changes.append('內容改成「%s」' % str(body['content'])[:60])
         if 'botId' in body or 'groupId' in body: changes.append('對象改成「%s」' % schedule_target_name(store, dict(groupId=body.get('groupId', ''), botId=body.get('botId', ''))))
         if 'on' in body: changes.append('啟用' if body['on'] else '停用')

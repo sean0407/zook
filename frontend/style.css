@@ -1492,6 +1492,13 @@ button {
 .sched-intro { margin: 0 0 16px; max-width: 760px; line-height: 1.6; }
 .sched-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .sched-head h3 { margin: 0; }
+.sched-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; color: #5f5f5f; font-size: 13px; }
+.sched-state { font-weight: 600; color: #8a8a8a; }
+.sched-state.on { color: #1e7a3c; }
+.sched-content { white-space: pre-wrap; overflow-wrap: anywhere; }
+.sched-content.folded { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.sched-more { margin-top: -4px; }
+.sched-err { display: block; margin-top: 8px; }
 .sched-card .status { display: block; margin-top: 4px; }
 .sched-card .status.warn { color: #b3261e; }
 .sched-when { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 12px; }
