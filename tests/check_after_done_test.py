@@ -26,7 +26,8 @@ def save(): open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('qu
 if name == '專員' and role in ('split_work', 'work', 'split_redo'):
     if flag('fail') or (role == 'split_redo' and flag('redofail')): time.sleep(0.2); sys.exit(3)
     if not flag('claim') and folder: save()
-    text = '已存到群組檔案：報價單.xlsx'
+    text = '已存到群組檔案：報價單.xlsx' + ('\n@查核員 請幫我看' if flag('mention') else '')
+if name == '設計' and role in ('split_work', 'work') and flag('designfail'): time.sleep(0.2); sys.exit(3)
 if name == '專員' and role == 'split_resave':
     if flag('resave') and folder: save()
     text = '已存到群組檔案：報價單.xlsx' if not flag('cannot') else '這次存不了，權限不足。'
@@ -121,6 +122,18 @@ class CheckAfterDone(unittest.TestCase):
         self.say(self.group())
         check = next(r for r in self.runs() if r['role'] == 'split_check'); plan = next(r for r in self.runs() if r['role'] == 'split_plan')  # both Codex
         self.assertIn('read-only', check['args']); self.assertNotIn('read-only', plan['args'])
+
+    def test_one_member_not_handing_in_holds_the_whole_check(self):
+        self.flag('designfail'); self.bots['設計'] = self.req('POST', '/api/bots', {'name': '設計', 'provider': 'codex'})[1]
+        found = self.say(self.group(names=('Alpha', '專員', '設計', '查核員')))
+        self.assertNotIn('查核員', [n for n, _ in self.order()])
+        self.assertTrue(any('設計 還沒交出成果' in x for x in self.said(found)), self.said(found))
+
+    def test_a_member_naming_the_checker_does_not_start_it_early(self):
+        self.flag('mention')
+        self.say(self.group(mode='free'))
+        self.assertEqual([r for n, r in self.order() if n == '查核員'], ['split_check'])
+        self.assertEqual(self.order()[:3], [('Alpha', 'kickoff'), ('專員', 'work'), ('查核員', 'split_check')])
 
     def test_nothing_handed_in_means_no_check(self):
         self.flag('fail')

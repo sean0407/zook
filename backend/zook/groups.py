@@ -886,7 +886,7 @@ class GroupRuns:
                             for target in mentioned:
                                 if target not in [x[0] for x in pending]: pending.append((target, False, None))
                         else:
-                            for target in mentioned[:1] if moderated else mentioned:
+                            for target in [x for x in mentioned if not gate or x not in gate['bots']][:1 if moderated else None]:  # #245: a 查核員 waits for the check, not for an @
                                 if not (moderated and target == host) and target not in [x[0] for x in pending]: pending.append((target, False, None))
                     store.save()
             with store.lock:

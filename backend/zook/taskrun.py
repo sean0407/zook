@@ -310,7 +310,7 @@ class TaskRuns:
         with store.lock:
             task.pop('resumed', None)  # told once (resume.py)
             handed = attempt['state'] == 'reported' and attempt.get('outcome') == 'succeeded' and turn['job']['status'] == 'completed'
-            seen = copy.deepcopy((attempt, task, dict(goal=run.get('goal')), dict(missingFiles=turn['msg'].get('missingFiles')))) if handed else None
+            seen = copy.deepcopy((attempt, task, dict(goal=run.get('goal'), owner=task_member_name(store, task['assignee'])), dict(missingFiles=turn['msg'].get('missingFiles')))) if handed else None
         gone = task_files_missing(store, group_id, seen[2], seen[1], seen[0], seen[3]) if seen else []  # #245: files it says it handed in, checked before anyone verifies them
         with store.lock:
             group = store.find('groups', group_id)
