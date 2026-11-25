@@ -96,7 +96,9 @@ class PagingTest(unittest.TestCase):
         self.assertEqual((len(whole), whole[-2]['content'], whole[0]['id']), (TOTAL + 2, '改寫的第 1201 則', 'm0000'))
         # A backup and its restore carry all of it.
         made = self.req('POST', '/api/backups', {})[1]['name']
-        self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': '備份之後'}); time.sleep(1)
+        after = self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': '備份之後'})[1]['jobId']
+        end = time.time() + 15  # a restore waits for no reply: the fake CLI must have finished (slow when the suite runs 8 at a time)
+        while time.time() < end and self.req('GET', '/api/jobs/' + after)[1]['status'] == 'running': time.sleep(0.1)
         self.assertEqual(self.req('POST', '/api/backups/%s/restore' % made, {})[0], 200)
         self.assertEqual(len(self.page('all=1')['messages']), TOTAL + 2)
         # Opening another conversation and coming back keeps both whole.
