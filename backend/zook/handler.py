@@ -43,7 +43,7 @@ class Handler(BaseHTTPRequestHandler):
             for extra in [] if phone else [a for a in store.data.get('accounts') or [] if a.get('provider') == provider]:
                 try: view = account_view(extra)
                 except (OSError, ValueError, RuntimeError): view = dict(id=extra['id'], name=extra['name'], type=extra['type'], status='unknown', method='', plan='', email='')
-                billed = extra['type'] == 'key' or view.get('method') in ('Anthropic Console', 'API 金鑰')
+                billed = extra['type'] == 'key' or api_billed_method(view.get('method'))
                 with store.lock:
                     used = provider_usage(store, provider, extra['id']); saved = copy.deepcopy(store.data.get('quota', {}).get(provider + '@' + extra['id']))
                 if provider in ('codex', 'grok', 'antigravity') and view['status'] == 'logged_in' and not billed: saved = (self.codex_live_quota(extra) if provider == 'codex' else grok_live_quota(self.server, extra) if provider == 'grok' else self.antigravity_live_quota(extra)) or saved
@@ -52,7 +52,7 @@ class Handler(BaseHTTPRequestHandler):
             result.append(dict(id=provider, name=account['name'], vendor=(P.spec(store.data, provider) or {}).get('vendor', ''), zookUsage=zook,
                                status=account['status'], method=account['method'], noQuotaApi=provider not in ('codex', 'claude', 'antigravity', 'grok'), quotaUnread=provider == 'grok' and not snap,
                                plan=(snap or {}).get('plan') or account['plan'], email=account['email'], workspace=account.get('workspace', ''), quota=snap,
-                               apiBilling=account['method'] in ('Anthropic Console', 'API 金鑰'), profiles=profiles))
+                               apiBilling=api_billed_method(account['method']), profiles=profiles))
         with store.lock:
             known = store.data.setdefault('autoStatus', {}); known.update(merge_auto_status(known, {x['id']: auto_state(x['id'], x['status'], x['method']) for x in result if x['id'] in AUTO_MODELS}))
             known.update(merge_auto_status(known, {auto_account_key(a['_account']): auto_state(x['id'], a['status'], a['method'], a['_account']) for x in result if x['id'] in AUTO_MODELS for a in x['profiles']}))

@@ -21,7 +21,7 @@ def run(script):
         "const esc = s => String(s ?? '').replace(/[&<>\"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;'})[c]); let state = {};",
         part(models, '  function fmtReset', '  const loadingBlock'), part(models, '  const quotaFor', '  function botUsageSection'),
         part(usage, '  const fmtTok', '  const OVERVIEW_METRICS'),
-        part(cards, '  // Percent left in one limit', '  function loginButtons'), part(cards, '  function outNext', '  function accountCard'),
+        part(cards, '  // Percent left in one limit', '  function loginButtons'), part(cards, '  function outNext', '  function accountRow'),
         script])
     done = subprocess.run(['node', '-e', code], capture_output=True, text=True, timeout=20)
     if done.returncode: raise AssertionError(done.stderr)
@@ -79,7 +79,7 @@ class GeminiWords(unittest.TestCase):
         cards = (JS / '32b-cards.js').read_text(encoding='utf-8')
         self.assertIn("const issue = a ? '' : p.issue", cards)          # an API-key card does not repeat the Google sign-in problem
         self.assertIn("if (!a && p.issue) return done;", cards)          # nor does the main card add 不提供額度資料 under it
-        self.assertIn('依用量計費，沒有額度上限可顯示', cards)
+        self.assertIn('<b>依用量計費</b>', cards)
 
 
 if __name__ == '__main__': unittest.main()
