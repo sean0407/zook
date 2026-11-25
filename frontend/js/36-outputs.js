@@ -7,11 +7,18 @@
     finally { clearTimeout(timer); }
     render(true);
   }
+  // #176 (#96②): the script a Bot wrote to make its files (create_report.py) is not what it handed over. Beside other files it goes
+  // under a switch; a Bot that only wrote code keeps its code in the list.
+  const BUILD_SCRIPT = /\.(py|js|mjs|cjs|ts|sh|zsh|bash|swift|rb|pl|applescript|scpt)$/i;
+  const splitScripts = list => list.some(o => !BUILD_SCRIPT.test(o.name)) ? [list.filter(o => !BUILD_SCRIPT.test(o.name)), list.filter(o => BUILD_SCRIPT.test(o.name))] : [list, []];
   function outputsPanel(b) {
     const list = state.outputs[b.id];
     if (!list) { setTimeout(() => loadOutputs(b.id), 0); return '<div class="detail-empty">正在讀取產出…</div>'; }
     const icon = {image: '🖼', pdf: '📕', markdown: '📝', text: '📄', file: '📎'};
-    return `<div class="detail-title">產出 <button class="link" data-action="outputs-refresh">重新整理</button></div>${list.length ? list.map(o => `<button class="note-row output-row" data-action="output-open" data-id="${esc(o.id)}" title="${esc(o.path)}"><strong>${icon[o.kind] || '📎'} ${esc(o.name)}</strong><small>${esc(fileSize(o.size))} · ${esc(formatDate(o.at))}</small></button>`).join('') : '<div class="detail-empty">這個 Bot 建立或修改過的檔案會出現在這裡。</div>'}`;
+    const [files, scripts] = splitScripts(list), showScripts = !!state.showScripts?.[b.id];
+    const row = o => `<button class="note-row output-row" data-action="output-open" data-id="${esc(o.id)}" title="${esc(o.path)}"><strong>${icon[o.kind] || '📎'} ${esc(o.name)}</strong><small>${esc(fileSize(o.size))} · ${esc(formatDate(o.at))}</small></button>`;
+    const more = scripts.length ? `<label class="output-scripts">${toggle('data-show-scripts="' + esc(b.id) + '"', showScripts, '顯示製作用的程式')}<span>顯示製作用的程式（${scripts.length}）</span></label>${showScripts ? scripts.map(row).join('') : ''}` : '';
+    return `<div class="detail-title">產出 <button class="link" data-action="outputs-refresh">重新整理</button></div>${list.length ? files.map(row).join('') + more : '<div class="detail-empty">這個 Bot 建立或修改過的檔案會出現在這裡。</div>'}`;
   }
   // A PDF opens fitted to the window's width; it stays hidden behind a line of text until it has loaded, instead of a dark box.
   const pdfFrame = (url, name) => `<div class="pdf-wrap"><p class="pdf-loading muted">正在開啟 PDF…</p><iframe class="output-pdf" src="${esc(url)}#view=FitH&zoom=page-width" title="${esc(name)}"></iframe></div>`;
