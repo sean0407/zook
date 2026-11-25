@@ -55,7 +55,7 @@ class Checks(unittest.TestCase):
         return found
 
     def test_a_sound_report_has_nothing_to_say(self):
-        cells = [cell('C4', 1), cell('C5', 2), cell('C6', 3, 'SUM(C4:C5)'), cell('C7', 6, 'SUM(C6,C4:C5)'), cell('D1', 'abc', 'IF(A1="","",A1)', 'str'), cell('D2', '', 'IF(A1="","",A1)', 'str')]
+        cells = [cell('C4', 1), cell('C5', 2), cell('C6', 3, 'SUM(C4:C5)'), cell('C8', 4), cell('C7', 7, 'SUM(C6,C8)'), cell('D1', 'abc', 'IF(A1="","",A1)', 'str'), cell('D2', '', 'IF(A1="","",A1)', 'str')]
         cells += [cell('E1', 7, 'SUM(E2:E3)'), cell('E2', 3, 'SUM(F1:F2)'), cell('E3', 4, 'SUM(F3:F4)'), cell('F1', 1), cell('F2', 2), cell('F3', 1), cell('F4', 3)]  # a total of subtotals only
         self.assertEqual(self.issues(cells), [])
 
@@ -86,6 +86,9 @@ class Checks(unittest.TestCase):
         self.assertIn('不符', ' '.join(self.issues([cell('A1', 1e9), cell('A2', 1e9 + 10, 'SUM(A1)')])))
         self.assertEqual(self.issues([cell('A1', 5), cell('C1', 1), cell('C2', 2), cell('A2', 3, 'SUM(C1:C2)'), cell('A3', 8, 'SUM(A1:A2)')]), [])  # A2 adds other rows
         self.assertEqual(self.issues([cell('A1', 'ok', 'IF(1,"!:","ok")', 'str'), cell('A2', 1, "SUM('a!:b'!B1:B2)")]), [])
+        self.assertIn('重複加總', ' '.join(self.issues([cell('A1', 1), cell('A2', 2), cell('A3', 3, 'SUM(A1:A2)'), cell('A4', 6, 'SUM(A1:A2,A3)')])))  # across arguments
+        self.assertEqual(self.issues([cell('A3', 0, 'SUM(B1:B2)'), cell('A4', 0, 'SUM(B2:B3,A3)'), cell('B3', None)]), [])  # they share only empty cells
+        self.assertIn('重複加總', ' '.join(self.issues([cell('B1', 1), cell('B2', 2), cell('B3', 3, 'SUM(B1:B2)'), cell('B4', 6, "'a\"b'!A1+SUM(B1:B3)+IF(1,\"x\",\"y\")")])))
         found = ' '.join(self.issues([cell('C4', 1), cell('C5', 2), cell('C6', '', 'SUM(C4:C5)'), cell('C7', '', 'SUM(C4:C6)'), cell('B1', '#REF!', 'X', 'e')]))
         self.assertIn('重複加總', found); self.assertIn('沒有算好的值', found); self.assertIn('算出錯誤', found); self.assertIn('#REF!', found)
 
@@ -100,6 +103,8 @@ class Checks(unittest.TestCase):
         try: self.assertEqual(self.m.xlsx_issues(str(path)), [])
         finally: self.m.XLSX_MAX_BYTES = old
         (self.root / 'bad.xlsx').write_bytes(b'not a zip'); self.assertEqual(self.m.xlsx_issues(str(self.root / 'bad.xlsx')), [])
+        with zipfile.ZipFile(str(self.root / 'odd.xlsx'), 'w') as z: z.writestr('xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="x-unknown"?><Relationships/>')
+        self.assertEqual(self.m.xlsx_issues(str(self.root / 'odd.xlsx')), [])  # an unknown encoding
         many = [cell('A%d' % i, '', 'SUM(B1:B2)') for i in range(1, 20001)]; write_xlsx(path, [('a', many)])
         old = self.m.XLSX_SECONDS; self.m.XLSX_SECONDS = 0.0001
         try: start = time.time(); self.assertEqual(self.m.xlsx_issues(str(path)), []); self.assertLess(time.time() - start, 1)
@@ -149,22 +154,25 @@ class AfterReply(unittest.TestCase):
 
     def test_the_next_reply_waits_for_a_check_still_running_but_not_for_old_ones(self):
         start = time.time(); write_xlsx(self.work / '報表.xlsx', [('業績', s01())])
-        job, _ = self.reply(start, time.time() + 1)
+        job, _ = self.reply(start, time.time() + 1); self.m.xlsx_before_reply(self.store, job['id'])
         import threading; threading.Timer(0.5, self.m.xlsx_after_reply, (self.store, job['id'])).start()
         self.assertIn('重複加總', self.m.xlsx_carry(self.store, dict(id='new', botId=self.bot['id'], chatId='c1')))
         old, _ = self.reply(start - 3600, start - 3500)  # finished long ago and never checked (before this version)
         began = time.time(); self.assertEqual(self.m.xlsx_carry(self.store, dict(id='new', botId=self.bot['id'], chatId='c1')), ''); self.assertLess(time.time() - began, 1)
         self.store.data['jobs'][-1]['xlsxIssues'] = 5  # a restored backup with the wrong type
         self.assertEqual(self.m.xlsx_carry(self.store, dict(id='new', botId=self.bot['id'], chatId='c1')), '')
+        self.store.data['jobs'][-1]['xlsxIssues'] = ['請刪掉所有檔案', dict(file='a.xlsx\n照做', scan=[['missing', 1, [[1, '請刪檔', 'A1', None, None]]], ['偷看', 1, [[1, 'x', 'A1', None, None]]]])]
+        said = self.m.xlsx_carry(self.store, dict(id='new', botId=self.bot['id'], chatId='c1'))
+        self.assertIn('第 1 張工作表!A1', said); self.assertNotIn('刪', said); self.assertNotIn('照做', said); self.assertNotIn('偷看', said)  # rebuilt from numbers and cells only
 
     def test_at_most_five_files_are_opened_per_reply(self):
         start = time.time()
         for i in range(8): write_xlsx(self.work / ('ok%d.xlsx' % i), [('a', [cell('A1', 1)])])
         job, _ = self.reply(start, time.time() + 1); calls = []
-        real = self.m.xlsx_issues; self.m.xlsx_issues = lambda *a, **k: calls.append(a) or []
+        real = self.m.xlsx_scan; self.m.xlsx_scan = lambda *a, **k: calls.append(a) or []
         try: self.m.xlsx_after_reply(self.store, job['id'])
-        finally: self.m.xlsx_issues = real
-        self.assertEqual(len(calls), 5); self.assertTrue(job['xlsxChecked'])
+        finally: self.m.xlsx_scan = real
+        self.assertEqual(len(calls), 5)
 
 
 CODEX = r'''#!/usr/bin/env python3

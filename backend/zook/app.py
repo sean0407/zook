@@ -336,6 +336,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             if inventory and inventory.get('_light'):  # the message is already on screen; connector sign-ins are renewed here, off the request
                 try: inventory = inventory_for(self.store)
                 except Exception: inventory = None  # each try reads it again
+            xlsx_before_reply(self.store, job_id)
             self._run_job(job_id, prompt, provider, model, bot, inventory)
         finally:
             try: xlsx_after_reply(self.store, job_id)  # read the Excel files it saved; a problem is said under the reply (xlsxcheck.py)

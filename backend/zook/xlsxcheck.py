@@ -13,7 +13,7 @@ XLSX_SECONDS = 2.0  # per file; slower ones are skipped
 XLSX_FILES = 5  # files looked at per reply
 XLSX_UNPACKED = 200 * 1024 * 1024  # all XML read from one file, unpacked
 XLSX_SHEETS = 200
-XLSX_WAIT = 15  # seconds the next reply waits for the check of the one before
+XLSX_WAIT = 20  # seconds the next reply waits for the check of the one before
 XLSX_SUFFIXES = ('.xlsx', '.xlsm')
 _XM = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
 _XR = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id'
@@ -66,8 +66,19 @@ def _xnum(x):
 
 
 def _xbare(text):
-    """A formula with its strings emptied and quoted sheet names replaced, so words inside them are not read as references."""
-    return re.sub(r"'(?:[^']|'')*'", 'S', re.sub(r'"(?:[^"]|"")*"', '""', text)).upper()
+    """A formula with its strings emptied and quoted sheet names replaced, in one pass, so words inside them are not read as references."""
+    out, i = [], 0
+    while i < len(text):
+        q = text[i]
+        if q in '"\'':
+            j = i + 1
+            while j < len(text):
+                if text[j] == q and text[j + 1:j + 2] == q: j += 2; continue
+                if text[j] == q: break
+                j += 1
+            out.append('""' if q == '"' else 'S'); i = j + 1
+        else: out.append(q); i += 1
+    return ''.join(out).upper()
 
 
 def _xparse(z, part, deadline, budget):
@@ -144,11 +155,11 @@ def _xsum_args(text):
     return out
 
 
-def xlsx_issues(path, for_bot=False):
-    """Plain sentences about one workbook's formulas, or [] when it looks sound, is too big, unreadable or slow. Only reads the file.
-    for_bot: sheets are named by their place (第 2 張工作表), never by the words in the file, and saved error texts are left out."""
+def xlsx_scan(path):
+    """What is wrong in one workbook, as [(kind, count, [(sheet number, sheet name, cell, saved, recalculated)])], or [] when it looks sound,
+    is too big, unreadable or slow. Only reads the file."""
     deadline = time.monotonic() + XLSX_SECONDS; budget = [XLSX_UNPACKED]
-    missing, errors, double, wrong, broken = [], [], [], [], []
+    found = {k: [] for k in _XKINDS}
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)  # a pipe put in the file's place does not hold the check up
         with os.fdopen(fd, 'rb') as handle:
@@ -159,19 +170,14 @@ def xlsx_issues(path, for_bot=False):
                     try: z.getinfo(part)
                     except KeyError: continue
                     cells, sums, formulas = _xread_sheet(z, part, deadline, budget)
-                    label = '第 %d 張工作表' % (index + 1) if for_bot else name
-                    where = lambda pos: '%s!%s' % (label, _xname(pos)) if pos else label
+                    at = lambda pos, saved=None, redo=None: (index + 1, name, _xname(pos) if pos else '', saved, redo)
                     for pos, text, number, saved, kind in formulas:
                         if time.monotonic() > deadline: raise _XSlow()
-                        if saved is None or (saved == '' and kind != 'str'): missing.append(where(pos))
-                        elif kind == 'e': errors.append(where(pos) + ('' if for_bot or not _XERROR.match(saved) else '（%s）' % saved))
-                        if text and _XBROKEN.search(text): broken.append(where(pos))
+                        if saved is None or (saved == '' and kind != 'str'): found['missing'].append(at(pos))
+                        elif kind == 'e': found['error'].append(at(pos, saved if _XERROR.match(saved) else None))
+                        if text and _XBROKEN.search(text): found['broken'].append(at(pos))
                         if not text or not pos or pos not in sums: continue
-                        stacked = False  # a subtotal inside the range whose own detail rows are inside it too
-                        for outer in sums[pos]:
-                            for p, x in _xinside(cells, *outer):
-                                if p != pos and x[1] and any(_xoverlap(outer, inner) for inner in sums.get(p, ())): stacked = True; break
-                            if stacked: break
+                        stacked = _xstacked(cells, sums, pos)
                         simple = _XSIMPLE.match(text.replace(' ', ''))
                         redo = None
                         if simple and number is not None:
@@ -182,18 +188,56 @@ def xlsx_issues(path, for_bot=False):
                                     redo += x[0] or 0.0
                                 if redo is None: break
                         off = redo is not None and abs(redo - number) > max(1e-6, 1e-12 * abs(redo))
-                        detail = '：存的是 %s，Excel 重算會是 %s' % (_xnum(number), _xnum(redo)) if off else ''
-                        if stacked: double.append(where(pos) + detail)
-                        elif off: wrong.append(where(pos) + detail)
-    except (_XSlow, _xzip.BadZipFile, _XET.ParseError, _xzlib.error, KeyError, OSError, ValueError, RuntimeError, EOFError, NotImplementedError, OverflowError, RecursionError):
+                        if stacked: found['double'].append(at(pos, number if off else None, redo if off else None))
+                        elif off: found['wrong'].append(at(pos, number, redo))
+    except (_XSlow, _xzip.BadZipFile, _XET.ParseError, _xzlib.error, KeyError, OSError, ValueError, LookupError, RuntimeError, EOFError,
+            NotImplementedError, OverflowError, RecursionError, UnicodeError):
         return []
+    return [(k, len(found[k]), found[k][:3]) for k in _XKINDS if found[k]]
+
+
+def _xstacked(cells, sums, pos):
+    """A SUM whose references take in a subtotal and also cells with values that subtotal already added."""
+    outer = sums[pos]
+    for o in outer:
+        for p, x in _xinside(cells, *o):
+            if p == pos or not x[1]: continue
+            for inner in sums.get(p, ()):
+                for o2 in outer:
+                    if not _xoverlap(inner, o2): continue
+                    both = ((max(inner[0][0], o2[0][0]), max(inner[0][1], o2[0][1])), (min(inner[1][0], o2[1][0]), min(inner[1][1], o2[1][1])))
+                    if any(q not in (pos, p) and y[0] is not None for q, y in _xinside(cells, *both)): return True
+    return False
+
+
+_XKINDS = ('missing', 'double', 'wrong', 'broken', 'error')
+
+
+def xlsx_render(scan, for_bot=False):
+    """Plain sentences from xlsx_scan. for_bot: sheets by their place (第 2 張工作表), never words from the file; anything not made here is dropped."""
     out = []
-    if missing: out.append('有 %d 格公式沒有算好的值，預覽和手機會顯示 0（例如 %s）' % (len(missing), '、'.join(missing[:3])))
-    if double: out.append('總計公式可能把小計重複加總（%s）' % '；'.join(double[:3]))
-    if wrong: out.append('有 %d 格公式存的值和重算結果不符（%s）' % (len(wrong), '；'.join(wrong[:3])))
-    if broken: out.append('公式看起來不完整，可能有參照被吃掉（例如 %s）' % '、'.join(broken[:3]))
-    if errors: out.append('有 %d 格公式算出錯誤（例如 %s）' % (len(errors), '、'.join(errors[:3])))
+    for item in scan if isinstance(scan, list) else []:
+        if not isinstance(item, (list, tuple)) or len(item) != 3 or item[0] not in _XKINDS or not isinstance(item[1], int) or not isinstance(item[2], list): continue
+        kind, count, places = item; shown = []
+        for p in places[:3]:
+            if not isinstance(p, (list, tuple)) or len(p) != 5 or not isinstance(p[0], int) or not _XCELL.match(str(p[2])): continue
+            sheet = '第 %d 張工作表' % p[0] if for_bot else str(p[1])
+            line = '%s!%s' % (sheet, p[2])
+            nums = [x for x in p[3:5] if isinstance(x, (int, float)) and not isinstance(x, bool) and _xmath.isfinite(x)]
+            if kind in ('double', 'wrong') and len(nums) == 2: line += '：存的是 %s，Excel 重算會是 %s' % (_xnum(nums[0]), _xnum(nums[1]))
+            if kind == 'error' and not for_bot and isinstance(p[3], str) and _XERROR.match(p[3]): line += '（%s）' % p[3]
+            shown.append(line)
+        if not shown: continue
+        if kind == 'missing': out.append('有 %d 格公式沒有算好的值，預覽和手機會顯示 0（例如 %s）' % (count, '、'.join(shown)))
+        if kind == 'double': out.append('總計公式可能把小計重複加總（%s）' % '；'.join(shown))
+        if kind == 'wrong': out.append('有 %d 格公式存的值和重算結果不符（%s）' % (count, '；'.join(shown)))
+        if kind == 'broken': out.append('公式看起來不完整，可能有參照被吃掉（例如 %s）' % '、'.join(shown))
+        if kind == 'error': out.append('有 %d 格公式算出錯誤（例如 %s）' % (count, '、'.join(shown)))
     return out
+
+
+def xlsx_issues(path, for_bot=False):
+    return xlsx_render(xlsx_scan(path), for_bot)
 
 
 def _xstamp(text):
@@ -201,42 +245,47 @@ def _xstamp(text):
     except (TypeError, ValueError): return None
 
 
-def _xsafe_name(name):
-    """A file name as the Bot will read it: one line, no brackets that could close the note, short."""
-    return re.sub(r'[\r\n\t（）()「」\[\]{}<>]', ' ', str(name))[:80]
+_XFILE = re.compile(r'^[\w.\- ]{1,60}\.xls[xm]$', re.IGNORECASE)
+
+
+def xlsx_before_reply(store, job_id):
+    """When a reply starts: the next message waits for this reply's check (xlsx_carry), and only for replies marked here."""
+    with store.lock:
+        job = store.find('jobs', job_id)
+        if job: job['xlsxPending'] = True
 
 
 def xlsx_after_reply(store, job_id):
-    """After a finished reply: check the Excel files it saved and write what is wrong under it and on the job. Never holds the lock while reading files."""
-    with store.lock:
-        job = store.find('jobs', job_id)
-        if not job: return
-        if job.get('status') != 'completed' or job.get('plan'): job['xlsxChecked'] = True; return
-        bot = store.find('bots', job['botId'])
-        start, end = _xstamp(job.get('createdAt')), _xstamp(job.get('finishedAt'))
-        if not bot or start is None or end is None: job['xlsxChecked'] = True; return
-    shown, told, looked = [], [], 0
+    """After a reply: check the Excel files it saved, say what is wrong under it and keep it on the job. Never holds the lock while reading files."""
+    found = []
     try:
+        with store.lock:
+            job = store.find('jobs', job_id)
+            if not job or job.get('status') != 'completed' or job.get('plan'): return
+            bot = store.find('bots', job['botId'])
+            start, end = _xstamp(job.get('createdAt')), _xstamp(job.get('finishedAt'))
+            if not bot or start is None or end is None: return
+        looked = 0
         for item in bot_outputs(store, bot):
             if looked >= XLSX_FILES: break
             if not item['name'].lower().endswith(XLSX_SUFFIXES): continue
             try: when = os.stat(item['path'], follow_symlinks=False).st_mtime
             except OSError: continue
-            if not start <= when <= end + 1: continue  # only what this reply saved (its CLI had ended by finishedAt)
+            if not start <= when <= end + 0.2: continue  # only what this reply saved: its CLI had ended by finishedAt
             looked += 1
-            found = xlsx_issues(item['path'])
-            if found:
-                shown.append('%s：%s' % (item['name'][:80].replace('\n', ' '), '；'.join(found)))
-                told.append('「%s」：%s' % (_xsafe_name(item['name']), '；'.join(xlsx_issues(item['path'], for_bot=True)) or '公式有問題'))
+            try: scan = xlsx_scan(item['path'])
+            except Exception: continue  # one odd file never costs the others their check
+            if scan: found.append((item['name'], scan))
     finally:
         with store.lock:
             job = store.find('jobs', job_id)
             if job:
-                job['xlsxChecked'] = True
-                if shown:
-                    job['xlsxIssues'] = told
+                job.pop('xlsxPending', None)
+                if found:
+                    job['xlsxIssues'] = [dict(file=name if _XFILE.match(name) else '', scan=[[k, n, [list(p) for p in places]] for k, n, places in scan]) for name, scan in found]
                     owner = store.find('groups', job['groupId']) if job.get('groupId') else store.find('bots', job['botId'])
                     message = find_message(owner, job.get('messageId')) if owner else None
+                    shown = ['%s：%s' % (name[:80].replace('\n', ' '), '；'.join(xlsx_render([list(x) for x in scan]))) for name, scan in found]
                     if message: message['note'] = '；'.join(x for x in (message.get('note'), *shown) if x)
                 store.save()
 
@@ -247,8 +296,8 @@ def _xlast(store, bot_id, chat_id, before):
 
 
 def xlsx_carry(store, job):
-    """For a reply about to start (lock not held): what the last finished reply of its conversation saved wrong in Excel files, or ''.
-    Waits a little when that reply's check is still running, so a message sent right after it still hears about it."""
+    """For a reply about to start (lock not held): what the last reply of its conversation saved wrong in Excel files, or ''.
+    Waits while that reply's check is still running, so a message sent the moment it finished still hears about it."""
     if job.get('groupId') or not job.get('chatId'): return ''
     end = time.monotonic() + XLSX_WAIT
     while True:
@@ -256,11 +305,16 @@ def xlsx_carry(store, job):
             last = _xlast(store, job.get('botId'), job['chatId'], job.get('id'))
             if not last: return ''
             finished = _xstamp(last.get('finishedAt'))
-            ready = last.get('xlsxChecked') or finished is None or time.time() - finished > XLSX_WAIT + 30  # an older reply, or one from before this check
+            pending = last.get('xlsxPending') and finished is not None and time.time() - finished < XLSX_WAIT + 30  # not one left over from a restart
             issues = last.get('xlsxIssues')
-        if ready or time.monotonic() > end: break
+        if not pending or time.monotonic() > end: break
         time.sleep(0.1)
-    lines = [str(x)[:600].replace('\n', ' ') for x in issues if isinstance(x, str)][:XLSX_FILES] if isinstance(issues, list) else []
+    lines = []
+    for f in issues if isinstance(issues, list) else []:
+        if not isinstance(f, dict): continue
+        said = xlsx_render(f.get('scan'), for_bot=True)  # rebuilt from numbers and cell names only: nothing restored from a backup is passed on as words
+        name = f.get('file') if isinstance(f.get('file'), str) and _XFILE.match(f.get('file')) else '其中一個 Excel 檔'
+        if said: lines.append('%s：%s' % (name, '；'.join(said)))
     if not lines: return ''
     return ('\n（Zook 的檢查結果，不是使用者的話：你上一則回覆存的 Excel 有問題——%s。請在這次回覆一併修好：公式和算好的值都要存，合計範圍不要包含小計；'
-            '做不到就照實告訴使用者。）' % '；'.join(lines))
+            '做不到就照實告訴使用者。）' % '；'.join(lines[:XLSX_FILES]))
