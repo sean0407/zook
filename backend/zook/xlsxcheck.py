@@ -25,9 +25,21 @@ _XSIMPLE = re.compile(r'^=?SUM\(\s*(%s(?:\s*,\s*%s)*)\s*\)$' % (_XRANGE, _XRANGE
 _XBROKEN = re.compile(r'!\s*[:),]|[(,]\s*:|:\s*[),]|!\s*$')
 _XERROR = re.compile(r'^#[A-Z0-9/!?]{1,8}$')
 _XAREA = 20000  # a range bigger than this is matched against the known cells instead of walked
+# #227: what a formula should take from a cell but has written in: a cell matched against a fixed item code with a number in the formula
+# (IF(A8="X100",C8*0.1,0)), or only numbers and arithmetic (=1200*3). 0 and 1 are left alone (IF(...,1,0)).
+_XCODE = re.compile(r'(?<![A-Za-z0-9_$.!])\$?[A-Za-z]{1,3}\$?[0-9]{1,7}\s*(?:=|<>)\s*"(?:[^"]|"")+"|"(?:[^"]|"")+"\s*(?:=|<>)\s*\$?[A-Za-z]{1,3}\$?[0-9]{1,7}(?![0-9])')
+_XLITERAL = re.compile(r'(?<![A-Z0-9_$.:!])([0-9]+(?:\.[0-9]+)?)(?![0-9A-Z(.:!])')
+_XARITH = re.compile(r'^=?[\s0-9.+\-*/^()%]+$')
 
 
 class _XSlow(Exception): pass
+
+
+def _xfixed(raw, bare):
+    """Whether a formula has numbers or an item code written in where a cell should be referred to (#227)."""
+    if not raw: return False
+    if _XARITH.match(bare) and re.search(r'[0-9.]\s*\)*\s*[+\-*/^]\s*\(*\s*[0-9.]', bare): return True
+    return bool(_XCODE.search(raw)) and any(float(m.group(1)) not in (0.0, 1.0) for m in _XLITERAL.finditer(bare))
 
 
 class _XGuard:
@@ -114,10 +126,10 @@ def _xread_sheet(z, part, deadline, budget):
         if number is not None and not _xmath.isfinite(number): number = None
         pos = _xpos(el.get('r'))
         if f is not None:
-            text = _xbare((f.text or '').strip()); si = f.get('si')
+            raw = (f.text or '').strip(); text = _xbare(raw); si = f.get('si')
             is_sum = bool(_XSUM.search(text)) if text else shared.get(si, False)
             if f.get('t') == 'shared' and text and si is not None: shared[si] = is_sum
-            formulas.append((pos, text, number, saved, kind))
+            formulas.append((pos, text, number, saved, kind, _xfixed(raw, text)))
             if pos:
                 cells[pos] = (number, is_sum, True)
                 if text and is_sum: sums[pos] = [r for args in _xsum_args(text) for r in _xrefs(args)]
@@ -173,8 +185,9 @@ def xlsx_scan(path):
                     except KeyError: continue
                     cells, sums, formulas = _xread_sheet(z, part, deadline, budget)
                     at = lambda pos, saved=None, redo=None: (index + 1, name, _xname(pos) if pos else '', saved, redo)
-                    for pos, text, number, saved, kind in formulas:
+                    for pos, text, number, saved, kind, fixed in formulas:
                         if time.monotonic() > deadline: raise _XSlow()
+                        if fixed and pos: found['fixed'].append(at(pos))
                         if saved is None or (saved == '' and kind != 'str'): found['missing'].append(at(pos))
                         elif kind == 'e': found['error'].append(at(pos, saved if _XERROR.match(saved) else None))
                         if text and _XBROKEN.search(text): found['broken'].append(at(pos))
@@ -212,7 +225,7 @@ def _xstacked(cells, sums, pos):
     return False
 
 
-_XKINDS = ('missing', 'double', 'wrong', 'broken', 'error')
+_XKINDS = ('missing', 'double', 'wrong', 'broken', 'error', 'fixed')
 
 
 def xlsx_render(scan, for_bot=False):
@@ -235,6 +248,8 @@ def xlsx_render(scan, for_bot=False):
         if kind == 'wrong': out.append('有 %d 格公式存的值和重算結果不符（%s）' % (count, '；'.join(shown)))
         if kind == 'broken': out.append('公式看起來不完整，可能有參照被吃掉（例如 %s）' % '、'.join(shown))
         if kind == 'error': out.append('有 %d 格公式算出錯誤（例如 %s）' % (count, '、'.join(shown)))
+        if kind == 'fixed': out.append('有 %d 格公式把數字或品號直接寫在公式裡，改數量或品項不會跟著變（例如 %s）%s' % (count, '、'.join(shown),
+                                       '，請把單價、折扣率等放進儲存格，公式改成引用那一格' if for_bot else ''))
     return out
 
 

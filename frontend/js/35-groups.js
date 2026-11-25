@@ -121,21 +121,27 @@
     if (!files) { setTimeout(() => loadGroupFiles(g), 0); return '<div class="detail-empty">正在讀取檔案…</div>'; }
     const base = '/api/groups/' + encodeURIComponent(g.id) + '/files/';
     const note = state.groupFileNote?.[g.id];
-    return `<div class="group-files"><button type="button" class="secondary" data-action="group-file-pick">＋ 上傳檔案</button><input type="file" id="group-file-input" multiple hidden>${note ? `<div class="group-file-note${note.failed.length ? ' has-failed' : ''}" role="status"><span>${esc(note.failed.length ? `${note.ok ? `已上傳 ${note.ok} 個；` : ''}${note.failed.length} 個沒有上傳：` : fileSummary(note.ok, []))}</span>${note.failed.length ? `<ul>${note.failed.map(x => `<li><strong title="${esc(x.name)}">${esc(midName(x.name))}</strong>：${esc(x.reason)}</li>`).join('')}</ul>` : ''}</div>` : ''}${files.length ? files.map(f => `<div class="group-file"><a href="${base}${encodeURIComponent(f.name)}" download="${esc(f.name)}" title="下載 ${esc(f.name)}"><strong title="${esc(f.name)}">${esc(f.name)}</strong><small>${esc([fileSize(f.size), f.by].filter(Boolean).join(' · '))}</small></a><button type="button" class="link danger" data-action="group-file-delete" data-id="${esc(f.name)}">刪除</button></div>`).join('') : '<div class="detail-empty">還沒有檔案。成員都能讀取和存入。</div>'}<small class="muted">單檔 20 MB，每個群組 200 MB。</small></div>`;
+    return `<div class="group-files"><button type="button" class="secondary" data-action="group-file-pick">＋ 上傳檔案</button><input type="file" id="group-file-input" multiple hidden>${note ? `<div class="group-file-note${note.failed.length ? ' has-failed' : ''}" role="status"><span>${esc(note.failed.length ? `${note.ok ? `已上傳 ${note.ok} 個；` : ''}${note.failed.length} 個沒有上傳：` : fileSummary(note.ok, []))}</span>${note.failed.length ? `<ul>${note.failed.map(x => `<li><strong title="${esc(x.name)}">${esc(midName(x.name))}</strong>：${esc(x.reason)}</li>`).join('')}</ul>` : ''}</div>` : ''}${note?.notes?.length ? `<div class="group-file-note" role="status">${esc(note.notes.join('。'))}</div>` : ''}${files.length ? files.map(f => `<div class="group-file"><span class="group-file-icon" aria-hidden="true">${fileIcon(f.name)}</span>${['image', 'pdf', 'text', 'markdown'].includes(f.kind) ? `<button type="button" class="group-file-name" data-group-file="${esc(f.name)}" data-group="${esc(g.id)}" title="預覽 ${esc(f.name)}">` : `<span class="group-file-name" title="${esc(f.name)}">`}<strong>${esc(midName(f.name, 40))}</strong><small>${esc([fileSize(f.size), f.by].filter(Boolean).join(' · '))}</small>${['image', 'pdf', 'text', 'markdown'].includes(f.kind) ? '</button>' : '</span>'}<a class="link" href="${base}${encodeURIComponent(f.name)}" download="${esc(f.name)}" title="下載 ${esc(f.name)}">下載</a><button type="button" class="link danger" data-action="group-file-delete" data-id="${esc(f.name)}">刪除</button></div>`).join('') : '<div class="detail-empty">還沒有檔案。成員都能讀取和存入。</div>'}<small class="muted">單檔 20 MB，每個群組 200 MB。${ATTACH_HINT}</small></div>`;
   }
   // Several files at once (#150): each one is tried, a bad one is skipped, and the end says which went in and which did not, and why.
   async function uploadGroupFiles(g, list) {
-    const ok = [], failed = [];
+    const ok = [], failed = [], odd = [], notes = [], had = new Set((state.groupFiles[g.id] || []).map(x => x.name));
     state.groupFileNote = state.groupFileNote || {};
     for (const f of list) {
       try {
         const res = await fetch('/api/groups/' + encodeURIComponent(g.id) + '/files', {method: 'POST', headers: {'X-File-Name': encodeURIComponent(f.name), 'Content-Type': 'application/octet-stream'}, body: f});
-        if (res.ok) { ok.push(f.name); continue; }
+        if (res.ok) {
+          const saved = (await res.json().catch(() => ({}))).name; ok.push(f.name);
+          if (saved && saved !== f.name) notes.push(`${midName(f.name)} 存成「${midName(saved)}」${had.has(f.name) ? '（群組裡已有同名檔）' : ''}`);
+          if (UNREADABLE.test(f.name)) odd.push(f.name);
+          had.add(saved || f.name); continue;
+        }
         failed.push({name: f.name, reason: (await res.json().catch(() => ({}))).error || '上傳失敗'});
       } catch (e) { failed.push({name: f.name, reason: '連不上 Zook，沒有上傳'}); }
     }
-    state.groupFileNote[g.id] = {ok: ok.length, failed};
-    toast(fileSummary(ok.length, failed));
+    if (odd.length) notes.push(unreadableNote(odd));
+    state.groupFileNote[g.id] = {ok: ok.length, failed, notes};
+    toast([fileSummary(ok.length, failed), ...notes].join('。'));
     await loadGroupFiles(g);
   }
   // One summary for several files, used by the group's files and the message box alike: 「已上傳 2 個；1 個沒有上傳：空檔.txt（檔案是空的）」.
