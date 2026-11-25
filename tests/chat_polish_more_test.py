@@ -156,6 +156,7 @@ class Rings(unittest.TestCase):
         m = importlib.util.module_from_spec(spec); sys.path.insert(0, str(SERVER.parent)); spec.loader.exec_module(m)
         with tempfile.TemporaryDirectory() as d:
             store = m.Store(Path(d) / 'data')
+            store.data['settings']['addedProviders'] = ['codex', 'grok']  # listed whether or not these CLIs are installed on this machine (CI has neither)
             now = datetime.datetime.now(datetime.timezone.utc).isoformat()
             store.data['quota'] = {'grok': {'updatedAt': now, 'limitReached': 'usage_limit_reached', 'windows': [{'label': '每週', 'usedPercent': 0}]},
                                    'codex': {'updatedAt': now, 'windows': [{'label': '每週', 'usedPercent': 30}]}}
