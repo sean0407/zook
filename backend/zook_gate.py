@@ -134,6 +134,65 @@ def _line_folders(whole):
     return folders
 
 
+def _folders():
+    """Every folder a command of the line being read may run in, after each cd, pushd or chdir of it (in any order: one may fail);
+    None when one cannot be known (a variable, cd -, popd, env -C, a name CDPATH may lead to keys)."""
+    found, stack = [_CWD[0]], 0  # stack: pushd's of this line not yet undone; a popd goes back to a folder of this line only then
+    for line in _LINES:
+        for part in _split(_without_inner(line))[0]:
+            raw = _redirects(part)[0]
+            if re.search(r'(?:^|\s)(?:\S*/)?env(?:\s+(?:-\S*|\S*=\S*))*?\s+(?:-[^-\s]*C|--chdir)', ' '.join(raw)): return None  # env -C: elsewhere
+            words = _strip(list(raw))
+            if words[:1] == ['popd'] and (words[1:] not in ([], ['-q']) or not stack) or words[:1] == ['pushd'] and len(words) == 1: return None
+            stack += {'pushd': 1, 'popd': -1}.get(words[0] if words else '', 0)
+            if words[:1] in (['cd'], ['pushd'], ['chdir']):
+                rest = [w for w in words[1:] if not re.fullmatch(r'-[LPeq@]+|--', w)]
+                where = _expand(rest[0]) if rest else HOME
+                if len(rest) > 1 or where[:1] in ('-', '+', '') or set(where) & set('$`*?[]{}\\'): return None
+                if os.path.isabs(where): found.append(os.path.normpath(where)); continue
+                more = [os.path.normpath(os.path.join(f, where)) for f in found]
+                if not re.match(r'\.\.?(/|$)', where):  # a plain name: CDPATH may lead to a folder of that name elsewhere
+                    if any('/%s/' % os.path.normpath(where).strip('/') in s.rstrip('/') + '/' for d in SECRET_DIRS + CREDENTIALS + _accounts_folder() for s in (d, os.path.realpath(d))): return None
+                    more += [os.path.join(_expand(c), where) for c in os.environ.get('CDPATH', '').split(':') if os.path.isabs(_expand(c))]
+                found += more
+            elif len(words) == 1 and not set(words[0]) & set('$`*?[]{}\\') and os.path.isabs(_expand(words[0])) and os.path.isdir(_expand(words[0])):
+                found.append(_expand(words[0]))  # zsh's AUTO_CD: a folder alone is a cd
+    return list(dict.fromkeys(found))
+
+
+def _secret_any(path):
+    """Where a key or sign-in is named, also from wherever a cd of this line may have led (a relative path); '' when none is."""
+    p = _expand(path); folders = [] if not p or os.path.isabs(p) else _folders() or []
+    return next((x for x in [path] + [os.path.join(f, p) for f in folders] if _secret_path(x)), '')
+
+
+def _rooted(starts):
+    """(the folders a search starts from, after the cds of its line; whether one cannot be known: a variable, or an unknown cd)."""
+    p = [_expand(s) for s in starts]; rel = [x for x in p if not os.path.isabs(x) and not set(x) & set('$`')]; folders = _folders() if rel else []
+    return [x for x in p if os.path.isabs(x)] + [os.path.join(f, x) for f in folders or [] for x in rel], folders is None or any(set(x) & set('$`') for x in p)
+
+
+def _short_value(args, i, valued, letters):
+    """The value of the first of these short options in args[i] (-fFILE, -if FILE), or None: another option's value ends the search."""
+    for k, ch in enumerate(args[i][1:] if re.match(r'-[^-]', args[i]) else '', 2):
+        if ch in letters: return args[i][k:] or (args[i + 1] if i + 1 < len(args) else '')
+        if '-' + ch in valued: return None
+
+
+def _arg_files(words):
+    """The files xargs (-a, --arg-file) and GNU parallel (-a, --arg-file, :::: and ::::+) read their arguments from."""
+    out, tool, listing = [], '', False
+    for i, w in enumerate(words):
+        if os.path.basename(w) in ('xargs', 'parallel'): tool = os.path.basename(w); continue
+        if not tool: continue
+        if w in ('::::', '::::+'): listing = True
+        elif w.startswith(':::'): listing = False
+        elif listing: out.append(w)
+        elif w in ('-a', '--arg-file') or w.startswith('--arg-file='): out += [w.split('=', 1)[1]] if '=' in w else words[i + 1:i + 2]
+        elif _short_value(words, i, WRAPPER_VALUED[tool], 'a') is not None: out.append(_short_value(words, i, WRAPPER_VALUED[tool], 'a'))
+    return out
+
+
 def _into_scratch(dest, folders):
     """A move's destination is, or may be, in a scratch folder: a variable, a wildcard, {a,b}, or a relative path where the folder the
     line runs in cannot be known may lead there."""
@@ -177,6 +236,7 @@ def _expand(path):
 
 
 _CWD = [os.getcwd()]
+_LINES = []  # the command line being read, and the ones around it (bash -c, $( … ), <( … )): a cd in any of them leads what follows
 
 
 def _abs(path):
@@ -349,17 +409,28 @@ def _hit(kind, what):
 
 
 # ---- reading a shell command
+def _opens(text):
+    """(where each $( … ), <( … ), >( … ) (process substitution) or zsh's =( … ) starts, whether it is inside quotes). One that never
+    ends is let be only in quotes read for sure (no backslash, $, backtick, comment or second line): text a shell would not run."""
+    quote, sure = '', not set(text) & set('#\\\n`$')
+    for j, c in enumerate(text[:-1]):
+        if c in '\'"' and quote in ('', c) and text[j - 1:j] != '\\': quote = '' if quote else c
+        elif text[j + 1] == '(' and (c in '$<>' or c == '=' and text[j - 1:j] in ('', ' ', '\t', '\n', ';', '&', '|', '(')): yield j, sure and bool(quote)
+
+
+def _closing(text, start):
+    """Where what opened at start ends (after its ')'), and whether it ended."""
+    depth, j = 1, start + 2
+    while j < len(text) and depth: depth += {'(': 1, ')': -1}.get(text[j], 0); j += 1
+    return j, not depth
+
+
 def _inner(command):
-    """Commands inside $( … ) and backticks, which run too."""
+    """Commands inside $( … ), <( … ), >( … ) and backticks, which run too; None in place of one whose ) is missing."""
     found = re.findall(r'`([^`]*)`', command)
-    i = 0
-    while True:
-        start = command.find('$(', i)
-        if start < 0: break
-        depth, j = 1, start + 2
-        while j < len(command) and depth:
-            depth += {'(': 1, ')': -1}.get(command[j], 0); j += 1
-        found.append(command[start + 2:j - 1]); i = start + 2
+    for start, quoted in _opens(command):
+        j, ended = _closing(command, start)
+        if ended or not quoted: found.append(command[start + 2:j - 1] if ended else None)
     return found
 
 
@@ -431,14 +502,19 @@ def command_boundaries(command, depth=0):
     if not isinstance(command, str): return []
     if depth > 4: return [_hit('unclear', '（指令包了太多層）')]
     found = []
-    for inner in _inner(command): found += command_boundaries(inner, depth + 1)
-    parts, clear = _split(_without_inner(command))  # what runs inside $( … ) was read above, and is counted once
-    if not clear: found.append(_hit('unclear', '（引號沒有成對）'))
-    for argv in parts:
-        words, read, written = _redirects(argv)
-        stripped = _strip(words)
-        found += _redirect_hits(read, written, empty=not stripped or os.path.basename(stripped[0]) in (':', 'true') and len(stripped) == 1 and not read or stripped[:2] == ['cat', '/dev/null'])
-        found += _argv_boundaries(stripped, command, depth)
+    _LINES.append(command)  # a cd here leads the searches of the commands inside it too
+    try:
+        for inner in _inner(command): found += [_hit('unclear', '（括號沒有成對）')] if inner is None else command_boundaries(inner, depth + 1)
+        parts, clear = _split(_without_inner(command))  # what runs inside $( … ) was read above, and is counted once
+        if not clear: found.append(_hit('unclear', '（引號沒有成對）'))
+        for argv in parts:
+            words, read, written = _redirects(argv)
+            stripped = _strip(words)
+            found += _redirect_hits(read, written, empty=not stripped or os.path.basename(stripped[0]) in (':', 'true') and len(stripped) == 1 and not read or stripped[:2] == ['cat', '/dev/null'])
+            listed = [w for w in map(_secret_any, _arg_files(words)) if w]  # xargs -a FILE, parallel --arg-file FILE or :::: FILE: read too
+            found += [_hit('secret', '讀取 ' + _names(listed))] if listed else []
+            found += _argv_boundaries(stripped, command, depth)
+    finally: _LINES.pop()
     return found
 
 
@@ -449,12 +525,9 @@ def _without_inner(command):
         return '$_' if start == 0 or text[start - 1] in ' \t\n;&|(=\'"' else ' _ '
     out, i = re.sub(r'`[^`]*`', lambda m: instead(command, m.start()), command), 0
     while True:
-        start = out.find('$(', i)
+        start = next((k for k, quoted in _opens(out) if k >= i and (_closing(out, k)[1] or not quoted)), -1)
         if start < 0: return out
-        depth, j = 1, start + 2
-        while j < len(out) and depth:
-            depth += {'(': 1, ')': -1}.get(out[j], 0); j += 1
-        out = out[:start] + instead(out, start) + out[j:]; i = start
+        out = out[:start] + instead(out, start) + out[_closing(out, start)[0]:]; i = start
 
 
 def merged(found):
@@ -580,6 +653,9 @@ def _search_roots(name, args, whole='', depth=0):
         plain = _positional(args, (RG_VALUED if name in ('rg', 'ripgrep') else UGREP_VALUED if name == 'ugrep' else GREP_VALUED) | {'-f', '--file', '-C', '--directory'})
         if name in ('rg', 'ag', 'ack', 'ugrep', 'ripgrep', 'pt'): plain = _past_pattern(plain, args, any(a in ('-e', '-f', '--regexp', '--file', '--files') or a.startswith(('--regexp=', '--file=')) for a in _options(args)))
         if name in ('tar', 'zip', 'cp', 'ditto'): plain = plain[1:] if name in ('tar', 'zip') else plain[:-1]
+        if name == 'tar':  # tar -C folder: the names after it are in that folder
+            moved = [v for i, a in enumerate(args) for v in [a[12:] if a.startswith('--directory=') else ''.join(args[i + 1:i + 2]) if a == '--directory' else _short_value(args, i, {'-f', '-b', '-T', '-X', '-s'}, 'C')] if v is not None]
+            plain = plain + [os.path.join(d, s) for d in moved for s in (plain or ['.']) if not os.path.isabs(_expand(s))]
         listing = name in ('rg', 'ripgrep') and _rg_list_only(args, whole, depth)  # names only (#138)
         if name in ('rg', 'ripgrep') and any(a in ('--in', '--in0') or a.startswith(('--in=', '--in0=')) for a in _options(args)): plain = plain + ['/']  # the paths come from a list Zook does not read: any of them
         return (plain or ['.']), name not in ('fd', 'fdfind', 'tree') and not listing
@@ -616,8 +692,10 @@ def _argv_boundaries(argv, whole, depth):
         starts, reads = roots
         if name == 'find' and ('-delete' in args or any(a in ('-exec', '-execdir', '-ok', '-okdir') and i + 1 < len(args) and os.path.basename(args[i + 1]) in DELETE_COMMANDS for i, a in enumerate(args))):
             found.append(_hit('delete', '（find 在 %s 裡找到的檔案）' % (_names(starts) or '目前資料夾')))
-        if any(_secret_path(s) for s in starts): found.append(_hit('secret', '讀取 ' + _names([s for s in starts if _secret_path(s)])))
-        elif reads and any(_holds_secrets(s) for s in starts): found.append(_hit('secret', '（搜尋 %s，範圍包含 ~/.ssh 等金鑰資料夾）' % _names([s for s in starts if _holds_secrets(s)])))
+        rooted, unknown = _rooted(starts)  # a relative folder from wherever the line's cds led
+        if any(_secret_path(s) for s in rooted + starts): found.append(_hit('secret', '讀取 ' + _names([s for s in rooted + starts if _secret_path(s)])))
+        elif reads and any(_holds_secrets(s) for s in rooted): found.append(_hit('secret', '（搜尋 %s，範圍包含 ~/.ssh 等金鑰資料夾）' % _names([s for s in rooted if _holds_secrets(s)])))
+        elif reads and unknown: found.append(_hit('secret', '（搜尋的資料夾要執行時才知道，可能包含 ~/.ssh 等金鑰資料夾）'))
         if name == 'find':
             for i, a in enumerate(args):
                 if a in ('-exec', '-execdir', '-ok', '-okdir'):
@@ -695,7 +773,13 @@ def _argv_boundaries(argv, whole, depth):
     web = set(_curl_addresses(args)) if name in ('curl', 'wget') else set()  # an address without https:// is still not a file here
     touched = [a for a in local if '://' not in a and a not in web and (a.startswith(('/', '~', '$HOME', '${HOME}', '.', '@')) or '/' in a or os.path.basename(a).startswith('.env'))]
     touched += [a.split('=', 1)[1] for a in args if a.startswith('--') and '=' in a]
-    if not any(k == 'secret' for k, _ in found) and any(_secret_path(a) for a in touched): found.append(_hit('secret', _names([a for a in touched if _secret_path(a)])))
+    touched += [a[k:] for a in args if re.match(r'-[^-]', a) for k in range(2, len(a)) if k == 2 or a[k] in '/~$.']  # a value fixed to its option: -f$HOME/…
+    if name in ('grep', 'egrep', 'fgrep', 'ggrep', 'rg', 'ripgrep', 'ugrep'):  # the files its patterns or globs come from: -f FILE, -if FILE, --file FILE
+        valued, opts = RG_VALUED if name in ('rg', 'ripgrep') else UGREP_VALUED if name == 'ugrep' else GREP_ONLY_VALUED, _options(args)
+        touched += [a.split('=', 1)[1] if '=' in a else args[i + 1] if i + 1 < len(args) else '' for i, a in enumerate(opts) if a.split('=', 1)[0] in ('--file', '--exclude-from', '--include-from', '--ignore-file')]
+        touched += [v for v in (_short_value(args, i, valued, 'f') for i in range(len(opts))) if v]
+    if _folders() != [_CWD[0]]: touched += plain  # after a cd, a bare name may be in a folder of keys
+    if not any(k == 'secret' for k, _ in found) and any(map(_secret_any, touched)): found.append(_hit('secret', _names(map(_secret_any, touched))))
     return found
 
 
