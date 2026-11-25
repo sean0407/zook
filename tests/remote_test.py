@@ -85,6 +85,90 @@ class BackendRulesTest(unittest.TestCase):
         self.assertEqual(self.req('DELETE', '/api/remote/devices/' + self.device)[0], 200)
         self.assertEqual(self.req('GET', '/api/state', token='bridge-token', device=self.device)[0], 401)
 
+    def status_devices(self):
+        status, data = self.req('POST', '/api/remote/bridge/status', {'connected': True, 'online': [self.device]}, token='bridge-token')
+        self.assertEqual(status, 200); return data['devices']
+
+    def test_revoked_device_is_dropped_by_the_bridge_too(self):
+        self.pair()
+        self.assertEqual(self.status_devices(), [self.device])
+        self.assertEqual(self.req('DELETE', '/api/remote/devices/' + self.device)[0], 200)
+        self.assertEqual(self.status_devices(), [])  # the bridge closes a connection whose device is not in this list
+        self.assertEqual(self.req('GET', '/api/remote/bridge/devices', token='bridge-token')[1]['list'], [])
+
+    def ago(self, days):
+        return (m.datetime.datetime.now(m.datetime.timezone.utc) - m.datetime.timedelta(days=days)).isoformat()
+
+    def test_expiry_defaults_to_30_days(self):
+        expiry = self.store.data['settings']['remoteExpiry']
+        self.assertEqual(expiry['days'], 30); self.assertTrue(expiry['since'])
+        self.assertEqual(self.req('GET', '/api/state')[1]['settings']['remoteExpiry']['days'], 30)
+
+    def test_damaged_setting_is_repaired_and_counts_from_now(self):
+        for damaged in ('x', {'days': 15}, {'days': 7, 'since': 'garbage'}, {'days': True, 'since': self.ago(100)}):
+            settings = {'remoteExpiry': damaged}; m.remote_expiry_repair(settings)
+            self.assertIn(settings['remoteExpiry']['days'], (7, 30))
+            device = dict(createdAt=self.ago(400), lastSeenAt=self.ago(300))
+            self.assertFalse(m.remote_expired(settings, device), damaged)
+        good = {'days': 90, 'since': self.ago(5)}; kept = {'remoteExpiry': dict(good)}; m.remote_expiry_repair(kept)
+        self.assertEqual(kept['remoteExpiry'], good)  # a sound setting is left as it is
+
+    def test_device_unused_longer_than_the_period_stops_working(self):
+        self.pair()
+        self.store.data['settings']['remoteExpiry'] = dict(days=30, since=self.ago(100))
+        device = self.store.data['remoteDevices'][0]; device.update(createdAt=self.ago(60), lastSeenAt=self.ago(29))
+        self.assertEqual(self.req('GET', '/api/state', token='bridge-token', device=self.device)[0], 200)  # used 29 days ago: still fine
+        self.store.data['remoteDevices'][0]['lastSeenAt'] = self.ago(31)
+        self.assertEqual(self.req('GET', '/api/state', token='bridge-token', device=self.device)[0], 401)
+        self.assertEqual(self.store.data['remoteDevices'], [])
+        self.assertEqual(self.status_devices(), [])
+
+    def test_never_used_device_counts_from_pairing(self):
+        self.pair()
+        self.store.data['settings']['remoteExpiry'] = dict(days=7, since=self.ago(100))
+        self.store.data['remoteDevices'][0].update(createdAt=self.ago(8), lastSeenAt=None)
+        self.assertEqual(self.status_devices(), [])  # dropped even while connected and idle
+        self.assertEqual(self.req('GET', '/api/remote')[1]['devices'], [])
+
+    def test_expired_device_leaves_the_mac_list(self):
+        self.pair()
+        self.store.data['settings']['remoteExpiry'] = dict(days=7, since=self.ago(100))
+        self.store.data['remoteDevices'][0].update(createdAt=self.ago(9), lastSeenAt=self.ago(8))
+        self.assertEqual(self.req('GET', '/api/remote')[1]['devices'], [])
+
+    def test_choosing_the_period(self):
+        set_days = lambda days: self.req('PATCH', '/api/settings', {'remoteExpiryDays': days})
+        for days in (7, 30, 90, 365, 0):
+            status, settings = set_days(days)
+            self.assertEqual((status, settings['remoteExpiry']['days']), (200, days))
+        for bad in (1, 10, -1, '30', True, None, 30.5):
+            self.assertEqual(set_days(bad)[0], 400, bad)
+        self.assertEqual(self.store.data['settings']['remoteExpiry']['days'], 0)
+
+    def test_phone_cannot_change_the_period(self):
+        self.pair()
+        self.assertEqual(self.req('PATCH', '/api/settings', {'remoteExpiryDays': 0}, token='bridge-token', device=self.device)[0], 403)
+        self.assertEqual(self.store.data['settings']['remoteExpiry']['days'], 30)
+
+    def test_forever_keeps_an_old_device(self):
+        self.pair()
+        self.assertEqual(self.req('PATCH', '/api/settings', {'remoteExpiryDays': 0})[0], 200)
+        self.store.data['remoteDevices'][0].update(createdAt=self.ago(900), lastSeenAt=self.ago(800))
+        self.assertEqual(self.req('GET', '/api/state', token='bridge-token', device=self.device)[0], 200)
+
+    def test_a_new_period_counts_from_when_it_was_chosen(self):
+        self.pair()
+        self.store.data['settings']['remoteExpiry'] = dict(days=90, since=self.ago(200))
+        self.store.data['remoteDevices'][0].update(createdAt=self.ago(60), lastSeenAt=self.ago(20))
+        self.assertEqual(self.req('PATCH', '/api/settings', {'remoteExpiryDays': 7})[0], 200)
+        self.assertEqual(self.status_devices(), [self.device])  # 20 days unused, but 7 days are counted from now
+        self.store.data['settings']['remoteExpiry']['since'] = self.ago(8)
+        self.assertEqual(self.status_devices(), [])
+        # Choosing the same period again does not restart the count.
+        self.pair(); self.store.data['remoteDevices'][0].update(createdAt=self.ago(10), lastSeenAt=self.ago(10))
+        self.assertEqual(self.req('PATCH', '/api/settings', {'remoteExpiryDays': 7})[0], 200)
+        self.assertEqual(self.status_devices(), [])
+
     def test_bridge_paths_need_the_bridge_and_the_bridge_cannot_act_as_the_owner(self):
         self.assertEqual(self.req('GET', '/api/remote/bridge/devices')[0], 403)              # the app's own token is not the bridge
         self.assertEqual(self.req('GET', '/api/state', token='bridge-token')[0], 403)        # bridge without a device gets nothing else

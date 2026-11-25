@@ -3,6 +3,8 @@
     done: '完成', failed: '沒有完成', stuck: '已停下，等你決定', unknown: '狀態不明', cancelled: '已停止'};
   const TASK_TONE = {done: 'ok', failed: 'bad', stuck: 'bad', unknown: 'warn', asked: 'warn', blocked: 'warn', waiting: 'warn', review: 'warn', cancelled: 'muted', running: 'live', verifying: 'live'};
   const TASK_RETRY = ['stuck', 'unknown', 'failed', 'cancelled'];
+  // Stopped to wait for you although its member reported it done: what it handed in is there to look at (as tasks.py task_handed_in).
+  const taskHandedIn = t => ['stuck', 'review', 'unknown'].includes(t.status) && Array.isArray(t.attempts) && t.attempts.length > 0 && t.attempts[t.attempts.length - 1].state === 'reported' && t.attempts[t.attempts.length - 1].outcome === 'succeeded';
   const taskEngineOn = () => state.data?.settings?.taskEngine === true;
   const groupModeOptions = () => GROUP_MODE_OPTIONS.concat(taskEngineOn() ? [{id: 'auto', name: '自動（主持人決定）', hint: '主持人拆工作、派給成員，回報後整理結果'}] : []);
 
@@ -10,17 +12,17 @@
     const run = g.taskRun && g.taskRun.id === m.taskBoard && Array.isArray(g.taskRun.tasks) ? g.taskRun : null;
     if (!run) return `<div class="system-note">${esc(m.content)}</div>`;  // an older board: its words
     const name = id => state.data.bots.find(b => b.id === id)?.name || '已刪除的 Bot';
-    const done = run.tasks.filter(t => t.status === 'done').length;
-    const head = run.tasks.length ? `已完成 ${done}／${run.tasks.length}` : (run.status === 'running' ? `${esc(name(run.hostId))} 正在規劃工作…` : '主持人直接回答，沒有建立工作');
+    const done = run.tasks.filter(t => t.status === 'done').length, handed = run.tasks.filter(taskHandedIn).length;
+    const head = run.tasks.length ? `已完成 ${done}／${run.tasks.length}${handed ? `，${handed} 項已交出，等你看結果` : ''}` : (run.status === 'running' ? `${esc(name(run.hostId))} 正在規劃工作…` : '主持人直接回答，沒有建立工作');
     const rows = run.tasks.map(t => {
       const attempts = Array.isArray(t.attempts) ? t.attempts : [], last = attempts[attempts.length - 1] || {};
       const detail = [last.summary, t.status === 'asked' && t.question ? '問主持人：' + t.question : '', last.reason, t.note, t.why || (t.basis ? '派工依據：' + t.basis : ''),
         Array.isArray(t.deps) && t.deps.length && ['pending', 'ready'].includes(t.status) ? '等工作 ' + t.deps.join('、') + ' 完成' : '',
         t.verify?.verdict ? `${name(t.verify.bot)} 驗收${t.verify.verdict === 'pass' ? '通過' : '沒有通過：' + (t.verify.reasons || '')}` : t.status === 'verifying' && t.verify?.bot ? `${name(t.verify.bot)} 驗收中` : '',
         t.failures ? `已經 ${t.failures} 次沒完成` : '', t.confirmed === false && ['pending', 'ready'].includes(t.status) ? '等你確認' : '', Array.isArray(last.files) && last.files.length ? '產出：' + last.files.join('、') : '', attempts.length > 1 ? `第 ${attempts.length} 次` : ''].filter(x => typeof x === 'string' && x);
-      const canAccept = (t.status === 'review' || t.status === 'stuck') && last.state === 'reported' && last.outcome === 'succeeded';
+      const canAccept = ['review', 'stuck', 'unknown'].includes(t.status) && last.state === 'reported' && last.outcome === 'succeeded';
       const retry = !taskEngineOn() ? '' : (!t.aborted && (TASK_RETRY.includes(t.status) && g.status !== 'running' || ['stuck', 'unknown'].includes(t.status)) ? `<button type="button" class="link" data-task-retry="${esc(t.id)}">重試</button>` : '') + (canAccept ? `<button type="button" class="link" data-task-accept="${esc(t.id)}">接受結果</button>` : '');
-      return `<li class="task-row"><span class="pill ${TASK_TONE[t.status] || ''}">${esc(TASK_STATE[t.status] || t.status)}</span><span class="task-title"><strong>${esc(String(t.n))}. ${esc(String(t.title))}</strong> <span class="muted">${esc(name(t.assignee))}</span>${detail.length ? `<span class="task-detail">${esc(detail.join(' · '))}</span>` : ''}</span>${retry}</li>`;
+      return `<li class="task-row"><span class="pill ${['stuck', 'unknown'].includes(t.status) && taskHandedIn(t) ? 'warn' : TASK_TONE[t.status] || ''}">${esc(['stuck', 'unknown'].includes(t.status) && taskHandedIn(t) ? '已交出，等你決定' : TASK_STATE[t.status] || t.status)}</span><span class="task-title"><strong>${esc(String(t.n))}. ${esc(String(t.title))}</strong> <span class="muted">${esc(name(t.assignee))}</span>${detail.length ? `<span class="task-detail">${esc(detail.join(' · '))}</span>` : ''}</span>${retry}</li>`;
     }).join('');
     const live = run.status === 'running' ? '<span class="browsing-dot" aria-hidden="true"></span>' : '';
     return `<details class="task-board" data-task-board="${esc(run.id)}" ${state.taskOpen?.[run.id] ? 'open' : ''}><summary>${live}<strong>任務板</strong> <span class="muted">${head}${run.status === 'stopped' ? ' · 已停止' : ''}</span></summary>${rows ? `<ol class="task-list">${rows}</ol>` : ''}</details>`;

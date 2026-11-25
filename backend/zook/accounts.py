@@ -333,7 +333,7 @@ def account_status(provider, account=None):
             data = json.loads(p.stdout or b'{}')
             if isinstance(data.get('loggedIn'), bool): item['status'] = 'logged_in' if data['loggedIn'] else 'not_logged_in'
             if item['status'] == 'logged_in':
-                item['method'] = {'claude.ai': 'Claude 訂閱帳號', 'console': 'Anthropic Console'}.get(data.get('authMethod'), str(data.get('authMethod') or ''))
+                item['method'] = {'claude.ai': 'Claude 訂閱帳號', 'console': 'Anthropic Console', 'api_key': 'API 金鑰'}.get(data.get('authMethod'), str(data.get('authMethod') or ''))
                 item['plan'] = str(data.get('subscriptionType') or '')
                 item['email'] = str(data.get('email') or '')
         elif provider == 'codex':
