@@ -27,13 +27,32 @@
     return `<section class="usage-block"><h2>用量預算</h2><p class="muted small settings-note">每月上限，只計算 Zook 送出的回覆（輸入加輸出）。達 80% 和用完時會通知。</p><div class="setting-list">${settingRow('預算用完時', '', dropdown('budgetOver', b.over, BUDGET_OVER, 'data-budget-over'))}${rows}</div></section>`;
   }
 
+  // #61 #247: each line says how it ended and opens to why and what to do next; filters by 分類 and 結果; an empty filter says so.
+  const ACTIVITY_EXAMPLES = {approval: '核准或拒絕 Bot 的動作', tool: 'Bot 沒先問就做的事、清理暫存資料夾', bot: '新增、修改、刪除 Bot 或群組', setting: '變更設定、用量預算提醒',
+    connector: '加入或移除 Skills、連接器', schedule: '新增、修改或手動執行排程', data: '新增或刪除知識、記憶', backup: '備份、還原與同步', device: '配對或移除手機'};
+  function activityEmpty(names) {
+    const kind = state.activityKind || '', result = state.activityResult || '';
+    if (!kind && !result) return '還沒有紀錄。設定變更、核准和 Bot 對外的動作會記在這裡。';
+    if (result) return `沒有${kind ? '「' + (names[kind] || '') + '」分類裡' : ''}結果是「${(state.activity.results || []).find(r => r.id === result)?.name || ''}」的紀錄。可以把「結果」改回「全部」。`;
+    return `這個分類目前沒有紀錄（例如${ACTIVITY_EXAMPLES[kind] || '這一類的變更'}會記在這裡）。可以改選其他分類。`;
+  }
+  function activityDetail(x, names) {
+    const line = (k, v) => v ? `<div class="act-line"><span>${k}</span><p>${esc(v)}</p></div>` : '';
+    const go = x.groupId ? `<button class="link" data-action="select-group" data-id="${esc(x.groupId)}">打開群組</button>` : x.botId ? `<button class="link" data-action="select-bot" data-id="${esc(x.botId)}">打開對話</button>` : '';
+    return `<div class="act-detail" id="act-${esc(x.id)}">${line('內容', x.text)}${line('時間', formatDate(x.at))}${line('分類', names[x.kind])}${line('來源', x.by)}${line('結果', x.resultName)}${line(x.result === 'failed' ? '失敗原因' : '原因', x.why)}${line('下一步', x.next || (x.result === 'ok' ? '不用做什麼。' : ''))}${go ? `<div class="act-go">${go}</div>` : ''}</div>`;
+  }
   function activityPage() {
     const a = state.activity;
     if (!a) return loadingBlock('正在讀取紀錄…');
     if (a.error) return `<div class="blank error-text">${esc(a.error)}</div>`;
     const kinds = [{id: '', name: '全部'}, ...a.kinds], names = Object.fromEntries(a.kinds.map(k => [k.id, k.name]));
-    const rows = a.items.length ? `<div class="plain-rows">${a.items.map(x => `<div class="plain-row"><div class="plain-copy"><strong>${esc(x.text)}</strong><span>${esc(formatDate(x.at))} · ${esc(names[x.kind] || '')} · ${esc(x.by)}</span></div></div>`).join('')}</div>` : '<div class="blank">還沒有紀錄。</div>';
-    return `<p class="muted">設定變更、核准與對外動作的紀錄，保留最近 1000 筆。對話內容不會記在這裡。</p><div class="setting-list">${settingRow('顯示', '', dropdown('activityKind', state.activityKind || '', kinds, 'data-activity-kind'))}</div>${rows}`;
+    const results = [{id: '', name: '全部'}, ...(a.results || [])];
+    const row = x => {
+      const open = state.activityOpen === x.id;
+      return `<div class="act-item"><button type="button" class="plain-row act-row" data-up="act-open" data-id="${esc(x.id)}" aria-expanded="${open}" aria-controls="act-${esc(x.id)}"><span class="plain-copy"><strong>${esc(x.text)}</strong><span>${[formatDate(x.at), names[x.kind], x.by].filter(Boolean).map(esc).join(' · ')}</span></span><span class="act-result r-${esc(x.result || 'ok')}">${esc(x.resultName || '成功')}</span></button>${open ? activityDetail(x, names) : ''}</div>`;
+    };
+    const rows = a.items.length ? `<div class="plain-rows act-rows">${a.items.map(row).join('')}</div>` : `<div class="blank">${esc(activityEmpty(names))}</div>`;
+    return `<p class="muted">設定變更、核准與對外動作的紀錄，保留最近 1000 筆。點一列看詳情。對話內容不會記在這裡。</p><div class="setting-list">${settingRow('分類', '', dropdown('activityKind', state.activityKind || '', kinds, 'data-activity-kind'))}${settingRow('結果', '', dropdown('activityResult', state.activityResult || '', results, 'data-activity-result'))}</div>${rows}`;
   }
 
   async function loadUpkeep(p) {
@@ -43,7 +62,7 @@
     };
     if (p === 'settings') { fill('backups', 'backups', x => x.items); fill('sync', 'sync'); }
     if (p === 'usage') fill('budget', 'budget');
-    if (p === 'activity') fill('activity', 'activity' + (state.activityKind ? '?kind=' + encodeURIComponent(state.activityKind) : ''));
+    if (p === 'activity') { const q = new URLSearchParams(); if (state.activityKind) q.set('kind', state.activityKind); if (state.activityResult) q.set('result', state.activityResult); fill('activity', 'activity' + (q.toString() ? '?' + q : '')); }
   }
 
   document.addEventListener('click', async e => {
@@ -51,6 +70,7 @@
     if (!el) return;
     const id = el.dataset.id;
     try {
+      if (el.dataset.up === 'act-open') { state.activityOpen = state.activityOpen === id ? '' : id; render(true); return; }
       if (el.dataset.up === 'backup-now') { state.backups = (await post('backups')).items; render(true); toast('已備份'); }
       if (el.dataset.up === 'backup-pick') $('#backup-file')?.click();
       if (el.dataset.up === 'backup-delete') await ask({title: '刪除這份備份？', lines: ['刪除後無法復原。現在的資料和其他備份不受影響。'], run: async () => { state.backups = (await post('backups/' + encodeURIComponent(id), {}, 'DELETE')).items; render(true); }});
@@ -74,7 +94,9 @@
       } else if (t.dataset.budgetOver !== undefined) {
         state.data.settings = await post('settings', {budgetOver: t.value}, 'PATCH'); await loadUpkeep('usage'); toast('已更新');
       } else if (t.dataset.activityKind !== undefined) {
-        state.activityKind = t.value; await loadUpkeep('activity');
+        state.activityKind = t.value; state.activityOpen = ''; await loadUpkeep('activity');
+      } else if (t.dataset.activityResult !== undefined) {
+        state.activityResult = t.value; state.activityOpen = ''; await loadUpkeep('activity');
       }
     } catch (err) { toast(err.message); }
   });

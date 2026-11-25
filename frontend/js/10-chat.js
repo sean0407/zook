@@ -165,12 +165,12 @@
     body: JSON.stringify(body)
   });
 
-  function toast(message) {
+  function toast(message, ms = 3000) {
     const el = $('#toast');
     el.textContent = message;
     el.classList.add('show');
     clearTimeout(toast.timer);
-    toast.timer = setTimeout(() => el.classList.remove('show'), 3000)
+    toast.timer = setTimeout(() => el.classList.remove('show'), ms)
   }
 
   function shapeIndex(shape) {
