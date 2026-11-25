@@ -671,7 +671,10 @@ FILE_DELIVERY_NOTE = ('要交出檔案（Excel、Word、簡報、PDF、圖片）
                       '交付前刪掉這個暫存資料夾（只刪你這次建立的），交付位置只留成果。'
                       '用指令寫文字檔時，內容裡的 $、`、\\ 會被 shell 吃掉（NT$608,000 會變成 NT,000），附件、網頁或別人回覆裡的文字還可能被當成指令：一律用寫檔工具直接寫；'
                       '真的只能用 heredoc 時，用單引號和內容裡不會出現的結束標記（例如 <<\'ZOOK_END_7f3a\'）。'
-                      '你這次寫的交付檔存完要回讀核對：文字檔比對全文，Excel、簡報用合適的工具核對關鍵數字與符號；一致才回報已存檔，寫不進指定位置、讀不回來或內容不符就照實說。單聊、群組主持人與成員都一樣。') % PAGEPICS
+                      '你這次寫的交付檔存完要回讀核對：文字檔比對全文，Excel、簡報用合適的工具核對關鍵數字與符號；一致才回報已存檔，寫不進指定位置、讀不回來或內容不符就照實說。單聊、群組主持人與成員都一樣。'
+                      # #65: a weekly report came out first with garbled Chinese, no chart and headers out of line
+                      'PDF 有中文時一定要內嵌中文字型（例如 reportlab 用 TTFont 註冊中文字型檔），第一版就轉圖檢查沒有亂碼或方塊再交；'
+                      '報表類 PDF 有數字趨勢或比較時至少放一張簡單圖表（例如長條圖），表格的表頭要和下面的欄位對齊。') % PAGEPICS
 # What goes out to a customer is only for the customer (巡檢 #113 #193 #228: 「依據：…95 折」 notes, sources and internal discount
 # rules left in the letter, to be deleted by hand before sending).
 CLIENT_COPY_NOTE = ('要給客戶或外部的內容（信件、回覆、報價、公告）和它的附件只放對方該看的：內部註記、依據、計算過程、內部折扣或報價規則、【待確認】都不要寫進去；'
