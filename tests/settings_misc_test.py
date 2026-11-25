@@ -104,6 +104,28 @@ class ListingFilesIsNotKeys(unittest.TestCase):
         self.assertNotIn('secret', [k for k, _ in gate.command_boundaries('grep -E KEY notes.txt')])  # grep's -E takes no value
 
 
+class SearchRootsFromASafeFolder(unittest.TestCase):
+    """Run from a folder without keys, so a root misread as the current folder is not hidden by it being the home folder."""
+    @classmethod
+    def setUpClass(cls): cls.m = load()
+
+    def setUp(self): self.cwd = os.getcwd(); self.temp = tempfile.TemporaryDirectory(); os.chdir(self.temp.name)
+
+    def tearDown(self): os.chdir(self.cwd); self.temp.cleanup()
+
+    def kinds(self, line): return [k for k, _ in self.m._gate().command_boundaries(line)]
+
+    def test_home_named_after_the_options_is_searched(self):
+        for line in ('rg --hidden --no-ignore -e KEY -- --pre ~',  # after --, --pre is a path, not an option taking ~
+                     'rg --hidden --no-ignore --pre /bin/cat -e TOKEN ~', 'rg --hidden --no-ignore --regexp=KEY ~', 'rg --hidden --no-ignore -eKEY ~',
+                     'rg -gfoo KEY ~', 'rg KEY ~', 'grep -r --regexp=KEY ~', 'grep -reKEY ~', 'grep -r -- KEY ~', 'rg --sort path KEY ~'):
+            self.assertIn('secret', self.kinds(line), line)
+
+    def test_safe_folder_alone_is_fine(self):
+        for line in ('rg KEY', 'rg -e KEY', 'rg --pre /bin/cat -e TOKEN', 'grep -rn KEY .', 'rg --files'):
+            self.assertNotIn('secret', self.kinds(line), line)
+
+
 class TroubleInTheInterface(unittest.TestCase):
     def setUp(self): self.code = js()
 

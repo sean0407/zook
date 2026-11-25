@@ -485,6 +485,7 @@ def _positional(args, valued):
     out, i = [], 0
     while i < len(args):
         a = args[i]
+        if a == '--': return out + list(args[i + 1:])  # the end of the options: every word after it is a pattern or a path
         if a.startswith('-') and a != '-':
             i += 2 if a in valued else 1
             continue
@@ -540,6 +541,16 @@ def _rg_list_only(args, whole, depth=0):
             and not any(w.startswith('-') for w in words[2:]))
 
 
+def _past_pattern(plain, args, given):
+    """The words after the search pattern. given: the pattern was set by its own option (-e KEY, --regexp=KEY), so every word is a path.
+    A pattern may also be fixed to its option (-eKEY, -ie KEY), which cannot be told apart from another short option with a value that
+    holds an e or f (-gfoo): then every word counts, and the current folder too while at most one word is left, so a folder is never
+    missed either way."""
+    if given: return plain
+    if any(re.match(r'-(?!-)[A-Za-z]*[ef]', a) for a in args if a != '-'): return plain + (['.'] if len(plain) <= 1 else [])
+    return plain[1:]
+
+
 def _search_roots(name, args, whole='', depth=0):
     """(starting folders, whether it reads what is under them) for find and the grep family; None for other commands."""
     if name == 'find':
@@ -551,13 +562,13 @@ def _search_roots(name, args, whole='', depth=0):
     if name in ('grep', 'egrep', 'fgrep', 'ggrep'):
         recursive = any(a in ('-r', '-R', '--recursive', '--dereference-recursive') or re.fullmatch(r'-[a-zA-Z]*[rR][a-zA-Z]*', a) or a.startswith('--directories=recurse') for a in args)
         plain = _positional(args, GREP_VALUED)
-        if not any(a in ('-e', '-f', '--regexp', '--file') or a.startswith(('--regexp=', '--file=')) for a in args): plain = plain[1:]  # the first is the pattern
+        plain = _past_pattern(plain, args, any(a in ('-e', '-f', '--regexp', '--file') or a.startswith(('--regexp=', '--file=')) for a in args))  # the first is the pattern
         return (plain or (['.'] if recursive else [])), recursive
     if name in ('rg', 'ag', 'ack', 'ugrep', 'ripgrep', 'pt', 'fd', 'fdfind', 'tree', 'zip', 'tar', 'cp', 'ditto'):
         if name in ('cp',) and not any(re.fullmatch(r'-[a-zA-Z]*[rRa][a-zA-Z]*', a) for a in args): return None
         if name == 'zip' and not any(re.fullmatch(r'-[a-zA-Z]*r[a-zA-Z]*', a) for a in args): return None
         plain = _positional(args, (RG_VALUED if name in ('rg', 'ripgrep') else GREP_VALUED) | {'-f', '--file', '-C', '--directory'})
-        if name in ('rg', 'ag', 'ack', 'ugrep', 'ripgrep', 'pt') and not any(a in ('-e', '-f', '--regexp', '--file', '--files') for a in args): plain = plain[1:]
+        if name in ('rg', 'ag', 'ack', 'ugrep', 'ripgrep', 'pt'): plain = _past_pattern(plain, args, any(a in ('-e', '-f', '--regexp', '--file', '--files') or a.startswith(('--regexp=', '--file=')) for a in args))
         if name in ('tar', 'zip', 'cp', 'ditto'): plain = plain[1:] if name in ('tar', 'zip') else plain[:-1]
         listing = name in ('rg', 'ripgrep') and _rg_list_only(args, whole, depth)  # names only (#138)
         return (plain or ['.']), name not in ('fd', 'fdfind', 'tree') and not listing
