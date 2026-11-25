@@ -70,6 +70,18 @@ class DateCheck(unittest.TestCase):
         self.assertIn('2025/1/23 是週四，不是週五', self.check('去年 1/23 週五的活動')[0])
         self.assertEqual(self.check('上次會議取消。12/1 週二開'), [])  # 上次 was in another sentence
         self.assertEqual(self.check('明年 1/23 週六'), [])
+        self.assertIn('2027/12/1 是週三', self.check('明年 12/1 週二')[0])
+        notes = self.check('去年 1/23 週四、明年 1/23 週六')  # each takes the year said right before it
+        self.assertEqual(notes, [])
+        self.assertEqual(self.check('上次取消. 12/1 週二開'), [])
+
+    def test_commas(self):
+        self.assertIn('2026/12/1 是週二，不是週一', self.check('12/1，週一')[0])
+        self.assertEqual(self.check('12/1，週二，12/3'), [])
+        self.assertIn('2027/1/23 是週六', self.check('1/22，週五 1/23')[0])
+
+    def test_the_first_dates_are_always_checked(self):
+        self.assertEqual(len(self.check('2027-1-23 週五。' + '1/1 ' * 300)), 1)
 
     def test_a_long_message_stays_quick(self):
         text = '、'.join('%d/%d 週%s' % (1 + i % 12, 1 + i % 28, '一二三四五六日'[i % 7]) for i in range(3000))[:29900]
@@ -84,6 +96,10 @@ class DateCheck(unittest.TestCase):
         synced = dict(role='user', content='1/23 禮拜五')
         self.m.date_check_copy(dict(dateCheckDay='2026-11-25', dateCheck=['別的字']), synced)
         self.assertIn('2027/1/23 是週六', synced['dateCheck'][0])
+        restored = [dict(role='user', content='hello', dateCheck=['別的字'], dateCheckDay='2026-11-25'), dict(role='user', content='1/23 週五', dateCheck=True, dateCheckDay='2026-11-25')]
+        self.m.date_check_restored(restored)
+        self.assertNotIn('dateCheck', restored[0]); self.assertIn('2027/1/23 是週六', restored[1]['dateCheck'][0])
+        self.assertIn('date_check_restored(messages)', (ROOT / 'backend/zook/upkeep.py').read_text(encoding='utf-8'))
 
     def test_marks_the_message_and_tells_the_bots(self):
         message = dict(content='1/23 禮拜五')
