@@ -419,7 +419,7 @@
           if (e.target === el) closeModal();
           break;
         case 'avatar-pick': { const panel = $('#bot-form .avatar-panel'); panel.hidden = !panel.hidden; break; }
-        case 'default-folder': { const picked = (await post('choose-folder')).path; if (picked) { state.data.settings = await post('settings', {access: 'folder', accessFolder: picked}, 'PATCH'); render(true); toast('已更新 Bot 預設'); } break; }
+        case 'default-folder': { const picked = (await post('choose-folder')).path; if (picked) { state.data.settings = await post('settings', {access: 'folder', accessFolder: picked}, 'PATCH'); render(true); toast('已更新「存取範圍」'); } break; }
         case 'shape':
           $('#bot-form [name=shape]').value = id;
           $$('.shape-btn').forEach(x => x.classList.toggle('selected', x.dataset.id === id));
