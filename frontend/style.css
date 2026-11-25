@@ -1974,3 +1974,30 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .path-offers { max-width: 960px; margin: 0 auto 6px; display: flex; flex-direction: column; gap: 4px; }
 .path-offer { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #555; padding: 4px 12px; background: #f6f6f6; border-radius: 12px; }
 .path-offer span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Phone width (#98, #131): no fixed minimum width, so nothing ends up off screen and the page never scrolls sideways.
+   Below the desktop minimum (700) the sidebar sits above the page instead of beside it and scrolls on its own;
+   windows and pages use the full width. */
+@media (max-width: 699px) {
+  .layout { min-width: 0; flex-direction: column; }
+  .sidebar { width: auto; max-height: 40dvh; padding: 8px 10px 6px; border-right: 0; border-bottom: 1px solid #e7e7e7; }
+  .side-top { padding: 0 5px 8px 9px; }
+  .side-row { min-height: 48px; }
+  .side-footer { padding-top: 6px; }
+  /* the sidebar is at the top now: open the menu downwards, over the page, and let it scroll on a short screen */
+  .side-footer .popup { bottom: auto; top: 46px; max-height: calc(60dvh - 16px); overflow-y: auto; }
+  /* long Bot or group names shorten instead of pushing buttons off screen */
+  .dd { max-width: 100%; }
+  .dd-btn { max-width: 100%; overflow: hidden; }
+  .dd-menu { max-width: calc(100vw - 16px); }
+  .main-header .header-actions { flex: 0 1 auto; min-width: 0; overflow-x: auto; }
+  .main-header .header-actions .text-btn { flex: none; max-width: 10em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .main { flex: 1; min-height: 0; }
+  .page { padding: 16px; }
+  .page-top { flex-wrap: wrap; gap: 10px; margin: 4px 0 18px; }
+  .modal-overlay { padding: 12px; }
+  .modal-foot { flex-wrap: wrap; padding: 12px 16px; }
+}
+
+/* A required field left empty is outlined in red once the person tries to send the form, so it is clear which one. */
+.modal input:user-invalid, .modal textarea:user-invalid, .modal select:user-invalid { border-color: #d33; box-shadow: 0 0 0 1px #d33; }
