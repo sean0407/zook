@@ -575,7 +575,12 @@ def local_choice(before, after, body, local=True):
     if any(k in body and (body[k] or '') != (before.get(k) or '') for k in ('provider', 'account')): after.pop('syncedModel', None)  # picked here
     if 'provider' in body and (body['provider'] or '') != (before.get('provider') or ''):
         set_gate_full(after); after.pop('localLimit', None)
-    elif any(k in body and (body[k] or '') != (before.get(k) or '') for k in ('access', 'accessFolder', 'permissionMode')): after.pop('localLimit', None)
+    elif any(k in body and (body[k] or '') != (before.get(k) or '') for k in ('access', 'accessFolder', 'permissionMode')):
+        if provider_kind(_bot_provider(after)) not in GATED_KINDS or after.get('provider') == 'auto' or after.get('gateFull'): after.pop('localLimit', None)
+        elif body.get('access') == 'full':  # #284: 「整台 Mac」 for a held Claude or Cursor Bot is the gate, as picking its model here again
+            for k in ('access', 'accessFolder', 'permissionMode'): after.pop(k, None); after.update({k: before[k]} if k in before else {})
+            set_gate_full(after); after.pop('localLimit', None)
+        else: hold_scope(after)  # its own 存取範圍 and 主動性 are not used on Claude or Cursor: nothing else lifts it
 
 
 def held_backups(bot, provider, chain):
