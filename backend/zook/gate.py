@@ -125,8 +125,13 @@ def claude_gate_after(store, env, gate, used_tools):
         seen = store.data.setdefault('claudeGate', {}); key = claude_gate_key(env)
         if ran: seen[key] = True
         elif used_tools:
-            seen[key] = False
+            was = seen.get(key) is True; seen[key] = False
             log_activity(store, 'tool', 'Claude 用了內建工具，但這一次 Zook 的安全檢查沒有執行（可能被管理政策關掉）。之後 Claude 的 Bot 先只在工作資料夾裡做事，直到再看到安全檢查生效。', by='Zook')
+            if was:  # only when it changes: the Bots that had the whole Mac in this Claude setup
+                try: names = [b.get('name') for b in store.data['bots'] if gated_bot(b, None, store.data) and provider_kind(_bot_provider(b, store.data)) == 'claude'
+                              and claude_gate_key(provider_env(_bot_provider(b, store.data), find_account(b.get('account'), _bot_provider(b, store.data)))) == key]
+                except Exception: names = ['Claude 的 Bot']  # telling never stops the reply
+                held_tell(store, names, 'Claude 這一次沒有執行 Zook 的安全檢查（可能被管理政策關掉）', '只限工作資料夾', '下次看到安全檢查生效時會自動恢復整台 Mac，不用另外設定。')
     return ran
 
 
@@ -149,7 +154,12 @@ def _local_migrate(store):
     if not settings.get('gateFullSet'):
         for bot in store.data['bots']: set_gate_full(bot)
         settings['gateFullSet'] = True; changed = True
-    if held_in_migrate(store): changed = True
+    if not settings.get('heldTold'):  # held in by a version that did not say so (0.23.1): said once now
+        held_tell(store, [b.get('name') for b in store.data['bots'] if b.get('localLimit')], '之前的版本已自動收緊這些 Bot')
+        settings['heldTold'] = True; changed = True
+    before = held_marks(store)
+    if held_in_migrate(store):
+        changed = True; held_told(store, before, '升級時發現這些 Bot 是由其他 Bot 建立，或從另一台 Mac 同步來的')
     if not settings.get('scriptsOff'):
         for bot in store.data['bots'] + (store.data.get('deletedBots') or []):
             if bot.get('scripts') is not False: bot['scripts'] = False
@@ -236,6 +246,51 @@ def held_in_migrate(store):
         if isinstance(bot, dict) and bot.get('recovered') and not bot.get('localLimit'): hold_in(bot)
     settings['heldInSet'] = True
     return True
+
+
+# ---- Zook itself held Bots in (queue #46): one plain line in the activity record and one Mac notification, naming the Bots, why and
+# where to widen them again. Only telling: what is held in, and how, is decided by the rules above.
+HELD_WHERE = '要放寬，請在 Mac 的 Zook 視窗打開該 Bot 的「編輯設定」→「進階設定」→「存取範圍」。'
+
+
+def held_marks(store):
+    """Lock held. Which Bots are held in now, by id, for held_told afterwards. Those set aside count too: one that comes back
+    (a 取代 join in sync) as it was is not told again."""
+    return {str(b.get('id')): bool(b.get('localLimit')) for b in store.data['bots'] + (store.data.get('deletedBots') or []) if isinstance(b, dict)}
+
+
+def held_told(store, before, why, quiet=()):
+    """Lock held. Tell about the Bots held in since held_marks gave `before`, and new ones that arrived held in. quiet: ids whose
+    activity line was already written (only the notification is added)."""
+    found = [b for b in store.data['bots'] if isinstance(b, dict) and b.get('localLimit') and not before.get(str(b.get('id')))]
+    names = [b.get('name') for b in found]
+    loud = [b.get('name') for b in found if b.get('id') not in quiet]
+    if loud: held_tell(store, loud, why)
+    if len(loud) < len(names): held_tell(store, [n for n in names if n not in loud], why, log=False)
+    return names
+
+
+def held_tell(store, names, why, what='只限工作資料夾、先問', where=None, log=True):
+    """Lock held. Nothing when no Bot is named. Before the service is up (a damaged data file is replaced while Zook starts), the
+    notification waits on the store and is queued when the service starts (held_attach)."""
+    names = [n for n in dict.fromkeys(' '.join(str(n or '').split())[:40] for n in names) if n]
+    if not names: return
+    shown = ''
+    for name in names:
+        more = '「%s」' % name
+        if shown and len(shown) + len(more) > 80: shown += '等 %d 個 Bot' % len(names); break
+        shown += ('、' if shown else '') + more
+    if log: log_activity(store, 'bot', '%s：Zook 把 %s 設為%s。%s' % (why, shown, what, where or HELD_WHERE), by='Zook')
+    note = ('Zook 收緊了 %d 個 Bot 的權限' % len(names), '%s：%s 設為%s。%s' % (why, shown, what, where or '要放寬請到 Mac 的 Zook 視窗，在 Bot 的「編輯設定」改。'))
+    app = getattr(store, 'notice_app', None)
+    if app is not None: app.notify(note[0], note[1], 'page', 'activity', '', always=True)
+    else: store.__dict__.setdefault('held_waiting', []).append(note)
+
+
+def held_attach(app):
+    """When the service starts: notifications from now on go to it, and those that waited are queued."""
+    app.store.notice_app = app
+    for title, body in app.store.__dict__.pop('held_waiting', []): app.notify(title, body, 'page', 'activity', '', always=True)
 
 
 def worker_gate(server, conn, worker, job_id, params):

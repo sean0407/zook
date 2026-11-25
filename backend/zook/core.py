@@ -872,7 +872,7 @@ def mobile_create_bot(store, body):
     if str(body.get('provider') or '').startswith(P.CUSTOM_PREFIX): raise ValueError('手機上不能選自訂 CLI，請在 Mac 上設定。')
     update(bot, {k: body[k] for k in ('instructions', 'provider') if k in body}, 'bot')
     hold_in(bot)  # made on the phone: its workspace and 謹慎 until the user widens it on the Mac
-    ensure_chats(bot); store.data['bots'].append(bot); store.save()
+    ensure_chats(bot); store.data['bots'].append(bot); store.save(); held_tell(store, [bot['name']], '在手機上建立的 Bot')
     return bot
 
 

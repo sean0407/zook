@@ -82,7 +82,7 @@ def backup_check(data):
     task_settings_clean(data['settings'])
     for bot in data['bots'] + [b for b in data.get('deletedBots') or [] if isinstance(b, dict)]:  # what this Mac allows is never in a copy
         bot['scripts'] = False; limit_locally(bot)
-    data['settings'].update(gateFullSet=True, scriptsOff=True)  # and the one-time upgrades do not grant it afterwards
+    data['settings'].update(gateFullSet=True, scriptsOff=True, heldTold=True)  # and the one-time upgrades do not grant it afterwards; what a restore holds in is told by the restore
     # The main file of a Zook that keeps conversations in their own files has no conversation in it. Putting it back as if it were whole would empty them all.
     if data.get('layout') is not None: raise ValueError('這個檔案是 Zook 的主檔，裡面沒有對話內容，不能當成備份。請改用「備份與還原」建立的備份檔。')
     for key, rel, messages, _ in chat_conversations(data):
@@ -106,7 +106,7 @@ def backup_restore(app, name):
         if isinstance(job, dict) and job.get('status') == 'running':
             for key in ('runner', 'runnerSalt', 'cliPid', 'interrupted', 'reattach'): job.pop(key, None)
             job.update(status='failed', error='備份當時這則回覆還沒完成。')
-    safety = backup_write(store, 'safety', store.data)
+    safety = backup_write(store, 'safety', store.data); held = held_marks(store)
     halted = sync_halt(store)  # saved first: if Zook stops halfway, the older data is never sent to the other Macs
     # This Mac's own pairing, sign-ins and sync stay as they are: they belong to the machine, not to the copy.
     keep = {key: copy.deepcopy(store.data.get(key)) for key in ('remoteDevices', 'sync') if key in store.data}
@@ -143,6 +143,7 @@ def backup_restore(app, name):
     store.data = fresh.data; _active['data'] = store.data
     store.chat_forget()  # the files on disk are the copy's now
     store.save(everything=True)
+    held_told(store, held, '還原備份後，這些 Bot 不是這台 Mac 現在允許的樣子')
     # Older data must not be sent to the other Macs as if it were new, nor its gaps as deletions: syncing stops until it is switched on again.
     return safety, halted
 
@@ -174,6 +175,7 @@ def recover_data(store):
         restore_keep_access(NOTHING_HERE(), store.data); store.data['remoteDevices'] = []
         store.data['settings'].update(access='workspace', permissionMode='manual'); store.data['settings'].pop('accessFolder', None)  # a Bot made later starts narrow too
         log_activity(store, 'backup', '資料檔無法讀取，改用備份 %s（損壞的檔案留存為 %s）' % (backup['name'], kept or '無法留存'), by='Zook')
+        held_told(store, {}, '資料檔無法讀取、改用備份，這台 Mac 不確定之前允許什麼')
         return dict(at=NOW(), backup=backup['name'], backupAt=backup['at'], kept=kept)
     log_activity(store, 'backup', '資料檔無法讀取，也沒有可用的備份，從全新狀態開始（損壞的檔案留存為 %s）' % (kept or '無法留存'), by='Zook')
     store.data = seeds()
