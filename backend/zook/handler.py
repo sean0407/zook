@@ -930,6 +930,7 @@ def main():
     except KeyboardInterrupt: pass
     finally:
         app.closing = True  # replies end now because Zook is closing: what is waiting in line stays there for next time
+        bg_starting(app)  # a CLI still starting is waited for, as the lock once made it (background.py, #290)
         if app.__dict__.get('script_api'):
             try: app.script_api.close()
             except Exception: pass

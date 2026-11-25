@@ -120,6 +120,12 @@ class Checks(unittest.TestCase):
         self.assertIn('內嵌中文字型', note); self.assertIn('圖表', note); self.assertIn('表頭', note)
         self.assertTrue(note.endswith('單聊、群組主持人與成員都一樣。') or '單聊、群組主持人與成員都一樣。' in note)
 
+    def test_the_delivery_rule_keeps_lists_apart_and_spreadsheets_by_reference(self):
+        """#72: numbered points squeezed into one paragraph; #227: a quote with no header row and a discount written into the formula."""
+        note = self.m.FILE_DELIVERY_NOTE
+        self.assertIn('每一項各自一段', note); self.assertIn('ListFlowable', note)
+        self.assertIn('表頭列', note); self.assertIn('不要把數字或品號寫死在公式裡', note)
+
 
 class AfterReply(unittest.TestCase):
     @classmethod
