@@ -2,8 +2,8 @@
 """The shared 「先問」 gate for a CLI's own tools (Claude's PreToolUse hook; cursor_guard.py uses it for Cursor).
 
 A Bot whose CLI has the whole Mac works without asking, except at the safety boundaries the user named:
-  delete   deleting files (rm, trash, find -delete, moving to the Trash or into the scratch folders, a Write or Edit that empties a
-           file), anywhere but the Bot's own scratch files (decisions #28): see _scratch_line
+  delete   deleting files (rm, trash, find -delete, moving to the Trash or into a Bot's scratch folder, a Write or Edit that empties
+           a file), anywhere but the Bot's own scratch folder (decisions #28, queue #261): see scratch_rm
   send     sending something out (mail, posting with curl/wget, scp/rsync/ssh to another machine, git push, gh create/merge/comment)
   secret   keys, passwords and accounts (~/.ssh, ~/.aws, ~/.config/gh, .env, the Keychain, the security command), reading too,
            and searching a folder that holds them
@@ -77,117 +77,120 @@ CODE_HINTS = re.compile(r'\b(?:os\.(?:remove|unlink|rmdir|removedirs|system|pope
                         r'do shell script|delete\b|trash\b)|\.ssh\b|\.aws\b|\.env\b|id_rsa|id_ed25519|password|passwd|`', re.I)
 
 
-# ---- the Bot's own scratch files (decisions #28): deleted without asking
-# Only a file that really is (after links) in /tmp or the Mac's temporary folder, or one in a folder $(mktemp …) made in the same
-# command line. Never the folder itself, a wildcard, a .., a link, a file with another name (hard link), or one under sudo, sh -c, $( ),
-# find or xargs. The line may hold only commands that cannot move, link or rename anything (so nothing in it can swap where a path
-# leads between this check and the delete), and moving a file into the scratch folders is asked as a delete.
-SCRATCH = re.compile(r'(?:/private/tmp|/private/var/folders/[^/]+/[^/]+/T)/')
-SCRATCH_COMPANIONS = {'rm', 'unlink', 'echo', 'printf', 'cat', 'ls', 'test', '[', '[[', 'true', 'false', ':', 'sleep', 'mkdir', 'touch', 'wc',
-                      'head', 'tail', 'grep', 'file', 'stat', 'du', 'date', 'pwd', 'mktemp', 'sort', 'uniq', 'cut', 'tr', 'diff', 'cmp', 'shasum', 'md5'}
-SCRATCH_RUNNERS = {'python', 'python3', 'node', 'ruby', 'swift'}  # running a file: what a program does is never read (see the top)
-MKTEMP_SET = re.compile(r'(?:^|(?<=[;\n]))[ \t]*([A-Za-z_]\w*)=("?)\$\(mktemp((?:[ \t]+[\w./+-]+)*)[ \t]*\)\2[ \t]*(?=$|[;&|\n])')
-SHELL_VARS = {'PATH', 'HOME', 'PWD', 'OLDPWD', 'IFS', 'TMPDIR', 'CDPATH', 'ENV', 'BASH_ENV', 'SHELL', 'ZDOTDIR', 'FPATH', 'PS4', 'PROMPT_COMMAND',
-              'REPLY', 'reply', 'path', 'cdpath', 'fpath', 'manpath', 'module_path', 'mailpath', 'fignore', 'psvar', 'argv', 'status',
-              'pipestatus', 'options', 'parameters', 'functions', 'aliases', 'commands', 'builtins'}
+# ---- the Bot's own scratch files (decisions #28, narrowed in queue #261): deleted without asking
+# Zook makes one folder for each Bot's scratch files (<data>/workspaces/<Bot>/.zook-scratch, gate.py scratch_env) and gives this hook
+# its path and device:inode (ZOOK_SCRATCH, ZOOK_SCRATCH_ID); the Bot cannot change either. Only a line that is nothing but one plain
+# rm or unlink, of written-out paths of plain files right in that very folder, each with one name only, is not asked. Anything more
+# (another command, ; && | ( ) $ ` * ? ~ \ < > # {}, a variable, a relative path, a .., a link, a folder, a hard link) is asked as
+# before, and so is /tmp and the Mac's temporary folder (other programs use them too). Moving a file into a scratch folder is asked
+# as a delete, so nothing gets there from elsewhere without the user's yes.
+SCRATCH_NAME = '.zook-scratch'
+SCRATCH_PART = re.compile(r'(?i)(?:^|/)\.zook-scratch(?:/|$)')
+SCRATCH_TEXT = re.compile(r'[A-Za-z0-9 /._+,@:%\'"-]|[^\x00-\x7f]')  # nothing a shell reads specially, and quoting read the same by all
+SCRATCH_RM = {'rm', '/bin/rm', 'unlink', '/bin/unlink', '/usr/bin/unlink'}
 
 
-def _scratch_place(path):
-    """Whether a path really is (after links) in /tmp or the Mac's temporary folder; the folder itself counts."""
-    p = _expand(path)
-    if not p or '$' in p or '`' in p: return False
-    return bool(SCRATCH.match(os.path.realpath(_abs(p)).rstrip('/') + '/'))
+def _scratch_folder():
+    """(path, lstat) of this Bot's scratch folder, when it is still the very folder Zook made; else None."""
+    path, ident = os.environ.get('ZOOK_SCRATCH', ''), os.environ.get('ZOOK_SCRATCH_ID', '')
+    if not path or not ident or not os.path.isabs(path) or os.path.normpath(path) != path or os.path.basename(path) != SCRATCH_NAME: return None
+    try: info = os.lstat(path)
+    except OSError: return None
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or '%d:%d' % (info.st_dev, info.st_ino) != ident: return None
+    return path, info
 
 
-def _into_scratch(dest, whole):
-    """A move's destination is, or may be, a scratch folder: only a written-out path, read against a folder the line does not change,
-    is surely elsewhere (a variable, a wildcard, {a,b}, or cd / pushd / env -C in the line may lead into /tmp)."""
-    if not dest or set(dest) & set('$`*?[]{}\\'): return True
-    if not os.path.isabs(_expand(dest)) and _moves_folder(whole): return True
-    return _scratch_place(dest)
+def scratch_rm(command):
+    """The whole command line only deletes files of this Bot's own scratch folder: not asked (see above)."""
+    if not isinstance(command, str) or not command.strip() or len(command) > 4000: return False
+    if not all(c.isprintable() and SCRATCH_TEXT.fullmatch(c) for c in command): return False
+    folder = _scratch_folder()
+    if folder is None: return False
+    try: words = shlex.split(command, posix=True)  # without \ $ ` ! the shell reads '…' and "…" exactly like this
+    except ValueError: return False
+    if len(words) < 2 or words[0] not in SCRATCH_RM: return False
+    rm, targets, done = os.path.basename(words[0]) == 'rm', [], False
+    for w in words[1:]:
+        if not done and w == '--': done = True
+        elif not done and w.startswith('-'):
+            if not (rm and re.fullmatch(r'-[fv]+', w)): return False  # -r, -d, -i, -P …: never
+        else: targets.append(w)
+    return 0 < len(targets) <= 20 and all(_scratch_target(t, *folder) for t in targets)
 
 
-def _moves_folder(whole):
-    """The line changes the folder it runs in to one that may be a scratch folder (cd to a variable, a link, a relative path, cd -)."""
-    if re.search(r'\benv\b[^;&|\n]*\s(?:-C|--chdir)', whole): return True
-    for part in _split(_without_inner(whole))[0]:
-        words = _strip(_redirects(part)[0])
-        if words and words[0] in ('cd', 'pushd', 'popd', 'chdir'):
-            where = next((w for w in words[1:] if not w.startswith('-')), None)
-            if words[0] == 'popd' or where is None or set(where) & set('$`*?[]{}\\') or not os.path.isabs(_expand(where)) or _scratch_place(where): return True
-    return False
-
-
-def _scratch_line(command):
-    """(the mktemp folders' variable names, whether a $ in a path can be read as written) when this command line may delete scratch files
-    without asking; None when it may not: something in it could move, link or rename files, change a variable, or cannot be read."""
-    if not isinstance(command, str) or len(command) > 4000: return None
-    sets = list(MKTEMP_SET.finditer(command))
-    names = [m.group(1) for m in sets]
-    for m in sets:
-        flags = m.group(3).split()
-        if names.count(m.group(1)) != 1 or m.group(1) in os.environ or m.group(1) in SHELL_VARS: return None
-        if command[:m.start()].count('"') % 2: return None  # inside a quoted text: never really set
-        for i, f in enumerate(flags):  # mktemp -d [-q] [-t prefix] only: a template could name any folder (never -u: no folder made)
-            if re.fullmatch(r'-[dq]+|--directory|--quiet', f): continue
-            if re.fullmatch(r'-[dq]*t', f) and i + 1 < len(flags) and re.fullmatch(r'[\w.+-]+', flags[i + 1]) and flags[i + 1] not in ('.', '..'): continue
-            if i and re.fullmatch(r'-[dq]*t', flags[i - 1]): continue
-            return None
-    rest = command
-    for m in reversed(sets): rest = rest[:m.start()] + ' ; ' + rest[m.end():]
-    plain = re.sub(r'\$\{(?:%s)\}' % '|'.join(['TMPDIR'] + names), '', rest)
-    if re.search(r'[`(){}#]|<<', plain) or re.search(r'(?<!\$)\bTMPDIR\b', plain): return None  # $( ), a function, a comment; TMPDIR changed
-    for name in names:
-        for m in re.finditer(r'(?<!\w)%s(?!\w)' % name, rest):
-            i, j = m.start(), m.end()
-            read = rest[i - 1:i] == '$' and rest[i - 2:i - 1] != '$' or rest[i - 2:i] == '${' and rest[j:j + 1] == '}'
-            if not read and rest[i - 1:i] not in ('-', '/', '.'): return None  # read, export, printf -v, d+=, for d in …: it may change
-    parts, clear = _split(_without_inner(command))
-    if not clear: return None
-    for part in parts:
-        words, _, written = _redirects(part)
-        for t in written:  # rm x > ~/a empties ~/a: only /dev/null, a written-out scratch path, or a file in this line's mktemp folder
-            m = re.fullmatch(r'\$(?:\{(\w+)\}|(\w+))/[^/]+', t)
-            if t != '/dev/null' and not (m and (m.group(1) or m.group(2)) in names) and not ('$' not in t and os.path.isabs(_expand(t)) and _scratch_place(t)): return None
-        while words and words[0] in SHELL_WORDS: words = words[1:]
-        if not words or len(words) == 1 and re.fullmatch(r'([A-Za-z_]\w*)=\$_', words[0]) and words[0][:-3] in names: continue  # d=$(mktemp …)
-        word = words[0]; name = os.path.basename(word)
-        if '/' in word and os.path.dirname(word) not in ('/bin', '/usr/bin'): return None
-        if name in SCRATCH_COMPANIONS: continue
-        if (name in SCRATCH_RUNNERS or re.fullmatch(r'python3\.\d+', name)) and len(words) > 1 and not words[1].startswith('-'): continue
-        return None
-    return set(names), "'" not in command and '\\' not in command
-
-
-def _scratch_file(arg, line):
-    """This rm target is one of the Bot's own scratch files: see _scratch_line."""
-    names, quoted_right = line
-    if '$' in arg:
-        if not quoted_right: return False  # '$d/x' or \$d/x is a file called $d…, not the folder
-        m = re.fullmatch(r'\$(?:\{(\w+)\}|(\w+))/([^/]+)', arg)
-        if m and (m.group(1) or m.group(2)) in names: return m.group(3) not in ('.', '..') and not set(m.group(3)) & set('*?[]{}$`~\\')
-        tmp = os.environ.get('TMPDIR', '')
-        if not os.path.isabs(tmp): return False
-        arg = re.sub(r'\$\{TMPDIR\}|\$TMPDIR\b', lambda _: tmp, arg)
-        if '$' in arg: return False
-    if not os.path.isabs(arg) or set(arg) & set('*?[]{}`') or arg.endswith('/') or '..' in arg.split('/'): return False
-    try: info = os.lstat(arg)
+def _scratch_target(path, folder, info):
+    if not os.path.isabs(path) or os.path.normpath(path) != path or os.path.dirname(path) != folder: return False  # no .., //, ./, trailing /
+    try: own = os.lstat(path)
     except OSError: return False
-    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid(): return False  # a link, a folder, a second name
-    return bool(SCRATCH.match(os.path.realpath(arg)))
+    return stat.S_ISREG(own.st_mode) and own.st_nlink == 1 and own.st_uid == os.getuid() and own.st_dev == info.st_dev  # never a link or folder
 
 
-def _scratch_only(name, args, line):
-    """rm or unlink of nothing but the Bot's own scratch files: not asked."""
-    if line is None or name not in ('rm', 'unlink'): return False
-    targets, done = [], False
-    for a in args:
-        if not done and a == '--': done = True; continue
-        if not done and a.startswith('-'):
-            if name == 'rm' and re.fullmatch(r'-[fiv]+', a): continue
-            return False  # -r, -d, -P (overwrites): never
-        targets.append(a)
-    return bool(targets) and all(_scratch_file(t, line) for t in targets)
+def _in_scratch(path):
+    """A path that is named as, or really is (after links), in a Bot's scratch folder; the folder itself counts."""
+    if SCRATCH_PART.search(path): return True
+    real = os.path.realpath(path)
+    folder = os.environ.get('ZOOK_SCRATCH', '')
+    return bool(SCRATCH_PART.search(real)) or bool(folder) and _under(real, [folder])
+
+
+def _own_scratch(path):
+    """Already really (after links) in this Bot's own scratch folder: moving it about there deletes nothing of the user's."""
+    folder = os.environ.get('ZOOK_SCRATCH', '')
+    return bool(folder) and _under(os.path.realpath(os.path.dirname(path.rstrip('/')) or '/'), [folder])
+
+
+def _line_folders(whole):
+    """Every folder a command of this line may run in: where it starts and each cd / pushd target, whatever their order (one may fail
+    or be skipped); None when one cannot be known (a variable, cd -, popd, a relative cd that CDPATH may lead elsewhere, env -C)."""
+    if re.search(r'(?:^|[\s;&|(])(?:-C|--chdir)\b', whole) and re.search(r'\benv\b', whole): return None
+    folders = [_CWD[0]]
+    for part in _split(_without_inner(whole))[0]:
+        words = _redirects(part)[0]
+        while words and words[0] in SHELL_WORDS: words = words[1:]
+        if not words: continue
+        if words[0] == 'popd': return None
+        if words[0] in ('cd', 'pushd', 'chdir'):
+            rest = [w for w in words[1:] if not re.fullmatch(r'-[LPe@]+', w)]
+            where = rest[0] if rest else '~'
+            if where == '-' or set(where) & set('$`*?[]{}\\'): return None
+            where = _expand(where)
+            if not os.path.isabs(where): return None
+            folders.append(where)
+        elif len(words) == 1 and not set(words[0]) & set('$`*?[]{}\\') and os.path.isabs(_expand(words[0])) and os.path.isdir(_expand(words[0])):
+            folders.append(_expand(words[0]))  # zsh's AUTO_CD: a folder alone is a cd
+    return folders
+
+
+def _into_scratch(dest, folders):
+    """A move's destination is, or may be, in a scratch folder: a variable, a wildcard, {a,b}, or a relative path where the folder the
+    line runs in cannot be known may lead there."""
+    if not dest or set(dest) & set('$`*?[]{}\\'): return True
+    p = _expand(dest)
+    if os.path.isabs(p): return _in_scratch(p)
+    return folders is None or any(_in_scratch(os.path.join(f, p)) for f in folders)
+
+
+def _move_args(args):
+    """(sources, destination) of mv; sources is None when they cannot be told apart (only mv -t folder, from xargs or find)."""
+    ops, target, i, done = [], None, 0, False
+    while i < len(args):
+        a = args[i]
+        if done or a == '-' or not a.startswith('-'): ops.append(a)
+        elif a == '--': done = True
+        elif a.startswith('--'):
+            key, has, value = a.partition('=')
+            if key in ('--target-directory', '--suffix') and not has: value = args[i + 1] if i + 1 < len(args) else ''; i += 1
+            if key == '--target-directory': target = value
+        else:
+            for j, ch in enumerate(a[1:]):
+                if ch in 'tS':
+                    value = a[j + 2:]
+                    if not value: value = args[i + 1] if i + 1 < len(args) else ''; i += 1
+                    if ch == 't': target = value
+                    break
+        i += 1
+    if target is not None: return (ops or None), target
+    return (ops[:-1] or None), (ops[-1] if ops else '')
 
 
 def _expand(path):
@@ -457,12 +460,12 @@ def command_boundaries(command, depth=0):
     for inner in _inner(command): found += command_boundaries(inner, depth + 1)
     parts, clear = _split(_without_inner(command))  # what runs inside $( … ) was read above, and is counted once
     if not clear: found.append(_hit('unclear', '（引號沒有成對）'))
-    scratch = _scratch_line(command) if depth == 0 else None  # only the line as written: never inside sh -c, $( ) or sudo
+    if depth == 0 and scratch_rm(command): return []  # only the line as written: never inside sh -c, $( ) or sudo
     for argv in parts:
         words, read, written = _redirects(argv)
         stripped = _strip(words)
         found += _redirect_hits(read, written, empty=not stripped or os.path.basename(stripped[0]) in (':', 'true') and len(stripped) == 1 and not read or stripped[:2] == ['cat', '/dev/null'])
-        found += _argv_boundaries(stripped, command, depth, scratch)
+        found += _argv_boundaries(stripped, command, depth)
     return found
 
 
@@ -573,7 +576,7 @@ def _search_roots(name, args):
     return None
 
 
-def _argv_boundaries(argv, whole, depth, scratch=None):
+def _argv_boundaries(argv, whole, depth):
     if not argv: return []
     word = argv[0]; name = os.path.basename(word); args = argv[1:]
     if '$' in word and word != '$' or '`' in word: return [_hit('unclear', '（要執行的程式是變數）')]
@@ -588,7 +591,7 @@ def _argv_boundaries(argv, whole, depth, scratch=None):
         if code is None and ('-' in args or not plain) and '<<' in whole: code = whole  # the program comes from a here-document
         if code is not None and CODE_HINTS.search(code): found.append(_hit('unclear', '（%s 的程式碼可能刪檔、對外送出或讀取金鑰）' % _word(name)))
         if name == 'osascript' and re.search(r'\bdelete\b|\btrash\b|move .* to trash', ' '.join(args), re.I): found.append(_hit('delete', '（用 AppleScript）'))
-        elif name == 'osascript' and re.search(r'\bmove\b', ' '.join(args), re.I) and re.search(r'tmp|temporary|/var/folders', ' '.join(args), re.I):
+        elif name == 'osascript' and re.search(r'\bmove\b', ' '.join(args), re.I) and re.search(r'zook-scratch', ' '.join(args), re.I):
             found.append(_hit('delete', '（用 AppleScript 移到暫存區）'))
     if name in ('sudo', 'su', 'doas'):
         rest, i = list(args), 0
@@ -597,7 +600,7 @@ def _argv_boundaries(argv, whole, depth, scratch=None):
         program = os.path.basename(inner[0]) if inner and shutil.which(inner[0]) else ''  # a program's name, never a word that might be a password
         found.append(_hit('system', '用 %s 執行 %s' % (name, _word(program))))
         if inner: found += _argv_boundaries(inner, whole, depth + 1)
-    if name in DELETE_COMMANDS and not _scratch_only(name, args, scratch): found.append(_hit('delete', _names(plain) or '（%s）' % name))
+    if name in DELETE_COMMANDS: found.append(_hit('delete', _names(plain) or '（%s）' % name))
     roots = _search_roots(name, args)
     if roots is not None:
         starts, reads = roots
@@ -612,17 +615,19 @@ def _argv_boundaries(argv, whole, depth, scratch=None):
                     if sub and os.path.basename(sub[0]) not in DELETE_COMMANDS: found += _argv_boundaries(_strip(sub), whole, depth + 1)
     if name == 'mv' and plain and ('.Trash' in plain[-1] or plain[-1].rstrip('/').endswith('/Trash')):
         found.append(_hit('delete', '%s（移到垃圾桶）' % _names(plain[:-1])))
-    moved = _positional(args, {'-t', '--target-directory'} if name in ('mv', 'gmv') else set()) if name in ('mv', 'gmv') or name == 'rsync' and any(a.startswith('--remove-s') for a in args) else \
-        plain[1:] + plain[:1] if name == 'zip' and any(a in ('-m', '--move') or re.fullmatch(r'-[a-zA-Z0-9]*m[a-zA-Z0-9]*', a) for a in args) else []
-    into = next((args[i + 1] for i, a in enumerate(args[:-1]) if name in ('mv', 'gmv') and re.fullmatch(r'-[a-zA-Z]*t|--target-directory', a)), None) or \
-        next((a.split('=', 1)[1] for a in args if name in ('mv', 'gmv') and a.startswith('--target-directory=')), None)
-    if into is not None: moved = [m for m in moved if m != into] + [into]  # mv -t folder files…
-    if into is not None and len(moved) == 1 and _into_scratch(into, whole): found.append(_hit('delete', '（xargs 等傳來的檔案，移到暫存區）'))
+    if name in ('mv', 'gmv'): moved = _move_args(args)
+    elif name == 'git' and 'mv' in args: moved = _move_args([a for a in args[args.index('mv') + 1:] if a not in ('-k', '-n', '--dry-run')])
+    elif name == 'rsync' and any(a.startswith('--remove-s') for a in args): moved = (plain[:-1] or None, plain[-1] if plain else '')
+    elif name == 'zip' and any(a in ('-m', '--move') or re.fullmatch(r'-[a-zA-Z0-9]*m[a-zA-Z0-9]*', a) for a in args): moved = (plain[1:] or None, plain[0] if plain else '')
+    else: moved = None
     if name in ('tar', 'gtar', 'gnutar', 'bsdtar') and any(a.startswith('--remove') for a in args): found.append(_hit('delete', '（tar 打包後刪除原檔）'))
     if name == 'rsync' and any(a.startswith('--delete') for a in args): found.append(_hit('delete', '（rsync 刪除目的地多出來的檔案）'))
-    held = lambda s: '$' not in s and os.path.isabs(_expand(s)) and not _moves_folder(whole) and _scratch_place(s)  # surely already scratch
-    if len(moved) > 1 and _into_scratch(moved[-1], whole) and any(not held(s) for s in moved[:-1]):  # scratch files are deleted without asking
-        found.append(_hit('delete', '%s（移到暫存區）' % _names([s for s in moved[:-1] if not held(s)])))
+    if moved is not None:  # into a scratch folder: its files are deleted without asking, so moving one there is asked as a delete
+        sources, dest = moved; folders = _line_folders(whole)
+        held = lambda s: not set(s) & set('$`*?[]{}\\') and (folders is not None or os.path.isabs(_expand(s))) and all(_own_scratch(os.path.join(f, _expand(s))) for f in folders or ['/'])
+        if _into_scratch(dest, folders):
+            if sources is None: found.append(_hit('delete', '（xargs 等傳來的檔案，移到暫存區）'))
+            elif any(not held(x) for x in sources): found.append(_hit('delete', '%s（移到暫存區）' % _names([x for x in sources if not held(x)])))
     if name == 'git': found += _git(args)
     if name == 'gh' and args: found += _gh(args)
     if name == 'curl':

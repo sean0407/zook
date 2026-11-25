@@ -477,6 +477,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             account = find_account(bot.get('account'), provider)  # an extra account only applies to the provider it belongs to
             env = provider_env(provider, account)
             env['ZOOK_DATA_DIR'] = str(store.dir)  # zook_gate.py asks before a Bot changes Zook's own data
+            scratch = scratch_env(store, bot['id'], env) if native and kind in GATED_KINDS else None  # its own scratch files: deleted without asking
             features = active_features(bot, kind, native, planning, scope)
             with store.lock: job.update(features=features, nativeAccess=[scope, str(root), permission_mode(store, bot, kind), bool(native)], runKind=kind)
             resume = self.native_session(job, provider, model, account, cli_cwd)
@@ -520,6 +521,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 if kind == 'grok': prompt += '\nZook 工具在這裡的完整名稱是 zook__ 加上工具名，例如 zook__zook_create_schedule。'
                 if native: prompt += '\n工具說明：' + gate_access_note(access_note(scope, root, kind in ('codex', 'antigravity') or (kind == 'cursor' and scope == 'full'), kind == 'grok'), kind) + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。' + (scope_save_note(scope, root, held_save_folder(store, job, bot['id'], scope, root, workspace), job, kind) if kind != 'claude' or claude_hooks_allowed(env=env) else '')  # where to save instead (#86 #88); Claude only with its tools
                 else: prompt += '\n工具說明：檔案讀寫與其他動作請使用 zook 工具。zook 工具會依使用者設定的主動性決定是否先請使用者核准，與本機 CLI 沙箱是否唯讀無關；需要時直接呼叫，被拒絕再說明即可。'
+                if native: prompt += scratch_note(scratch)
             if not selected and scope != 'workspace': prompt += '\n工具說明：' + access_note(scope, root, True)
             if choices_for(store, job): prompt += CHOICE_NOTE
             prompt += xlsx_carry(store, job)  # what the reply before saved wrong in an Excel file (xlsxcheck.py)

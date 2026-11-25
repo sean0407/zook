@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """#54①: an approval card names what is really deleted: 2>/dev/null is not a file called 「2」, and a variable is shown as a
-variable, never glued to the folder the command runs in. Deleting is still asked about; only the Bot's own scratch files are not
-(decisions #28: the user changed what an earlier security review asked for; see gate_scratch_test)."""
+variable, never glued to the folder the command runs in. Deleting is still asked about, scratch files too (an earlier security
+review asked for that; changing it is the user's call, see loop/decisions.md)."""
 import os, sys, unittest
 from pathlib import Path
 
@@ -27,7 +27,7 @@ class DeleteWords(unittest.TestCase):
         said = deletes('rm -rf "$OUT/x"')
         self.assertEqual(len(said), 1); self.assertIn('「$OUT/x」指向的位置', said[0]); self.assertNotIn('/Users/someone/work/$', said[0])
 
-    def test_deleting_is_still_asked_about(self):  # a scratch folder itself, or a scratch file with another file (decisions #28)
+    def test_deleting_is_still_asked_about(self):  # scratch files too: an earlier security review asked for that (gate_test)
         for command in ('rm -rf /tmp/x', 'd=$(mktemp -d); rm -rf "$d"', 'rm -f /tmp/x ~/報告.xlsx'):
             self.assertTrue(deletes(command), command)
 
