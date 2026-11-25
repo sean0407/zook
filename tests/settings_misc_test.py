@@ -81,10 +81,27 @@ class ListingFilesIsNotKeys(unittest.TestCase):
         self.assertNotEqual(self.m.command_summary('rg --hidden -e --files .'), '尋找檔案')
         self.assertNotIn('尋找檔案', self.m.command_summary('rg --files | xargs cat'))
 
-    def test_listing_with_plain_options(self):
+    def test_only_the_plainest_form_is_a_listing(self):
         gate = self.m._gate()
-        self.assertNotIn('secret', [k for k, _ in gate.command_boundaries('rg --files --hidden -g "*.txt" Downloads')])
-        self.assertNotIn('secret', [k for k, _ in gate.command_boundaries('rg --files --hidden -g "*.txt"')])
+        import shlex
+        for line in ('rg --files --hidden -g "*.txt" Downloads', 'rg --files --hidden', 'rg --files "My Docs"', 'rg --files *', 'rg --files ~/x#y'):
+            self.assertFalse(gate._rg_list_only(shlex.split(line)[1:], line), line)  # anything more than rg --files and folders: read as a search
+        self.assertFalse(gate._rg_list_only(['--files'], 'rg --files', 1))  # inside $( … ), a shell's -c or eval
+        self.assertTrue(gate._rg_list_only(['--files', 'Documents'], 'rg --files Documents'))
+        self.assertIn('secret', [k for k, _ in gate.command_boundaries('rg --files --hidden')])
+        self.assertIn('secret', [k for k, _ in gate.command_boundaries('/bin/zsh -lc "rg --files"')])
+
+    def test_review_of_pr_111(self):
+        """The three ways the final review of PR #111 found to read keys while the exemption applied."""
+        gate = self.m._gate()
+        for line in ('rg --hidden --no-ignore API_KEY . # --files',  # a --files in a comment
+                     "cat $(rg --hidden --no-ignore --files -g '*id_rsa*')",  # names handed to cat through $( … )
+                     'rg --hidden --no-ignore --pre /bin/cat -e TOKEN'):  # --pre's value read as the folder searched (also on main)
+            self.assertIn('secret', [k for k, _ in gate.command_boundaries(line)], line)
+            self.assertNotIn('尋找檔案', self.m.command_summary(line), line)
+        self.assertIn('secret', [k for k, _ in gate.command_boundaries('rg --sort path -e KEY')])
+        self.assertIn('secret', [k for k, _ in gate.command_boundaries('rg -d 3 KEY')])
+        self.assertNotIn('secret', [k for k, _ in gate.command_boundaries('grep -E KEY notes.txt')])  # grep's -E takes no value
 
 
 class TroubleInTheInterface(unittest.TestCase):

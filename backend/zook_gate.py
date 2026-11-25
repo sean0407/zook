@@ -71,6 +71,12 @@ GIT_FLAGS = {'-p', '--paginate', '-P', '--no-pager', '--bare', '--no-replace-obj
              '--icase-pathspecs', '--no-optional-locks', '--html-path', '--man-path', '--info-path', '--version', '--help', '-v', '-h', '--no-lazy-fetch', '--no-advice'}
 GREP_VALUED = {'-e', '-f', '-m', '-A', '-B', '-C', '--regexp', '--file', '--max-count', '--include', '--exclude', '--exclude-dir', '--context', '--after-context',
                '--before-context', '--label', '-g', '--glob', '-t', '--type', '-T', '--type-not', '-M', '--max-columns', '--max-depth', '-j', '--threads', '--iglob'}
+# ripgrep's own options that take a value: without them its value (rg --pre /bin/cat -e KEY) was read as the folder searched,
+# so the current folder went unchecked. Not for grep, where -E, -r and -d mean something else.
+RG_VALUED = GREP_VALUED | {'--pre', '--pre-glob', '--sort', '--sortr', '-d', '-E', '--encoding', '--ignore-file', '--type-add', '--type-clear',
+                           '--path-separator', '-r', '--replace', '--max-filesize', '--dfa-size-limit', '--regex-size-limit', '--colors', '--color',
+                           '--context-separator', '--field-context-separator', '--field-match-separator', '--engine', '--hostname-bin',
+                           '--hyperlink-format', '--generate'}
 # Inline code (python -c, node -e, a here-document) that may delete, send, run commands or touch keys: it cannot be read reliably.
 CODE_HINTS = re.compile(r'\b(?:os\.(?:remove|unlink|rmdir|removedirs|system|popen|exec\w*|spawn\w*|rename|replace)|shutil\.(?:rmtree|move)|subprocess|send2trash|'
                         r'unlink(?:Sync)?|rmSync|rename\w*\s*\(|File::Copy|fs\.promises|renameSync|moveItem|removeItem|File\.rename|FileUtils|rmdirSync|rm_rf|child_process|execSync|spawnSync|requests\.|httpx|urlopen|urllib|http\.client|smtplib|ftplib|'
@@ -520,27 +526,21 @@ def _gh(args):
     return []
 
 
-# rg --files only lists names, as fd does (#138), but only in this plain form: every word one of these, or a folder to list, and
-# the whole line that one command, with no pipe, redirection or other command (what reads the names next is not known here). Anything else is a search of what is in the files.
-RG_LIST_ONLY = {'--files', '--hidden', '--no-ignore', '--no-ignore-vcs', '--no-ignore-dot', '--no-ignore-global', '--no-ignore-parent', '-L', '--follow', '-u', '-uu', '-uuu', '-0', '--null', '-.', '--sort=path', '--sort=none'}
-RG_LIST_VALUED = {'-g', '--glob', '--iglob', '-t', '--type', '-T', '--type-not', '-d', '--max-depth'}
+# rg --files only lists names, as fd does (#138). Only in its plainest form is it taken at its word: the whole command line, typed at
+# the top (not inside $( … ), a shell's -c or eval), is `rg --files` followed by nothing but folders, with no character that could
+# hand the names on, hide words in a comment, quote, expand or add words (a glob may expand to a file named --pre=…). Any other form
+# is read as a search of what is in the files.
+RG_LIST_UNSAFE = set('#;|&<>()`$\'"\\\n\r*?[]{}=')
 
 
-def _rg_list_only(args, whole):
-    if not whole or any(c in whole for c in ';&|<>()`$\n'): return False  # one plain command: nothing hands the names on
-    if whole.split()[0] not in ('rg', 'ripgrep') or os.environ.get('RIPGREP_CONFIG_PATH'): return False  # the real rg, by name with no settings before it, and no config file adding words
-    i, listing = 0, False
-    while i < len(args):
-        a = args[i]
-        if a == '--': return False  # what follows may be a pattern
-        if a in RG_LIST_VALUED: i += 2; continue  # its value is never the --files option (rg -g --files is a glob)
-        if a.split('=', 1)[0] in RG_LIST_VALUED and '=' in a: i += 1; continue
-        if a.startswith('-') and a not in RG_LIST_ONLY: return False
-        listing = listing or a == '--files'; i += 1
-    return listing
+def _rg_list_only(args, whole, depth=0):
+    if depth or not isinstance(whole, str) or any(c in RG_LIST_UNSAFE for c in whole) or os.environ.get('RIPGREP_CONFIG_PATH'): return False
+    words = whole.split()
+    return (words[:2] in (['rg', '--files'], ['ripgrep', '--files']) and list(args) == words[1:]
+            and not any(w.startswith('-') for w in words[2:]))
 
 
-def _search_roots(name, args, whole=''):
+def _search_roots(name, args, whole='', depth=0):
     """(starting folders, whether it reads what is under them) for find and the grep family; None for other commands."""
     if name == 'find':
         starts = []
@@ -556,10 +556,10 @@ def _search_roots(name, args, whole=''):
     if name in ('rg', 'ag', 'ack', 'ugrep', 'ripgrep', 'pt', 'fd', 'fdfind', 'tree', 'zip', 'tar', 'cp', 'ditto'):
         if name in ('cp',) and not any(re.fullmatch(r'-[a-zA-Z]*[rRa][a-zA-Z]*', a) for a in args): return None
         if name == 'zip' and not any(re.fullmatch(r'-[a-zA-Z]*r[a-zA-Z]*', a) for a in args): return None
-        plain = _positional(args, GREP_VALUED | {'-f', '--file', '-C', '--directory'})
+        plain = _positional(args, (RG_VALUED if name in ('rg', 'ripgrep') else GREP_VALUED) | {'-f', '--file', '-C', '--directory'})
         if name in ('rg', 'ag', 'ack', 'ugrep', 'ripgrep', 'pt') and not any(a in ('-e', '-f', '--regexp', '--file', '--files') for a in args): plain = plain[1:]
         if name in ('tar', 'zip', 'cp', 'ditto'): plain = plain[1:] if name in ('tar', 'zip') else plain[:-1]
-        listing = name in ('rg', 'ripgrep') and _rg_list_only(args, whole)  # names only (#138)
+        listing = name in ('rg', 'ripgrep') and _rg_list_only(args, whole, depth)  # names only (#138)
         return (plain or ['.']), name not in ('fd', 'fdfind', 'tree') and not listing
     return None
 
@@ -589,7 +589,7 @@ def _argv_boundaries(argv, whole, depth):
         found.append(_hit('system', '用 %s 執行 %s' % (name, _word(program))))
         if inner: found += _argv_boundaries(inner, whole, depth + 1)
     if name in DELETE_COMMANDS: found.append(_hit('delete', _names(plain) or '（%s）' % name))
-    roots = _search_roots(name, args, whole)
+    roots = _search_roots(name, args, whole, depth)
     if roots is not None:
         starts, reads = roots
         if name == 'find' and ('-delete' in args or any(a in ('-exec', '-execdir', '-ok', '-okdir') and i + 1 < len(args) and os.path.basename(args[i + 1]) in DELETE_COMMANDS for i, a in enumerate(args))):
