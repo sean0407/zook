@@ -333,7 +333,7 @@ def account_status(provider, account=None):
             data = json.loads(p.stdout or b'{}')
             if isinstance(data.get('loggedIn'), bool): item['status'] = 'logged_in' if data['loggedIn'] else 'not_logged_in'
             if item['status'] == 'logged_in':
-                item['method'] = {'claude.ai': 'Claude 訂閱帳號', 'console': 'Anthropic Console'}.get(data.get('authMethod'), str(data.get('authMethod') or ''))
+                item['method'] = {'claude.ai': 'Claude 訂閱帳號', 'console': 'Anthropic Console', 'api_key': 'API 金鑰'}.get(data.get('authMethod'), str(data.get('authMethod') or ''))
                 item['plan'] = str(data.get('subscriptionType') or '')
                 item['email'] = str(data.get('email') or '')
         elif provider == 'codex':
@@ -423,7 +423,7 @@ def cli_issue(text):
     """A plain explanation for account problems a CLI reports in English."""
     text = str(text or '').lower()
     if 'ineligibletiererror' in text or 'no longer supported for gemini code assist' in text:
-        return 'Google 已不開放個人免費方案使用 Gemini CLI。請按「＋ 帳號」加入 Gemini API 金鑰，再到 Bot 的進階設定選用它。'
+        return '這個 Google 登入不能用：Google 已不開放個人免費方案使用 Gemini CLI。要用 Gemini，請在用量頁 Gemini 卡片按「＋ 帳號」加入 Gemini API 金鑰（依用量計費），再到 Bot 的進階設定選用它。'
     if 'api_key_invalid' in text or 'api key not valid' in text:
         return 'Google 不接受這把 Gemini API 金鑰，請移除後重新新增。'
     return ''

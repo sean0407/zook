@@ -1,5 +1,5 @@
   // Backups, the activity record, usage budgets and the rules every Bot follows.
-  const fmtTokens = n => n >= 1e8 ? (n / 1e8).toFixed(n % 1e8 ? 1 : 0) + ' 億' : n >= 1e4 ? Math.round(n / 1e4).toLocaleString() + ' 萬' : String(n);
+  const fmtTokens = n => fmtTok(n);  // the usage page's one unit (32-usage.js)
   const fmtSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
 
   function rulesSection() {
@@ -91,7 +91,7 @@
     if (!state.templates) { api('skill-templates').then(x => { state.templates = x.items; if (state.page === 'skills') render(true); }).catch(() => { state.templates = []; }); return ''; }
     const q = (query || '').toLowerCase(), left = state.templates.filter(t => !t.added && (!q || (t.name + t.description + t.category).toLowerCase().includes(q)));
     if (!left.length) return '';
-    const card = t => `<article class="dir-card catalog-card">${itemIcon(t.name)}<div class="dir-body"><div class="dir-title"><h3 title="${esc(t.name)}">${esc(t.name)}</h3><button class="primary small-btn" data-up="template-add" data-id="${esc(t.id)}">加入</button></div><p class="dir-desc">${esc(t.description.replace(/。$/, ''))}</p><div class="dir-meta"><span>${esc(t.category)}</span></div></div></article>`;
+    const card = t => `<article class="dir-card catalog-card">${itemIcon(t.name)}<div class="dir-body"><div class="dir-title"><h3 title="${esc(t.name)}">${esc(t.name)}</h3><button class="primary small-btn" data-up="template-add" data-id="${esc(t.id)}" aria-label="加入「${esc(t.name)}」">加入</button></div><p class="dir-desc">${esc(t.description.replace(/。$/, ''))}</p><div class="dir-meta"><span>${esc(t.category)}</span></div></div></article>`;
     return `<section class="dir-section catalog-intro"><h2 class="catalog-head">Skill 範本</h2><p class="muted">寫好的常用 Skill，按一下加入，所有 Bot 都能用。</p></section><section class="dir-section"><div class="dir-grid">${left.map(card).join('')}</div></section>`;
   }
   document.addEventListener('click', async e => {

@@ -69,6 +69,7 @@ def update(target, body, kind):
         if relay.startswith('ws://') and not re.match(r'ws://(127\.0\.0\.1|localhost)(:|/|$)', relay): raise ValueError('中繼伺服器網址要以 wss:// 開頭。')
         if value.get('enabled') and not relay: raise ValueError('請先填入中繼伺服器網址。')
         changes['remote'] = dict(enabled=bool(value.get('enabled')), relayUrl=relay)
+    if kind == 'settings' and 'remoteExpiryDays' in body: changes['remoteExpiry'] = remote_expiry_set(target, body['remoteExpiryDays'])
     if kind in ('settings', 'bot') and 'fallbacks' in body:
         value = body['fallbacks']
         if value is None and kind == 'bot': changes['fallbacks'] = None  # follow the default order
