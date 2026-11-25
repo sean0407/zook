@@ -190,7 +190,9 @@ def group_host(store, group):
 
 def drop_group_host(store, group):
     group['hostId'] = ''
-    group['messages'].append(dict(id=ID(), role='system', content='主持人已不在群組裡，這個群組改成不設主持人。', createdAt=NOW()))
+    auto = group.get('mode') == 'auto'
+    if auto: group['mode'] = 'free'  # 自動 cannot run without a host (#218)
+    group['messages'].append(dict(id=ID(), role='system', content='主持人已不在群組裡，這個群組改成不設主持人%s。' % ('；「自動」討論方式需要主持人，已改回「自由」' if auto else ''), createdAt=NOW()))
 
 
 def group_closer(store, group):
