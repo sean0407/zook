@@ -82,6 +82,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
     def remote_view(self):
         """What the 設定 page shows about remote access."""
         with self.store.lock:
+            remote_prune(self.store)
             remote = self.store.data['settings'].get('remote') or {}
             running = self.remote_proc is not None and self.remote_proc.poll() is None
             online = set(self.remote_status.get('online') or []) if running else set()
@@ -119,6 +120,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
         """Requests from Zook's own relay connection (never from a device directly)."""
         store = self.store
         with store.lock:
+            remote_prune(store)  # an expired phone is left out of the lists below, so its open connection closes too
             pairing = self.pairing if self.pairing and self.pairing['expiresAt'] > time.time() else None
             if path == '/api/remote/bridge/pairing' and method == 'GET':
                 if not pairing: return handler.error(404, '目前沒有進行中的配對。')
@@ -478,6 +480,8 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             account = find_account(bot.get('account'), provider)  # an extra account only applies to the provider it belongs to
             env = provider_env(provider, account)
             env['ZOOK_DATA_DIR'] = str(store.dir)  # zook_gate.py asks before a Bot changes Zook's own data
+            for key in ('ZOOK_SCRATCH', 'ZOOK_SCRATCH_ID'): env.pop(key, None)  # never one inherited from elsewhere
+            scratch = scratch_env(store, bot['id'], env) if native and selected and scope != 'folder' else None  # its own scratch files, cleaned by zook_clean_scratch
             features = active_features(bot, kind, native, planning, scope)
             with store.lock: job.update(features=features, nativeAccess=[scope, str(root), permission_mode(store, bot, kind), bool(native)], runKind=kind)
             resume = self.native_session(job, provider, model, account, cli_cwd)
@@ -490,7 +494,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 with store.lock: skill_ids = shared_skill_ids(store, inventory); mcp_ids = shared_mcp_ids(store, inventory)
                 session = runtime.RuntimeSession(skill_ids, mcp_ids, bot['allowCommands'], root if scope == 'folder' else workspace,
                     lambda *a: self.approve(job_id, *a), lambda event: self.record_event(job_id, event), inventory=inventory,
-                    extra_tools=(plan_safe if planning else list)(self.app_tools(bot, runtime, job.get('groupId'), job.get('origin') or 'user') + git_tools(store, bot, scope, root, runtime, kind) + ([] if job.get('groupId') or job.get('internal') else question_tools(self, job_id, runtime, job.get('origin') or 'user')) + browser_tools(self, job_id, bot, kind, job.get('origin') or 'user', runtime) + task_tools(self, job_id, runtime)), permission_mode=lambda bot_id=bot['id']: self.live_permission(bot_id, job_id))
+                    extra_tools=(plan_safe if planning else list)(self.app_tools(bot, runtime, job.get('groupId'), job.get('origin') or 'user') + git_tools(store, bot, scope, root, runtime, kind) + ([] if job.get('groupId') or job.get('internal') else question_tools(self, job_id, runtime, job.get('origin') or 'user')) + browser_tools(self, job_id, bot, kind, job.get('origin') or 'user', runtime) + task_tools(self, job_id, runtime) + scratch_tools(store, bot, runtime, scratch)), permission_mode=lambda bot_id=bot['id']: self.live_permission(bot_id, job_id))
                 session.read_only = planning; session.attachment_files = (job.get('attachments') or []) + ([str(group_copy_folder(store, bot['id']))] if job.get('groupFiles') else [])  # this reply's own
                 with store.lock:
                     job = store.find('jobs', job_id)
@@ -521,6 +525,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 if kind == 'grok': prompt += '\nZook 工具在這裡的完整名稱是 zook__ 加上工具名，例如 zook__zook_create_schedule。'
                 if native: prompt += '\n工具說明：' + gate_access_note(access_note(scope, root, kind in ('codex', 'antigravity') or (kind == 'cursor' and scope == 'full'), kind == 'grok'), kind) + 'Skill、連接器、記憶與團隊相關動作使用 zook 工具，zook 工具會依使用者設定的主動性決定是否先請使用者核准；需要時直接呼叫，被拒絕再說明即可。' + (scope_save_note(scope, root, held_save_folder(store, job, bot['id'], scope, root, workspace), job, kind) if kind != 'claude' or claude_hooks_allowed(env=env) else '')  # where to save instead (#86 #88); Claude only with its tools
                 else: prompt += '\n工具說明：檔案讀寫與其他動作請使用 zook 工具。zook 工具會依使用者設定的主動性決定是否先請使用者核准，與本機 CLI 沙箱是否唯讀無關；需要時直接呼叫，被拒絕再說明即可。'
+                if native: prompt += scratch_note(scratch)
             if not selected and scope != 'workspace': prompt += '\n工具說明：' + access_note(scope, root, True)
             if choices_for(store, job): prompt += CHOICE_NOTE
             prompt += xlsx_carry(store, job)  # what the reply before saved wrong in an Excel file (xlsxcheck.py)
@@ -701,7 +706,9 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                     if not account: self.note_provider_issue(provider, issue)
                     raise RuntimeError(issue)
                 failure, sentence = cli_failure(provider, reported)
-                with store.lock: job['errorKind'] = failure
+                with store.lock:
+                    job['errorKind'] = failure
+                    if failure == 'quota': job['quotaResetAt'] = quota_reset_at(store, provider, account['id'] if account else '')  # said with the failure (errors.py)
                 raise RuntimeError(sentence)
             if parsed['unparsable']: raise RuntimeError('CLI 回傳無法解析的結果。')
             content = parsed['content']
@@ -832,7 +839,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             except ValueError as exc: raise RuntimeError(str(exc))
         def listing(args):
             with store.lock:
-                return {'schedules': [dict(id=x['id'], target=schedule_target_name(store, x), kind='group' if x.get('groupId') else 'bot', content=x['content'],
+                return {'schedules': [dict(id=x['id'], target=schedule_target_name(store, x), kind='group' if x.get('groupId') else 'bot', name=x.get('name') or '', content=x['content'],
                                            when=schedule_when(x), enabled=bool(x.get('on')), finished=bool(x.get('done')), lastResult=x.get('lastStatus') or '')
                                       for x in store.data['schedules']], 'limit': MAX_SCHEDULES}
         def create(args):
@@ -852,7 +859,8 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             with store.lock:
                 item = find(args); store.data['schedules'].remove(item); store.save()
                 return dict(id=item['id'], deleted=True)
-        fields = {'target': S('Exact Bot or group name. Empty = this conversation (the group when in a group chat, otherwise you)'),
+        fields = {'name': S('Optional short name shown in the schedule list; empty = the first words of content'),
+                  'target': S('Exact Bot or group name. Empty = this conversation (the group when in a group chat, otherwise you)'),
                   'content': S('What to do each time, written as the message the Bot or group will receive'),
                   'repeat': S('daily | weekdays | mon | tue | wed | thu | fri | sat | sun | hourly | monthly | once'),
                   'time': S('24-hour HH:MM in the Mac\'s local time; for hourly only the minutes count'),

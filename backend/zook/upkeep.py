@@ -111,7 +111,7 @@ def backup_restore(app, name):
     halted = sync_halt(store)  # saved first: if Zook stops halfway, the older data is never sent to the other Macs
     # This Mac's own pairing, sign-ins and sync stay as they are: they belong to the machine, not to the copy.
     keep = {key: copy.deepcopy(store.data.get(key)) for key in ('remoteDevices', 'sync') if key in store.data}
-    keep_remote = copy.deepcopy(store.data['settings'].get('remote'))
+    keep_remote = {key: copy.deepcopy(store.data['settings'][key]) for key in ('remote', 'remoteExpiry') if key in store.data['settings']}
     # A triggered schedule goes on from where it is now, so files and mails it has already handled do not start it again.
     progress = {x['id']: {k: copy.deepcopy(x[k]) for k in ('watchSeen', 'mailState', 'mailWaiting') if k in x} for x in store.data['schedules']}
     for item in data.get('schedules') or []:
@@ -120,7 +120,7 @@ def backup_restore(app, name):
     previous = store.path.read_bytes(); root, aside = store.chat_root(), store.dir / (CHAT_FOLDER + '.old')
     try:
         data.update(keep)
-        if keep_remote is not None: data['settings']['remote'] = keep_remote
+        data.setdefault('settings', {}).update(keep_remote)  # with this Mac's phones goes how long they stay valid
         browser_keep_local(store.data, data)  # a copy never turns the browser on
         task_keep_local(store.data, data)  # nor 任務引擎, nor work that starts by itself
         usage_detect_keep_local(store.data, data)  # nor 自動偵測使用量
@@ -254,7 +254,7 @@ def drop_removed_providers(store):
 
 
 SETTING_NAMES = {'permissionMode': '主動性', 'webSearch': '上網搜尋', 'browserAutomation': '排程與觸發可用內建瀏覽器', 'provider': '預設提供者', 'model': '預設模型', 'fallbacks': '備用模型', 'access': '存取範圍', 'accessFolder': '存取範圍',
-                 'features': '功能開關', 'effort': '思考強度', 'remote': '手機連線', 'autoUpdateCheck': '自動檢查更新', 'usageDetectEvery': '自動偵測使用量', 'scheduleNotify': '通知', 'sharedMcp': '共用連接器', 'disabledSkills': 'Skills 開關',
+                 'features': '功能開關', 'effort': '思考強度', 'remote': '手機連線', 'remoteExpiryDays': '手機自動失效期限', 'autoUpdateCheck': '自動檢查更新', 'usageDetectEvery': '自動偵測使用量', 'scheduleNotify': '通知', 'sharedMcp': '共用連接器', 'disabledSkills': 'Skills 開關',
                  'disabledPlugins': '插件開關', 'autoModels': '自動選擇的模型', 'autoAccounts': '自動選擇的帳號', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步', 'voiceLang': '語音輸入語言', 'streamReplies': '回覆逐字顯示', 'queueWhenBusy': 'Bot 忙碌時排隊', 'usageCardSort': '剩餘額度排序', 'usageCardOrder': '剩餘額度排序', 'keepCli': '保持 CLI 開啟', 'backgroundRuns': '結束時繼續在背景跑', 'autoCompact': '對話過長時自動整理'}
 BOT_FIELD_NAMES = {'name': '名稱', 'persona': '人格檔案', 'instructions': '工作指示', 'provider': '模型', 'model': '模型', 'account': '帳號', 'permissionMode': '主動性', 'access': '存取範圍', 'accessFolder': '存取範圍',
                    'fallbacks': '備用模型', 'features': '功能開關', 'effort': '思考強度', 'isAdmin': '管理員身分', 'enabledMcp': '連接器', 'scripts': '允許本機腳本'}
@@ -535,7 +535,8 @@ def trim_jobs(store):
 def state_view(store, whole=False):
     """Lock held. What the window and the phone load: everything except the trimmed jobs and the usage totals, which only the usage page needs."""
     view = dict(store.data, rev=store.rev)
-    view['jobs'] = [{k: v for k, v in j.items() if k not in ('thinking', 'cliSession', 'cliPid', 'runner')} for j in store.data['jobs'] if not j.get('slim') and not j.get('internal')]
+    view['jobs'] = [dict({k: v for k, v in j.items() if k not in ('thinking', 'cliSession', 'cliPid', 'runner')}, **({'failure': failure_info(j)} if j.get('status') == 'failed' else {}))
+                    for j in store.data['jobs'] if not j.get('slim') and not j.get('internal')]
     if not whole: view['bots'] = [page_bot(b) for b in store.data['bots']]  # the newest part of each open conversation; older parts are asked for
     if not whole: view['groups'] = [page_group(g) for g in store.data['groups']]
     view.pop('usageArchive', None); view.pop('usageDaily', None); view['rings'] = usage_rings(store)
@@ -563,9 +564,32 @@ def send_seen(app, key):
     return sends[key][1] if key and key in sends else None
 
 
-def send_remember(app, key, result):
+def send_remember(app, key, result, seconds=SEND_ONCE_SECONDS):
     """Lock held. Only an accepted send is remembered: one that was refused can simply be tried again."""
-    if key: app.__dict__.setdefault('recent_sends', {})[key] = (time.monotonic() + SEND_ONCE_SECONDS, result)
+    if key: app.__dict__.setdefault('recent_sends', {})[key] = (time.monotonic() + seconds, result)
+
+
+# ---- Making once (#63): the window sends an id with what a form makes (a Bot, a group, a schedule, a note), new each time the
+# form opens. Making a Bot can take a few seconds; a second press before the first answered sends the same request again and
+# gets what the first one made instead of a second Bot of the same name. Requests without an id are made as before.
+CREATE_ONCE_SECONDS = 120
+
+
+def create_seen(handler, kind, body):
+    """Lock held. What an earlier request from the same form made, while it is still there; otherwise None, and what this
+    request makes is remembered when it is answered (create_done)."""
+    client = body.get('clientId')
+    handler.create_key = key = ('make:' + kind, client) if isinstance(client, str) and SEND_ID.fullmatch(client) else None
+    made = send_seen(handler.server, key)
+    item = handler.server.store.find(kind, made) if made else None
+    if item: handler.noted = True  # nothing new was made: no second line in the activity record
+    return item
+
+
+def create_done(handler, code, result):
+    """Called for every answer (lock held for the ones create_seen looked at)."""
+    key, handler.create_key = getattr(handler, 'create_key', None), None
+    if key and code == 201 and isinstance(result, dict) and isinstance(result.get('id'), str): send_remember(handler.server, key, result['id'], CREATE_ONCE_SECONDS)
 
 
 # ---- Deleted Bots: a Bot that is deleted is kept aside with its conversations, so it can be brought back with one click.
