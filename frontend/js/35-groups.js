@@ -6,8 +6,8 @@
   const groupHostId = g => 'hostId' in g ? g.hostId : (groupMembers(g).find(b => b.isAdmin)?.id || '');
   const hostOptions = ids => [{id: '', name: '不設主持人'}, ...ids.map(id => state.data.bots.find(b => b.id === id)).filter(Boolean).map(b => ({id: b.id, name: b.name}))];
   function groupSettingRows(g, chosen) {
-    const host = g.id ? groupHostId(g) : '', limit = g.turnLimit || (host ? 16 : 8);
-    return `<div class="setting-list in-form"><div data-host-field>${settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', host, hostOptions([...chosen])))}</div>${settingRow('討論方式', '送出時也能在輸入框旁，只對這一則訊息改用別的方式', dropdown('mode', g.mode === 'auto' && !taskEngineOn() ? 'free' : g.mode || 'free', groupModeOptions()))}${settingRow('回合上限', '每則訊息最多幾次發言，到了就先停下', dropdown('turnLimit', String(limit), [4, 8, 12, 16].map(n => ({id: String(n), name: n + ' 次'}))))}</div>`;
+    const host = g.id ? groupHostId(g) : '', limit = g.turnLimit || 4;
+    return `<div class="setting-list in-form"><div data-host-field>${settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', host, hostOptions([...chosen])))}</div>${settingRow('討論方式', '送出時也能在輸入框旁，只對這一則訊息改用別的方式', dropdown('mode', g.mode === 'auto' && !taskEngineOn() ? 'free' : g.mode || 'free', groupModeOptions()))}${settingRow('回合上限', '要回答的成員都回一次算 1 回合；自動轉交和追問也算在內，到了就先停下（「自動」做到目標達成為止）', dropdown('turnLimit', String(limit), [4, 5, 8, 12, 16].map(n => ({id: String(n), name: n + ' 回合'}))))}</div>`;
   }
   function syncGroupHost(form) {
     const ids = new FormData(form).getAll('botIds'), slot = form.querySelector('[data-host-field]'), now = form.elements.hostId.value;
@@ -28,7 +28,7 @@
     const key = g.id + currentGroupMode(g) + ':' + (g.messages || []).length;
     try {
       const e = await post('groups/' + encodeURIComponent(g.id) + '/estimate', {content: $('#chat-input')?.value || '', mode: currentGroupMode(g)});
-      const text = `預計${e.upTo ? '最多 ' : ' '}${e.replies} 次回覆${e.most ? `（主持人退回修正時最多 ${e.most} 次）` : ''}`;  // the token figure meant nothing to people and looked alarming
+      const text = e.text || `預計${e.upTo ? '最多 ' : ' '}${e.replies} 次回覆`;  // in rounds, worded by the Mac (#174); the token figure meant nothing to people and looked alarming
       state.groupEstimate = {key, text};
       const el = $('#group-estimate');
       if (el && activeGroup()?.id === g.id) el.textContent = text;
@@ -38,7 +38,7 @@
 
   function groupRunBar(g) {
     if (g.status === 'running') return '';
-    if (g.paused) return `<div class="group-bar"><span>這輪已達發言上限，討論還沒結束。</span><button type="button" class="secondary small-btn" data-action="group-discard">結束</button><button type="button" class="primary small-btn" data-action="group-continue">繼續</button></div>`;
+    if (g.paused) return `<div class="group-bar"><span>這次詢問已達 ${esc(String(g.turnLimit || 4))} 回合上限，討論還沒結束。按「繼續」再進行 ${esc(String(g.turnLimit || 4))} 回合。</span><button type="button" class="secondary small-btn" data-action="group-discard">結束</button><button type="button" class="primary small-btn" data-action="group-continue">繼續</button></div>`;
     let after = g.afterAsk;  // worked out over the whole discussion by the Mac, since the page may hold only its newest part
     if (!after) { const messages = groupMsgs(g), lastAsk = messages.map(m => m.role).lastIndexOf('user'), since = messages.slice(lastAsk + 1).filter(m => m.role === 'assistant' && m.content && !m.checkOf); after = {replies: since.length, card: since.some(m => m.card)}; }
     return after.replies >= 2 && !after.card ? `<div class="group-bar"><span></span><button type="button" class="secondary small-btn" data-action="group-summarize">整理結論（多用一次模型請求）</button></div>` : '';

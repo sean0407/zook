@@ -386,7 +386,7 @@
         state.accounts = await api('accounts'); render(true); pollAccounts();
       } else if (form.id === 'group-form') {
         const d = new FormData(form), id = form.dataset.id;
-        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds'), hostId: d.get('hostId') || '', mode: d.get('mode') || 'free', turnLimit: Number(d.get('turnLimit')) || 8, ...(id ? {} : {clientId: onceId(form)})}, id ? 'PATCH' : 'POST');
+        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds'), hostId: d.get('hostId') || '', mode: d.get('mode') || 'free', turnLimit: Number(d.get('turnLimit')) || 4, ...(id ? {} : {clientId: onceId(form)})}, id ? 'PATCH' : 'POST');
         closeModal();
         state.groupId = result.id;
         state.page = 'chat';

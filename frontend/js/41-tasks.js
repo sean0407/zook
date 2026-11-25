@@ -25,9 +25,14 @@
       return `<li class="task-row"><span class="pill ${['stuck', 'unknown'].includes(t.status) && taskHandedIn(t) ? 'warn' : TASK_TONE[t.status] || ''}">${esc(['stuck', 'unknown'].includes(t.status) && taskHandedIn(t) ? '已交出，等你決定' : TASK_STATE[t.status] || t.status)}</span><span class="task-title"><strong>${esc(String(t.n))}. ${esc(String(t.title))}</strong> <span class="muted">${esc(name(t.assignee))}</span>${detail.length ? `<span class="task-detail">${esc(detail.join(' · '))}</span>` : ''}</span>${retry}</li>`;
     }).join('');
     const live = run.status === 'running' ? '<span class="browsing-dot" aria-hidden="true"></span>' : '';
-    return `<details class="task-board" data-task-board="${esc(run.id)}" ${state.taskOpen?.[run.id] ? 'open' : ''}><summary>${live}<strong>任務板</strong> <span class="muted">${head}${run.status === 'stopped' ? ' · 已停止' : ''}</span></summary>${rows ? `<ol class="task-list">${rows}</ol>` : ''}</details>`;
+    return `<details class="task-board" data-task-board="${esc(run.id)}" ${state.taskOpen?.[run.id] ? 'open' : ''}><summary>${live}<strong>任務板</strong> <span class="muted">${head}${run.status === 'stopped' ? ' · 已停止' : ''}</span></summary>${taskBoundaryView(run)}${rows ? `<ol class="task-list">${rows}</ol>` : ''}</details>`;
   }
 
+  // 邊界 (#174): the goal and when it counts as done, as the host wrote them; the user's own words until it does.
+  function taskBoundaryView(run) {
+    const b = run.boundary && typeof run.boundary === 'object' ? run.boundary : {}, goal = String(b.goal || run.goal || '').replace(/\s+/g, ' ').slice(0, 200);
+    return goal ? `<div class="task-detail task-boundary"><strong>目標：</strong>${esc(goal)}${b.doneWhen ? `<br><strong>完成條件：</strong>${esc(String(b.doneWhen))}` : ''}</div>` : '';
+  }
   // What the user has to do for a run: confirm the plan, or make a decision the host asked for. Shown above the message box.
   function taskDecisionCards(g) {
     const run = g.taskRun;
@@ -42,7 +47,7 @@
       cards.push(`<section class="question-card task-review"><strong>工作 ${esc(String(t.n))}「${esc(String(t.title))}」沒有其他家的模型可以驗收，請你看一下結果</strong><small>${esc(String(last.summary || ''))}</small><div class="actions"><button class="secondary" data-task-accept="${esc(t.id)}">接受結果</button></div></section>`);
     }
     for (const gate of (run.gates || []).filter(x => x.status === 'pending')) {
-      cards.push(`<section class="question-card task-gate"><strong>${esc(String(gate.question))}</strong><small>等這個決定的工作：${esc((gate.tasks || []).join('、'))}</small><div class="actions">${(gate.options || []).map(o => `<button class="secondary" data-task-gate="${esc(gate.id)}" data-answer="${esc(String(o))}">${esc(String(o))}</button>`).join('')}</div></section>`);
+      cards.push(`<section class="question-card task-gate"><strong>${esc(String(gate.question))}</strong><small>${gate.kind === 'checkpoint' ? '主持人已在上面整理進度和還差什麼。選「繼續」再做下一段。' : '等這個決定的工作：' + esc((gate.tasks || []).join('、'))}</small><div class="actions">${(gate.options || []).map(o => `<button class="secondary" data-task-gate="${esc(gate.id)}" data-answer="${esc(String(o))}">${esc(String(o))}</button>`).join('')}</div></section>`);
     }
     return cards.join('');
   }
