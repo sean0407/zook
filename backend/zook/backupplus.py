@@ -5,7 +5,7 @@ import stat as _stat, zipfile as _zipfile
 
 BACKUP_EVERY = {'daily': 1, 'weekly': 7}
 BACKUP_KEEP_CHOICES = (3, 7, 14, 30, 60)
-BACKUP_FILE_TOPS = ('uploads', 'group-files', 'workspaces')
+BACKUP_FILE_TOPS = ('uploads', 'group-files', 'workspaces', 'knowledge')  # knowledge: files added to 知識庫 (knowledge.py)
 BACKUP_SUBFOLDER = 'Zook 備份'  # made inside the folder the user picked, so Zook never trims files of its own among theirs
 BACKUP_SKIP_DIRS = {'node_modules', '__pycache__', 'venv'}  # and every hidden folder (.git, .claude, .ssh …): CLI sign-ins live there
 # Names that look like keys or passwords are never copied. Passwords and API keys themselves are in the Keychain, which no backup reads.
@@ -298,6 +298,7 @@ def backup_files_restore(store, path):
     with store.lock:
         store.__dict__['backup_restoring'] = None
         backup_tell(store, note)
+    knowledge_requeue(store)  # files that were being read when the copy was made, now that they are back
 
 
 def backup_safe_dirs(root, parts):

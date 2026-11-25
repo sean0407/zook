@@ -86,6 +86,11 @@ def sync_items(store):
 def _text(value, limit): return isinstance(value, str) and len(value) <= limit
 
 
+def _sync_encodes(value):
+    try: value.encode('utf-8'); return True
+    except UnicodeEncodeError: return False
+
+
 def sync_clean(key, value):
     """A value read from another Mac's file, reduced to what Zook accepts, or None. The folder is the user's, but the file is still only data."""
     parts = key.split(':')
@@ -128,6 +133,7 @@ def sync_clean(key, value):
         tags = value.get('tags', [])
         if not _text(value.get('title'), 300) or not _text(value.get('content'), 100000) or not _text(value.get('botId', ''), 100): return None
         if not isinstance(tags, list) or len(tags) > 30 or any(not _text(t, 100) for t in tags) or not _text(value.get('source', ''), 300): return None
+        if value.get('source') and (re.search(r'[\x00-\x1f\x7f/\\]', value['source']) or not _sync_encodes(value['source'])): return None  # only a plain file name
         out = dict(title=value['title'], content=value['content'], botId=value.get('botId', ''), tags=tags, createdAt=str(value.get('createdAt') or '')[:40], updatedAt=str(value.get('updatedAt') or '')[:40])
         if value.get('source'): out['source'] = value['source']  # only the name of the file it was read from, shown on its card
         return out
@@ -240,6 +246,7 @@ def sync_remove(store, key):
         return True
     if parts[0] in ('knowledge', 'memories'):
         store.data[parts[0]] = [x for x in store.data.get(parts[0]) or [] if x['id'] != parts[1]]
+        if parts[0] == 'knowledge': knowledge_drop_file(store, parts[1])  # its uploaded file goes too (knowledge.py)
         return True
     return True
 

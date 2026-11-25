@@ -145,6 +145,7 @@ def backup_restore(app, name):
     if files:  # the files that are missing now are put back in the background; the user is told when it is done
         store.__dict__['backup_restoring'] = True
         threading.Thread(target=backup_files_restore, args=(store, path), daemon=True).start()
+    else: knowledge_requeue(store)  # 處理中 in the copy: read again, or said to be missing (knowledge.py)
     # Older data must not be sent to the other Macs as if it were new, nor its gaps as deletions: syncing stops until it is switched on again.
     return safety, halted, dict(restored=backup_counts(store.data), held=held_names, filesPending=files)
 

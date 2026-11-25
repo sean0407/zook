@@ -126,6 +126,10 @@ class KnowledgeFiles(unittest.TestCase):
         self.assertEqual(self.request('DELETE', '/api/knowledge/' + ready['id'])[0], 200)
         self.assertFalse((self.root / 'data/knowledge' / ready['id']).exists())
 
+    def test_long_name_keeps_its_type(self):
+        item = self.settled(self.upload('很長的檔名' * 40 + '.md', '內容'.encode())[1]['id'])
+        self.assertEqual(item['status'], 'ready'); self.assertTrue(item['source'].endswith('.md'))
+
     def test_file_count_limit(self):
         ids = [self.upload('f%d.txt' % i, b'x')[1]['id'] for i in range(50)]
         status, err = self.upload('one-more.txt', b'x')
@@ -147,6 +151,30 @@ class KnowledgeUnits(unittest.TestCase):
         picked = self.ns['knowledge_for'](S, {'id': 'me'})
         self.assertEqual([x['id'] for x in picked], [str(i) for i in range(2, 12)])
         self.assertEqual(len(self.ns['knowledge_lines'](picked[:1])), len('t2: ') + 4000)
+
+    def test_review_findings(self):
+        import tempfile as _t
+        with _t.TemporaryDirectory() as d:
+            d = Path(d)
+            ns = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+            with zipfile.ZipFile(d / 'gap.xlsx', 'w') as z:  # B is left out: the price stays in column C
+                z.writestr('xl/worksheets/sheet1.xml', '<worksheet %s><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>品名</t></is></c><c r="C1"><v>99</v></c></row></sheetData></worksheet>' % ns)
+            self.assertIn('品名\t\t99', self.ns['knowledge_extract'](d / 'gap.xlsx'))
+            with zipfile.ZipFile(d / 'bomb.xlsx', 'w', zipfile.ZIP_DEFLATED) as z:  # one shared string used many times stops at the limit
+                z.writestr('xl/sharedStrings.xml', '<sst %s><si><t>%s</t></si></sst>' % (ns, 'x' * 5000))
+                z.writestr('xl/worksheets/sheet1.xml', '<worksheet %s><sheetData><row r="1">%s</row></sheetData></worksheet>' % (ns, '<c t="s"><v>0</v></c>' * 5000))
+            self.assertLessEqual(len(self.ns['knowledge_extract'](d / 'bomb.xlsx')), self.ns['KNOWLEDGE_TEXT'] + 10)
+            with zipfile.ZipFile(d / 'empty.pptx', 'w') as z:
+                z.writestr('ppt/slides/slide1.xml', '<p:sld xmlns:p="x"/>')
+            self.assertEqual(self.ns['knowledge_extract'](d / 'empty.pptx'), '')  # page headings alone are not content: the item fails
+
+    def test_synced_file_name_is_checked(self):
+        ns = {'__file__': str(ROOT / 'backend/server.py')}
+        for part in ('core', 'knowledge', 'sync'):
+            f = ROOT / 'backend/zook' / (part + '.py'); exec(compile(f.read_text(encoding='utf-8'), str(f), 'exec'), ns)
+        clean = lambda source: ns['sync_clean']('knowledge:' + 'a' * 32, dict(title='t', content='c', botId='', tags=[], source=source))
+        self.assertEqual(clean('手冊.pdf')['source'], '手冊.pdf')
+        for bad in ('\ud800.pdf', 'a/b.pdf', 'a\nb.pdf', 5): self.assertIsNone(clean(bad), bad)
 
     def test_prompts_use_the_shared_choice(self):
         for name in ('app.py', 'groups.py'):

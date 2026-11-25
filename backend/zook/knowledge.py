@@ -73,6 +73,13 @@ def _knowledge_folder(store, item_id):
     return store.dir / 'knowledge' / item_id if re.fullmatch(r'[0-9a-f]{32}', str(item_id)) else None
 
 
+def knowledge_drop_file(store, item_id):
+    """The uploaded file of an item that is gone (deleted here or on another Mac). Never follows a link out of the data folder."""
+    folder, root = _knowledge_folder(store, item_id), store.dir / 'knowledge'
+    if not folder or root.is_symlink() or folder.is_symlink() or not folder.is_dir(): return
+    shutil.rmtree(str(folder), ignore_errors=True)
+
+
 def _knowledge_bot(store, body):
     if 'botId' in body and body['botId'] not in ('', None) and not store.find('bots', body['botId']): raise ValueError('找不到這個 Bot，請重新選擇「給誰用」。')
 
@@ -88,9 +95,7 @@ def knowledge_route(handler, store, parts, path):
         item = store.find('knowledge', parts[2])
         if not item: return handler.error(404, '找不到知識項目。')
         if method == 'DELETE':
-            store.data['knowledge'].remove(item); store.save()
-            folder = _knowledge_folder(store, item['id'])
-            if folder: shutil.rmtree(str(folder), ignore_errors=True)
+            store.data['knowledge'].remove(item); store.save(); knowledge_drop_file(store, item['id'])
             return handler.respond(200, {'ok': True})
         if method == 'PATCH':
             body = handler.body()
@@ -106,8 +111,10 @@ def knowledge_upload(handler, store):
     except ValueError: size = 0
     if size <= 0: return handler.error(400, '檔案是空的。')
     if size > MAX_UPLOAD: handler.close_connection = True; return handler.error(413, '單一檔案不能超過 20 MB。')
-    name = upload_name(unquote(handler.headers.get('X-File-Name', '')))
-    suffix = pathlib.Path(name).suffix.lower()
+    sent = unquote(handler.headers.get('X-File-Name', ''))
+    suffix = pathlib.Path(upload_name(sent.replace('\\', '/').split('/')[-1][-20:])).suffix.lower()  # from the end of the name, before it is shortened
+    name = upload_name(sent)
+    if suffix and not name.lower().endswith(suffix): name = name[:120 - len(suffix)] + suffix  # a long name keeps its type
     title = unquote(handler.headers.get('X-Title', '')).strip() or pathlib.Path(name).stem or name
     bot_id = unquote(handler.headers.get('X-Bot-Id', ''))
     def refuse(code, why): handler.close_connection = True; return handler.error(code, why)
@@ -126,7 +133,9 @@ def knowledge_upload(handler, store):
             out.write(chunk); remaining -= len(chunk)
     if remaining: shutil.rmtree(str(folder), ignore_errors=True); return handler.error(400, '檔案沒有傳完整。')
     with store.lock:
-        if bot_id and not store.find('bots', bot_id): bot_id = ''  # deleted while the file came in: for every Bot rather than for nobody
+        why = '這個 Bot 剛剛被刪除了，沒有上傳。請重新選擇「給誰用」。' if bot_id and not store.find('bots', bot_id) else \
+              '知識庫最多放 %d 個檔案，請先刪掉不用的再上傳。' % KNOWLEDGE_FILES if sum(1 for x in store.data['knowledge'] if x.get('source')) >= KNOWLEDGE_FILES else ''
+        if why: shutil.rmtree(str(folder), ignore_errors=True); return handler.error(400, why)  # never widened to every Bot; two uploads at once do not pass the limit
         item = dict(id=item_id, title=title, content='', tags=[], botId=bot_id, source=name, size=size, status='processing', createdAt=NOW(), updatedAt=NOW())
         store.data['knowledge'].append(item); store.save()
     knowledge_queue(store, item_id)
@@ -158,16 +167,18 @@ def knowledge_process(store, item_id):
     with store.lock:
         item = store.find('knowledge', item_id)
         if not item or item.get('status') != 'processing': return
-        suffix = pathlib.Path(item.get('source') or '').suffix.lower()
-    source = folder / ('source' + suffix) if folder else None
+        suffix = pathlib.Path(item['source']).suffix.lower() if isinstance(item.get('source'), str) else ''
+    source = folder / ('source' + suffix) if folder and suffix in KNOWLEDGE_TYPES else None
     done = {}
     try:
         if not source or not source.is_file(): raise KnowledgeUnreadable('原始檔案已經不在，請刪除後重新上傳。')
         text = knowledge_extract(source)
-        text = re.sub(r'[ \t]+\n', '\n', re.sub(r'\n{3,}', '\n\n', text.replace('\r\n', '\n').replace('\r', '\n').replace('\x00', ''))).strip()
+        long = len(text) > KNOWLEDGE_TEXT * 2
+        text = '\n'.join(line.rstrip(' \t') for line in text[:KNOWLEDGE_TEXT * 2].replace('\r\n', '\n').replace('\r', '\n').replace('\x00', '').split('\n'))
+        text = re.sub(r'\n{3,}', '\n\n', text).strip()  # (a run of newlines only: linear)
         if not text: raise KnowledgeUnreadable('檔案裡讀不到文字（PDF 可能是掃描的圖片），目前只支援有文字的檔案。')
         done = dict(status='ready', content=text[:KNOWLEDGE_TEXT], error='')
-        if len(text) > KNOWLEDGE_TEXT: done['note'] = '檔案很長，只保留前 %s 字。' % format(KNOWLEDGE_TEXT, ',')
+        if long or len(text) > KNOWLEDGE_TEXT: done['note'] = '檔案很長，只保留前 %s 字。' % format(KNOWLEDGE_TEXT, ',')
     except KnowledgeUnreadable as exc: done = dict(status='failed', error=str(exc))
     except subprocess.TimeoutExpired: done = dict(status='failed', error='讀取超過 %d 秒，檔案可能太大或太複雜。' % KNOWLEDGE_SECONDS)
     except Exception: done = dict(status='failed', error='讀取檔案時發生錯誤，檔案可能已損壞。')
@@ -185,11 +196,16 @@ def knowledge_start(store):
         waiting = [x['id'] for x in store.data['knowledge'] if x.get('status') == 'processing']
         known = {x['id'] for x in store.data['knowledge']}
     root = store.dir / 'knowledge'
-    try: folders = [p for p in root.iterdir() if p.is_dir() and not p.is_symlink() and re.fullmatch(r'[0-9a-f]{32}', p.name)] if root.is_dir() else []
+    try: folders = [p for p in root.iterdir() if p.is_dir() and not p.is_symlink() and re.fullmatch(r'[0-9a-f]{32}', p.name)] if root.is_dir() and not root.is_symlink() else []
     except OSError: folders = []
     for folder in folders:
         if folder.name not in known: shutil.rmtree(str(folder), ignore_errors=True)
     for item_id in waiting: knowledge_queue(store, item_id)
+
+
+def knowledge_requeue(store):
+    """After a restore: items the copy has as 處理中 are read again (or marked failed when their file is not there)."""
+    for item_id in [x.get('id') for x in store.data['knowledge'] if x.get('status') == 'processing']: knowledge_queue(store, item_id)
 
 
 def knowledge_extract(path):
@@ -239,7 +255,7 @@ class _KnowledgeHTML(_KHTMLParser):
 
 def _knowledge_html(text):
     page = _KnowledgeHTML(); page.feed(text); page.close()
-    return re.sub(r'[ \t]*\n[ \t]*', '\n', ''.join(page.parts))
+    return '\n'.join(line.strip(' \t') for line in ''.join(page.parts).split('\n'))
 
 
 def _knowledge_pdf(path):
@@ -262,19 +278,31 @@ def _knowledge_xml(book, name, budget):
     return _KET.fromstring(book.read(name))
 
 
+def _knowledge_column(ref):
+    letters = re.match(r'[A-Z]{1,3}', ref or '')
+    if not letters: return None
+    n = 0
+    for ch in letters.group(0): n = n * 26 + ord(ch) - 64
+    return n - 1
+
+
 def _knowledge_office(path, suffix):
+    """Slides' and sheets' text. Every piece counts against KNOWLEDGE_TEXT as it is added, so a small file cannot grow into a huge text;
+    page and sheet headings alone do not count as content."""
     try: book = _kzip.ZipFile(str(path))
     except (_kzip.BadZipFile, OSError): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔。' % suffix[1:].upper())
-    budget, lines, names, total = [KNOWLEDGE_UNPACKED], [], set(book.namelist()), [0]
-    def add(line): lines.append(line); total[0] += len(line) + 1; return total[0] > KNOWLEDGE_TEXT  # True: enough text
+    budget, lines, names, total, found = [KNOWLEDGE_UNPACKED], [], set(book.namelist()), [0], [False]
+    def add(line, content=True):  # True: enough text
+        lines.append(line); total[0] += len(line) + 1; found[0] = found[0] or content; return total[0] > KNOWLEDGE_TEXT
+    result = lambda: '\n'.join(lines) if found[0] else ''
     number = lambda n: int(re.sub(r'\D', '', n.rsplit('/', 1)[-1]) or 0)
     with book:
         if suffix == '.pptx':
             ns = '{http://schemas.openxmlformats.org/drawingml/2006/main}'
             for i, name in enumerate(sorted((n for n in names if re.fullmatch(r'ppt/slides/slide\d+\.xml', n)), key=number), 1):
                 paras = [''.join(t.text or '' for t in p.iter(ns + 't')) for p in _knowledge_xml(book, name, budget).iter(ns + 'p')]
-                if add('【第 %d 頁】' % i) or any(add(p) for p in paras if p.strip()): break
-            return '\n'.join(lines)
+                if add('【第 %d 頁】' % i, False) or any(add(p) for p in paras if p.strip()): break
+            return result()
         ns = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
         shared = []
         if 'xl/sharedStrings.xml' in names:
@@ -288,17 +316,23 @@ def _knowledge_office(path, suffix):
         except (KeyError, _KET.ParseError): pass
         sheets = [n for n in titles if n in names] or sorted((n for n in names if re.fullmatch(r'xl/worksheets/sheet\d+\.xml', n)), key=number)
         for name in sheets:
-            if add('【工作表 %s】' % (titles.get(name) or number(name))): break
+            if add('【工作表 %s】' % (titles.get(name) or number(name)), False): break
             for row in _knowledge_xml(book, name, budget).iter(ns + 'row'):
-                cells = []
+                cells, size = [], 0
                 for c in row.iter(ns + 'c'):
                     kind, value = c.get('t'), c.find(ns + 'v')
-                    if kind == 'inlineStr': cells.append(''.join(t.text or '' for t in c.iter(ns + 't')))
-                    elif value is None or value.text is None: cells.append('')
+                    if kind == 'inlineStr': text = ''.join(t.text or '' for t in c.iter(ns + 't'))
+                    elif value is None or value.text is None: text = ''
                     elif kind == 's':
-                        try: cells.append(shared[int(value.text)])
-                        except (ValueError, IndexError): cells.append('')
-                    else: cells.append(value.text)
+                        try: text = shared[int(value.text)]
+                        except (ValueError, IndexError): text = ''
+                    else: text = value.text
+                    at = _knowledge_column(c.get('r'))
+                    gap = max(0, at - len(cells)) if at is not None else 0  # a skipped column stays empty, so values keep their columns
+                    size += gap + len(text) + 1
+                    if total[0] + size > KNOWLEDGE_TEXT: break  # counted cell by cell: one shared string used a million times stops here
+                    cells.extend([''] * gap); cells.append(text)
                 while cells and not cells[-1]: cells.pop()
-                if cells and add('\t'.join(cells)): return '\n'.join(lines)
-        return '\n'.join(lines)
+                if cells and add('\t'.join(cells)): return result()
+                if total[0] + size > KNOWLEDGE_TEXT: return result()
+        return result()
