@@ -1314,7 +1314,7 @@ button {
 .dir-status { padding: 1px 7px; border-radius: 6px; background: #eee; color: #777; }
 .dir-status.ok { background: #e6f7ef; color: #0d8a55; }
 .dir-status.bad { background: #fde8e8; color: #b42318; }
-.dir-note { margin: 0; font-size: 11.5px; color: #b07a00; }
+.dir-note { margin: 0; font-size: 11.5px; color: #b07a00; overflow-wrap: anywhere; }
 @media (max-width: 760px) { .dir-search { width: 100%; margin-left: 0; } }
 
 /* Plain-language activity and approvals */
@@ -1453,6 +1453,7 @@ button {
 .relay-input { width: 280px; max-width: 46vw; padding: 7px 10px; border: 1px solid #e2e2e2; border-radius: 9px; font-size: 13px; background: #fff; }
 .remote-status { font-size: 13px; color: #888; }
 .remote-status.ok { color: #0d8a55; } .remote-status.bad { color: #b42318; }
+.setting-copy .remote-expiry-note { color: #a26200; }
 .remote-devices { max-width: 760px; margin-top: 14px; }
 .remote-devices-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 6px; font-size: 14px; }
 .device-row { padding: 12px 0; }
@@ -2019,6 +2020,17 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .danger-btn { background: #c0392b; color: #fff; border-radius: 9px; padding: 10px 15px; font-weight: 550; }
 .danger-btn:hover { background: #a93226; }
 .danger-btn:disabled, .modal.ask .secondary:disabled { opacity: .5; cursor: default; }
+
+/* #238: a failed reply: kind, whether retry helps, the reason, the next step and its buttons */
+.failure-card { border: 1px solid #f3c7c2; background: #fff8f7; color: inherit; white-space: normal; }
+.failure-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; }
+.failure-card p { margin: 8px 0 0; }
+.failure-why { color: #b3261e; }
+.failure-next { font-size: 14px; }
+.failure-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 10px; }
+/* #63: a required field left empty says so right under it */
+.field-error { display: block; color: #c0392b; font-size: 12px; margin-top: 4px; font-weight: 500; }
+.modal [aria-invalid="true"] { border-color: #d33; box-shadow: 0 0 0 1px #d33; }
 /* Side panel in a narrow window (#118, #60, #152): at or below 1100 wide (DETAIL_WIDE in 10-chat.js) it covers the page from the right
    with a dimmed backdrop instead of squeezing the conversation; × , the backdrop or Escape close it. Wider windows keep it beside the conversation. */
 .detail-backdrop { display: none; }

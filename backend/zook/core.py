@@ -192,6 +192,7 @@ class StoreBase:
         self.data['settings'].setdefault('disabledPlugins', [])
         self.data['settings'].setdefault('fallbacks', [])
         self.data['settings'].setdefault('remote', dict(enabled=False, relayUrl=''))
+        remote_expiry_repair(self.data['settings'])  # mobile.py
         self.data.setdefault('remoteDevices', [])
         drop_removed_providers(self)  # OpenCode, GitHub Copilot and Kimi are no longer supported
         plain_old_records(self)  # activity saved by earlier versions or a restored backup, in today's words (actwords.py)
@@ -965,6 +966,7 @@ def provider_chain(store, bot, provider, model):
 
 def fallback_reason(error):
     error = error or ''
+    if 'macOS' in error: return 'macOS 權限擋住'
     if '額度' in error or '上限' in error: return '額度已用完'
     if '尚未登入' in error or '重新登入' in error: return '尚未登入'
     if '找不到' in error or '安裝' in error: return '尚未安裝'

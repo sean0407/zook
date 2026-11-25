@@ -134,4 +134,5 @@ def paging_route(handler, store, parts, path):
     if path == '/api/search': return handler.respond(200, search_messages(store, (query.get('q') or [''])[0][:200], (query.get('bot') or [''])[0]))
     bot = store.find('bots', parts[2])
     if not bot: return handler.error(404, '找不到機器人。')
+    if parts[3] == 'export': return handler.respond(200, export_chat(store.data, bot, (query.get('chat') or [''])[0]))
     return handler.respond(200, page_messages(bot, (query.get('chat') or [''])[0], query))

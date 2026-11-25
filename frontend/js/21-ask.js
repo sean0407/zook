@@ -2,10 +2,10 @@
   // embedded views, so pressing 刪除 there did nothing at all (#175, #192). It sits above any open window (the Bot form stays as it was),
   // and Esc, a click outside it and 取消 all mean no.
   //   lines: what goes away, whether it can be brought back, what else changes; each a line of plain text.
-  //   run:   the work itself, done while the dialog shows 處理中… with both buttons off, so a second press sends nothing twice.
+  //   run:   the work itself, done while the dialog shows 刪除中… (working) with both buttons off, so a second press sends nothing twice.
   //          It closes afterwards either way; a failure is passed on to the caller (which shows it).
   // Resolves true when the person said yes (after run, when given), false otherwise.
-  function ask({title, lines = [], ok = '刪除', danger = true, run = null}) {
+  function ask({title, lines = [], ok = '刪除', danger = true, run = null, working = ok + '中…'}) {
     $('#ask-root')?.dispatchEvent(new Event('ask-cancel'));  // only one question at a time; an older one counts as no
     const back = document.activeElement, root = document.createElement('div');
     root.id = 'ask-root';
@@ -29,7 +29,7 @@
         if (e.target.classList.contains('ask-overlay') || e.target === no) return cancel();
         if (e.target !== yes || busy) return;
         if (!run) { close(); return resolve(true); }
-        busy = true; yes.disabled = no.disabled = true; yes.textContent = '處理中…'; root.querySelector('.ask').setAttribute('aria-busy', 'true');
+        busy = true; yes.disabled = no.disabled = true; yes.textContent = working; root.querySelector('.ask').setAttribute('aria-busy', 'true');
         try { await run(); close(); resolve(true); } catch (err) { close(); reject(err); }
       });
     });
