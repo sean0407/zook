@@ -186,7 +186,9 @@ def group_host(store, group):
 
 def drop_group_host(store, group):
     group['hostId'] = ''
-    group['messages'].append(dict(id=ID(), role='system', content='主持人已不在群組裡，這個群組改成不設主持人。', createdAt=NOW()))
+    auto = group.get('mode') == 'auto'
+    if auto: group['mode'] = 'free'  # 自動 cannot run without a host (#218)
+    group['messages'].append(dict(id=ID(), role='system', content='主持人已不在群組裡，這個群組改成不設主持人%s。' % ('；「自動」討論方式需要主持人，已改回「自由」' if auto else ''), createdAt=NOW()))
 
 
 def group_closer(store, group):
@@ -335,25 +337,30 @@ class GroupRuns:
         return {'runId': self.post_group_message(group, body.get('content'), attachments=attachments_for(self.store, body.get('attachments')), effort=body.get('effort'), mode=body.get('mode'))}
 
     def interject_group(self, group, content, attachments=None):
-        """插話: the user speaks while the discussion runs. Caller holds the store lock. In an open discussion (自由／主持) every
-        later turn reads it and a member it @-mentions answers next; a member answering right now sees it on its next turn. A
-        structured discussion (輪流、辯論、分工、比較) or a 任務 is not changed half way: the message waits and is answered when
-        the round ends. Either way, a message no turn has read is answered in a new round, as if it had been sent then.
-        It never changes who started the discussion, so a discussion a schedule or a Bot started keeps its limits."""
+        """插話 (#94, decided by the user: 即時插入): the user speaks while the discussion runs, and it joins at once, in every
+        討論方式. Caller holds the store lock. The group's CLIs take nothing in the middle of a reply, so the turn that reads it
+        is the next one to start: in an open discussion a member it @-mentions answers next; in 輪流、辯論、分工、比較 the next
+        step reads it; in a 任務 the host answers it as soon as it is free, also while a result waits for 「接受結果」 (a question
+        is not an acceptance: the card stays). A message no turn has read is answered after the round, by the members it names
+        or else by whoever closes. It never changes who started the discussion, so a discussion a schedule or a Bot started keeps its limits."""
         if attachments: raise RuntimeError('討論進行中只能傳文字；附件請等這輪結束或先停止。')
         if not isinstance(content, str) or not content.strip() or len(content) > 30000: raise ValueError('訊息內容無效。')
         members = [b for b in (self.store.find('bots', x) for x in group['botIds']) if b]
-        open_run = group.get('runKind') == 'free'
-        joins = open_run and interject_wanted(content, [b['name'] for b in members])  # the same rule as with one Bot: a correction joins, anything new waits
         message = dict(id=ID(), role='user', content=content.strip(), createdAt=NOW())
         date_check_message(message)
         group['messages'].append(message)
-        if joins: self._join_run(group, message, members); log_activity(self.store, 'group', '在討論途中插話（%s）' % group.get('name', ''))
-        else:  # 排在後面: turns of this round do not read it; it is answered in a round of its own when this one ends
-            message.update(waiting=True, queued=True); group.setdefault('interjectQueued', []).append(message['id'])
-            log_activity(self.store, 'group', '討論途中傳送，排在這輪後面（%s）' % group.get('name', ''))
-        named = [] if group_everyone(content, members) else group_mentions(content, members)
-        return dict(runId=group.get('runId'), interjected=joins, queued=not joins, waiting=not joins, next=[(self.store.find('bots', x) or {}).get('name') for x in named] if joins else [])
+        run = group.get('taskRun')
+        if isinstance(run, dict) and run.get('status') == 'running' and run.get('groupRunId') == group.get('runId'):  # 任務: to the host
+            message['interjected'] = True; run.setdefault('userAdded', []).append(message['id'])
+            handler = [task_member_name(self.store, run['hostId'])]
+            self.task_poke(group['id'])
+        else:
+            self._join_run(group, message, members)
+            named = [] if group_everyone(content, members) else group_mentions(content, members)
+            handler = [(self.store.find('bots', x) or {}).get('name') for x in named]
+        message['interjectTo'] = '、'.join(n for n in handler if n) or '下一位回覆的成員'
+        log_activity(self.store, 'group', '在討論途中插話，交給%s（%s）' % (message['interjectTo'], group.get('name', '')))
+        return dict(runId=group.get('runId'), interjected=True, queued=False, waiting=False, next=[n for n in handler if n], to=message['interjectTo'])
 
     def _join_run(self, group, message, members):
         """Lock held. 插話 into the open discussion that is running: every later turn reads it; a member it @-mentions answers next."""
@@ -457,7 +464,13 @@ class GroupRuns:
             store.save()
             unseen = group.get('interjectUnseen'); kept = {m['id'] for m in group['messages'][-GROUP_KEEP:] if not m.get('waiting')}
             seen = unseen if unseen in kept and not step.get('promptFor') and unseen not in set(step.get('hide') or ()) else None  # 插話 this turn's prompt holds
-            return dict(job=job, msg=msg, prompt=prompt, provider=provider, model=model, bot=copy.deepcopy(bot), role=role, writable=writable, skipFiles=set(step.get('hideFiles') or ()), saved=[], seen=seen, staged=staged, check=check)
+            heard = [] if step.get('promptFor') else [m for m in group['messages'][-GROUP_KEEP:] if m.get('interjected') and not m.get('waiting') and m['id'] not in set(step.get('hide') or ())]
+            members_now = [b for b in (store.find('bots', x) for x in group['botIds']) if b]
+            named = [m for m in heard if bot_id not in (m.get('readBy') or []) and bot_id in group_mentions(m['content'], members_now)]  # 插話 naming it that it reads for the first time
+            for m in heard:
+                m.setdefault('heardBy', bot['name'])  # the window says who read the 插話 first (a 任務's host: taskrun.py)
+                if bot_id not in m.setdefault('readBy', []): m['readBy'] = (m['readBy'] + [bot_id])[-20:]
+            return dict(job=job, msg=msg, prompt=prompt, provider=provider, model=model, bot=copy.deepcopy(bot), role=role, writable=writable, skipFiles=set(step.get('hideFiles') or ()), saved=[], seen=seen, staged=staged, check=check, heard=bool(named))
 
     def _group_job(self, group_id, turn):
         """One Bot's turn, with its own copy of the group's files."""
@@ -560,6 +573,10 @@ class GroupRuns:
             group = self.store.find('groups', group_id)
             if not group or group.get('runId') != run_id: return False
             group['activeJobIds'] = []; group['activeJobId'] = None
+            finished = [t for t in turns_here if t['job']['status'] == 'completed']
+            if any(t.get('seen') and t['seen'] == group.get('interjectUnseen') for t in finished): group.pop('interjectUnseen', None)  # 插話 a finished turn read: nothing is left to answer for it, in every 討論方式
+            if group.get('interjectNext') and (step or {}).get('role'):  # 輪流、分工 and the like: a member it named that read it in its own step has answered it
+                group['interjectNext'] = [x for x in group['interjectNext'] if x not in {t['bot']['id'] for t in finished if t.get('heard')}]
             for t in turns_here:
                 if t['job']['status'] != 'completed':
                     if t['role'] == 'verify': t['msg']['error'] = '查核已停止。' if t['job']['status'] == 'cancelled' else t['job'].get('error') or '查核沒有完成。'  # kept with the check: shown under the reply after a reload too
@@ -582,6 +599,8 @@ class GroupRuns:
         texts = [m['content'] for m in queued + ([said] if said else [])]
         everyone = everyone or any(group_everyone(t, members) for t in texts)
         targets = [] if everyone else named or list(dict.fromkeys(x for t in texts for x in group_mentions(t, members)))
+        if not targets and not everyone and group['runMode'] != 'free':  # 輪流、分工、任務 and the like: whoever closes answers it, not the whole round again (#133)
+            targets = [x for x in [group_closer(self.store, group)] if x]
         self.start_group(group, targets or [b['id'] for b in members], not targets)
 
     def _pause_group(self, group, limit, paused):
@@ -717,7 +736,6 @@ class GroupRuns:
                     group = store.find('groups', group_id)
                     if not group or group.get('runId') != run_id: return
                     members = [b for b in (store.find('bots', x) for x in group['botIds']) if b]
-                    if any(t['seen'] and t['seen'] == group.get('interjectUnseen') and t['job']['status'] == 'completed' for t in turns_here): group.pop('interjectUnseen', None)
                     for t in turns_here:
                         job, msg, role, bot_id = t['job'], t['msg'], t['role'], t['bot']['id']
                         if job['status'] != 'completed': continue

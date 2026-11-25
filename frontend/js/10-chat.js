@@ -45,6 +45,13 @@
       label = label.split('\n').map(x => x.trim()).join(' ');  // a long name the Bot wrapped onto two lines
       return open ? hold(open) + label + hold(open.startsWith('<a') ? '</a>' : '</button>') : label;
     });
+    // #45: a bare file:///… written in the text opens like a link to that file. It ends at a space or Chinese punctuation
+    // (「圖在file:///tmp/a.png，請看」); a trailing full stop or comma is not part of it.
+    s = s.replace(/(?<![A-Za-z0-9+.\-/])file:\/\/(?:localhost)?\/[^\s<>()（）"'`*\u0000，。、；：！？「」『』【】《》]+/gi, whole => {
+      let n = whole.length; while (n && /[.,;:!?]/.test(whole[n - 1])) n--;  // a loop, not a regex: no slow backtracking
+      const url = whole.slice(0, n), {path} = mdTarget(url);
+      return path ? hold(`<button type="button" class="link local-link" data-path="${esc(path)}" title="${esc(path)}">${esc(url)}</button>`, url) + whole.slice(n) : whole;
+    });
     s = esc(s)
       .replace(/(^|[\s(（])(https?:\/\/[^\s<)）\u0000]+)/g, (_, p, u) => `${p}<a href="${u}" rel="noopener noreferrer">${u}</a>`)
       .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<strong>$1</strong>')
@@ -468,6 +475,7 @@
     const editing = !!g.id, chosen = new Set(g.botIds || (state.selected && !state.groupId ? [state.selected] : []));
     modal(editing ? '編輯群組' : '新增群組', `<form id="group-form"><div class="modal-body">${editing ? '' : teamLink()}<label class="field">名稱<input name="name" maxlength="100" placeholder="留空則以成員名稱命名" value="${esc(g.name||'')}"></label><label class="field">成員（2–10 個 Bot，人越多每輪越慢）</label><div class="member-pick">${state.data.bots.map(b => `<label class="member-switch">${avatar(b)}<span class="member-copy"><strong>${esc(b.name)}</strong><small>${esc((b.persona||b.instructions||'').slice(0,50))}</small></span>${toggle(`name="botIds" value="${esc(b.id)}"`, chosen.has(b.id), b.name)}</label>`).join('') || '<p class="muted">請先建立 Bot。</p>'}</div>${groupSettingRows(g, chosen)}</div><div class="modal-foot">${editing?'<button type="button" class="link" data-action="delete-group" style="margin-right:auto;color:#b55">刪除群組</button>':''}<button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">${editing?'儲存':'建立群組'}</button></div></form>`);
     $('#group-form').dataset.id = g.id || '';
+    groupFormNote($('#group-form'));
   }
   async function pollGroup(groupId) {
     if (state.groupPollers[groupId]) return;

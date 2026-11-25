@@ -2,18 +2,31 @@
   const GROUP_MODE_OPTIONS = [{id: 'free', name: '自由', hint: '相關成員回覆，可以互相 @'}, {id: 'turns', name: '輪流', hint: '依序各發言一次'}, {id: 'debate', name: '辯論', hint: '正反交鋒，最後裁定'}, {id: 'split', name: '主持人分工', hint: '主持人拆開工作，驗收後彙整'}, {id: 'compare', name: '比較', hint: '各自獨立回答，列出異同'}];
   if (!state.groupMode) state.groupMode = {};
   if (!state.groupFiles) state.groupFiles = {};
-  const currentGroupMode = g => { const mode = state.groupMode[g.id] || g.mode || 'free'; return mode === 'auto' && !taskEngineOn() ? 'free' : mode; };
   const groupHostId = g => 'hostId' in g ? g.hostId : (groupMembers(g).find(b => b.isAdmin)?.id || '');
+  const autoReady = g => !!groupHostId(g) && groupMembers(g).length >= 2;  // 自動 needs a host and two members (#218)
+  const currentGroupMode = g => { const mode = state.groupMode[g.id] || g.mode || 'free'; return mode === 'auto' && (!taskEngineOn() || !autoReady(g)) ? 'free' : mode; };
   const hostOptions = ids => [{id: '', name: '不設主持人'}, ...ids.map(id => state.data.bots.find(b => b.id === id)).filter(Boolean).map(b => ({id: b.id, name: b.name}))];
   function groupSettingRows(g, chosen) {
     const host = g.id ? groupHostId(g) : '', limit = g.turnLimit || (host ? 16 : 8);
-    return `<div class="setting-list in-form"><div data-host-field>${settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', host, hostOptions([...chosen])))}</div>${settingRow('討論方式', '送出時也能在輸入框旁，只對這一則訊息改用別的方式', dropdown('mode', g.mode === 'auto' && !taskEngineOn() ? 'free' : g.mode || 'free', groupModeOptions()))}${settingRow('回合上限', '每則訊息最多幾次發言，到了就先停下', dropdown('turnLimit', String(limit), [4, 8, 12, 16].map(n => ({id: String(n), name: n + ' 次'}))))}</div>`;
+    return `<div class="setting-list in-form"><div data-host-field>${settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', host, hostOptions([...chosen])))}</div>${settingRow('討論方式', '送出時也能在輸入框旁，只對這一則訊息改用別的方式', dropdown('mode', g.mode === 'auto' && !taskEngineOn() ? 'free' : g.mode || 'free', groupModeOptions()))}${settingRow('回合上限', '每則訊息最多幾次發言，到了就先停下', dropdown('turnLimit', String(limit), [4, 8, 12, 16].map(n => ({id: String(n), name: n + ' 次'}))))}</div><p class="small error-text" data-group-problem role="alert" hidden></p><p class="muted small" data-group-hint hidden></p>`;
   }
   function syncGroupHost(form) {
     const ids = new FormData(form).getAll('botIds'), slot = form.querySelector('[data-host-field]'), now = form.elements.hostId.value;
     slot.innerHTML = settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', ids.includes(now) ? now : '', hostOptions(ids)));
   }
-  const groupModeControl = g => `<div class="effort-pick group-mode" title="討論方式">${dropdown('groupMode', currentGroupMode(g), groupModeOptions())}</div>`;
+  // What the form shows under the settings: why 自動 cannot be saved yet, and a hint when every member is the same vendor (#218).
+  const botFamily = b => { const p = b.provider || state.data.settings.provider || ''; return p === 'auto' ? '' : (state.providers || []).find(x => x.id === p)?.kind || p; };
+  function groupFormNote(form) {
+    const ids = new FormData(form).getAll('botIds'), mode = form.elements.mode?.value, host = form.elements.hostId?.value;
+    const members = ids.map(id => state.data.bots.find(b => b.id === id)).filter(Boolean);
+    const problem = mode !== 'auto' ? '' : !host ? '「自動」要由主持人拆工作、派給成員：請在「主持人」選一位成員，或改用其他討論方式。' : members.length < 2 ? '「自動」至少要 2 位成員，請再選一位。' : '';
+    const families = members.map(botFamily), one = members.length >= 2 && families.every(f => f && f === families[0]);
+    const el = form.querySelector('[data-group-problem]'), hint = form.querySelector('[data-group-hint]');
+    if (el) { el.textContent = problem; el.hidden = !problem; }
+    if (hint) { hint.textContent = one ? `成員都是 ${providerShort(families[0])}，沒有跨家驗收：結果要你自己看，或加一位別家的 Bot。` : ''; hint.hidden = !one; }
+    return !problem;
+  }
+  const groupModeControl = g => `<div class="effort-pick group-mode" title="討論方式">${dropdown('groupMode', currentGroupMode(g), groupModeOptions().filter(o => o.id !== 'auto' || autoReady(g)))}</div>`;
 
   // 預計用量: updated while typing, and never uses a model.
   function groupEstimateLine(g) {

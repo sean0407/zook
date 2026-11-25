@@ -310,7 +310,7 @@
 
   function detail(b) {
     let notes = state.data.knowledge.filter(n => n.botId === b.id);
-    return `${detailBackdrop()}<aside class="detail" aria-label="詳情"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatar(b,'big')}<h2>${esc(b.name)}</h2><p>${esc(b.provider === 'auto' ? '自動選擇' : b.provider||state.data.settings.provider||'')} ${esc(b.model||'')}</p><p>${esc(permText(b))}</p>${b.autoAssigned && b.autoReason ? `<p class="muted small">自動配好：${esc(b.autoReason)}</p>` : ''}<button class="secondary detail-edit" data-action="edit-bot">編輯設定</button></div><div class="tabs"><button data-action="detail" data-id="persona" class="${state.detail==='persona'?'active':''}">人格</button><button data-action="detail" data-id="activity" class="${state.detail==='activity'?'active':''}">動態</button><button data-action="detail" data-id="database" class="${state.detail==='database'?'active':''}">資料庫</button><button data-action="detail" data-id="outputs" class="${state.detail==='outputs'?'active':''}">產出</button></div>${state.detail==='persona'?personaPanel(b):state.detail==='outputs'?outputsPanel(b):state.detail==='database'?`<div class="detail-title">知識 <button class="link" data-action="new-note">＋ 新增</button></div>${notes.length?notes.map(n=>`<button class="note-row" data-action="edit-note" data-id="${esc(n.id)}"><strong>${esc(n.title)}</strong><small>${esc(n.content)}</small></button>`).join(''):'<div class="detail-empty">尚未新增知識。加入資料，讓這個 Bot 有更多背景。</div>'}${memoryNote(b)}`:`<div class="detail-title">最近動態</div>${toolTimeline(b.id)}${(b.messages||[]).length?`<div class="detail-empty">最近對話 ${esc(formatDate(b.messages.at(-1).createdAt))}</div>`:'<div class="detail-empty">這裡會顯示最近的對話動態。</div>'}`}${usageDock()}</aside>`
+    return `${detailBackdrop()}<aside class="detail" aria-label="詳情"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatar(b,'big')}<h2>${esc(b.name)}</h2><p>${esc([providerShort(b.provider || state.data.settings.provider || 'codex'), b.model, '思考強度：' + (EFFORTS.find(x => x.id === (b.effort || state.data.settings.effort))?.name || '標準')].filter(Boolean).join(' · '))}</p><p>${esc(permText(b))}</p>${b.autoAssigned && b.autoReason ? `<p class="muted small">自動配好：${esc(b.autoReason)}</p>` : ''}<button class="secondary detail-edit" data-action="edit-bot">編輯設定</button></div><div class="tabs"><button data-action="detail" data-id="persona" class="${state.detail==='persona'?'active':''}">人格</button><button data-action="detail" data-id="activity" class="${state.detail==='activity'?'active':''}">動態</button><button data-action="detail" data-id="database" class="${state.detail==='database'?'active':''}">資料庫</button><button data-action="detail" data-id="outputs" class="${state.detail==='outputs'?'active':''}">產出</button></div>${state.detail==='persona'?personaPanel(b):state.detail==='outputs'?outputsPanel(b):state.detail==='database'?`<div class="detail-title">知識 <button class="link" data-action="new-note">＋ 新增</button></div>${notes.length?notes.map(n=>`<button class="note-row" data-action="edit-note" data-id="${esc(n.id)}"><strong>${esc(n.title)}</strong><small>${esc(n.content)}</small></button>`).join(''):'<div class="detail-empty">尚未新增知識。加入資料，讓這個 Bot 有更多背景。</div>'}${memoryNote(b)}`:`<div class="detail-title">最近動態</div>${toolTimeline(b.id)}${(b.messages||[]).length?`<div class="detail-empty">最近對話 ${esc(formatDate(b.messages.at(-1).createdAt))}</div>`:'<div class="detail-empty">這裡會顯示最近的對話動態。</div>'}`}${usageDock()}</aside>`
   }
 
   function formatDate(d) {
@@ -502,6 +502,7 @@
     state.modal = document.activeElement;
     modalRoot.innerHTML = `<div class="modal-overlay" data-action="overlay"><section class="modal ${wide?'wide':''}" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="modal-head"><h2 id="modal-title">${esc(title)}</h2><button class="icon-btn" data-action="close-modal" aria-label="關閉">×</button></div>${body}${footer}</section></div>`;
     setTimeout(() => $('.modal input,.modal textarea,.modal select,.modal button')?.focus(), 0);
+    modalRoot.querySelectorAll('form').forEach(f => { f.noValidate = true; });  // an empty field is said in words; the browser's bubble may not show (#209)
     if ($('#bot-form')) syncFeatureRows($('#bot-form'));
   }
   // 特色功能 only appear for the CLI that can really do them.
@@ -524,13 +525,14 @@
     sameFallback(form, auto ? '' : id);
   }
   // 備用模型 never switches to the Bot's own CLI, so that choice is left out; a Bot that already has it sees why it does nothing.
+  // The 預設 line names the order without that CLI, and each other CLI says when its account is used up, as 模型與帳號 does (#43).
   function sameFallback(form, id) {
     const dd = form.querySelector('input[name="fallbackChoice"]')?.closest('.dd');
     if (!dd) return;
     dd.querySelectorAll('.dd-opt').forEach(o => {
-      const base = o.dataset.base || (o.dataset.base = o.dataset.label), same = !!id && o.dataset.value === id, chosen = o.classList.contains('selected');
+      const base = o.dataset.base || (o.dataset.base = o.dataset.label), value = o.dataset.value, same = !!id && value === id, chosen = o.classList.contains('selected');
       o.hidden = same && !chosen;
-      o.dataset.label = same ? base + '（同一家，不會切換）' : base;
+      o.dataset.label = value === '' ? fallbackDefaultLabel(id) : same ? base + '（同一家，不會切換）' : value === '__none' ? base : base + levelMark(accountLevel(value, ''));
       o.querySelector('strong').textContent = o.dataset.label;
       if (chosen) dd.querySelector('.dd-label').textContent = o.dataset.label;
     });
@@ -564,6 +566,7 @@
     if (!b.id) restoreBotDraft(form);
     loadModels(form);
     syncFeatureRows(form);  // Claude and Cursor have nothing to choose about access
+    polishBotForm(form, b);  // limits, a name already in use, what 帳號 and 備用模型 do
     if (!state.quota) api('quota').then(q => {  // 已用完／剩不到 20% beside each account
       state.quota = q;
       if (!form.isConnected) return;

@@ -2049,6 +2049,25 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 /* #63: a required field left empty says so right under it */
 .field-error { display: block; color: #c0392b; font-size: 12px; margin-top: 4px; font-weight: 500; }
 .modal [aria-invalid="true"] { border-color: #d33; box-shadow: 0 0 0 1px #d33; }
+/* #224 #209: what is still missing, beside the buttons; required fields marked; how much a long text may hold; a name in use (#156 #115) */
+.form-need { flex: 1; min-width: 0; margin: 0; align-self: center; text-align: right; color: #c0392b; font-size: 13px; font-weight: 500; }
+.need-mark { margin-left: 6px; padding: 0 6px; border-radius: 8px; background: #fdecea; color: #c0392b; font-size: 11px; font-weight: 600; }
+.char-count { display: block; margin-top: 4px; text-align: right; font-size: 11px; }
+.char-count.at-limit { color: #c0392b; font-weight: 500; }
+.char-count[hidden], .name-taken[hidden] { display: none; }
+.bot-names .field-hint { margin-top: 0; text-align: left; }
+.name-taken { color: #a15c00; }
+.setting-row.row-need { box-shadow: inset 3px 0 0 #d33; }
+/* 模型與帳號 takes the whole width, so an account's name is not cut off in the box (#44⑥) */
+#bot-form .form-grid > label.field { grid-column: 1 / -1; }
+/* #157: a long Bot or group name stays on one line and ends in … instead of running under 所有對話／開新對話／匯出對話 */
+.main-header .bot-pill { display: block; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.main-header .bot-pill > .avatar, .main-header .bot-pill > .avatar-stack { display: inline-flex; vertical-align: middle; margin-right: 8px; }
+@media (min-width: 1251px) {
+  .main-header { display: grid; padding-left: 24px; grid-template-columns: minmax(0, 1fr) minmax(0, max-content) minmax(max-content, 1fr); }
+  .main-header .bot-pill { grid-column: 2; justify-self: center; max-width: 100%; }
+  .main-header .header-actions { grid-column: 3; justify-self: end; position: static; margin: 0 24px 0 8px; }
+}
 /* Side panel in a narrow window (#118, #60, #152): at or below 1100 wide (DETAIL_WIDE in 10-chat.js) it covers the page from the right
    with a dimmed backdrop instead of squeezing the conversation; × , the backdrop or Escape close it. Wider windows keep it beside the conversation. */
 .detail-backdrop { display: none; }
