@@ -1,8 +1,10 @@
 # Each Bot's own scratch folder (queue #261, decisions #28). Loaded by backend/server.py into one shared namespace.
 # Zook makes <data>/workspaces/<Bot>/.zook-scratch once, keeps its device:inode in Zook's data (outside the workspace), and gives
 # the Bot the tool zook_clean_scratch: it deletes plain files right in that very folder by name, through the folder opened once and
-# checked to be the one Zook made, without asking; only files made during this reply (their birth time), so a file of the user's moved
-# in there (by any means: a link, a nested shell, inline code) is not deleted. A shell rm is never let through without asking (zook_gate.py), because what it
+# checked to be the one Zook made, without asking; only files made during this reply (their birth time), so an existing file of the
+# user's moved in there is not deleted (a second line behind zook_gate.py asking before a move into the folder). Birth time is not a
+# proof the Bot made the file: one rewritten as a new file (sed -i, an editor's save) is new too, and setattrlist can set it. A Bot
+# of a CLI without Zook's gate can delete anything with its own rm anyway. A shell rm is never let through without asking (zook_gate.py), because what it
 # really deletes cannot be known for sure from the command line; /tmp and the Mac's temporary folder are asked as before.
 SCRATCH_NOTE = ('\n暫存檔：中間產物、一次性腳本、轉檔過程的檔案一律放在「%s」，不要放 /tmp 或系統暫存資料夾。用完呼叫 zook_clean_scratch，'
                 '把要刪的檔名（只有檔名，不含路徑）列給它，Zook 會直接清掉這次回覆建立的檔案，不用等使用者核准；在同一次回覆裡清理。'
@@ -97,11 +99,29 @@ def clean_scratch(folder, ident, names, since):
                 kept.append('%s（不是一般檔案，沒有刪）' % name); continue  # a link, a folder, a hard link to a file elsewhere
             if getattr(own, 'st_birthtime', 0) < since:
                 kept.append('%s（不是這次回覆建立的，沒有刪）' % name); continue
-            try: os.unlink(name, dir_fd=fd)
-            except OSError: kept.append('%s（刪不掉）' % name); continue
+            if not _unlink_checked(fd, name, own): kept.append('%s（刪不掉）' % name); continue
             deleted.append(name)
     finally: os.close(fd)
     return deleted, kept
+
+
+def _unlink_checked(fd, name, seen):
+    """Delete the very file looked at: first renamed to a name nobody can guess (so nothing can be put under it meanwhile), and deleted
+    only when it is still that file; otherwise given its name back (unless something else took it)."""
+    hidden = '.zook-deleting-' + secrets.token_hex(8)
+    try: os.rename(name, hidden, src_dir_fd=fd, dst_dir_fd=fd)
+    except OSError: return False
+    try: now = os.stat(hidden, dir_fd=fd, follow_symlinks=False)
+    except OSError: return False
+    if stat.S_ISREG(now.st_mode) and now.st_nlink == 1 and (now.st_dev, now.st_ino) == (seen.st_dev, seen.st_ino):
+        try: os.unlink(hidden, dir_fd=fd); return True
+        except OSError: pass
+    try: os.stat(name, dir_fd=fd, follow_symlinks=False)
+    except FileNotFoundError:
+        try: os.rename(hidden, name, src_dir_fd=fd, dst_dir_fd=fd)
+        except OSError: pass
+    except OSError: pass
+    return False
 
 
 def scratch_tools(store, bot, runtime, scratch):

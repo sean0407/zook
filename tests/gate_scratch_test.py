@@ -72,7 +72,9 @@ class MovesIntoScratch(Base):
                         'mv -t %s ~/a' % s, 'mv --target-directory=%s ~/a' % s, 'mv -ft %s ~/a' % s, 'gmv -t %s ~/a' % s,
                         'ls ~/old | xargs mv -t %s' % s, 'echo r | xargs -I {} mv {} %s/' % s, 'find ~ -name r -exec mv {} %s/ \\;' % s,
                         'mv ~/a $D', 'mv ~/a %s/*' % self.ws, 'mv ~/a {%s,x}' % s, 'mv ~/a %s/.ZOOK-SCRATCH/' % self.ws,
-                        'mv %s/a %s/' % (other, s), 'git mv r.docx %s/r.docx' % s, 'git -C ~/p mv -f a .zook-scratch/', 'git -C ~/p mv a b'):
+                        'mv %s/a %s/' % (other, s), 'git mv r.docx %s/r.docx' % s, 'git -C ~/p mv -f a .zook-scratch/', 'git -C ~/p mv a b',
+                        'ln -s %s lk && mv ~/u lk/' % s, 'ln -sfn "$ZOOK_SCRATCH" ./l; mv ~/a l/', 'ln -s .zook-scratch l', 'zmv ~/u .zook-scratch/u',
+                        'busybox mv ~/u .zook-scratch/', 'ls | parallel mv {} .zook-scratch/', 'ls | parallel -j 2 mv {} .zook-scratch/'):
             self.asked(command)
 
     def test_a_link_named_like_the_folder_is_not_already_scratch(self):
@@ -143,6 +145,17 @@ class CleanTool(Base):
         os.rename(user, os.path.join(self.scratch, 'report.docx'))
         self.assertEqual(self.clean(['report.docx']), ([], ['report.docx（不是這次回覆建立的，沒有刪）']))
         self.assertTrue(os.path.exists(os.path.join(self.scratch, 'report.docx')))
+
+    def test_a_file_swapped_in_after_the_check_is_not_deleted(self):
+        self.fresh(name='a.txt'); user = self.fresh(self.ws, 'user.txt'); old = time.time() - 3600; os.utime(user, (old, old))
+        real = os.rename
+        def swap(src, dst, **kw):  # right after the look, another file is put under that name
+            if src == 'a.txt': real(user, os.path.join(self.scratch, 'a.txt'))
+            return real(src, dst, **kw)
+        with unittest.mock.patch.object(self.ns['os'], 'rename', side_effect=swap):
+            self.assertEqual(self.clean(['a.txt']), ([], ['a.txt（刪不掉）']))
+        self.assertEqual(Path(self.scratch, 'a.txt').read_text(), 'x')
+        self.assertEqual(os.stat(os.path.join(self.scratch, 'a.txt')).st_birthtime < time.time() - 1000, True)  # the user's file, kept
 
     def test_a_replaced_folder_is_refused(self):
         p = self.fresh(name='a.txt')

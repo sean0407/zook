@@ -51,9 +51,10 @@ SYSTEM_DIRS = ('/System', '/Library', '/usr', '/bin', '/sbin', '/etc', '/private
 TEMP_DIRS = ['/tmp', '/private/tmp', '/var/folders', '/private/var/folders']
 # The folders a CLI loads hooks, settings, Skills and plugins from, wherever they are (the home folder or a Bot's workspace).
 CLI_FOLDERS = {'.claude', '.cursor', '.codex', '.grok', '.gemini', '.antigravity', 'cursor-config'}
-WRAPPERS = {'env', 'nohup', 'time', 'command', 'builtin', 'exec', 'nice', 'caffeinate', 'timeout', 'xargs', 'stdbuf', 'arch', 'noglob', 'nocorrect'}
+WRAPPERS = {'env', 'nohup', 'time', 'command', 'builtin', 'exec', 'nice', 'caffeinate', 'timeout', 'xargs', 'stdbuf', 'arch', 'noglob', 'nocorrect', 'busybox', 'parallel'}
 WRAPPER_VALUED = {'env': {'-u', '-P', '-C'}, 'nice': {'-n'}, 'timeout': {'-s', '-k', '--signal', '--kill-after'}, 'caffeinate': {'-t', '-w'},
-                  'xargs': {'-I', '-J', '-L', '-n', '-P', '-R', '-S', '-s', '-E', '-d', '-a'}, 'stdbuf': {'-i', '-o', '-e'}, 'time': {'-o', '-f'}, 'exec': {'-a'}}
+                  'xargs': {'-I', '-J', '-L', '-n', '-P', '-R', '-S', '-s', '-E', '-d', '-a'}, 'stdbuf': {'-i', '-o', '-e'}, 'time': {'-o', '-f'}, 'exec': {'-a'},
+                  'parallel': {'-j', '--jobs', '-S', '--sshlogin', '-a', '--arg-file', '--colsep', '-d', '--delimiter', '-n', '-N', '--timeout'}}
 SHELL_WORDS = {'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until', '!', '{', '}', 'coproc'}  # what runs after them is a command too
 SHELLS = {'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish'}
 INTERPRETERS = {'python', 'python3', 'python2', 'node', 'nodejs', 'perl', 'ruby', 'php', 'deno', 'bun', 'osascript', 'lua', 'Rscript', 'swift'}
@@ -581,7 +582,10 @@ def _argv_boundaries(argv, whole, depth):
                     if sub and os.path.basename(sub[0]) not in DELETE_COMMANDS: found += _argv_boundaries(_strip(sub), whole, depth + 1)
     if name == 'mv' and plain and ('.Trash' in plain[-1] or plain[-1].rstrip('/').endswith('/Trash')):
         found.append(_hit('delete', '%s（移到垃圾桶）' % _names(plain[:-1])))
-    if name in ('mv', 'gmv'): moved = _move_args(args)
+    if name == 'ln' and any(a.startswith('-') and 's' in a.lstrip('-') or a == '--symbolic' for a in args):
+        if any('ZOOK_SCRATCH' in a or _in_scratch(_abs(a)) for a in plain):  # a link to a scratch folder: what is moved through it lands there
+            found.append(_hit('delete', '（建立連到暫存區的連結）'))
+    if name in ('mv', 'gmv', 'zmv'): moved = _move_args(args)
     elif name == 'git' and 'mv' in args: moved = _move_args([a for a in args[args.index('mv') + 1:] if a not in ('-k', '-n', '--dry-run')])
     else: moved = None
     if name == 'rsync' and any(a.startswith('--remove-s') for a in args): found.append(_hit('delete', '（rsync 傳完後刪除原檔）'))
