@@ -10,7 +10,7 @@
 # a host it comes after the members' independent round. In 任務引擎 a task reported with files that are not there is tried again
 # before another vendor checks it.
 CHECKER_NAME = re.compile(r'查核|驗收|審核|審查|校對|稽核|覆核|複核|把關|品管|(?<![A-Za-z])(?:QA|reviewer|checker)(?![A-Za-z])', re.I)
-CHECKER_DUTY = re.compile(r'(?:負責|專門|主要)(?:做|進行)?(?:查核|驗收|審核|審查|校對|稽核|覆核|複核|把關)')
+CHECKER_DUTY = re.compile(r'(?:負責|專門|主要|擔任|你是|我是|身為|作為)(?:做|進行|的)?[^，。,.；;\n]{0,6}?(?:查核|驗收|審核|審查|校對|稽核|覆核|複核|把關)')
 CHECKER_NOT = re.compile(r'[不沒没非無无別]')  # 「不負責查核」「我不是負責查核的」: said not to be its job
 MODERATOR_RULES['split_check'] = ['現在輪到你查核。照主持人分派給你的查核工作，實際打開要查的檔案（成員交的，或使用者給的）逐項核對，不要只看別人的說法。',
                                   '第一行只寫【判定】同意、【判定】有疑慮 或 【判定】有錯誤 其中之一，接著用最多 4 點說明依據；有檔案沒打開，就寫明哪個沒看，不能判定通過。',
@@ -59,16 +59,16 @@ def _same_file(name, pool, owner=''):
 
 
 def checked_present(store, group_id, names, exact=(), owner=''):
-    """Lock not needed. The names among these that are not among the group's shared files, the only place a checker reads them.
-    Names in exact (a report's own list of files) must be that file; others (words picked from a reply) may be the end of a longer
-    name. A name that is not a file name is never counted."""
+    """The names among these that are not among the group's shared files, the only place a checker reads them: the very name, or
+    Zook's rename of it for this member. Names picked from a reply must look like file names; a report's own list (exact) is looked
+    for name by name."""
     pool = [e.name for e in _plain_files(group_files_dir(store, group_id))]
     gone = []
     for raw in names or []:
         name = re.sub(r'[（(][^（）()]{0,30}[）)]\s*$', '', ' '.join(str(raw or '').split())).strip(' 「」『』`\'"')
         base = name.rsplit('/', 1)[-1]
         if (raw not in exact and not re.search(r'\.[A-Za-z0-9]{1,10}$', base)) or not base or base in gone: continue  # a report's own list is looked for name by name
-        if _same_file(base, pool, owner) if raw in exact else _claim_present(base, pool): continue
+        if _same_file(base, pool, owner): continue  # the very name (or Zook's rename of it): an older file whose name merely ends the same is not it
         gone.append(base)
     return gone[:10]
 
@@ -82,7 +82,7 @@ def _nothing_saved(replies, pool):
     not save, such as in 謹慎, is not asked to."""
     looked = [m for m in replies if 'savedFiles' in m]
     if not looked or any(m.get('savedFiles') for m in looked) or not any(w in (m.get('content') or '') for m in looked for w in SAVE_SAID): return False
-    return not any(_claim_present(n, pool) for m in looked for n in CLAIM_WORD.findall(m.get('content') or ''))
+    return not any(_same_file(n, pool) for m in looked for n in CLAIM_WORD.findall(m.get('content') or ''))
 
 
 NOTHING_SAVED = '（說存了的檔案）'
@@ -111,7 +111,8 @@ class CheckOrder:
             latest = {b: m for b, m in last.items() if m.get('status') == 'completed' and m.get('content')}
             unfinished = [b for b in step.get('gate', []) if b not in latest and store.find('bots', b) and b in group['botIds']]  # no reply, or one that did not finish: not handed in
             earlier = step.get('missing') if isinstance(step.get('missing'), dict) else {}  # what was missing before 補存 is looked for again, whatever the new reply says
-            said = {b: [n for n in dict.fromkeys(list(m.get('missingFiles') or []) + list(earlier.get(b) or [])) if n != NOTHING_SAVED and n not in (m.get('savedFiles') or [])] for b, m in latest.items()}
+            saves = lambda b: [n for x in group['messages'][start:] if x.get('botId') == b and x.get('role') == 'assistant' for n in x.get('savedFiles') or []]
+            said = {b: [n for n in dict.fromkeys(list(m.get('missingFiles') or []) + list(earlier.get(b) or [])) if n != NOTHING_SAVED and not _claim_present(n, saves(b))] for b, m in latest.items()}  # saved since, under a fuller name, counts
             checkers = _names(store, step['bots'])
             with _group_files_lock:  # nothing is being saved into the group's files while they are looked at
                 gone = {b: checked_present(store, group_id, names) for b, names in said.items() if names}

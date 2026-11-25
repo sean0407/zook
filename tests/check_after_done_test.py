@@ -145,9 +145,11 @@ class CheckAfterDone(unittest.TestCase):
     def test_a_persona_that_says_it_does_not_check_is_a_maker(self):
         self.bots['報價'] = self.req('POST', '/api/bots', {'name': '報價', 'provider': 'codex', 'persona': '我不是負責查核的，主要做報價單。'})[1]
         self.bots['審'] = self.req('POST', '/api/bots', {'name': '小審', 'provider': 'codex', 'persona': '負責驗收其他成員的成果。'})[1]
-        g = self.req('POST', '/api/groups', {'botIds': [self.bots[n]['id'] for n in ('Alpha', '報價', '審')], 'hostId': self.bots['Alpha']['id'], 'mode': 'split'})[1]
+        self.bots['驗'] = self.req('POST', '/api/bots', {'name': '小驗', 'provider': 'codex', 'persona': '你擔任驗收角色，看別人的成果。'})[1]
+        g = self.req('POST', '/api/groups', {'botIds': [self.bots[n]['id'] for n in ('Alpha', '報價', '審', '驗')], 'hostId': self.bots['Alpha']['id'], 'mode': 'split'})[1]
         self.say(g)
-        self.assertEqual([x[0] for x in self.order()], ['Alpha', '報價', '小審', 'Alpha'])
+        order = [x[0] for x in self.order()]
+        self.assertEqual((order[:2], set(order[2:4]), order[4:]), (['Alpha', '報價'], {'小審', '小驗'}, ['Alpha']))
 
     def test_saying_saved_with_nothing_saved_goes_back_first(self):
         self.flag('vague'); self.flag('resave')

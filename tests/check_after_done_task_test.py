@@ -50,5 +50,6 @@ class CheckAfterDoneTask(base.TaskEngineTest):
         self.assertFalse(answers[2]['error'], answers[2])
         tasks = group['taskRun']['tasks']
         self.assertEqual([(t['title'], t.get('deps')) for t in tasks], [('工作1', []), ('工作3', [1])])
+        self.assertEqual(tasks[1]['changes'], 'none')  # a 查核員's task only reads
 
 if __name__ == '__main__': unittest.main()

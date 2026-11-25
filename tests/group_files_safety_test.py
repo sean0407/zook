@@ -107,6 +107,7 @@ class GroupFileSafety(unittest.TestCase):
         listed = ['a:b.xlsx', '報價單.xlsx', '報價單.pdf', 'README']
         self.assertEqual(server.checked_present(self.store, 'g1', listed, exact=listed, owner='甲'), ['報價單.pdf', 'README'])
         self.assertEqual(server.checked_present(self.store, 'g1', ['keep.txt', 'gone.docx']), ['gone.docx'])
+        (self.shared / '舊版合約.docx').write_text('old'); self.assertEqual(server.checked_present(self.store, 'g1', ['合約.docx']), ['合約.docx'])  # an older file that merely ends the same is not it
         group = dict(id='g1', fileInfo={'報價單（甲）.xlsx': {'by': '甲'}, 'ab.xlsx': {'by': '乙'}})
         self.assertEqual(server.task_files_missing(self.store, group, '甲', dict(files=['報價單.xlsx', 'ab.xlsx']), {}), ['ab.xlsx'])  # another member's file is not its work
         self.assertEqual(server.task_files_missing(self.store, group, '甲', dict(files=['ab.xlsx']), dict(savedFiles=['ab.xlsx'])), [])

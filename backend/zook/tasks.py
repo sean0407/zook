@@ -540,6 +540,8 @@ def task_tools(app, job_id, runtime):
                 label = '主持人：' + reason if reason else '主持人指定'
                 basis = '依剩餘額度改派' if bot is not suggested else label
                 if bot is suggested and task_learn_on(store) and bot['id'] != run['hostId']: bot, basis = task_pick_by_record(store, group, run, bot, kind, label, changes)  # #71: the host's own share stays its own
+                if group_is_checker(bot) and not group_is_checker(suggested): bot, moved, basis = suggested, '', label  # #245: work is never moved onto a 查核員
+                if group_is_checker(bot): changes = 'none'  # a 查核員's task only reads
                 # New work waits for the user's 「照這個做」, unless 設定 lets work that changes nothing start by itself.
                 confirmed = task_execution(store) == 'lowrisk' and changes == 'none' and not any(t['status'] == 'stuck' for t in run['tasks'])
                 task = dict(id=ID(), n=len(run['tasks']) + 1, title=title, spec=spec, doneWhen=done_when, assignee=bot['id'], suggested=suggested['name'], deps=deps,
