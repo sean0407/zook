@@ -462,7 +462,7 @@ def interject_send(app, bot, body, by=''):
     at = next((i for i, m in enumerate(messages) if m['id'] == job.get('messageId')), len(messages))
     if by: message['author'] = by
     messages.insert(at, message)  # above the reply it changes, which is still being written
-    job.setdefault('added', []).append(message['id']); job.setdefault('addedText', []).append(content.strip()); store.save()
+    job.setdefault('added', []).append(message['id']); job.setdefault('addedText', []).append(content.strip() + date_check_note(message)); store.save()
     log_activity(store, 'chat', '在回覆途中補充訊息（%s）' % bot.get('name', ''))
     return job, ''
 

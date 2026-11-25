@@ -1,6 +1,7 @@
 # Checks a date the user wrote together with a day of the week ("1/23 禮拜五", "下週一 12/1", "2027/1/23 (Sat)") against this
 # Mac's calendar before the message goes to a Bot. Nothing in the user's words is changed: a mismatch is shown under the message
 # in plain words and added to what the Bots read, so they ask before copying it.
+import bisect as _bisect
 import datetime as _dt
 import re as _re
 
@@ -8,14 +9,21 @@ DATE_WEEKDAYS = ('週一', '週二', '週三', '週四', '週五', '週六', '�
 _DAY_CHARS = {'一': 0, '二': 1, '三': 2, '四': 3, '五': 4, '六': 5, '日': 6, '天': 6}
 _DAY_EN = (('mon', 0), ('tue', 1), ('wed', 2), ('thu', 3), ('fri', 4), ('sat', 5), ('sun', 6))
 # 2027/1/23, 2027-1-23, 2027年1月23日, 1/23, 1月23日. A bare M-D with a dash is left alone (too often a range or a code).
-_DATE = _re.compile(r'(?<![\d/.\-])(?:(?P<y>\d{4})\s*(?:年\s*|[/.\-]))?(?P<m>\d{1,2})\s*(?:月\s*|/)(?P<d>\d{1,2})(?:\s*[日號号])?(?![\d/])')
+_DATE = _re.compile(r'(?<![\d/.\-])(?:(?P<y>\d{4})\s{0,2}(?:年\s{0,2}|[/.\-]))?(?P<m>\d{1,2})\s{0,2}(?:月\s{0,2}|/)(?P<d>\d{1,2})(?:\s{0,2}[日號号])?(?![\d/])')
 _DATE_DASH = _re.compile(r'(?<![\d/.\-])(?P<y>\d{4})-(?P<m>\d{1,2})-(?P<d>\d{1,2})(?![\d\-])')
-_WEEKDAY = _re.compile(r'(?P<pre>[上下這这本前每]{0,2}|(?:last|next|this)\s+)?(?:(?:週|周|星期|禮拜|礼拜)(?P<zh>[一二三四五六日天])|[（(]\s*(?P<bare>[一二三四五六日])\s*[)）]'
-                       r'|(?P<en>\b(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?(?![a-z])))', _re.I)
+_WEEKDAY = _re.compile(r'(?P<pre>[上下這这本前每]{0,2}|(?:last|next|this)\s{1,3})?(?:(?:週|周|星期|禮拜|礼拜)(?P<zh>[一二三四五六日天])|[（(]\s{0,2}(?P<bare>[一二三四五六日])\s{0,2}[)）]'
+                       r'|(?P<en>\b(?:mon|tue|wed|thu|fri|sat|sun)[a-z]{0,6}\.?(?![a-z])))', _re.I)
 _EN_FULL = {'mon', 'monday', 'tue', 'tues', 'tuesday', 'wed', 'wednesday', 'thu', 'thur', 'thurs', 'thursday', 'fri', 'friday', 'sat', 'saturday', 'sun', 'sunday'}
-_RANGE_AFTER = _re.compile(r'\s*(?:到|至|~|～|-|–|—)\s*(?:週|周|星期|禮拜|礼拜)?[一二三四五六日天]')
-_PAST_WORDS = _re.compile(r'上週|上周|上禮拜|上礼拜|上星期|上個月|上个月|上月|去年|昨天|前天|上次|last\s+(?:week|month|year)', _re.I)
+_RANGE_MARKS = '到至~～-–—'
+_RANGE_AFTER = _re.compile(r'\s{0,3}[到至~～\-–—]\s{0,3}(?:週|周|星期|禮拜|礼拜)?[一二三四五六日天]')
+_GAP_AFTER = _re.compile(r'[ \t　]{0,3}(?:[是為为][ \t　]{0,2})?[(（]?[ \t　]{0,2}')  # 1/23 週五, 1/23（週五）, 1/23 是週五
+_GAP_BEFORE = _re.compile(r'[ \t　]{0,3}[,，]?[ \t　]{0,3}')  # 週五 1/23, 星期五，1/23
+_CLOSE = _re.compile(r'[ \t　]{0,2}[)）]')
+_CLAUSE_END = _re.compile(r'[。！？!?\n；;]')
+_PAST_WORDS = _re.compile(r'上週|上周|上禮拜|上礼拜|上星期|上個月|上个月|上月|昨天|前天|上次|last\s{1,3}(?:week|month)', _re.I)
+_YEAR_WORDS = (('前年', -2), ('去年', -1), ('今年', 0), ('明年', 1), ('後年', 2), ('后年', 2), ('last year', -1), ('this year', 0), ('next year', 1))
 DATE_CHECK_MAX = 5  # notes per message
+DATE_CHECK_SCAN = 200  # dates and weekdays looked at per message: a long list stays quick (this runs with the store locked)
 
 
 def _weekday_of(match):
@@ -29,23 +37,28 @@ def _weekday_of(match):
 def _weekdays(text):
     found = []
     for w in _WEEKDAY.finditer(text):
+        if len(found) >= DATE_CHECK_SCAN: break
         day = _weekday_of(w)
         if day is None: continue
         pre = (w.group('pre') or '').strip().lower()
         if '每' in pre: continue  # 每週五: a habit, not a date
         if _RANGE_AFTER.match(text, w.end()): continue  # 週一到週五: a span of days
-        if w.start() > 0 and text[w.start() - 1] in '到至~～-–—': continue
-        found.append(dict(day=day, start=w.start(), end=w.end(), past=pre.startswith('上') or pre.startswith('last'), future=pre.startswith('下') or pre.startswith('next')))
+        if text[max(0, w.start() - 4):w.start()].rstrip()[-1:] in tuple(_RANGE_MARKS): continue  # the end of such a span
+        close = _CLOSE.match(text, w.end()) if not w.group('bare') else None
+        found.append(dict(day=day, start=w.start(), end=w.end(), shown_end=close.end() if close else w.end(),
+                          past=pre.startswith('上') or pre.startswith('last'), future=pre.startswith('下') or pre.startswith('next')))
     return found
 
 
 def _dates(text):
-    spans = []
+    spans, starts = [], []
     for pattern in (_DATE, _DATE_DASH):
         for d in pattern.finditer(text):
-            if any(s <= d.start() < e for s, e, _ in spans): continue
-            spans.append((d.start(), d.end(), d))
-    return sorted(spans, key=lambda x: x[0])
+            if len(spans) >= DATE_CHECK_SCAN: break
+            at = _bisect.bisect_right(starts, d.start()) - 1
+            if at >= 0 and spans[at][0] <= d.start() < spans[at][1]: continue
+            spans.insert(at + 1, (d.start(), d.end(), d)); starts.insert(at + 1, d.start())
+    return spans
 
 
 def _pick_year(month, day, today, past, future=False):
@@ -62,7 +75,14 @@ def _pick_year(month, day, today, past, future=False):
     return ahead, behind
 
 
-def _shown(date, with_year=True): return ('%d/%d/%d' % (date.year, date.month, date.day)) if with_year else '%d/%d' % (date.month, date.day)
+def _shown(date): return '%d/%d/%d' % (date.year, date.month, date.day)
+
+
+def _clause(text, start, end):
+    """The words around a date in the same sentence, for 去年、上週… said about it."""
+    lead = text[max(0, start - 16):start]
+    cut = list(_CLAUSE_END.finditer(lead))
+    return (lead[cut[-1].end():] if cut else lead) + text[start:end]
 
 
 def date_check(text, today=None):
@@ -70,24 +90,35 @@ def date_check(text, today=None):
     if not isinstance(text, str) or not text: return []
     today = today or _dt.date.today()
     days, notes, used = _weekdays(text), [], set()
+    starts = [w['start'] for w in days]
     for start, end, d in _dates(text):
         if len(notes) >= DATE_CHECK_MAX: break
-        after = next((i for i, w in enumerate(days) if i not in used and w['start'] >= end and _re.fullmatch(r'[\s　,，、(（]{0,3}', text[end:w['start']])), None)
-        before = None if after is not None else next((i for i, w in reversed(list(enumerate(days))) if i not in used and w['end'] <= start and _re.fullmatch(r'[\s　,，、]{0,3}', text[w['end']:start])), None)
-        pick = after if after is not None else before
+        pick = None
+        i = _bisect.bisect_left(starts, end)  # the first weekday after the date, if it follows right on
+        if i < len(days) and i not in used:
+            if days[i]['start'] - end <= 10 and _GAP_AFTER.fullmatch(text, end, days[i]['start']): pick = i
+        if pick is None:
+            i = _bisect.bisect_left(starts, start) - 1  # else the one right before it
+            if i >= 0 and i not in used and days[i]['end'] <= start:
+                if start - days[i]['end'] <= 10 and _GAP_BEFORE.fullmatch(text, days[i]['end'], start): pick = i
         if pick is None: continue
         used.add(pick); w = days[pick]
         month, day = int(d.group('m')), int(d.group('d'))
-        written = text[min(start, w['start']):max(end, w['end'])].strip()
+        written = text[min(start, w['start']):max(end, w['shown_end'])].strip()
         if d.group('y'):
             try: actual = _dt.date(int(d.group('y')), month, day)
             except ValueError: notes.append('「%s」：沒有 %s/%d/%d 這一天，請確認日期。' % (written, d.group('y'), month, day)); continue
             if actual.weekday() != w['day']: notes.append('「%s」：%s 是%s，不是%s。請確認是哪一天。' % (written, _shown(actual), DATE_WEEKDAYS[actual.weekday()], DATE_WEEKDAYS[w['day']]))
             continue
-        nearby = text[max(0, min(start, w['start']) - 12):max(end, w['end'])]
-        past = w['past'] or (not w['future'] and bool(_PAST_WORDS.search(nearby)))
-        main, other = _pick_year(month, day, today, past, w['future'])
-        if w['future'] or past: other = None  # 下週、上週、去年…: the user said which way, so the other year is no excuse
+        nearby = _clause(text, min(start, w['start']), max(end, w['end'])).lower()
+        shift = next((n for word, n in _YEAR_WORDS if word in nearby), None)
+        if shift is not None:  # 去年 1/23: that year, no guessing
+            try: main, other = _dt.date(today.year + shift, month, day), None
+            except ValueError: main = other = None
+        else:
+            past = w['past'] or (not w['future'] and bool(_PAST_WORDS.search(nearby)))
+            main, other = _pick_year(month, day, today, past, w['future'])
+            if w['future'] or past: other = None  # 下週、上週…: the user said which way, so the other year is no excuse
         if main is None: notes.append('「%s」：沒有 %d/%d 這一天，請確認日期。' % (written, month, day)); continue
         if main.weekday() == w['day']: continue
         line = '「%s」：%s 是%s，不是%s。' % (written, _shown(main), DATE_WEEKDAYS[main.weekday()], DATE_WEEKDAYS[w['day']])
@@ -96,16 +127,33 @@ def date_check(text, today=None):
     return notes
 
 
+def _check_day(message):
+    day = (message or {}).get('dateCheckDay')
+    try: return _dt.date.fromisoformat(day) if isinstance(day, str) and len(day) == 10 else None
+    except ValueError: return None
+
+
 def date_check_message(message, today=None):
-    """Lock held. Marks a user's message whose dates and weekdays do not match; the words themselves stay as written."""
+    """Lock held. Marks a user's message whose dates and weekdays do not match; the words themselves stay as written. The day
+    it was checked on is kept, so what the Bots read later is worked out again the same way, never taken from a stored text."""
+    today = today or _dt.date.today()
     notes = date_check(message.get('content'), today)
-    if notes: message['dateCheck'] = notes
-    else: message.pop('dateCheck', None)
+    if notes: message.update(dateCheck=notes, dateCheckDay=today.isoformat())
+    else: message.pop('dateCheck', None); message.pop('dateCheckDay', None)
     return notes
 
 
 def date_check_note(message):
-    """What the Bots read right after that message."""
-    notes = [x for x in (message or {}).get('dateCheck') or [] if isinstance(x, str)][:DATE_CHECK_MAX]
+    """What the Bots read right after that message: worked out from its words and the day it was sent (a copy restored or synced
+    from elsewhere cannot put its own text here)."""
+    day = _check_day(message)
+    if not day or not message.get('dateCheck'): return ''
+    notes = date_check(message.get('content'), day)
     if not notes: return ''
     return '\n（Zook 檢查日期：%s 這是用這台 Mac 的日曆算的；回覆前請先向使用者確認是哪一天，不要照抄。）' % ' '.join(notes)
+
+
+def date_check_copy(source, into):
+    """Sync: a message from another Mac keeps its reminder, worked out here again from its words and the day it was sent."""
+    day = _check_day(source)
+    if day and into.get('role') == 'user': date_check_message(into, day)
