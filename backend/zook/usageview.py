@@ -47,6 +47,11 @@ def usage_card_fields(body, changes):
         changes['usageCardOrder'] = list(dict.fromkeys(order))
 
 
+def api_billed_method(method):
+    """A sign-in paid by use (an API key or an Anthropic Console sign-in): it has no plan limits to show, whatever figures are stored."""
+    return str(method or '').strip().lower() in ('api 金鑰', 'anthropic console', 'api_key', 'api key')
+
+
 def usage_card_focus(item, now=None):
     """(rank, percent left) for one card in 自動: rank 0 has figures, 1 has none, 2 is used up, 3 is not signed in. The percent is
     that of the limit worth watching now: the five-hour one when there is one, otherwise the weekly one."""
@@ -55,8 +60,9 @@ def usage_card_focus(item, now=None):
     now = time.time() if now is None else now
     rows = [(str(w.get('label') or ''), _left(w, snap, now)) for w in snap.get('windows') or [] if isinstance(w, dict)]
     rows = [r for r in rows if r[1] is not None]
+    if item.get('apiBilling'): return 1, 0.0  # paid by use: old figures of a subscription say nothing about it
     if limit_reached_now(snap) or any(left <= 0 for _, left in rows): return 2, 0.0
-    if not rows or item.get('apiBilling'): return 1, 0.0
+    if not rows: return 1, 0.0
     focus = next((r for r in rows if '小時' in r[0]), None) or next((r for r in rows if '週' in r[0]), None) or rows[0]
     return 0, focus[1]
 
