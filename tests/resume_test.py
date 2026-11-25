@@ -172,7 +172,7 @@ class TaskPickupTest(unittest.TestCase):
         app = App(); app.store = store
         app.task_pickup(group)
         self.assertEqual(group['taskRun']['tasks'][0]['status'], 'verifying')
-        self.assertEqual(group['taskRun']['tasks'][0]['attempts'][0]['cli'], 'codex')  # cut off before the turn wrote it: a checker of another vendor can still be chosen
+        self.assertEqual(m.task_worker_kind(store, group['taskRun']['tasks'][0]), 'codex')  # cut off before the turn wrote it: a checker of another vendor can still be chosen
 
     def test_an_old_run_waits_for_the_user(self):
         m = load()

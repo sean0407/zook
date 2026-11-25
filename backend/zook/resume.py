@@ -259,7 +259,6 @@ class Resuming:
             cut = self.store.find('jobs', last.get('jobId')) if last.get('jobId') else None
             if before == 'verifying' or (before == 'running' and last.get('state') == 'reported' and last.get('outcome') == 'succeeded'):
                 t.update(status='verifying', verify=dict(state='waiting')); t.pop('note', None)  # the work reported done: only its check runs, nothing is done again
-                if cut and not last.get('cli'): last['cli'] = task_job_cli(self.store, cut, None)  # cut off before the turn wrote it: who may check depends on it
             elif before == 'running' and cut and task_acted_outward(cut):
                 t.update(status='stuck', note=task_outward_note(cut) + '自動接著做可能重複，停下來等你決定。'); continue
             elif before == 'running':
