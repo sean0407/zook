@@ -1,16 +1,24 @@
   // Backups, the activity record, usage budgets and the rules every Bot follows.
   const fmtTokens = n => fmtTok(n);  // the usage page's one unit (32-usage.js)
-  const fmtSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+  const fmtSize = n => n >= 1073741824 ? +(n / 1073741824).toFixed(1) + ' GB' : n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
 
   function rulesSection() {
     const rules = state.data.settings.rules || '';
     return `<h2 class="settings-h">固定規則</h2><p class="muted small settings-note">所有 Bot 每次回覆都會遵守，優先於各自的工作指示。</p><form id="rules-form" class="rules-form"><textarea name="rules" maxlength="10000" rows="5" aria-label="固定規則" placeholder="例如：一律用繁體中文回答。金額一律標示幣別。">${esc(rules)}</textarea><div class="setting-actions"><button class="primary">儲存規則</button></div></form>`;
   }
 
+  // 備份與還原 (queue #232, #50, #51): settings as switches and dropdowns, a name for a backup made by hand, and what a restore changes.
+  const BACKUP_EVERY = [{id: 'daily', name: '每天'}, {id: 'weekly', name: '每週'}];
   function backupSection() {
-    const list = state.backups;
-    const rows = !list ? loadingBlock('正在讀取備份…') : list.length ? `<div class="plain-rows">${list.map(b => `<div class="plain-row"><div class="plain-copy"><strong>${esc(formatDate(b.at))}</strong><span>${esc(b.kindName)} · ${fmtSize(b.size)}</span></div><div class="plain-actions"><button class="link" data-up="backup-restore" data-id="${esc(b.name)}">還原</button><button class="link danger" data-up="backup-delete" data-id="${esc(b.name)}">刪除</button></div></div>`).join('')}</div>` : '<div class="blank">還沒有備份。</div>';
-    return `<h2 class="settings-h">備份與還原</h2><p class="muted small settings-note">每天自動備份一次，保留 14 天。內容包含 Bot、對話、知識、排程與設定；密碼和金鑰留在鑰匙圈，不會放進備份。</p><div class="setting-actions backup-actions"><button class="primary" data-up="backup-now">立即備份</button><button class="secondary" data-action="export">匯出成檔案</button><button class="secondary" data-up="backup-pick">從檔案加入</button><input type="file" id="backup-file" accept=".json,.gz,application/json,application/gzip" hidden></div>${rows}`;
+    const info = state.backupInfo, list = state.backups;
+    const cfg = info?.settings, files = cfg?.withFiles;
+    const rows = !list ? loadingBlock('正在讀取備份…') : list.length ? `<div class="plain-rows">${list.map(b => `<div class="plain-row"><div class="plain-copy"><strong>${esc(formatDate(b.at))}${b.label ? ' · ' + esc(b.label) : ''}</strong><span>${esc(b.kindName)} · ${fmtSize(b.size)}${b.hasFiles ? ' · 含檔案' : ''}</span></div><div class="plain-actions backup-row-actions"><button class="secondary small-btn" data-up="backup-restore" data-id="${esc(b.name)}">還原</button><button class="secondary small-btn danger-text" data-up="backup-delete" data-id="${esc(b.name)}">刪除</button></div></div>`).join('')}</div>` : '<div class="blank">還沒有備份。</div>';
+    const what = '備份內容：Bot、對話、記憶、知識、排程與設定。密碼和金鑰留在鑰匙圈，不會放進備份。' + (files ? '也包含附件、群組檔案和 Bot 工作資料夾裡的產出。' : '不含檔案（附件、群組檔案、Bot 產出）；要一起備份請打開「包含檔案」。');
+    const size = info ? `${info.filesSize == null ? '正在計算檔案大小' : info.filesSize ? `目前約 ${fmtSize(info.filesSize)}` : '目前沒有檔案'}；超過 ${fmtSize(info.filesLimit)} 時這次只備份資料。隱藏檔、名稱像金鑰或密碼的檔案（例如 .env）不會放進去。` : '';
+    const where = cfg ? `${esc(cfg.folder)}${cfg.missing ? '<br><span class="error-text">選的資料夾現在找不到，暫時存在預設位置。</span>' : ''}` : '';
+    const settings = cfg ? `<div class="setting-list">${settingRow('自動備份', '', toggle('data-backup-set="auto"', cfg.auto, '自動備份'))}${settingRow('頻率', '', dropdown('backupEvery', cfg.every, BACKUP_EVERY, 'data-backup-set="every"'))}${settingRow('保留份數', '只算自動備份；手動備份保留最近 20 份', dropdown('backupKeep', String(cfg.keep), info.choices.keep.map(n => ({id: String(n), name: n + ' 份'})), 'data-backup-set="keep"'))}${settingRow('包含檔案', esc(size), toggle('data-backup-set="withFiles"', cfg.withFiles, '包含檔案'))}${settingRow('備份位置', where + (cfg.isDefault ? '（預設位置）' : ''), `<div class="backup-place"><button class="secondary small-btn" data-up="backup-folder">選擇資料夾</button>${cfg.isDefault ? '' : '<button class="secondary small-btn" data-up="backup-folder-reset">改回預設</button>'}<button class="secondary small-btn" data-up="backup-reveal">在 Finder 顯示</button></div>`)}</div>` : '';
+    const running = info?.running ? '<p class="muted small">正在建立含檔案的備份…完成後會出現在下面。</p>' : info?.restoring ? '<p class="muted small">正在補回備份裡的檔案…</p>' : '';
+    return `<h2 class="settings-h" id="settings-backup">備份與還原</h2><p class="muted small settings-note">${what}</p>${settings}<div class="setting-actions backup-actions"><button class="primary" data-up="backup-now" ${info?.running ? 'disabled' : ''}>立即備份</button><button class="secondary" data-action="export">匯出成檔案</button><button class="secondary" data-up="backup-pick">匯入備份檔</button><input type="file" id="backup-file" accept=".json,.gz,application/json,application/gzip" hidden></div><p class="muted small settings-note">「立即備份」存一份到上面的備份位置，可以取名，之後在下面一鍵還原。「匯出成檔案」下載一份資料給你自己保管或搬到別台 Mac（不含檔案），要用時按「匯入備份檔」加入清單，再按「還原」。</p>${running}${rows}`;
   }
 
   const BUDGET_OVER = [{id: 'warn', name: '只提醒', hint: '繼續回覆'}, {id: 'switch', name: '改用備用模型', hint: '沒有備用模型時照常回覆'}, {id: 'stop', name: '停止回覆', hint: '到下個月或調高上限為止'}];
@@ -39,9 +47,10 @@
   async function loadUpkeep(p) {
     const fill = async (key, path, pick) => {
       try { const out = await api(path); state[key] = pick ? pick(out) : out; } catch (e) { state[key] = pick ? [] : {error: e.message}; }
+      if (key === 'backupInfo') state.backups = state.backupInfo.items || [];
       if (state.page === p) render(true);
     };
-    if (p === 'settings') { fill('backups', 'backups', x => x.items); fill('sync', 'sync'); }
+    if (p === 'settings') { fill('backupInfo', 'backups'); fill('sync', 'sync'); }
     if (p === 'usage') fill('budget', 'budget');
     if (p === 'activity') fill('activity', 'activity' + (state.activityKind ? '?kind=' + encodeURIComponent(state.activityKind) : ''));
   }
@@ -51,13 +60,15 @@
     if (!el) return;
     const id = el.dataset.id;
     try {
-      if (el.dataset.up === 'backup-now') { state.backups = (await post('backups')).items; render(true); toast('已備份'); }
+      if (el.dataset.up === 'backup-now') backupNameForm();
       if (el.dataset.up === 'backup-pick') $('#backup-file')?.click();
-      if (el.dataset.up === 'backup-delete') await ask({title: '刪除這份備份？', lines: ['刪除後無法復原。現在的資料和其他備份不受影響。'], run: async () => { state.backups = (await post('backups/' + encodeURIComponent(id), {}, 'DELETE')).items; render(true); }});
-      if (el.dataset.up === 'backup-restore' && await ask({title: '還原這份備份？', lines: ['現在的資料會換成這份備份的內容。', '還原前的資料會另存一份，之後可以再還原回來。'], ok: '還原', danger: false})) {
-        const done = await post('backups/' + encodeURIComponent(id) + '/restore');
-        await refresh(); await loadUpkeep('settings'); toast(done.syncStopped ? '已還原。同步已停止，確認資料後再重新開啟' : '已還原');
+      if (el.dataset.up === 'backup-reveal') await post('backups/reveal');
+      if (el.dataset.up === 'backup-folder' || el.dataset.up === 'backup-folder-reset') {
+        const out = await post('backups/folder', el.dataset.up === 'backup-folder' ? {choose: true} : {reset: true});
+        if (out.changed) { backupTake(out); toast('已更新備份位置'); }
       }
+      if (el.dataset.up === 'backup-delete') await ask({title: '刪除這份備份？', lines: ['刪除後無法復原。現在的資料和其他備份不受影響。'], run: async () => { backupTake(await post('backups/' + encodeURIComponent(id), {}, 'DELETE')); }});
+      if (el.dataset.up === 'backup-restore') await backupRestore(id);
     } catch (err) { toast(err.message); }
   });
 
@@ -68,7 +79,10 @@
         const file = t.files[0]; t.value = '';
         let data;
         try { data = JSON.parse(await backupText(file)); } catch (_) { throw new Error('這不是 Zook 的備份檔。'); }
-        state.backups = (await post('backups/file', {data})).items; render(true); toast('已加入，按「還原」才會套用');
+        await post('backups/file', {data}); await loadUpkeep('settings'); toast('已加入備份清單，按「還原」才會套用');
+      } else if (t.dataset.backupSet !== undefined) {
+        const key = t.dataset.backupSet, value = t.type === 'checkbox' ? t.checked : key === 'keep' ? Number(t.value) : t.value;
+        state.data.settings = await post('settings', {backup: {[key]: value}}, 'PATCH'); await loadUpkeep('settings'); toast('已更新備份設定');
       } else if (t.dataset.budget !== undefined) {
         state.data.settings = await post('settings', {budgets: {[t.dataset.budget]: Number(t.value)}}, 'PATCH'); await loadUpkeep('usage'); toast('已更新預算');
       } else if (t.dataset.budgetOver !== undefined) {
@@ -211,6 +225,70 @@
     try { state.sync = await post('sync', {folder: e.target.dataset.folder, join: new FormData(e.target).get('join')}); closeModal(); await refresh(); toast('已開始同步'); }
     catch (err) { toast(err.message); }
   });
+
+  function backupTake(out) { state.backupInfo = out; state.backups = out.items || []; render(true); }
+  // While a backup with files is written, or files are put back, the list is looked at again until it is done.
+  function backupWatch() {
+    clearTimeout(backupWatch.timer);
+    backupWatch.timer = setTimeout(async () => {
+      try { const out = await api('backups'); const was = state.backupInfo; backupTake(out); if (out.running || out.restoring) return backupWatch(); if (was?.running || was?.restoring) toast(out.lastNote || '備份已完成'); } catch (_) {}
+    }, 1500);
+  }
+  // 立即備份: a name of its own, and what it holds.
+  function backupNameForm() {
+    const files = state.backupInfo?.settings?.withFiles;
+    modal('立即備份', `<form id="backup-name-form"><div class="modal-body"><label class="detail-title" for="backup-label">名稱（可不填）</label><input id="backup-label" name="label" maxlength="40" placeholder="例如：搬家前"><p class="muted small">${files ? '這份會包含檔案（附件、群組檔案、Bot 產出），檔案多時要等一下。' : '這份不含檔案。要一起備份檔案，請先打開「包含檔案」。'}存在備份位置，之後在清單裡一鍵還原。</p></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">備份</button></div></form>`);
+  }
+  document.addEventListener('submit', async e => {
+    if (e.target.id !== 'backup-name-form') return;
+    e.preventDefault();
+    try {
+      const out = await post('backups', {label: e.target.elements.label.value}); closeModal(); backupTake(out);
+      if (out.pending) { toast('正在備份檔案，完成後會通知'); backupWatch(); } else toast('已備份');
+    } catch (err) { toast(err.message); }
+  });
+  const backupNames = list => list.slice(0, 5).map(n => `「${n}」`).join('、') + (list.length > 5 ? ` 等 ${list.length} 個` : '');
+  // 還原: say first what will be gone and who is busy; afterwards, what came back and what was held in (#50).
+  async function backupRestore(name) {
+    let p = await api('backups/' + encodeURIComponent(name) + '/preview');
+    const b = p.backup, item = (state.backups || []).find(x => x.name === name), lost = p.lost;
+    const gone = [lost.bots.length ? `${lost.bots.length} 個 Bot（${backupNames(lost.bots)}）` : '', lost.groups.length ? `${lost.groups.length} 個群組（${backupNames(lost.groups)}）` : '', lost.chats ? `${lost.chats} 段對話` : '', lost.messages ? `${lost.messages} 則訊息` : '', lost.memories ? `${lost.memories} 則記憶` : ''].filter(Boolean);
+    const busyNames = p.busy.map(x => x.type === 'group' ? `群組「${x.name}」` : `Bot「${x.name}」`).join('、');
+    const lines = [
+      `會換成 ${formatDate(item?.at)}${p.label ? '「' + p.label + '」' : ' '}的備份：${b.bots} 個 Bot、${b.groups} 個群組、${b.chats} 段對話、${b.memories} 則記憶。`,
+      gone.length ? `現在有、備份裡沒有的 ${gone.join('、')}會消失。` : '和現在相比，沒有會消失的 Bot、群組、對話或記憶。',
+      p.back.length ? `備份裡有、現在已刪除的 ${backupNames(p.back)} 會回來，權限先收窄為只限工作資料夾、先問。` : '',
+      p.hasFiles ? '這份含檔案：只補回現在不見的檔案，不覆蓋現有檔案。' : '這份不含檔案，現有的附件和產出不受影響。',
+      '還原前的資料會另存一份「還原前」備份，想反悔就還原那一份。',
+      p.syncOn ? '多台 Mac 同步會先停止，確認資料後再重新開啟。' : '',
+      busyNames ? `${busyNames}正在回覆。按「停止後還原」會先停止它們。` : ''];
+    if (!(await ask({title: '還原這份備份？', lines, ok: busyNames ? '停止後還原' : '還原', danger: !!gone.length}))) return;
+    if (p.busy.length) await backupStopAll(name, p.busy);
+    const done = await post('backups/' + encodeURIComponent(name) + '/restore');
+    await refresh(); await loadUpkeep('settings');
+    const r = done.restored;
+    const body = [`<p>現在有 ${r.bots} 個 Bot、${r.groups} 個群組、${r.chats} 段對話。</p>`,
+      done.held?.length ? `<p>${esc(backupNames(done.held))}的權限先收窄為只限工作資料夾、先問。要放寬請在 Bot 的「編輯設定」改。</p>` : '',
+      done.filesPending ? '<p>正在補回備份裡不見的檔案，完成後會通知。</p>' : '',
+      done.syncStopped ? '<p class="muted">多台 Mac 同步已停止，確認資料後再到設定重新開啟。</p>' : '',
+      '<p class="muted">想回到還原前的樣子：在備份清單找「還原前」那一份，按「還原」。</p>'].join('');
+    modal('已還原', `<div class="modal-body">${body}</div>`, '<div class="modal-foot"><button class="primary" data-action="close-modal">知道了</button></div>');
+    if (done.filesPending) backupWatch();
+  }
+  // 停止後還原: stop each busy group and reply, then wait until nothing answers any more.
+  async function backupStopAll(name, busy) {
+    for (const x of busy) {
+      try { await post(x.type === 'group' ? 'groups/' + encodeURIComponent(x.id) + '/stop' : 'jobs/' + encodeURIComponent(x.id) + '/cancel', {}); } catch (_) {}
+    }
+    for (let i = 0; i < 40; i++) {
+      await new Promise(ok => setTimeout(ok, 500));
+      const left = (await api('backups/' + encodeURIComponent(name) + '/preview')).busy;
+      if (!left.length) return;
+      if (i === 39) throw new Error(left.map(x => x.type === 'group' ? `群組「${x.name}」` : `Bot「${x.name}」`).join('、') + '還沒停下來，資料沒有變動。稍後再試。');
+    }
+  }
+  // The top of 設定 links here: the section is far down.
+  document.addEventListener('click', e => { if (e.target.closest?.('[data-up="jump-backup"]')) $('#settings-backup')?.scrollIntoView({block: 'start'}); });
 
   // A backup is one compressed file; older ones are plain text.
   async function backupText(file) {

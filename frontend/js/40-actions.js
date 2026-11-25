@@ -595,7 +595,7 @@
         }
         case 'export': {
           let data = await post('export');
-          download(JSON.stringify(data, null, 2), 'Zook-export.json', 'application/json');
+          download(JSON.stringify(data, null, 2), `Zook-export-${fileDay()}.json`, 'application/json');
           break
         }
         case 'refresh-models':

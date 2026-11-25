@@ -1,24 +1,24 @@
 # Looking after the data: backups, the activity record, monthly usage budgets and the rules every Bot follows.
 # Loaded by backend/server.py into one shared namespace.
 
-# ---- Backups: one copy a day kept for two weeks, copies made by hand, and one before every restore.
+# ---- Backups: automatic copies as 設定 says (backupplus.py; daily and 14 kept unless changed), copies made by hand, and one before every restore.
 BACKUP_KEEP = {'auto': 14, 'manual': 20, 'safety': 5, 'file': 5}
 BACKUP_KINDS = {'auto': '每日自動', 'manual': '手動', 'safety': '還原前', 'file': '從檔案加入'}
-BACKUP_NAME = re.compile(r'zook-(auto|manual|safety|file)-\d{8}-\d{6}\.json(?:\.gz)?')  # one file with everything in it; compressed since conversations moved to their own files
+BACKUP_NAME = re.compile(r'zook-(auto|manual|safety|file)-\d{8}-\d{6}\.(?:json(?:\.gz)?|zip)')  # one file with everything in it; compressed since conversations moved to their own files; .zip also holds files
 MAX_BACKUP_FILE = 50 * 1024 * 1024
 
 
 def backup_dir(store):
-    folder = store.dir / 'backups'
-    folder.mkdir(mode=0o700, exist_ok=True)
-    return folder
+    """Where new backups go: the folder chosen in 設定 when it is there, else Zook's own."""
+    return backup_chosen(store) or backup_home(store)
 
 
 def backup_list(store):
-    out = []
-    for path in backup_dir(store).glob('zook-*.json*'):
+    out, seen = [], set()
+    for path in [p for folder in backup_folders(store) for p in folder.glob('zook-*')]:
         match = BACKUP_NAME.fullmatch(path.name)
-        if not match: continue
+        if not match or path.name in seen or path.is_symlink(): continue
+        seen.add(path.name)
         try: stat = path.stat()
         except OSError: continue
         out.append(dict(name=path.name, kind=match.group(1), kindName=BACKUP_KINDS[match.group(1)], size=stat.st_size,
@@ -26,31 +26,25 @@ def backup_list(store):
     return sorted(out, key=lambda x: re.search(r'\d{8}-\d{6}', x['name']).group(0), reverse=True)
 
 
-def backup_write(store, kind, data):
-    """Save one copy and drop the oldest ones of its kind. Passwords and keys are in the Keychain and are never part of a copy."""
-    folder = backup_dir(store)
+def backup_write(store, kind, data, label=''):
+    """Save one copy of the data and drop the oldest ones of its kind. Passwords and keys are in the Keychain and are never part of a copy."""
+    try: folder = backup_dir(store)
+    except OSError: folder = backup_home(store)
     name = 'zook-%s-%s.json.gz' % (kind, datetime.datetime.now().strftime('%Y%m%d-%H%M%S'))
-    fd, temp = tempfile.mkstemp(prefix='.backup-', dir=str(folder))
-    try:
-        os.fchmod(fd, 0o600)
-        with os.fdopen(fd, 'wb') as raw:
-            with gzip.GzipFile(fileobj=raw, mode='wb', compresslevel=6, mtime=0) as packed: packed.write(json.dumps(data, ensure_ascii=False).encode('utf-8', 'surrogatepass'))
-            raw.flush(); os.fsync(raw.fileno())
-        os.replace(temp, folder / name)
-    finally:
-        if os.path.exists(temp): os.unlink(temp)
-    same = sorted((p.name for p in folder.glob('zook-%s-*.json*' % kind) if BACKUP_NAME.fullmatch(p.name)), key=lambda n: re.search(r'\d{8}-\d{6}', n).group(0))
-    for old in same[:-BACKUP_KEEP[kind]]:
-        try: (folder / old).unlink()
-        except OSError: pass
+    raw = json.dumps(data, ensure_ascii=False).encode('utf-8', 'surrogatepass')
+    try: backup_save(folder, name, lambda out: backup_gzip(out, raw))
+    except OSError:
+        if folder == backup_home(store): raise
+        folder = backup_home(store); backup_save(folder, name, lambda out: backup_gzip(out, raw))  # the chosen folder cannot be written now
+    backup_trim(store, kind)
+    if label: backup_label_save(store, name, label)
     return name
 
 
 def backup_daily(store):
-    """Lock held. Makes today's copy if there is none yet."""
-    today = datetime.datetime.now().strftime('%Y%m%d')
-    if any(p.name.startswith('zook-auto-' + today) for p in backup_dir(store).glob('zook-auto-*.json*')): return None
-    return backup_write(store, 'auto', store.data)
+    """Lock held. Makes the automatic copy when one is due (設定: on or off, daily or weekly). Not while one with files is being written."""
+    if store.__dict__.get('backup_running') or not backup_due(store): return None
+    return backup_make(store, 'auto')['name']
 
 
 def backup_check(data):
@@ -80,6 +74,7 @@ def backup_check(data):
     for g in data.get('groups') or []:
         if 'taskRun' in g and not task_run_ok(g['taskRun']): g.pop('taskRun')  # 任務引擎's books, only in the shape Zook writes
     task_settings_clean(data['settings'])
+    if isinstance(data['settings'].get('backup'), dict): data['settings']['backup'].pop('folder', None)  # a place on some Mac's disk is never taken from a copy
     for bot in data['bots'] + [b for b in data.get('deletedBots') or [] if isinstance(b, dict)]:  # what this Mac allows is never in a copy
         bot['scripts'] = False; limit_locally(bot)
     data['settings'].update(gateFullSet=True, scriptsOff=True, heldTold=True)  # and the one-time upgrades do not grant it afterwards; what a restore holds in is told by the restore
@@ -94,14 +89,14 @@ def backup_check(data):
 def backup_restore(app, name):
     """Lock held. Put a copy back. What is there now is saved first, so a restore can itself be undone."""
     store = app.store
-    if not isinstance(name, str) or not BACKUP_NAME.fullmatch(name): raise ValueError('找不到這份備份。')
-    path = backup_dir(store) / name
-    if not path.is_file(): raise ValueError('找不到這份備份。')
-    if any(j['status'] == 'running' for j in store.data['jobs']) or any(g.get('status') == 'running' for g in store.data['groups']):
-        raise Busy('有 Bot 正在回覆，等它結束再還原。')
-    if path.stat().st_size > MAX_BACKUP_FILE: raise ValueError('備份檔太大。')
+    path = backup_path(store, name)
+    if not path: raise ValueError('找不到這份備份。')
+    busy = backup_busy(store)
+    if busy: raise Busy(backup_busy_text(busy))
+    if store.__dict__.get('backup_restoring'): raise Busy('上一次還原的檔案還在補回，完成後再試。')
+    if backup_too_big(path): raise ValueError('備份檔太大。')
     try: data = backup_check(backup_read(path))
-    except (OSError, EOFError, UnicodeError, RecursionError): raise ValueError('這份備份無法讀取，資料沒有變動。')
+    except (OSError, EOFError, UnicodeError, RecursionError, KeyError, _zipfile.BadZipFile): raise ValueError('這份備份無法讀取，資料沒有變動。')
     for bot in data['bots']: bot.pop('queue', None)  # messages that were waiting when the copy was made have been sent since
     for job in data.get('jobs') or []:  # a reply running when the copy was made belongs to the Zook that ran it: never started again here
         if isinstance(job, dict) and job.get('status') == 'running':
@@ -111,7 +106,7 @@ def backup_restore(app, name):
     halted = sync_halt(store)  # saved first: if Zook stops halfway, the older data is never sent to the other Macs
     # This Mac's own pairing, sign-ins and sync stay as they are: they belong to the machine, not to the copy.
     keep = {key: copy.deepcopy(store.data.get(key)) for key in ('remoteDevices', 'sync') if key in store.data}
-    keep_remote = {key: copy.deepcopy(store.data['settings'][key]) for key in ('remote', 'remoteExpiry') if key in store.data['settings']}
+    keep_settings = {key: copy.deepcopy(store.data['settings'][key]) for key in ('remote', 'remoteExpiry', 'backup') if key in store.data['settings']}  # and where and how this Mac backs up
     # A triggered schedule goes on from where it is now, so files and mails it has already handled do not start it again.
     progress = {x['id']: {k: copy.deepcopy(x[k]) for k in ('watchSeen', 'mailState', 'mailWaiting') if k in x} for x in store.data['schedules']}
     for item in data.get('schedules') or []:
@@ -120,7 +115,8 @@ def backup_restore(app, name):
     previous = store.path.read_bytes(); root, aside = store.chat_root(), store.dir / (CHAT_FOLDER + '.old')
     try:
         data.update(keep)
-        data.setdefault('settings', {}).update(keep_remote)  # with this Mac's phones goes how long they stay valid
+        data.setdefault('settings', {}).update(keep_settings)  # with this Mac's phones goes how long they stay valid
+        if 'backup' not in keep_settings: data['settings'].pop('backup', None)
         browser_keep_local(store.data, data)  # a copy never turns the browser on
         task_keep_local(store.data, data)  # nor 任務引擎, nor work that starts by itself
         usage_detect_keep_local(store.data, data)  # nor 自動偵測使用量
@@ -144,9 +140,13 @@ def backup_restore(app, name):
     store.data = fresh.data; _active['data'] = store.data
     store.chat_forget()  # the files on disk are the copy's now
     store.save(everything=True)
-    held_told(store, held, '還原備份後，這些 Bot 不是這台 Mac 現在允許的樣子')
+    held_names = held_told(store, held, '還原備份後，這些 Bot 不是這台 Mac 現在允許的樣子')
+    files = backup_is_files(path)
+    if files:  # the files that are missing now are put back in the background; the user is told when it is done
+        store.__dict__['backup_restoring'] = True
+        threading.Thread(target=backup_files_restore, args=(store, path), daemon=True).start()
     # Older data must not be sent to the other Macs as if it were new, nor its gaps as deletions: syncing stops until it is switched on again.
-    return safety, halted
+    return safety, halted, dict(restored=backup_counts(store.data), held=held_names, filesPending=files)
 
 
 def sync_halt(store):
@@ -166,10 +166,10 @@ def recover_data(store):
     try: os.replace(store.path, store.dir / kept)
     except OSError: kept = ''
     for backup in backup_list(store):
-        if backup['kind'] == 'file' or backup['size'] > MAX_BACKUP_FILE: continue  # a file brought in from elsewhere was never this Mac's data
+        if backup['kind'] == 'file' or backup_too_big(backup_path(store, backup['name']) or pathlib.Path('/nonexistent')): continue  # a file brought in from elsewhere was never this Mac's data
         try:
-            store.data = backup_check(backup_read(backup_dir(store) / backup['name']))
-        except (OSError, ValueError, UnicodeError, RecursionError, EOFError): continue
+            store.data = backup_check(backup_read(backup_path(store, backup['name'])))
+        except (OSError, ValueError, UnicodeError, RecursionError, EOFError, KeyError, TypeError, _zipfile.BadZipFile): continue
         for bot in store.data['bots']: bot.pop('queue', None)
         # Nothing on this Mac says what it allows now, and the copy may be from before something was taken back: every Bot is held in,
         # no connector or custom CLI is on, and phones pair again.
@@ -255,7 +255,7 @@ def drop_removed_providers(store):
 
 SETTING_NAMES = {'permissionMode': '主動性', 'webSearch': '上網搜尋', 'browserAutomation': '排程與觸發可用內建瀏覽器', 'provider': '預設提供者', 'model': '預設模型', 'fallbacks': '備用模型', 'access': '存取範圍', 'accessFolder': '存取範圍',
                  'features': '功能開關', 'effort': '思考強度', 'remote': '手機連線', 'remoteExpiryDays': '手機自動失效期限', 'autoUpdateCheck': '自動檢查更新', 'usageDetectEvery': '自動偵測使用量', 'scheduleNotify': '通知', 'sharedMcp': '共用連接器', 'disabledSkills': 'Skills 開關',
-                 'disabledPlugins': '插件開關', 'autoModels': '自動選擇的模型', 'autoAccounts': '自動選擇的帳號', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步', 'voiceLang': '語音輸入語言', 'streamReplies': '回覆逐字顯示', 'queueWhenBusy': 'Bot 忙碌時排隊', 'usageCardSort': '剩餘額度排序', 'usageCardOrder': '剩餘額度排序', 'keepCli': '保持 CLI 開啟', 'backgroundRuns': '結束時繼續在背景跑', 'autoCompact': '對話過長時自動整理'}
+                 'disabledPlugins': '插件開關', 'backup': '備份設定', 'autoModels': '自動選擇的模型', 'autoAccounts': '自動選擇的帳號', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步', 'voiceLang': '語音輸入語言', 'streamReplies': '回覆逐字顯示', 'queueWhenBusy': 'Bot 忙碌時排隊', 'usageCardSort': '剩餘額度排序', 'usageCardOrder': '剩餘額度排序', 'keepCli': '保持 CLI 開啟', 'backgroundRuns': '結束時繼續在背景跑', 'autoCompact': '對話過長時自動整理'}
 BOT_FIELD_NAMES = {'name': '名稱', 'persona': '人格檔案', 'instructions': '工作指示', 'provider': '模型', 'model': '模型', 'account': '帳號', 'permissionMode': '主動性', 'access': '存取範圍', 'accessFolder': '存取範圍',
                    'fallbacks': '備用模型', 'features': '功能開關', 'effort': '思考強度', 'isAdmin': '管理員身分', 'enabledMcp': '連接器', 'scripts': '允許本機腳本'}
 
@@ -400,7 +400,7 @@ def budget_view(store):
 
 def upkeep_fields(data, body, changes):
     """Checks the settings this file owns. Used by update() for kind 'settings'."""
-    browser_fields(body, changes); task_fields(body, changes)
+    browser_fields(body, changes); task_fields(body, changes); backup_fields(data, body, changes)
     if 'rules' in body:
         if not isinstance(body['rules'], str) or len(body['rules']) > 10000: raise ValueError('固定規則太長，最多 10000 字。')
         changes['rules'] = body['rules'].strip()
@@ -460,22 +460,21 @@ def upkeep_route(handler, store, parts, path):
         kind = (parse_qs(urlsplit(handler.path).query).get('kind') or [''])[0]
         return handler.respond(200, activity_list(store, kind if kind in ACTIVITY_KINDS else ''))
     if path == '/api/budget' and method == 'GET': return handler.respond(200, budget_view(store))
-    if path == '/api/backups' and method == 'GET': return handler.respond(200, dict(items=backup_list(store)))
-    if path == '/api/backups' and method == 'POST':
-        name = backup_write(store, 'manual', store.data); log_activity(store, 'backup', '建立備份')
-        return handler.respond(201, dict(name=name, items=backup_list(store)))
+    if parts[:2] == ['api', 'backups']:
+        if backup_route(handler, store, parts, path): return
     if path == '/api/backups/file' and method == 'POST':
         name = backup_write(store, 'file', backup_check(handler.body(MAX_BACKUP_FILE).get('data'))); log_activity(store, 'backup', '從檔案加入一份備份')
         return handler.respond(201, dict(name=name, items=backup_list(store)))
     if n == 4 and parts[3] == 'restore' and method == 'POST':
-        try: safety, stopped = backup_restore(handler.server, parts[2])
+        try: safety, stopped, more = backup_restore(handler.server, parts[2])
         except Busy as exc: return handler.error(409, str(exc))
         log_activity(store, 'backup', '還原備份 %s（還原前的資料另存為 %s）%s' % (parts[2], safety, '，並停止同步' if stopped else ''))
-        return handler.respond(200, dict(ok=True, safety=safety, syncStopped=stopped))
+        return handler.respond(200, dict(more, ok=True, safety=safety, syncStopped=stopped))
     if n == 3 and method == 'DELETE':
-        if not BACKUP_NAME.fullmatch(parts[2]) or not (backup_dir(store) / parts[2]).is_file(): return handler.error(404, '找不到這份備份。')
-        (backup_dir(store) / parts[2]).unlink(); log_activity(store, 'backup', '刪除備份 ' + parts[2])
-        return handler.respond(200, dict(items=backup_list(store)))
+        found = backup_path(store, parts[2])
+        if not found: return handler.error(404, '找不到這份備份。')
+        found.unlink(); backup_label_save(store); log_activity(store, 'backup', '刪除備份 ' + parts[2])
+        return handler.respond(200, backup_view(store))
     return handler.error(404, '找不到資源。')
 
 
@@ -632,16 +631,16 @@ def recover_deleted_bots(store):
     alive = {b['id'] for b in store.data['bots']} | {b.get('id') for b in store.data.get('deletedBots') or []}
     wanted = ({j['botId'] for j in store.data['jobs']} | set(store.data.get('usageArchive') or {})) - alive
     if not wanted: return True
-    files = [p for p in list(store.dir.glob('swarmr*.json')) + list(backup_dir(store).glob('zook-*.json*')) if p != store.path]
+    files = [p for p in list(store.dir.glob('swarmr*.json')) + [f for folder in backup_folders(store) for f in folder.glob('zook-*')] if p != store.path]
     def age(path):
         try: return path.stat().st_mtime
         except OSError: return 0
     for path in sorted(files, key=age, reverse=True)[:60]:  # the newest copy that still has the Bot is the closest to how it was
         if not wanted: break
         try:
-            if path.is_symlink() or path.stat().st_size > MAX_BACKUP_FILE: continue
+            if path.is_symlink() or (backup_too_big(path) if path.name.startswith('zook-') else path.stat().st_size > MAX_BACKUP_FILE): continue
             old = backup_read(path)
-        except (OSError, ValueError, UnicodeError, RecursionError, EOFError): continue
+        except (OSError, ValueError, UnicodeError, RecursionError, EOFError, KeyError, _zipfile.BadZipFile): continue
         for bot in (old.get('bots') if isinstance(old, dict) and isinstance(old.get('bots'), list) else []):
             if isinstance(bot, dict) and bot.get('id') in wanted and isinstance(bot.get('name'), str) and bot['name'].strip():
                 wanted.discard(bot['id'])

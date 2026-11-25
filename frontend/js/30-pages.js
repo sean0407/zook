@@ -271,6 +271,8 @@
     return all.length ? all.map(x => `<div class="card"><h3>${esc(x.name)}</h3><p>${esc(x.description||x.source||x.kind)}</p><span class="status">${esc(x.status|| (x.installed?'已偵測':'設定狀態未知'))}</span></div>`).join('') : '<div class="blank">沒有符合的項目。</div>'
   }
 
+  // A date in names of downloaded files (#51), so several exports do not look alike: 20261125.
+  const fileDay = () => { const d = new Date(); return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`; };
   function download(content, name, type) {
     let url = URL.createObjectURL(new Blob([content], {
       type
