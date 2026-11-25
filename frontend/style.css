@@ -1057,12 +1057,25 @@ button {
 .approval-card { margin:0 auto 12px; padding:14px 16px; border:1px solid #e5cf9a; border-radius:12px; background:#fffaf0; max-width:800px; }
 .approval-card p { margin:6px 0; overflow-wrap:anywhere; }
 .task-board { margin:6px auto 10px; padding:8px 14px; border:1px solid #d9e2ec; border-radius:10px; background:#f7f9fc; max-width:800px; font-size:13px; }
-.task-board summary { cursor:pointer; display:flex; align-items:center; gap:8px; }
+.task-board summary { cursor:pointer; display:flex; align-items:center; flex-wrap:wrap; gap:4px 8px; }
 .task-list { margin:8px 0 2px; padding-left:0; list-style:none; display:grid; gap:6px; }
-.task-row { display:flex; gap:10px; align-items:flex-start; }
-.task-row .pill { flex:none; }
 .task-title { min-width:0; overflow-wrap:anywhere; }
-.task-detail { display:block; color:#666; margin-top:2px; }
+.task-detail { display:block; color:#555; margin-top:3px; line-height:1.5; overflow-wrap:anywhere; }
+/* #130: 下一步 under the title, and one card per task */
+.task-next { flex-basis:100%; display:flex; gap:8px; align-items:baseline; color:#444; line-height:1.5; }
+.task-next strong { flex:none; font-weight:600; color:#1f66c9; }
+.task-next.you strong { color:#a26200; }
+@media (max-width:600px) { .task-next { flex-direction:column; gap:2px; } }
+.task-steps { margin:10px 0 4px; padding:0; list-style:none; display:grid; gap:8px; }
+.task-step { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border:1px solid #e3e8ee; border-radius:8px; background:#fff; }
+.task-num { flex:none; width:22px; height:22px; border-radius:50%; background:#e8edf3; color:#445; font-size:12px; font-weight:600; display:flex; align-items:center; justify-content:center; }
+.task-body { flex:1; min-width:0; }
+.task-head { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+.task-who { color:#777; margin-top:2px; }
+.task-acts { display:flex; gap:14px; margin-top:6px; }
+.member-row .pill.host-pill { display:inline-block; margin-left:6px; padding:1px 8px; font-size:11px; font-weight:500; background:#e6f0fe; color:#1f66c9; vertical-align:1px; }
+/* #223①: what an empty group does */
+.group-howto { margin:14px 0 0; padding:0 0 0 22px; max-width:520px; text-align:left; color:#555; line-height:1.6; font-size:14px; display:grid; gap:6px; }
 .pill.live { background:#e6f0fe; color:#1f66c9; }
 .pill.muted { background:#eee; color:#777; }
 .browsing-card { display:flex; align-items:center; gap:10px; margin:0 auto 10px; padding:8px 14px; border:1px solid #cfe0f5; border-radius:10px; background:#f3f8fe; max-width:800px; font-size:13px; }
@@ -2049,6 +2062,25 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 /* #63: a required field left empty says so right under it */
 .field-error { display: block; color: #c0392b; font-size: 12px; margin-top: 4px; font-weight: 500; }
 .modal [aria-invalid="true"] { border-color: #d33; box-shadow: 0 0 0 1px #d33; }
+/* #224 #209: what is still missing, beside the buttons; required fields marked; how much a long text may hold; a name in use (#156 #115) */
+.form-need { flex: 1; min-width: 0; margin: 0; align-self: center; text-align: right; color: #c0392b; font-size: 13px; font-weight: 500; }
+.need-mark { margin-left: 6px; padding: 0 6px; border-radius: 8px; background: #fdecea; color: #c0392b; font-size: 11px; font-weight: 600; }
+.char-count { display: block; margin-top: 4px; text-align: right; font-size: 11px; }
+.char-count.at-limit { color: #c0392b; font-weight: 500; }
+.char-count[hidden], .name-taken[hidden] { display: none; }
+.bot-names .field-hint { margin-top: 0; text-align: left; }
+.name-taken { color: #a15c00; }
+.setting-row.row-need { box-shadow: inset 3px 0 0 #d33; }
+/* 模型與帳號 takes the whole width, so an account's name is not cut off in the box (#44⑥) */
+#bot-form .form-grid > label.field { grid-column: 1 / -1; }
+/* #157: a long Bot or group name stays on one line and ends in … instead of running under 所有對話／開新對話／匯出對話 */
+.main-header .bot-pill { display: block; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.main-header .bot-pill > .avatar, .main-header .bot-pill > .avatar-stack { display: inline-flex; vertical-align: middle; margin-right: 8px; }
+@media (min-width: 1251px) {
+  .main-header { display: grid; padding-left: 24px; grid-template-columns: minmax(0, 1fr) minmax(0, max-content) minmax(max-content, 1fr); }
+  .main-header .bot-pill { grid-column: 2; justify-self: center; max-width: 100%; }
+  .main-header .header-actions { grid-column: 3; justify-self: end; position: static; margin: 0 24px 0 8px; }
+}
 /* Side panel in a narrow window (#118, #60, #152): at or below 1100 wide (DETAIL_WIDE in 10-chat.js) it covers the page from the right
    with a dimmed backdrop instead of squeezing the conversation; × , the backdrop or Escape close it. Wider windows keep it beside the conversation. */
 .detail-backdrop { display: none; }

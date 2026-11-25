@@ -52,6 +52,9 @@ class CheckView(unittest.TestCase):
         verify = verify[:verify.index('\n  }\n')]
         self.assertNotIn('confirm(', verify); self.assertIn('state.verifyNotes[id]', verify); self.assertIn('needsConfirm', verify)
 
+    def test_conclusion_after_a_passed_check_says_so(self):
+        self.assertIn("${m.afterCheck ? ' <span class=\"muted\">· 查核通過後自動整理</span>' : ''}", self.js)  # #222
+
     def test_one_button_per_reply_and_none_without_another_member(self):
         button = self.js[self.js.index('const groupVerifyButton'):]
         button = button[:button.index('\n  };\n')]
