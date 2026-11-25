@@ -105,6 +105,7 @@ class HeldAccessForm(unittest.TestCase):
     def test_the_held_row_is_shown_and_explained(self):
         src = JS['20-models.js']
         self.assertIn('data-held-access', src)
+        self.assertIn('b.localLimit &&', re.search(r'const heldOn = .*', src).group(0))  # only a Bot Zook held in: the menu starts at what it has
         row = re.search(r'const HELD_ACCESS_NOTE = .*', src).group(0)
         self.assertIn('安全檢查生效', row); self.assertIn('工作資料夾', row)
         sync = re.search(r'function syncFeatureRows\(form\) \{.*?\n  \}', src, re.S).group(0)
