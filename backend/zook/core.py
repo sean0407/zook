@@ -42,8 +42,8 @@ from urllib.parse import urlsplit, unquote, parse_qs
 MAX_BODY = 1024 * 1024
 MAX_CLI_OUTPUT = 128 * 1024 * 1024  # a CLI's event log can carry whole generated images
 # Thinking strength: 快速 / 標準 / 深入. 標準 passes nothing, so each CLI keeps its own default.
-EFFORTS = ('fast', 'standard', 'deep')
-EFFORT_LEVELS = dict(fast='low', deep='high')
+EFFORTS = ('fast', 'medium', 'standard', 'deep')  # standard = the CLI's own default; the others pass a level to it
+EFFORT_LEVELS = dict(fast='low', medium='medium', deep='high')
 PLAN_KINDS = ('codex', 'claude', 'grok', 'antigravity', 'cursor')  # the CLIs Zook can really hold to read-only
 SUBAGENT_NOTE = '\n這裡不能派出子代理或內部執行助手。如果 Skill 或規則要求派出，改由你自己直接完成，不要因此停下來。'
 PLAN_NOTE = ('\n先規劃：這次只提出計畫，不要動手。用條列說明要做什麼、步驟順序、會動到哪些檔案或服務、哪些動作需要使用者核准。'
