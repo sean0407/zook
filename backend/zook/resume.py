@@ -10,6 +10,7 @@ RESUME_HOURS = 24
 RESUME_KINDS = ('codex', 'claude')  # CLIs whose conversation id is known while the reply is still running
 RESUME_MARK = '接續 Zook 重啟前中斷的回覆'
 RESUME_SAVED = '這個模型接不回原本的對話，改用 Zook 保存的對話內容'
+TASK_CUT_NOTE = 'Zook 重新啟動時這項工作還在做，可能已經做了一部分，請確認後按重試或接受結果。'
 INTERRUPT_NOTE = ('\n\n（Zook 系統提示）Zook 剛才重新啟動，你上一次回覆在中途被中斷了。請先確認做到哪裡（例如檢查已經寫好或改過的檔案），'
                   '不要重複已經完成的動作，再從中斷的地方接著完成。之前等使用者核准的動作已經失效，需要的話會重新詢問。')
 
@@ -154,6 +155,72 @@ def resume_job(job, chat, old, use, note, content):
     return note.strip() + '\n\n使用者原本的要求：' + content
 
 
+# #285: a CLI's built-in tools reach the reply's record only when its turn ends, so after a restart Zook cannot see a command that
+# already ran. While a reply runs, the first built-in tool its CLI starts is noted on the job at once (usedTools). Only a reply
+# known to have used none (watched from its start, nothing seen) is carried on by itself; the others wait for 「接著做」.
+WATCH_KINDS = ('claude', 'codex', 'grok', 'cursor', 'antigravity')  # CLIs whose output says when a built-in tool starts
+CODEX_QUIET_ITEMS = ('agent_message', 'reasoning', 'todo_list', 'error')
+
+
+def _zook_tool(name):
+    n = str(name or '').lower()
+    return n.startswith('mcp__zook') or n.startswith('zook_') or n.startswith('zook__')  # Zook's own: in job['toolCalls'] as they are used
+
+
+def native_tool_started(kind, d):
+    """Whether this line of a CLI's output starts (or reports) one of its built-in tools. Zook's own tools do not count."""
+    if kind == 'claude':
+        message = d.get('message') if d.get('type') == 'assistant' and isinstance(d.get('message'), dict) else {}
+        return any(isinstance(b, dict) and b.get('type') in ('tool_use', 'server_tool_use') and not _zook_tool(b.get('name')) for b in message.get('content') or [] if isinstance(message.get('content'), list))
+    if kind == 'codex':
+        item = d.get('item') if str(d.get('type') or '').startswith('item.') and isinstance(d.get('item'), dict) else {}
+        if not item or item.get('type') in CODEX_QUIET_ITEMS: return False
+        return not (item.get('type') == 'mcp_tool_call' and str(item.get('server') or '') == 'zook')
+    if kind == 'grok': return d.get('type') == 'tool_call' and not _zook_tool(d.get('toolName') or d.get('title') or '')
+    if kind == 'cursor':
+        call = d.get('tool_call') if d.get('type') == 'tool_call' and isinstance(d.get('tool_call'), dict) else {}
+        return bool(call) and not any(k in call for k in ('mcpToolCall', 'getMcpToolsToolCall'))  # Zook is its only MCP server
+    if kind == 'antigravity':
+        step = d.get('step_update') if isinstance(d.get('step_update'), dict) else {}
+        return step.get('step_type') == 'tool' and not _zook_tool(step.get('tool_name'))
+    return False
+
+
+def tool_watch(store, job_id, kind, inner):
+    """feed(bytes) that marks the job (usedTools, saved at once) when the CLI first starts a built-in tool, then passes the bytes on."""
+    state = dict(pending=bytearray(), done=False)
+    def feed(chunk):
+        try:
+            if not state['done'] and chunk:
+                state['pending'] += chunk
+                *lines, rest = bytes(state['pending']).split(b'\n')
+                state['pending'] = bytearray(rest[-4 * 1024 * 1024:])
+                for line in lines:
+                    line = line.strip()
+                    if not line.startswith(b'{'): continue
+                    try: d = json.loads(line.decode('utf-8', 'replace'))
+                    except ValueError: continue
+                    if isinstance(d, dict) and native_tool_started(kind, d):
+                        state['done'] = True
+                        with store.lock:
+                            job = store.find('jobs', job_id)
+                            if job is not None and not job.get('usedTools'): job['usedTools'] = True; store.save()  # on disk before a crash can come
+                        break
+        except Exception: pass
+        if inner: inner(chunk)
+    return feed
+
+
+def resume_blocked(job):
+    """Why a cut-off reply is not carried on by itself, or ''. Doing it again could repeat what it already did outside."""
+    if task_acted_outward(job): return '中斷前可能已經對外做了一部分（例如寄出或改了連接的服務），所以沒有自動接著做。確認後可以按「接著做」。'
+    if job.get('usedTools'): return '中斷前已經用了指令或工具，Zook 看不到它做到哪（可能已經做了一部分），所以沒有自動接著做。確認後可以按「接著做」。'
+    access = job.get('nativeAccess')
+    could = not isinstance(access, list) or len(access) < 4 or bool(access[3])  # older records: not known
+    if could and job.get('toolWatch') is not True: return 'Zook 無法確認中斷前有沒有用過指令或工具（可能已經做了一部分），所以沒有自動接著做。確認後可以按「接著做」。'
+    return ''
+
+
 def resume_feed(store, job_id, kind, keep_session, resume, feed, where):
     """The output feed of a reply, which also notes the CLI conversation it writes into as soon as that is known.
     A carried-on reply says under it whether it continued its CLI conversation or was sent Zook's saved one."""
@@ -161,6 +228,8 @@ def resume_feed(store, job_id, kind, keep_session, resume, feed, where):
         job = store.find('jobs', job_id) or {}
         message = find_message(store.find('bots', job.get('botId')), job.get('messageId')) if job.get('resumeOf') else None
         if message is not None: message['note'] = RESUME_MARK if resume else RESUME_MARK + '（' + RESUME_SAVED + '）'
+        if job: job['toolWatch'] = job.get('toolWatch', True) is True and kind in WATCH_KINDS  # one try on a CLI it cannot watch: not known
+    feed = tool_watch(store, job_id, kind, feed) if kind in WATCH_KINDS else feed
     if not keep_session or kind not in RESUME_KINDS: return feed
     spot = lambda sid: note_cli_session(store, job_id, *where[:3], where[3], sid)
     if resume: spot(resume); return feed
@@ -198,8 +267,8 @@ class Resuming:
             place = self.resume_place(bot, old) if bot else None
             if not place: continue
             message = place[2]
-            if task_acted_outward(old):  # it may have sent or changed something outside: doing it again could do it twice
-                message.update(resumable=True, note='中斷前可能已經對外做了一部分（例如寄出或改了連接的服務），所以沒有自動接著做。確認後可以按「接著做」。'); continue
+            why = resume_blocked(old)  # #285: it may have run a command or sent something: doing it again could do it twice
+            if why: message.update(resumable=True, note=why); continue
             if not resume_age_ok(old['interrupted']):
                 message.update(resumable=True, note='Zook 關閉超過 %d 小時（或不知道關了多久），所以沒有自動接著做。' % RESUME_HOURS); continue
             try: self.continue_job(bot, old, inventory)
@@ -256,19 +325,16 @@ class Resuming:
             before = t.pop('before', None)
             if not before or t.get('aborted') or t.get('status') not in ('unknown', 'cancelled', 'stuck'): continue
             last = (t.get('attempts') or [{}])[-1]
-            cut = self.store.find('jobs', last.get('jobId')) if last.get('jobId') else None
             if before == 'verifying' or (before == 'running' and last.get('state') == 'reported' and last.get('outcome') == 'succeeded'):
                 t.update(status='verifying', verify=dict(state='waiting')); t.pop('note', None)  # the work reported done: only its check runs, nothing is done again
-            elif before == 'running' and cut and task_acted_outward(cut):
-                t.update(status='stuck', note=task_outward_note(cut) + '自動接著做可能重複，停下來等你決定。'); continue
-            elif before == 'running':
-                t.update(status='pending' if t.get('deps') else 'ready', resumed=True); t.pop('note', None)
-                if not t.get('resumeBonus'):  # the try that was cut off (or only reserved), once per task: restarts never lift the cap for good
-                    run['bonusAttempts'] = run.get('bonusAttempts', 0) + 1; t['resumeBonus'] = True
+            elif before == 'running':  # #285: commands it ran are not known until its turn ends, so it is never done again by itself
+                t.update(status='stuck', resumed=True, note=TASK_CUT_NOTE)  # a 重試 is told it was cut off (task_worker_prompt)
             elif before == 'review': t['status'] = 'review'
             else: t['status'] = before; t.pop('note', None)
         for g in run.get('gates') or []:
             if g.pop('before', None) == 'pending' and g.get('status') == 'cancelled': g.update(status='pending', since=time.time())
-        group['messages'].append(dict(id=ID(), role='system', content='Zook 重新啟動，任務從中斷的地方接著做：已完成的工作不重做，中斷的那一項會先確認做到哪。', createdAt=NOW()))
+        cut = [t for t in run['tasks'] if t.get('note') == TASK_CUT_NOTE and t.get('status') == 'stuck']
+        group['messages'].append(dict(id=ID(), role='system', content='Zook 重新啟動，任務從中斷的地方接著做：已完成的工作不重做' + (
+            '；中斷時還在做的%s停下來等你確認，看過後在任務看板上按「重試」或「接受結果」。' % ('、'.join('工作 %s' % t.get('n') for t in cut)) if cut else '。'), createdAt=NOW()))
         task_board_update(self.store, group)
         self.task_resume(group)
