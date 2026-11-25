@@ -28,8 +28,7 @@ def native_action(kind, value):
     """Activity entry for something a CLI's built-in tool did (a file it changed or a command it ran)."""
     value = str(value or '').strip()
     if kind == 'command':  # what it did and where, as on an approval card: never the command itself, which may hold a password
-        match = re.match(r"^/bin/(?:zsh|bash|sh) -lc (['\"]?)(.*)\1$", value, re.S)
-        return dict(name='native_command', category='code', arguments={'summary': command_summary(match.group(2) if match else value)})
+        return dict(name='native_command', category='code', arguments={'summary': command_summary(value)})  # the shell around it is taken off there
     return dict(name='native_write', category='internal', arguments={'path': value[:300]})
 
 
@@ -37,7 +36,7 @@ THINKING_EACH, THINKING_ALL = 2000, 8000  # characters of a CLI's own thinking k
 
 
 def command_summary(command):
-    try: return gate_module().command_summary(command)
+    try: return plain_command_summary(command)  # actwords.py
     except Exception: return '執行指令'
 
 
