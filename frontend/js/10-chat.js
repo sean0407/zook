@@ -9,19 +9,49 @@
     "'": '&#39;'
   } [c]));
 
-  // Minimal Markdown → HTML. Everything is escaped first; only known tags are produced and links must be http(s).
+  // A Markdown link's target → the opening tag, '' (show only its words) or null (not a link: leave the text as it is).
+  // Bots write paths with spaces or Chinese inside <…> (CommonMark), and sometimes break it: `(</tmp/a.docx> >)`, `(/tmp/a b.docx>)`.
+  // Only http(s) becomes a real link; a file on this Mac is a button that opens Zook's preview, never a page address.
+  const MD_LINK = /\[([^[\]]+)\]\((\s*<[^<>\n]*>[^()\n]*|(?:[^()\n]|\([^()\n]*\))*)\)/g;
+  // The target of a link without its <…>, title and stray '>'; and the file on this Mac it names ('' when it names none).
+  function mdTarget(inner) {
+    let t = inner.trim();
+    const q = t.slice(-1), from = /["']/.test(q) ? t.lastIndexOf(q, t.length - 2) : -1;
+    if (from > 0 && /\s/.test(t[from - 1])) t = t.slice(0, from).trim();  // a title: [a](<b> "title")
+    const angled = t.startsWith('<');
+    if (angled) { t = t.slice(1); const close = t.indexOf('>'); if (close >= 0) t = t.slice(0, close); }
+    let end = t.length; while (end && /[\s>]/.test(t[end - 1])) end--;  // a loop, not a regex: no slow backtracking on long spaces
+    t = t.slice(0, end).trim();
+    let path = '';
+    if (/^file:\/?\//i.test(t)) { path = t.replace(/^file:(\/\/(localhost)?)?/i, ''); try { path = decodeURIComponent(path); } catch (_) {} }
+    else if (/^(\/(?!\/)|~\/)/.test(t)) path = t;  // kept as written: a %20 may be part of the real name (the preview also tries it decoded)
+    if (!(path.startsWith('/') && !path.startsWith('//') || path.startsWith('~/'))) path = '';
+    return {t, angled, path};
+  }
+  function mdLinkOpen(inner) {
+    const {t, angled, path} = mdTarget(inner);
+    if (/^https?:\/\/[^\s<>"]+$/i.test(t) || (angled && /^https?:\/\/[^<>"]+$/i.test(t))) return `<a href="${esc(t.replace(/\s/g, '%20'))}" rel="noopener noreferrer">`;
+    if (path) return `<button type="button" class="link local-link" data-path="${esc(path)}" title="${esc(path)}">`;
+    if (angled || /^[a-z][a-z0-9+.-]*:/i.test(t) || /^[^\s]+\.[A-Za-z0-9]{1,8}$/.test(t)) return '';  // a bare file name or an unsafe kind of link: just its words
+    return null;
+  }
+  // Minimal Markdown → HTML. Everything is escaped; only known tags are produced (links: see mdLinkOpen).
   function mdInline(text) {
-    const codes = [];
-    let s = esc(text).replace(/`([^`\n]+)`/g, (_, c) => `\u0000${codes.push(c) - 1}\u0000`);
-    s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, t, u) => `<a href="${u}" rel="noopener noreferrer">${t}</a>`)
-      .replace(/\[([^\]\n]+)\]\(((?:file:\/\/)?\/[^\s)]+)\)/g, (_, t, u) => `<a href="${u}" class="local-link" title="${u}">${t}</a>`)
-      .replace(/\[([^\]\n]+)\]\(([^\s)]+\.[A-Za-z0-9]{1,8})\)/g, '$1')  // a link to a bare file name cannot open here: just its words
-      .replace(/(^|[\s(（])(https?:\/\/[^\s<)）]+)/g, (_, p, u) => `${p}<a href="${u}" rel="noopener noreferrer">${u}</a>`)
+    const held = [], raw = [], hold = (html, was) => { raw.push(was); return `\u0000${held.push(html) - 1}\u0000`; };
+    let s = String(text ?? '').replace(/\u0000/g, '').replace(/`([^`\n]+)`/g, (whole, c) => hold(`<code>${esc(c)}</code>`, whole));
+    s = s.replace(MD_LINK, (whole, label, inner) => {
+      const open = mdLinkOpen(inner.replace(/\u0000(\d+)\u0000/g, (_, i) => raw[i]));  // a ` in a file name is part of the name
+      if (open === null) return whole;
+      label = label.split('\n').map(x => x.trim()).join(' ');  // a long name the Bot wrapped onto two lines
+      return open ? hold(open) + label + hold(open.startsWith('<a') ? '</a>' : '</button>') : label;
+    });
+    s = esc(s)
+      .replace(/(^|[\s(（])(https?:\/\/[^\s<)）\u0000]+)/g, (_, p, u) => `${p}<a href="${u}" rel="noopener noreferrer">${u}</a>`)
       .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<strong>$1</strong>')
       .replace(/__(?=\S)([\s\S]*?\S)__/g, '<strong>$1</strong>')
       .replace(/~~(?=\S)([\s\S]*?\S)~~/g, '<del>$1</del>')
       .replace(/(^|[^*\w])\*(?=\S)([^*\n]*?\S)\*(?!\*)/g, '$1<em>$2</em>');
-    return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[i]}</code>`);
+    return s.replace(/\u0000(\d+)\u0000/g, (_, i) => held[i]);
   }
   function markdown(src) {
     const lines = String(src ?? '').replace(/\r\n?/g, '\n').split('\n'), out = [];
@@ -80,6 +110,10 @@
   };
   const svg = n => `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[n]||''}</svg>`;
   const colors = ['#111111', '#a47545', '#ff284b', '#ff6d0c', '#f59a0a', '#13bf78', '#14b8a6', '#2585f6', '#9254ff', '#ed2f9b', '#959595'];
+  // At or below this width the side panel covers the page instead of squeezing the conversation (#118, #60, #152); style.css uses the same number.
+  const DETAIL_WIDE = 1100;
+  const narrowDetail = () => window.matchMedia(`(max-width: ${DETAIL_WIDE}px)`).matches;
+  const detailBackdrop = () => '<div class="detail-backdrop" data-action="toggle-detail" aria-hidden="true"></div>';
   const state = {
     data: {
       bots: [],
@@ -93,7 +127,7 @@
     groupPollers: {},
     page: 'chat',
     detail: 'activity',
-    detailOpen: window.innerWidth > 1100,  // a narrow window keeps the conversation readable
+    detailOpen: !narrowDetail(),  // a narrow window keeps the conversation readable; the panel opens over it on request
     query: '',
     launcher: false,
     collapsed: {},
@@ -216,7 +250,8 @@
     url: '網址', field: '欄位', text: '文字', enter: '按 Enter', number: '連結編號', part: '第幾段', direction: '方向', account: '帳號', effort: '思考強度', jobTitle: '職稱'};
   const humanWords = t => String(t || '').replace(/[_-]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
   const skillName = id => (state.integrations?.skills || []).find(x => x.id === id)?.name || 'Skill';
-  const fileName = p => String(p || '').split('/').pop() || '檔案';
+  const inAttachments = p => /(^|\/)workspaces\/[^/]+\/attachments\/|^(\.\/)?attachments\//.test(String(p || ''));  // a Bot's own attachments folder
+  const fileName = p => (inAttachments(p) ? String(p).split('/').pop().replace(/^[0-9a-f]{8}-(?=.)/, '') : String(p || '').split('/').pop()) || '檔案';  // an upload without the id Zook put in front of it
   function describeCall(c) {
     const a = c.arguments || {};
     switch (c.name) {
@@ -249,7 +284,7 @@
       case 'web_search': return a.query ? `上網搜尋「${String(a.query).slice(0, 60)}」` : '上網搜尋';
       case 'native_write': return `修改檔案「${fileName(a.path)}」`;
       case 'native_command': return a.summary && a.summary !== '執行指令' ? String(a.summary).slice(0, 80) : '在工作資料夾執行指令';  // 「執行指令：python3、ls」 says which programs
-      case 'native_read': return `查看「${fileName(a.path) || '檔案'}」`;
+      case 'native_read': return inAttachments(a.path) ? `讀取你上傳的附件「${fileName(a.path)}」` : `查看「${fileName(a.path) || '檔案'}」`;
       case 'native_skill': return `使用 Skill「${String(a.name || 'Skill').slice(0, 60)}」`;
       case 'web_fetch': return `讀取網頁「${(String(a.url || '').match(/^https?:\/\/([^/]+)/) || [, a.url || '網頁'])[1]}」`;
     }
@@ -260,6 +295,8 @@
     [/unavailable|not found|No such/i, '找不到需要的資料'], [/exceeds|too large|limit/i, '內容太大'], [/timed? ?out|timeout/i, '等太久沒有回應'],
     [/authori|401|403|sign in/i, '需要先登入這個服務'], [/connect|ECONN|network/i, '連不上這個服務']];
   const humanError = e => (ERROR_WORDS.find(([re]) => re.test(String(e || ''))) || [null, '沒有成功'])[1];
+  // A step that did not go through says why in words next to it (你沒有允許、找不到需要的資料…), not only by its red dot.
+  const evNote = (cls, label) => cls === 'bad' ? `<small class="ev-count">（${esc(label)}）</small>` : '';
   function callStatus(c) {
     if (c.status === 'waiting_approval') return ['wait', '等你核准'];
     if (c.status === 'running' || c.status === 'pending') return ['run', '進行中'];
@@ -324,9 +361,9 @@
       let [cls, label] = callStatus(c);
       if ((cls === 'wait' || cls === 'run') && !c.jobRunning) [cls, label] = ['bad', '已中斷'];
       const who = showWho ? (state.data.bots.find(b => b.id === c.botId)?.name || 'Bot') + ' ' : '';
-      return {cls, label, text: who + describeCall(c), where: c.groupName && !showWho ? c.groupName : '', title: label + (c.name === 'native_command' && (c.arguments?.summary || c.arguments?.command) ? '：' + (c.arguments.summary || c.arguments.command) : ''), n: 1};
-    }).reduce((out, r) => { const last = out[out.length - 1]; if (last && last.text === r.text && last.cls === r.cls && last.where === r.where) last.n++; else out.push(r); return out; }, []);  // the same step several times in a row: one line with a count
-    return `<div class="tool-timeline">${rows.map(r => `<div class="tool-event ${r.cls}" title="${esc(r.title)}"><span class="ev-dot ${r.cls}" role="img" aria-label="${esc(r.label)}"></span><span class="ev-text">${esc(r.text)}${r.n > 1 ? `<small class="ev-count">（連續 ${r.n} 次）</small>` : ''}${r.where ? `<small class="ev-where">在群組「${esc(r.where)}」</small>` : ''}</span></div>`).join('')}</div>`;
+      return {cls, label, text: who + describeCall(c), where: c.groupName && !showWho ? c.groupName : '', title: label + (c.name === 'native_command' && c.arguments?.summary ? '：' + c.arguments.summary : ''), n: 1};
+    }).reduce((out, r) => { const last = out[out.length - 1]; if (last && last.text === r.text && last.cls === r.cls && last.label === r.label && last.where === r.where) last.n++; else out.push(r); return out; }, []);  // the same step several times in a row: one line with a count
+    return `<div class="tool-timeline">${rows.map(r => `<div class="tool-event ${r.cls}" title="${esc(r.title)}"><span class="ev-dot ${r.cls}" role="img" aria-label="${esc(r.label)}"></span><span class="ev-text">${esc(r.text)}${evNote(r.cls, r.label)}${r.n > 1 ? `<small class="ev-count">（連續 ${r.n} 次）</small>` : ''}${r.where ? `<small class="ev-where">在群組「${esc(r.where)}」</small>` : ''}</span></div>`).join('')}</div>`;
   }
   // An empty conversation opens with the Bot's own greeting and questions you might ask it (made from its persona when it was
   // created). A Bot from before that asks for them once; until they arrive, a plain hello.
@@ -353,7 +390,7 @@
     const messages = convMessages(b);
     const running = Object.entries(state.pollers).find(([id, v]) => v.botId === b.id && !v.stopping && (state.jobDetails[id]?.chatId || b.chatId) === b.chatId);  // a stopped reply still ending is not running
     const lastDone = [...messages].reverse().find(m => m.role !== 'user' && m.status !== 'running'), fileList = botFiles(b.id, (lastDone?.id || '') + ':' + messages.length);  // a finished reply may have made a file
-    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-bot">${avatar(b)}${esc(b.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn chat-title-btn" data-action="chats" title="目前：${esc(chatName(b))}。查看和切換這個 Bot 的所有對話">☰ 所有對話</button><button class="text-btn" data-action="new-chat" title="和這個 Bot 開始一段新的對話">＋ 開新對話</button><button class="text-btn" data-action="chat-folder" title="在 Finder 打開這段對話的資料夾：沒指定存放位置時，Bot 交出的檔案都放這裡">打開資料夾</button><button class="text-btn" data-action="share">↑ 匯出對話</button>${!state.detailOpen?'<button class="text-btn" data-action="toggle-detail">顯示詳情</button>':''}</div></header>${guideCard()}<div class="conversation" id="conversation">${messages.length?`<div class="conversation-inner">${olderBar(b)}${messages.map(m=>`${m.compacted ? '<div class="compact-line"><span>前面的對話已整理成摘要，Bot 從這裡接續</span></div>' : ''}<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message ${m.role==='user'?'user':'assistant'}" data-mid="${esc(m.id)}">${m.role==='user'?'':avatar(b)}${partialFor(m)?`<div class="bubble md streaming">${markdown(partialFor(m))}</div>`:m.role!=='user'&&m.content&&m.status!=='running'?`<div class="bubble md ${m.status==='failed'?'error-text':''}">${withAutoMark(linkOutputs(markdown(m.content), b.id), m)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(m.status==='running'?'正在思考…':m.status==='cancelled'&&!m.content?'已停止回覆':m.status==='failed'&&!m.content?(Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。'):m.content)}</div>`}${waitLine(m)}${attachmentsView(m)}${m.role!=='user'&&m.content&&m.status!=='running'?messageFiles(m.content, fileList):''}${sentNote(m)?`<div class="interject-note">${sentNote(m)}</div>`:''}${redoBar(b, m, running)}</div>`).join('')}${queuedView(b)}${sendingView(b.id + '/' + b.chatId, messages, b.queue || [])}${choiceButtons(b, messages, running)}</div>`:state.sending.some(x => x.where === b.id + '/' + b.chatId)?`<div class="conversation-inner">${sendingView(b.id + '/' + b.chatId, messages)}</div>`:emptyIntro(b)}</div>${chatRail()}<div class="composer-wrap">${toBottomButton()}${browsingCard(b.id)}${approvalCards(b.id)}${questionCards(b.id)}<div id="slash-menu" class="mention-menu slash-menu" role="listbox" aria-label="指令" hidden></div><form class="composer" id="chat-form">${pendingFiles()}<button type="button" class="icon-btn round-btn" data-action="composer-menu" aria-label="更多選項">${svg('plus')}</button><textarea id="chat-input" rows="1" placeholder="傳送訊息給 ${esc(b.name)}，輸入 / 使用指令" aria-label="輸入訊息"></textarea>${modeChips(b)}<button type="button" class="icon-btn round-btn" data-action="voice" aria-label="語音輸入">${svg('mic')}</button>${running?`<button type="button" class="send" data-action="cancel-job" data-id="${esc(running[0])}" aria-label="停止回覆">■</button><button class="send" type="submit" aria-label="傳送訊息" title="像是修正或補充的訊息會插進正在跑的回覆，其他的排在後面">↑</button>`:`<button class="send" type="submit" aria-label="傳送訊息">↑</button>`}</form></div></main>${state.detailOpen?detail(b):''}`
+    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-bot">${avatar(b)}${esc(b.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn chat-title-btn" data-action="chats" title="目前：${esc(chatName(b))}。查看和切換這個 Bot 的所有對話">☰ 所有對話</button><button class="text-btn" data-action="new-chat" title="和這個 Bot 開始一段新的對話">＋ 開新對話</button><button class="text-btn" data-action="chat-folder" title="在 Finder 打開這段對話的資料夾：沒指定存放位置時，Bot 交出的檔案都放這裡">打開資料夾</button><button class="text-btn" data-action="share" title="把這段對話存成 Markdown 檔（附件只列檔名）">↑ 匯出對話</button>${!state.detailOpen?'<button class="text-btn" data-action="toggle-detail">顯示詳情</button>':''}</div></header>${guideCard()}<div class="conversation" id="conversation">${messages.length?`<div class="conversation-inner">${olderBar(b)}${messages.map(m=>`${m.compacted ? '<div class="compact-line"><span>前面的對話已整理成摘要，Bot 從這裡接續</span></div>' : ''}<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message ${m.role==='user'?'user':'assistant'}" data-mid="${esc(m.id)}">${m.role==='user'?'':avatar(b)}${partialFor(m)?`<div class="bubble md streaming">${markdown(partialFor(m))}</div>`:m.role!=='user'&&m.content&&m.status!=='running'?`<div class="bubble md ${m.status==='failed'?'error-text':''}">${withAutoMark(linkOutputs(markdown(m.content), b.id), m)}${noteLine(m)}</div>`:`<div class="bubble ${m.status==='failed'?'error-text':''}">${esc(m.status==='running'?'正在思考…':m.status==='cancelled'&&!m.content?'已停止回覆':m.status==='failed'&&!m.content?(Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。'):m.content)}</div>`}${waitLine(m)}${attachmentsView(m)}${dateNote(m)}${m.role!=='user'&&m.content&&m.status!=='running'?messageFiles(m.content, fileList):''}${sentNote(m)?`<div class="interject-note">${sentNote(m)}</div>`:''}${redoBar(b, m, running)}</div>`).join('')}${queuedView(b)}${sendingView(b.id + '/' + b.chatId, messages, b.queue || [])}${choiceButtons(b, messages, running)}</div>`:state.sending.some(x => x.where === b.id + '/' + b.chatId)?`<div class="conversation-inner">${sendingView(b.id + '/' + b.chatId, messages)}</div>`:emptyIntro(b)}</div>${chatRail()}<div class="composer-wrap">${toBottomButton()}${browsingCard(b.id)}${approvalCards(b.id)}${questionCards(b.id)}<div id="slash-menu" class="mention-menu slash-menu" role="listbox" aria-label="指令" hidden></div><form class="composer" id="chat-form">${pendingFiles()}<button type="button" class="icon-btn round-btn" data-action="composer-menu" aria-label="更多選項">${svg('plus')}</button><textarea id="chat-input" rows="1" placeholder="傳送訊息給 ${esc(b.name)}，輸入 / 使用指令" aria-label="輸入訊息"></textarea>${modeChips(b)}<button type="button" class="icon-btn round-btn" data-action="voice" aria-label="語音輸入">${svg('mic')}</button>${running?`<button type="button" class="send" data-action="cancel-job" data-id="${esc(running[0])}" aria-label="停止回覆">■</button><button class="send" type="submit" aria-label="傳送訊息" title="像是修正或補充的訊息會插進正在跑的回覆，其他的排在後面">↑</button>`:`<button class="send" type="submit" aria-label="傳送訊息">↑</button>`}</form></div></main>${state.detailOpen?detail(b):''}`
   }
 
   function activeGroup() { return state.groupId ? (state.data.groups || []).find(g => g.id === state.groupId) : null; }
@@ -397,7 +434,7 @@
   }
   const groupFileMark = g => { const all = g.messages || []; return all.length + ':' + all.filter(m => m.status === 'completed' || m.role === 'system').length + ':' + (all[all.length - 1]?.id || ''); };
   // A member's copy of the group's files lives inside Zook's own data; the person only needs the file's name.
-  const hideInnerPaths = text => String(text).replace(/\[([^\]\n]+)\]\((?:file:\/\/|file:)?[^)\s]*\/workspaces\/[0-9a-f]{32}\/[^)\s]*\)/g, '$1（群組檔案）').replace(/(?:…|\.\.\.)?(?:\/[^\s`'"<>()（）「」，、：]*)?\/workspaces\/[0-9a-f]{32}\/(?:[^\s`'"<>()（）「」，、]*\/)?([^\s`'"<>()（）「」，、\/]+)/g, '$1（群組檔案）').replace(/(群組檔案\s*[：:「]\s*)([^\n（]{1,200}?)（群組檔案）/g, '$1$2');  // 「群組檔案：X（群組檔案）」 says it once
+  const hideInnerPaths = text => String(text).replace(MD_LINK, (whole, label, inner) => { const {path} = mdTarget(inner); if (!/\/workspaces\/[0-9a-f]{32}\//.test(path)) return whole; let name = path.split('/').pop(); try { name = decodeURIComponent(name); } catch (_) {} label = label.split('\n').map(x => x.trim()).join(' '); return label.includes(name) ? label + '（群組檔案）' : label + '：' + name + '（群組檔案）'; }).replace(/(?:…|\.\.\.)?(?:\/[^\s`'"<>()（）「」，、：]*)?\/workspaces\/[0-9a-f]{32}\/(?:[^\s`'"<>()（）「」，、]*\/)?([^\s`'"<>()（）「」，、\/]+)/g, '$1（群組檔案）').replace(/(群組檔案\s*[：:「]\s*)([^\n（]{1,200}?)（群組檔案）/g, '$1$2');  // 「群組檔案：X（群組檔案）」 says it once
   function groupMessage(g, m) {
     if (m.compacted && !m.checkOf) return '<div class="compact-line"><span>前面的討論已整理成摘要，成員從這裡接續</span></div>' + groupMessage(g, Object.assign({}, m, {compacted: false}));
     if (m.checkOf) return '';
@@ -409,7 +446,7 @@
       return `<div class="system-note">${esc(m.content)}</div>${messageFiles(m.content, groupSharedFiles(g, fileMark).filter(f => !said.includes(f.name)))}`;
     }
     const tag = html => highlightMentions(html, groupMembers(g));
-    if (m.role === 'user') return `<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message user" data-mid="${esc(m.id)}">${m.author ? `<div class="speaker-wrap user-author"><div class="speaker">由 ${esc(m.author)} 發起</div><div class="bubble">${tag(esc(m.content))}</div></div>` : `<div class="bubble">${tag(esc(m.content))}</div>`}${attachmentsView(m)}${sentNote(m) ? `<div class="interject-note">${sentNote(m)}</div>` : ''}</div>`;
+    if (m.role === 'user') return `<div class="date">${esc(formatDate(m.createdAt))}</div><div class="message user" data-mid="${esc(m.id)}">${m.author ? `<div class="speaker-wrap user-author"><div class="speaker">由 ${esc(m.author)} 發起</div><div class="bubble">${tag(esc(m.content))}</div></div>` : `<div class="bubble">${tag(esc(m.content))}</div>`}${attachmentsView(m)}${dateNote(m)}${sentNote(m) ? `<div class="interject-note">${sentNote(m)}</div>` : ''}</div>`;
     const b = state.data.bots.find(x => x.id === m.botId) || {name: '已刪除的 Bot', color: '#959595'};
     if (m.content) m = Object.assign({}, m, {content: hideInnerPaths(m.content)});
     const text = m.status==='running' ? '正在思考…' : m.status==='cancelled'&&!m.content ? '已停止回覆' : m.status==='failed'&&!m.content ? (Object.values(state.jobDetails).find(j => j.messageId === m.id)?.error || '回覆失敗，請檢查這個 Bot 的提供者設定。') : m.content;
@@ -418,14 +455,14 @@
   function groupChat() {
     const g = activeGroup(), members = groupMembers(g), running = g.status === 'running';
     const messages = groupMsgs(g), left = (g.botIds || []).filter(id => state.data.bots.some(b => b.id === id)).length, short = left < 2;  // #217: a member was deleted
-    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-group">${avatarStack(g)}${esc(g.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn" data-action="share">↑ 匯出對話</button>${!state.detailOpen?'<button class="text-btn" data-action="toggle-detail">顯示詳情</button>':''}</div></header>${guideCard()}<div class="conversation" id="conversation">${messages.length?`<div class="conversation-inner">${groupOlderBar(g)}${messages.map(m => groupMessage(g, m)).join('')}${sendingView(g.id, messages)}</div>`:state.sending.some(x => x.where === g.id)?`<div class="conversation-inner">${sendingView(g.id, messages)}</div>`:`<div class="empty-chat">${avatarStack(g,'hero')}<h1>${esc(g.name)}</h1><p>直接發訊息，或用 @ 指定成員。</p></div>`}</div>${chatRail()}<div class="composer-wrap">${toBottomButton()}${browsingCard(null, jobsForGroup(g.id))}${taskDecisionCards(g)}${approvalCards(null, jobsForGroup(g.id))}${groupRunBar(g)}${short ? `<div class="short-banner" role="status">成員不足：這個群組只剩 ${left} 位成員，按上方群組名稱加成員後才能討論。</div>` : ''}<div class="mention-row" aria-label="指名 Bot">${members.map(b => `<button type="button" class="mention-chip" data-action="mention" data-id="${esc(b.name)}">${avatar(b)}@${esc(b.name)}</button>`).join('')}<button type="button" class="mention-chip" data-action="mention" data-id="所有人">@所有人</button></div><div id="mention-menu" class="mention-menu" role="listbox" aria-label="選擇要指名的 Bot" hidden></div><form class="composer" id="chat-form">${pendingFiles()}<button type="button" class="icon-btn round-btn" data-action="composer-menu" aria-label="更多選項">${svg('plus')}</button><div class="input-wrap"><div class="input-mirror" aria-hidden="true"></div><textarea id="chat-input" rows="1" placeholder="${short ? '成員不足，加成員後才能傳送' : running ? '討論中也可以直接插話，用 @ 指定誰接著回' : '傳送訊息給群組，用 @ 指定 Bot'}" aria-label="輸入訊息" ${short ? 'disabled' : ''}></textarea></div>${groupModeControl(g)}${effortChip()}<button type="button" class="icon-btn round-btn" data-action="voice" aria-label="語音輸入">${svg('mic')}</button>${running?`<button type="button" class="send" data-action="stop-group" data-id="${esc(g.id)}" aria-label="停止討論">■</button><button class="send" type="submit" aria-label="傳送訊息" title="像是修正或補充的訊息會加入正在進行的討論，其他的排在這輪後面">↑</button>`:`<button class="send" type="submit" aria-label="傳送訊息">↑</button>`}</form>${groupEstimateLine(g)}</div></main>${state.detailOpen?groupDetail(g):''}`;
+    return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-group">${avatarStack(g)}${esc(g.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn" data-action="share" title="把群組的整段討論存成 Markdown 檔（共用檔案只列檔名）">↑ 匯出對話</button>${!state.detailOpen?'<button class="text-btn" data-action="toggle-detail">顯示詳情</button>':''}</div></header>${guideCard()}<div class="conversation" id="conversation">${messages.length?`<div class="conversation-inner">${groupOlderBar(g)}${messages.map(m => groupMessage(g, m)).join('')}${sendingView(g.id, messages)}</div>`:state.sending.some(x => x.where === g.id)?`<div class="conversation-inner">${sendingView(g.id, messages)}</div>`:`<div class="empty-chat">${avatarStack(g,'hero')}<h1>${esc(g.name)}</h1><p>直接發訊息，或用 @ 指定成員。</p></div>`}</div>${chatRail()}<div class="composer-wrap">${toBottomButton()}${browsingCard(null, jobsForGroup(g.id))}${taskDecisionCards(g)}${approvalCards(null, jobsForGroup(g.id))}${groupRunBar(g)}${short ? `<div class="short-banner" role="status">成員不足：這個群組只剩 ${left} 位成員，按上方群組名稱加成員後才能討論。</div>` : ''}<div class="mention-row" aria-label="指名 Bot">${members.map(b => `<button type="button" class="mention-chip" data-action="mention" data-id="${esc(b.name)}">${avatar(b)}@${esc(b.name)}</button>`).join('')}<button type="button" class="mention-chip" data-action="mention" data-id="所有人">@所有人</button></div><div id="mention-menu" class="mention-menu" role="listbox" aria-label="選擇要指名的 Bot" hidden></div><form class="composer" id="chat-form">${pendingFiles()}<button type="button" class="icon-btn round-btn" data-action="composer-menu" aria-label="更多選項">${svg('plus')}</button><div class="input-wrap"><div class="input-mirror" aria-hidden="true"></div><textarea id="chat-input" rows="1" placeholder="${short ? '成員不足，加成員後才能傳送' : running ? '討論中也可以直接插話，用 @ 指定誰接著回' : '傳送訊息給群組，用 @ 指定 Bot'}" aria-label="輸入訊息" ${short ? 'disabled' : ''}></textarea></div>${groupModeControl(g)}${effortChip()}<button type="button" class="icon-btn round-btn" data-action="voice" aria-label="語音輸入">${svg('mic')}</button>${running?`<button type="button" class="send" data-action="stop-group" data-id="${esc(g.id)}" aria-label="停止討論">■</button><button class="send" type="submit" aria-label="傳送訊息" title="像是修正或補充的訊息會加入正在進行的討論，其他的排在這輪後面">↑</button>`:`<button class="send" type="submit" aria-label="傳送訊息">↑</button>`}</form>${groupEstimateLine(g)}</div></main>${state.detailOpen?groupDetail(g):''}`;
   }
   function groupDetail(g) {
     const members = groupMembers(g), running = g.status === 'running';
     const activeIds = g.activeJobIds?.length ? g.activeJobIds : g.activeJobId ? [g.activeJobId] : [];
     const activeNames = running ? activeIds.map(id => state.data.bots.find(b => b.id === state.jobDetails[id]?.botId)?.name).filter(Boolean) : [];
     const active = activeNames.length ? {name: activeNames.join('、')} : null;
-    return `<aside class="detail"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatarStack(g,'big')}<h2>${esc(g.name)}</h2><p>${members.length} 位成員${running ? ' · 討論中' + (active ? '（' + esc(active.name) + ' 發言中）' : '') : ''}</p><button class="secondary detail-edit" data-action="edit-group">編輯群組</button></div><div class="tabs"><button data-action="group-tab" data-id="members" class="${state.groupTab==='files'?'':'active'}">成員</button><button data-action="group-tab" data-id="files" class="${state.groupTab==='files'?'active':''}">檔案</button></div>${state.groupTab==='files'?groupFilesTab(g):`${members.map(b => `<button class="member-row" data-member-work="${esc(b.id)}" data-group="${esc(g.id)}">${avatar(b)}<span><strong>${esc(b.name)}${jobTitle(b)}</strong><small>${esc([(b.provider||state.data.settings.provider||'') + (b.model ? ' ' + b.model : ''), permText(b), (g.memberCounts?.[b.id] ? '發言 ' + g.memberCounts[b.id] + ' 次' : '')].filter(Boolean).join(' · '))}</small></span></button>`).join('')}<div class="detail-empty">點成員會開啟他自己的對話視窗，可以看到他在這個討論中查了什麼、用了哪些 Skill；群組裡只有他的結論。</div>`}${usageDock()}</aside>`;
+    return `${detailBackdrop()}<aside class="detail" aria-label="詳情"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatarStack(g,'big')}<h2>${esc(g.name)}</h2><p>${members.length} 位成員${running ? ' · 討論中' + (active ? '（' + esc(active.name) + ' 發言中）' : '') : ''}</p><button class="secondary detail-edit" data-action="edit-group">編輯群組</button></div><div class="tabs"><button data-action="group-tab" data-id="members" class="${state.groupTab==='files'?'':'active'}">成員</button><button data-action="group-tab" data-id="files" class="${state.groupTab==='files'?'active':''}">檔案</button></div>${state.groupTab==='files'?groupFilesTab(g):`${members.map(b => `<button class="member-row" data-member-work="${esc(b.id)}" data-group="${esc(g.id)}">${avatar(b)}<span><strong>${esc(b.name)}${jobTitle(b)}</strong><small>${esc([(b.provider||state.data.settings.provider||'') + (b.model ? ' ' + b.model : ''), permText(b), (g.memberCounts?.[b.id] ? '發言 ' + g.memberCounts[b.id] + ' 次' : '')].filter(Boolean).join(' · '))}</small></span></button>`).join('')}<div class="detail-empty">點成員會開啟他自己的對話視窗，可以看到他在這個討論中查了什麼、用了哪些 Skill；群組裡只有他的結論。</div>`}${usageDock()}</aside>`;
   }
   function groupModal(g = {}) {
     const editing = !!g.id, chosen = new Set(g.botIds || (state.selected && !state.groupId ? [state.selected] : []));

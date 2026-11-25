@@ -663,7 +663,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.command == 'GET' and path == '/api/usage': return self.respond(200, usage())
                 if self.command == 'POST' and path == '/api/export': return self.respond(200, store.data)
                 if parts[:2] == ['api', 'backups'] or path in ('/api/activity', '/api/budget'): return upkeep_route(self, store, parts, path)
-                if self.command == 'GET' and (path == '/api/search' or (len(parts) == 4 and parts[:2] == ['api', 'bots'] and parts[3] == 'messages')): return paging_route(self, store, parts, path)
+                if self.command == 'GET' and (path == '/api/search' or (len(parts) == 4 and parts[:2] == ['api', 'bots'] and parts[3] in ('messages', 'export'))): return paging_route(self, store, parts, path)
                 if len(parts) == 3 and parts[:2] == ['api', 'jobs'] and self.command == 'GET':
                     job = store.find('jobs', parts[2]); return self.respond(200, job_view(job)) if job else self.error(404, '找不到工作。')
                 if len(parts) == 3 and parts[:2] == ['api', 'approvals'] and self.command == 'POST':
@@ -782,6 +782,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self.respond(200, {'group': page_group(group), 'jobs': [job_view(j) for j in (store.find('jobs', x) for x in ids) if j]})
                     if len(parts) == 4 and parts[3] == 'messages' and self.command == 'GET':
                         return self.respond(200, page_group_messages(group, parse_qs(urlsplit(self.path).query), store))
+                    if len(parts) == 4 and parts[3] == 'export' and self.command == 'GET': return self.respond(200, export_group(store.data, group))
                     if len(parts) == 3 and self.command == 'PATCH':
                         candidate = copy.deepcopy(group); set_group_fields(store, candidate, self.body())
                         added = candidate['messages'][len(group['messages']):]  # the discussion may still be running, so its messages stay as they are
@@ -945,9 +946,6 @@ def main():
     signal.signal(signal.SIGTERM, stop_server)
     threading.Thread(target=app.sync_remote, daemon=True).start()
     threading.Thread(target=app.schedule_loop, daemon=True).start()
-    for job in app.store.data['jobs']:  # activity saved by earlier versions
-        for call in job.get('toolCalls') or []:
-            if call.get('name') == 'native_command' and isinstance((call.get('arguments') or {}).get('command'), str): call['arguments'] = {'summary': command_summary(call['arguments']['command'])}  # older records: the summary only
     trim_jobs(app.store); recover_deleted_bots(app.store)
     app.store.save()
     try: app.script_api = ScriptApi(app)  # for scripts on this Mac; every Bot starts with it switched off
