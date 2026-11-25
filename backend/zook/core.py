@@ -964,6 +964,7 @@ def provider_chain(store, bot, provider, model):
 
 def fallback_reason(error):
     error = error or ''
+    if 'macOS' in error: return 'macOS 權限擋住'
     if '額度' in error or '上限' in error: return '額度已用完'
     if '尚未登入' in error or '重新登入' in error: return '尚未登入'
     if '找不到' in error or '安裝' in error: return '尚未安裝'

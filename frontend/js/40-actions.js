@@ -310,6 +310,10 @@
           await refresh(); poll(sent.jobId, b.id);
           break;
         }
+        case 'open-privacy':
+          await post('privacy-settings', {pane: el.dataset.pane});
+          toast('已打開系統設定。允許 Zook 後回來按「重試」');
+          break;
         case 'redo-again': {
           const b = activeBot();
           if (await redoAllowed(b)) await redo(b, {mode: 'again'});

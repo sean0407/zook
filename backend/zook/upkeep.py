@@ -534,7 +534,8 @@ def trim_jobs(store):
 def state_view(store, whole=False):
     """Lock held. What the window and the phone load: everything except the trimmed jobs and the usage totals, which only the usage page needs."""
     view = dict(store.data, rev=store.rev)
-    view['jobs'] = [{k: v for k, v in j.items() if k not in ('thinking', 'cliSession', 'cliPid', 'runner')} for j in store.data['jobs'] if not j.get('slim') and not j.get('internal')]
+    view['jobs'] = [dict({k: v for k, v in j.items() if k not in ('thinking', 'cliSession', 'cliPid', 'runner')}, **({'failure': failure_info(j)} if j.get('status') == 'failed' else {}))
+                    for j in store.data['jobs'] if not j.get('slim') and not j.get('internal')]
     if not whole: view['bots'] = [page_bot(b) for b in store.data['bots']]  # the newest part of each open conversation; older parts are asked for
     if not whole: view['groups'] = [page_group(g) for g in store.data['groups']]
     view.pop('usageArchive', None); view.pop('usageDaily', None); view['rings'] = usage_rings(store)
