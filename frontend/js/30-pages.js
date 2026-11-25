@@ -86,8 +86,11 @@
     const msgs = b.messages || [], lastUser = [...msgs].reverse().find(x => x.role === 'user');
     if (!lastUser) return '';
     if (m.id === lastUser.id) return '<div class="msg-actions user-actions"><button type="button" class="link" data-action="edit-last">編輯</button></div>';
-    if (m.role !== 'user' && m.id === msgs[msgs.length - 1]?.id && m.status !== 'running')
+    if (m.role !== 'user' && m.id === msgs[msgs.length - 1]?.id && m.status !== 'running') {
+      const resume = m.resumable && m.status === 'failed' ? '<button type="button" class="primary small-btn" data-action="resume-reply" title="從 Zook 關閉前中斷的地方接著做，已完成的動作不會重做">接著做</button>' : '';
+      if (failureCard(m, false)) return resume ? '<div class="msg-actions">' + resume + '</div>' : '';  // the failure card has its own buttons (37c-failure.js)
       return '<div class="msg-actions">' + (m.plan && m.status === 'completed' ? '<button type="button" class="primary small-btn" data-action="run-plan">照計畫執行</button>' : '') + (m.resumable && m.status === 'failed' ? '<button type="button" class="primary small-btn" data-action="resume-reply" title="從 Zook 關閉前中斷的地方接著做，已完成的動作不會重做">接著做</button>' : '') + '<button type="button" class="link" data-action="redo-again">重新回答</button><button type="button" class="link" data-action="redo-model">換模型重答</button></div>';
+    }
     return '';
   }
   // Redoing cannot undo what the last reply already did (files changed, mail sent): say so first.

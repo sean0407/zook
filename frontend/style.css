@@ -2020,6 +2020,13 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .danger-btn:hover { background: #a93226; }
 .danger-btn:disabled, .modal.ask .secondary:disabled { opacity: .5; cursor: default; }
 
+/* #238: a failed reply: kind, whether retry helps, the reason, the next step and its buttons */
+.failure-card { border: 1px solid #f3c7c2; background: #fff8f7; color: inherit; white-space: normal; }
+.failure-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; }
+.failure-card p { margin: 8px 0 0; }
+.failure-why { color: #b3261e; }
+.failure-next { font-size: 14px; }
+.failure-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 10px; }
 /* #63: a required field left empty says so right under it */
 .field-error { display: block; color: #c0392b; font-size: 12px; margin-top: 4px; font-weight: 500; }
 .modal [aria-invalid="true"] { border-color: #d33; box-shadow: 0 0 0 1px #d33; }

@@ -647,6 +647,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/team' and self.command == 'POST' and not self.device:
                 body = self.body()
                 with store.lock: return self.respond(201, self.server.create_team(body))
+            if path == '/api/privacy-settings' and self.command == 'POST': return privacy_route(self)  # macOS's own privacy page, for a failed reply (errors.py)
             inventory = None
             if (path in ('/api/chat', '/api/chat/redo', '/api/chat/resume') and self.command == 'POST') or (parts[:2] == ['api', 'bots'] and self.command in ('POST', 'PATCH')) or (len(parts) == 4 and parts[:2] == ['api', 'schedules']):
                 inventory = inventory_for(store, tokens=path not in ('/api/chat', '/api/chat/redo', '/api/chat/resume'))  # a message only checks its Bot's choices; the reply signs in to connectors itself

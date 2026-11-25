@@ -704,7 +704,9 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                     if not account: self.note_provider_issue(provider, issue)
                     raise RuntimeError(issue)
                 failure, sentence = cli_failure(provider, reported)
-                with store.lock: job['errorKind'] = failure
+                with store.lock:
+                    job['errorKind'] = failure
+                    if failure == 'quota': job['quotaResetAt'] = quota_reset_at(store, provider, account['id'] if account else '')  # said with the failure (errors.py)
                 raise RuntimeError(sentence)
             if parsed['unparsable']: raise RuntimeError('CLI 回傳無法解析的結果。')
             content = parsed['content']
