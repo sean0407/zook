@@ -138,6 +138,29 @@ class WaitingTest(unittest.TestCase):
         self.assertFalse(me.get('queue')); self.assertNotIn('對話已不存在', self.asked())
         self.assertIn('丙', [m['content'] for m in me['messages'] if m['role'] == 'user'])
 
+    def test_two_sent_at_once_are_answered_in_the_order_sent(self):
+        # #142: the second message reaches the Mac before the first. It says which one it follows, so it waits for that one.
+        import threading
+        out = {}
+        late = threading.Thread(target=lambda: out.update(second=self.say('再用一句話說明什麼是月報', clientId='msg-order-0002', after='msg-order-0001')))
+        late.start(); time.sleep(0.5)
+        first = self.say('用一句話說明什麼是週報', clientId='msg-order-0001'); late.join(10)
+        self.assertEqual((first[0], 'jobId' in first[1]), (202, True))
+        self.assertEqual(out['second'][0], 202); self.assertTrue(out['second'][1].get('queued') or out['second'][1].get('accepted'), out['second'])  # in line, or taken in while it waits for the first (#289)
+        me = self.settle(2)
+        self.assertEqual([m['content'] for m in me['messages'] if m['role'] == 'user'], ['用一句話說明什麼是週報', '再用一句話說明什麼是月報'])
+        self.assertEqual(self.asked(), ['用一句話說明什麼是週報', '再用一句話說明什麼是月報'])
+
+    def test_a_message_whose_predecessor_never_comes_is_not_held_for_long(self):
+        began = time.time()
+        sent = self.say('甲', clientId='msg-order-0003', after='msg-never-arrives')
+        self.assertEqual(sent, (202, {'accepted': True}))  # taken in at once (#289); sent once it stops waiting for the other one
+        self.assertLess(time.time() - began, 1.5)
+        time.sleep(4)
+        self.assertEqual(self.say('甲', clientId='msg-order-0003')[1].get('duplicate'), True)
+        began = time.time(); self.say('乙', clientId='msg-order-0004', after='msg-order-0003')  # its predecessor is in: no wait at all
+        self.assertLess(time.time() - began, 1.5)
+
 
 if __name__ == '__main__':
     unittest.main()
