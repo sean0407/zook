@@ -2006,3 +2006,12 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .message > .wait-line { flex-basis:100%; margin-left:44px; }
 .wait-line.stuck { color:#b26b00; }
 .wait-line .link { margin-left:8px; font-size:12px; }
+
+/* #175: the page's own yes/no question, above any open window */
+.ask-overlay { z-index: 105; }  /* above #modal-root (100), below #toast (110) */
+.modal.ask { width: min(420px, 100%); }
+.modal.ask .modal-body p { margin: 0 0 10px; line-height: 1.6; color: #333; white-space: pre-wrap; }
+.modal.ask .modal-body p:last-child { margin-bottom: 0; }
+.danger-btn { background: #c0392b; color: #fff; border-radius: 9px; padding: 10px 15px; font-weight: 550; }
+.danger-btn:hover { background: #a93226; }
+.danger-btn:disabled, .modal.ask .secondary:disabled { opacity: .5; cursor: default; }
