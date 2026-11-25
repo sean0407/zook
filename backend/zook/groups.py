@@ -565,13 +565,13 @@ class GroupRuns:
         with self.store.lock:
             group = self.store.find('groups', group_id)
             if not group or group.get('runId') != run_id: return steps
-            n = 2 if len(steps) > 1 and steps[1]['role'] == 'split_check' else 1  # #245: the 查核員 waiting after the work too
+            n = 2 if len(steps) > 1 and steps[1]['role'] == 'split_check' else 1  # #245: the 查核員 waiting after the work too, and who it waits for
             bots = [b for b in (self.store.find('bots', x) for s in steps[:n] for x in s['bots']) if b]
             idle = split_idle(plan['job'].get('content') or '', bots)
             if not idle: return steps
             group['messages'].append(dict(id=ID(), role='system', content='主持人沒有分工作給 %s，這次不用回覆。' % '、'.join(b['name'] for b in bots if b['id'] in idle), createdAt=NOW()))
             self.store.save()
-        return [dict(s, bots=[x for x in s['bots'] if x not in idle]) for s in steps[:n] if [x for x in s['bots'] if x not in idle]] + steps[n:]
+        return [dict(s, bots=[x for x in s['bots'] if x not in idle], **({'gate': [x for x in s['gate'] if x not in idle]} if 'gate' in s else {})) for s in steps[:n] if [x for x in s['bots'] if x not in idle]] + steps[n:]
 
     def _send_back(self, group_id, run_id, step, merged, steps):
         """分工: the host's check found work that does not match what its member said. That member fixes it once, then the host
@@ -880,13 +880,15 @@ class GroupRuns:
                         elif role in ('kickoff', 'moderate'):
                             if role == 'kickoff':
                                 mentioned = mentioned or [b['id'] for b in members if b['id'] != bot_id]; blind_next = True
-                                mentioned, checkers = split_checkers(store, mentioned)
-                                if checkers: gate = dict(bots=checkers, gate=mentioned)
+                                held = split_checkers(store, [b['id'] for b in members if b['id'] != bot_id])[1]  # every 查核員 waits for the work, named now or later
+                                makers = [x for x in mentioned if x not in held]
+                                if makers and held: mentioned, gate = makers, dict(bots=[x for x in mentioned if x in held], gate=makers, held=held)
                             if role == 'moderate' and not mentioned: rounds = GROUP_MODERATION_ROUNDS + 1  # host already wrapped up
                             for target in mentioned:
                                 if target not in [x[0] for x in pending]: pending.append((target, False, None))
                         else:
-                            for target in [x for x in mentioned if not gate or x not in gate['bots']][:1 if moderated else None]:  # #245: a 查核員 waits for the check, not for an @
+                            if gate: gate['bots'] += [x for x in mentioned if x in gate.get('held', gate['bots']) and x not in gate['bots']]  # #245: named before the check: it checks then
+                            for target in [x for x in mentioned if not gate or x not in gate.get('held', gate['bots'])][:1 if moderated else None]:
                                 if not (moderated and target == host) and target not in [x[0] for x in pending]: pending.append((target, False, None))
                     store.save()
             with store.lock:

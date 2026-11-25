@@ -7,7 +7,7 @@
 # a host it comes after the members' independent round. In 任務引擎 a task reported with files that are not there is tried again
 # before another vendor checks it.
 CHECKER_NAME = re.compile(r'查核|驗收|審核|審查|校對|稽核|覆核|複核|把關|品管|(?<![A-Za-z])(?:QA|reviewer|checker)(?![A-Za-z])', re.I)
-CHECKER_DUTY = re.compile(r'(?:負責|專門|主要)(?:做|進行)?(?:查核|驗收|審核|審查|校對|稽核|覆核|複核|把關)')
+CHECKER_DUTY = re.compile(r'(?<![不沒没非無无])(?:負責|專門|主要)(?:做|進行)?(?:查核|驗收|審核|審查|校對|稽核|覆核|複核|把關)')
 MODERATOR_RULES['split_check'] = ['其他成員已經交出他們的部分，現在輪到你查核。照主持人分派給你的查核工作，實際打開他們交的檔案逐項核對，不要只看他們的說法。',
                                   '第一行只寫【判定】同意、【判定】有疑慮 或 【判定】有錯誤 其中之一，接著用最多 4 點說明依據；有檔案沒打開，就寫明哪個沒看，不能判定通過。',
                                   '要給客戶或外部的內容，核對有沒有內部註記、計算過程、內部折扣或報價規則、【待確認】。',
@@ -60,7 +60,7 @@ def checked_present(store, group_id, names, exact=(), owner=''):
     for raw in names or []:
         name = re.sub(r'[（(][^（）()]{0,30}[）)]\s*$', '', ' '.join(str(raw or '').split())).strip(' 「」『』`\'"')
         base = name.rsplit('/', 1)[-1]
-        if not re.search(r'\.[A-Za-z0-9]{1,10}$', base) or base in gone: continue
+        if (raw not in exact and not re.search(r'\.[A-Za-z0-9]{1,10}$', base)) or not base or base in gone: continue  # a report's own list is looked for name by name
         if _same_file(base, pool, owner) if raw in exact else _claim_present(base, pool): continue
         gone.append(base)
     return gone[:10]
@@ -86,7 +86,7 @@ class CheckOrder:
             for m in group['messages'][start:]:  # each member's newest reply: a redo or 補存 that failed means the work was not handed in again
                 if m.get('role') == 'assistant' and m.get('botId') in step.get('gate', []) and not m.get('checkOf') and m.get('status') != 'running': last[m['botId']] = m
             latest = {b: m for b, m in last.items() if m.get('status') == 'completed' and m.get('content')}
-            unfinished = [b for b in last if b not in latest]  # a member that answered but did not finish: its part is not handed in
+            unfinished = [b for b in step.get('gate', []) if b not in latest and store.find('bots', b) and b in group['botIds']]  # no reply, or one that did not finish: not handed in
             earlier = step.get('missing') if isinstance(step.get('missing'), dict) else {}  # what was missing before 補存 is looked for again, whatever the new reply says
             said = {b: list(dict.fromkeys(list(m.get('missingFiles') or []) + list(earlier.get(b) or []))) for b, m in latest.items()}
             checkers = _names(store, step['bots'])
@@ -96,14 +96,14 @@ class CheckOrder:
             group = store.find('groups', group_id)
             if not group or group.get('runId') != run_id: return False
             note = lambda text: group['messages'].append(dict(id=ID(), role='system', content=text, createdAt=NOW()))
-            if not latest or unfinished:  # the check waits for everyone's part: nothing is checked half-handed-in
-                note('%s 還沒交出成果，%s 這次不用查核。' % (_names(store, unfinished or step.get('gate', [])) or '成員', checkers)); store.save(); return steps[1:]
-            if gone and not step.get('resaved'):
+            if gone and not step.get('resaved'):  # 補存 first, also while another member's part is still missing
                 fixes = {b: '你說交了 %s，但群組檔案裡找不到，可能沒有存成功。把這些檔案存到群組檔案。' % '、'.join(names) for b, names in gone.items()}
                 who = _names(store, list(gone))
                 note('%s 說交了 %s，但群組檔案裡找不到；先退回給 %s 補存，補好再請 %s 查核。' % (who, '、'.join(n for v in gone.values() for n in v), who, checkers))
                 store.save()
                 return [dict(role='split_resave', bots=list(gone), blind=False, fixes=fixes), dict(step, resaved=True, missing=gone)] + steps[1:]
+            if not latest or unfinished:  # the check waits for everyone's part: nothing is checked half-handed-in
+                note('%s 還沒交出成果，%s 這次不用查核。' % (_names(store, unfinished or step.get('gate', [])) or '成員', checkers)); store.save(); return steps[1:]
             if gone:
                 note('%s 補存後還是找不到 %s，%s 這次不查核；請 %s 重新存檔後再請查核。' % (_names(store, list(gone)), '、'.join(n for v in gone.values() for n in v), checkers, _names(store, list(gone))))
                 store.save(); return steps[1:]
@@ -112,6 +112,7 @@ class CheckOrder:
     def _free_check(self, group_id, run_id, gate):
         """A discussion with a host: the 查核員 the kickoff named, once the members' independent round is over. Returns
         (turns to add, the gate still to pass, the step those turns run with); False when the run ended."""
+        if not gate.get('bots'): return [], None, None  # no 查核員 was named for this work
         step = check_step(gate['bots'], gate['gate']); step.update(resaved=gate.get('resaved', False), missing=gate.get('missing') or {})
         after = self._check_gate(group_id, run_id, step, [step])
         if after is False: return False
@@ -127,9 +128,8 @@ class CheckOrder:
         bots = [b for b in (self.store.find('bots', x) for x in group['botIds']) if b and b['id'] != closer]
         producers, checkers = split_checkers(self.store, [b['id'] for b in bots])
         if not checkers: return dict(role='split_redo', bots=[b['id'] for b in bots if b['id'] in fixes], blind=False, fixes=fixes), None
-        start = _ask_start(group)
-        checked = [x for x in checkers if x in fixes or any(m.get('botId') == x and m.get('role') == 'assistant' and m.get('content') for m in group['messages'][start:])]
         redo = [x for x in producers if x in fixes]
+        checked = checkers if redo else [x for x in checkers if x in fixes]  # redone work is checked, also when the first check did not run
         step = dict(role='split_redo', bots=redo, blind=False, fixes={k: fixes[k] for k in redo}) if redo else None
         again = check_step(checked, redo or producers, {k: v for k, v in fixes.items() if k in checkers}) if checked and (redo or any(x in fixes for x in checkers)) else None
         return step, again

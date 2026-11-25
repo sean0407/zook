@@ -32,7 +32,7 @@ if name == '專員' and role == 'split_resave':
     if flag('resave') and folder: save()
     text = '已存到群組檔案：報價單.xlsx' if not flag('cannot') else '這次存不了，權限不足。'
 if name == '查核員': text = '【判定】同意\n看過報價單.xlsx'
-if role == 'kickoff': text = '目標：報價\n@專員：做報價單\n@查核員：檢查報價單'
+if role == 'kickoff': text = '目標：報價\n@專員：做報價單' + ('' if flag('nocheck') else '\n@查核員：檢查報價單')
 if role in ('split_merge', 'split_remerge', 'final', 'moderate'): text = '【結論】好\n【待你決定】無\n【行動項目】無\n【未解問題】無'
 if role == 'split_merge' and flag('sendback'): text = '【退回】專員：合計改成公式\n' + text
 if 'DUPWRITE' in s and folder: open(os.path.join(folder.group(1), name + '-copy.txt'), 'w').write('same content')
@@ -134,6 +134,19 @@ class CheckAfterDone(unittest.TestCase):
         self.say(self.group(mode='free'))
         self.assertEqual([r for n, r in self.order() if n == '查核員'], ['split_check'])
         self.assertEqual(self.order()[:3], [('Alpha', 'kickoff'), ('專員', 'work'), ('查核員', 'split_check')])
+
+    def test_a_checker_named_only_later_still_waits_for_the_check(self):
+        self.flag('mention'); self.flag('nocheck')
+        self.say(self.group(mode='free'))
+        self.assertEqual(self.order()[:3], [('Alpha', 'kickoff'), ('專員', 'work'), ('查核員', 'split_check')])
+        self.assertEqual([r for n, r in self.order() if n == '查核員'], ['split_check'])
+
+    def test_a_persona_that_says_it_does_not_check_is_a_maker(self):
+        self.bots['報價'] = self.req('POST', '/api/bots', {'name': '報價', 'provider': 'codex', 'persona': '我不負責查核，主要做報價單。'})[1]
+        self.bots['審'] = self.req('POST', '/api/bots', {'name': '小審', 'provider': 'codex', 'persona': '負責驗收其他成員的成果。'})[1]
+        g = self.req('POST', '/api/groups', {'botIds': [self.bots[n]['id'] for n in ('Alpha', '報價', '審')], 'hostId': self.bots['Alpha']['id'], 'mode': 'split'})[1]
+        self.say(g)
+        self.assertEqual([x[0] for x in self.order()], ['Alpha', '報價', '小審', 'Alpha'])
 
     def test_nothing_handed_in_means_no_check(self):
         self.flag('fail')
