@@ -184,7 +184,7 @@
         case 'group-verify-dismiss': delete (state.verifyNotes || {})[id]; render(true); break;
         case 'card-copy': { const m = groupMsgs(activeGroup()).find(x => x.id === id); await navigator.clipboard.writeText(cardText(m.card)); toast('已複製結論'); break; }
         case 'card-save': { const g = activeGroup(), m = groupMsgs(g).find(x => x.id === id); await post('knowledge', {title: g.name + ' 討論結論', content: cardText(m.card)}); toast('已存到知識庫'); break; }
-        case 'group-tab': state.groupTab = id; if (activeGroup()) delete state.groupFiles[activeGroup().id]; render(true); break;
+        case 'group-tab': state.groupTab = id; if (activeGroup()) { delete state.groupFiles[activeGroup().id]; if (state.groupFileNote) delete state.groupFileNote[activeGroup().id]; } render(true); break;
         case 'group-file-pick': $('#group-file-input').click(); break;
         case 'group-file-delete': { const g = activeGroup(); if (!(await ask({title: `刪除「${id}」？`, lines: ['這個檔案會從群組檔案刪除，無法復原。'], run: () => api('groups/' + encodeURIComponent(g.id) + '/files/' + encodeURIComponent(id), {method: 'DELETE'})}))) break; await loadGroupFiles(g); toast('已刪除檔案'); break; }
         case 'stop-group':
@@ -409,7 +409,7 @@
         }
         case 'choose-folder': {
           const picked = (await post('choose-folder')).path, form = $('#bot-form');
-          if (picked && form) { form.elements.accessFolder.value = picked; form.querySelector('[data-access-path]').textContent = picked; saveBotDraft(form); }
+          if (picked && form) { form.elements.accessFolder.value = picked; form.querySelector('[data-access-path]').textContent = picked; saveBotDraft(form); recheckForm(form); }
           break;
         }
         case 'close-modal':
@@ -419,7 +419,7 @@
           if (e.target === el) closeModal();
           break;
         case 'avatar-pick': { const panel = $('#bot-form .avatar-panel'); panel.hidden = !panel.hidden; break; }
-        case 'default-folder': { const picked = (await post('choose-folder')).path; if (picked) { state.data.settings = await post('settings', {access: 'folder', accessFolder: picked}, 'PATCH'); render(true); toast('已更新 Bot 預設'); } break; }
+        case 'default-folder': { const picked = (await post('choose-folder')).path; if (picked) { state.data.settings = await post('settings', {access: 'folder', accessFolder: picked}, 'PATCH'); render(true); toast('已更新「存取範圍」'); } break; }
         case 'shape':
           $('#bot-form [name=shape]').value = id;
           $$('.shape-btn').forEach(x => x.classList.toggle('selected', x.dataset.id === id));
@@ -595,7 +595,7 @@
         }
         case 'export': {
           let data = await post('export');
-          download(JSON.stringify(data, null, 2), 'Zook-export.json', 'application/json');
+          download(JSON.stringify(data, null, 2), `Zook-export-${fileDay()}.json`, 'application/json');
           break
         }
         case 'refresh-models':

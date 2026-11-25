@@ -246,10 +246,13 @@ def task_route(handler, store, group, parts):
         if run['status'] != 'running' and group['status'] == 'running': return handler.error(409, '這個任務正在結束，等幾秒再重試。')
         last = task['attempts'][-1] if task['attempts'] else {}
         reported = last.get('state') == 'reported' and last.get('outcome') == 'succeeded'
+        cut = bool(task.get('cut')) and task['status'] in ('stuck', 'unknown') and not reported  # #285: cut off by a restart, no report
         if accept:
-            # The user looked at the result and takes it as it is (nobody of another vendor could check it, or the check did not finish).
-            if not reported: return handler.error(409, '這項工作沒有可以接受的結果。')
-            task.update(status='done', note='你看過後接受了結果（沒有經過另一家驗收）。'); task['verify'] = dict(task.get('verify') or {}, state='accepted'); task.pop('reviewSince', None)
+            # The user looked at the result and takes it as it is (nobody of another vendor could check it, or the check did not finish),
+            # or at what a try cut off by a restart left behind (the user's call, 2026-11-25): it counts as done and what waits for it goes on.
+            if not reported and not cut: return handler.error(409, '這項工作沒有可以接受的結果。')
+            task.update(status='done', note=TASK_CUT_ACCEPTED if cut else '你看過後接受了結果（沒有經過另一家驗收）。'); task['verify'] = dict(task.get('verify') or {}, state='accepted'); task.pop('reviewSince', None)
+            if cut: task.update(acceptedCut=True, acceptedAt=NOW()); task.pop('resumed', None)
         elif reported and (task.get('verify') or {}).get('verdict') != 'fail':
             task.update(status='verifying', verify=dict(state='waiting')); task.pop('note', None)  # the work is done: only the check runs again
         else:
@@ -257,14 +260,16 @@ def task_route(handler, store, group, parts):
             task.update(status='pending' if task.get('deps') or task.get('gate') else 'ready', failures=0, confirmed=True if task['attempts'] else task.get('confirmed', True)); task.pop('note', None)  # never started: it still needs 「照這個做」
             gate = next((g for g in run.get('gates') or [] if g['id'] == task.get('gate')), None)
             if gate and gate['status'] in ('timeout', 'cancelled'): gate.update(status='pending', since=time.time())  # the decision it waited for is asked again
+        task.pop('cut', None)  # decided: retried or accepted
         run['bonusAttempts'] = run.get('bonusAttempts', 0) + TASK_FAILS; run['bonusWakes'] = run.get('bonusWakes', 0) + 2  # room the user gave for this try
         reopened, changed = {task['n']}, True
         while changed:  # A → B → C: retrying A reopens B and C
             changed = False
             for t in run['tasks']:
-                if t['n'] not in reopened and set(t.get('deps') or []) & reopened and t['status'] == 'failed' and t.get('note', '').startswith('前面的工作'):
-                    t['status'] = 'pending'; t.pop('note', None); reopened.add(t['n']); changed = True
-        group['messages'].append(dict(id=ID(), role='system', content='你%s工作 %d「%s」。' % ('接受了' if accept else '要求重試', task['n'], task['title']), createdAt=NOW()))
+                if t['n'] not in reopened and set(t.get('deps') or []) & reopened and (t['status'] == 'failed' and t.get('note', '').startswith('前面的工作') or
+                        t['status'] == 'cancelled' and t.get('before') in ('pending', 'ready')):  # stopped only by a restart too late to go on (task_recover)
+                    t['status'] = 'pending'; t.pop('note', None); t.pop('before', None); reopened.add(t['n']); changed = True
+        group['messages'].append(dict(id=ID(), role='system', content='你%s工作 %d「%s」。' % (('在中斷後手動接受了' if cut else '接受了') if accept else '要求重試', task['n'], task['title']), createdAt=NOW()))
         if group['status'] != 'running': app.task_resume(group)
         else: app.task_poke(group['id'])
         task_board_update(store, group); store.save()

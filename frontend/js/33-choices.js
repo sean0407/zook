@@ -8,7 +8,7 @@
   function choiceButtons(b, messages, running) {
     const last = messages[messages.length - 1];
     if (!choicesOn() || running || !last || last.role === 'user' || last.status !== 'completed' || !Array.isArray(last.options) || (b.queue || []).length) return '';
-    return `<div class="choice-row" role="group" aria-label="選項">${last.options.map(o => `<button type="button" class="choice-btn" data-choice="${esc(o)}">${esc(o)}</button>`).join('')}</div>`;
+    return `<div class="choice-row" role="group" aria-label="選項">${last.options.map(o => `<button type="button" class="choice-btn" data-choice="${esc(o)}" title="放進輸入框，按 ↑ 才送出">${esc(o)}</button>`).join('')}</div>`;
   }
 
   function pendingQuestions(botId) { return jobsForBot(botId).filter(j => j.status === 'running').flatMap(j => (j.questions || []).filter(q => q.status === 'pending')); }
@@ -35,12 +35,14 @@
   document.addEventListener('click', e => {
     const pick = e.target.closest('[data-choice]');
     if (pick) {
-      const botId = state.selected;  // sent on its own: what is typed in the box, and its attachments, stay where they are
-      if (pick.disabled || !botId) return;
-      pick.closest('.choice-row').querySelectorAll('button').forEach(x => x.disabled = true);
-      post('chat', {botId, content: pick.dataset.choice, clientId: 'choice-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10)})
-        .then(async sent => { await refresh(); if (sent.jobId) poll(sent.jobId, botId); })
-        .catch(err => { toast(err.message); render(true); });
+      // #89: put into the message box, not sent. When the page moves under the pointer (a file card arriving above), a click
+      // that lands here by mistake changes nothing; the user reads it, edits it if needed, and presses ↑.
+      const input = $('#chat-input');
+      if (pick.disabled || !input) return;
+      const typed = input.value.replace(/\s+$/, '');
+      input.value = typed ? typed + '\n' + pick.dataset.choice : pick.dataset.choice;
+      input.focus(); input.setSelectionRange(input.value.length, input.value.length);
+      input.dispatchEvent(new Event('input', {bubbles: true}));  // the box grows to fit, as when typing
       return;
     }
     const answer = e.target.closest('[data-answer]');

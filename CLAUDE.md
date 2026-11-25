@@ -34,7 +34,7 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 | `native/Browser.swift` | Bot 的內建瀏覽器（`Zook --zook-browser`，同一個執行檔）：不保存資料的 WKWebView，可瀏覽與在搜尋框輸入 |
 | `native/remote/` | `zook-remote`，與中繼伺服器的加密連線 |
 | `backend/server.py` | 啟動入口：依序載入 `backend/zook/` 的檔案，全部共用同一個命名空間 |
-| `backend/zook/` | 依 `server.py` 裡的順序載入，共用同一個命名空間。`core` 資料儲存、`accounts` 帳號與更新、`agyhome` Antigravity 額外帳號的家目錄、`agykeychain` 額外帳號各自的鑰匙圈、`library` 設定包與排程規則、`oauth` 連接器與 Google 登入、`catalog` 連接器目錄、`outputs` 產出、`mobile` 手機、`groupfiles` 群組共用檔案、`groups` 群組討論、`triggers` 資料夾與信件觸發、`sync` 多台 Mac 同步、`errors` CLI 失敗原因分類、`stream` 回覆逐字顯示、`progress` 等待時的進度與強制停止、`waiting` 忙碌時排隊、`paging` 長對話分頁與搜尋、`compact` 對話過長自動整理、`automation` 本機腳本介面、`choices` 選項按鈕與 Bot 提問、`teams` 一句話建立團隊、`live` 保持 CLI 開啟、`cursor` Cursor、`browser` 內建瀏覽器（擋私有位址的轉送層、工具、誰能用）、任務引擎（[設計](docs/task-engine-design.md)）：`tasks` 帳本、提示詞與工具，`taskrun` 執行迴圈，`taskcheck` 交叉驗收、重試、決策關卡與確認，`taskplus` 依驗收紀錄派工與派助手、`app` 回覆、`parsing` 解讀 CLI 輸出、`abilities` 各家能力對照、`sessions` 接續 CLI 原生對話與即時讀取輸出、`routing` 自動選擇模型、`fields` 欄位檢查、`upkeep` 備份、活動紀錄、用量預算、固定規則、舊工作瘦身、已刪除的 Bot、`templates` Skill 範本、`usageview` 用量頁、`handler` HTTP 路由 |
+| `backend/zook/` | 依 `server.py` 裡的順序載入，共用同一個命名空間。`core` 資料儲存、`accounts` 帳號與更新、`agyhome` Antigravity 額外帳號的家目錄、`agykeychain` 額外帳號各自的鑰匙圈、`library` 設定包與排程規則、`oauth` 連接器與 Google 登入、`catalog` 連接器目錄、`outputs` 產出、`mobile` 手機、`groupfiles` 群組共用檔案、`groups` 群組討論、`triggers` 資料夾與信件觸發、`sync` 多台 Mac 同步、`errors` CLI 失敗原因分類、`stream` 回覆逐字顯示、`progress` 等待時的進度與強制停止、`waiting` 忙碌時排隊、`intake` 送出訊息立刻收下、`paging` 長對話分頁與搜尋、`compact` 對話過長自動整理、`automation` 本機腳本介面、`choices` 選項按鈕與 Bot 提問、`teams` 一句話建立團隊、`live` 保持 CLI 開啟、`cursor` Cursor、`browser` 內建瀏覽器（擋私有位址的轉送層、工具、誰能用）、任務引擎（[設計](docs/task-engine-design.md)）：`tasks` 帳本、提示詞與工具，`taskrun` 執行迴圈，`taskcheck` 交叉驗收、重試、決策關卡與確認，`taskplus` 依驗收紀錄派工與派助手、`app` 回覆、`parsing` 解讀 CLI 輸出、`abilities` 各家能力對照、`sessions` 接續 CLI 原生對話與即時讀取輸出、`routing` 自動選擇模型、`fields` 欄位檢查、`upkeep` 備份、活動紀錄、用量預算、固定規則、舊工作瘦身、已刪除的 Bot、`templates` Skill 範本、`usageview` 用量頁、`handler` HTTP 路由 |
 | `backend/runtime.py` | MCP 客戶端、工具執行、核准分級；連接器的工具用到才載入 |
 | `backend/discovery.py` | 掃描這台 Mac 上 Codex、Claude 與共用庫的 Skills、連接器、插件（由 `runtime.py` 以路徑載入） |
 | `backend/zook_cli.py` | 本機腳本介面的指令工具，說明在 [docs/automation.md](docs/automation.md) |
@@ -109,7 +109,7 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
   - CI 通過後依下面「發佈」做完：合併到 `main`、改版號、建置、打包 DMG、建立 GitHub 發佈、確認下載網址、安裝。
 - **授權**：CI 通過就合併、發佈並直接安裝這台 Mac，不用再問使用者。安裝前一定等使用者的 Zook 沒有進行中的工作。
   - **審查沒核准時（使用者 2026-11-25 授權）**：例行審查（sol）沒核准，但開發已把剩下的問題全部寫成 PR 說明裡的「已知限制」、沒有待修的發現時，照常合併、發佈、安裝，不用等使用者確認；發佈紀錄寫明審查沒核准和那些已知限制。
-  - 改到核准、權限、沙盒、金鑰、計費的版本（sol high 或 astra 審查），以及交辦標「找獨立審查」的版本，審查沒核准仍要先問使用者。
+  - 改到核准、權限、沙盒、金鑰、計費的版本（luna xhigh 審查），以及交辦標「找獨立審查」的版本，審查沒核准仍要先問使用者。
   - **Codex 沒額度時（使用者 2026-11-25 決定）**：Codex 帳號額度都低於 20% 時，改用 Claude Code 的其他模型（和開發用的不同，例如 Sonnet）審查後發佈。一般版本：Claude 審完、發現已修或列為已知限制就發。改到核准、權限、沙盒、金鑰、計費的版本：Claude 審查要核准才發，沒核准仍先問使用者。PR 說明照樣寫用了哪個模型和結論；Codex 額度恢復後，安全相關的版本補跑 astra。
 
 ## 讓開發維持效率（使用者 2026-11-21 選定）
@@ -131,9 +131,9 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 4. 實作。
 5. 三層驗證。
 6. 用 Codex 審查（和開發者不同家的模型）：使用共用的 `codex-review` Skill（`~/.claude/skills/codex-review`，帳號輪流、20% 下限、不用付費點數、自動取最新模型都在它的 SKILL.md）。在 repo 根目錄執行：
-   `python3 scripts/codex_review.py --family sol|astra --brief <審查說明> --out <結果檔>`（這個檔案只是轉給共用 Skill，參數相同）。Zook 自己的規定：
-   - 每一版的例行審查用 sol（medium）：找錯誤、漏掉的測試、和這份規則衝突的地方。
-   - 交辦標「找獨立審查」的版本，以及改到核准、權限、沙盒、金鑰的版本，用 astra（high）：冒名回報、繞過核准、派工失控、權限與金鑰這類安全問題。
+   `python3 scripts/codex_review.py --family luna --effort medium|xhigh --brief <審查說明> --out <結果檔>`（這個檔案只是轉給共用 Skill，參數相同）。Zook 自己的規定：
+   - 審查一律用 luna（2026-11-25 使用者決定）。每一版的例行審查用中度（`--effort medium`）：找錯誤、漏掉的測試、和這份規則衝突的地方。
+   - 比較複雜的版本、交辦標「找獨立審查」的版本，以及改到核准、權限、沙盒、金鑰的版本，用超高（`--effort xhigh`）：冒名回報、繞過核准、派工失控、權限與金鑰這類安全問題。
    - 審查範圍只限這一版的改動（diff）；只改文字或文件的小版本，併到下一版一起審。
    - 結果檔放在 repo 外面；進度檔記下它印出的帳號、模型和 token，以及每個發現怎麼處理。
    - 另外請 Claude 子代理審查時，兩邊互相看不到結果；兩邊都找到的先修，只有一邊找到的先重現再決定，理由寫進進度檔，報告分開列出。
