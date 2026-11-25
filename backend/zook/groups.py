@@ -463,8 +463,12 @@ class GroupRuns:
             unseen = group.get('interjectUnseen'); kept = {m['id'] for m in group['messages'][-GROUP_KEEP:] if not m.get('waiting')}
             seen = unseen if unseen in kept and not step.get('promptFor') and unseen not in set(step.get('hide') or ()) else None  # 插話 this turn's prompt holds
             heard = [] if step.get('promptFor') else [m for m in group['messages'][-GROUP_KEEP:] if m.get('interjected') and not m.get('waiting') and m['id'] not in set(step.get('hide') or ())]
-            for m in heard: m.setdefault('heardBy', bot['name'])  # the window says who read the 插話 first (a 任務's host: taskrun.py)
-            return dict(job=job, msg=msg, prompt=prompt, provider=provider, model=model, bot=copy.deepcopy(bot), role=role, writable=writable, skipFiles=set(step.get('hideFiles') or ()), saved=[], seen=seen, staged=staged, check=check, heard=bool(heard))
+            members_now = [b for b in (store.find('bots', x) for x in group['botIds']) if b]
+            named = [m for m in heard if bot_id not in (m.get('readBy') or []) and bot_id in group_mentions(m['content'], members_now)]  # 插話 naming it that it reads for the first time
+            for m in heard:
+                m.setdefault('heardBy', bot['name'])  # the window says who read the 插話 first (a 任務's host: taskrun.py)
+                if bot_id not in m.setdefault('readBy', []): m['readBy'] = (m['readBy'] + [bot_id])[-20:]
+            return dict(job=job, msg=msg, prompt=prompt, provider=provider, model=model, bot=copy.deepcopy(bot), role=role, writable=writable, skipFiles=set(step.get('hideFiles') or ()), saved=[], seen=seen, staged=staged, check=check, heard=bool(named))
 
     def _group_job(self, group_id, turn):
         """One Bot's turn, with its own copy of the group's files."""

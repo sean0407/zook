@@ -68,7 +68,7 @@ class TaskRuns:
                         if t.get('parent') and t.get('staged'): task_handoff_abort(run, t['parent'])
                     for t in run['tasks']:
                         if t['status'] not in TASK_SETTLED: t['status'] = 'cancelled'
-                    left = task_user_added(group, run) if ended == 'done' and group.get('runId') == run_id else []
+                    left = task_user_added(group, run) if group.get('runId') == run_id else []  # a stop by the user has already cleared the run
                     if left: group.setdefault('interjectQueued', []).extend(m['id'] for m in left)  # 插話 that came as the run ended: answered right after it
                     run.pop('userAdded', None)
                     task_board_update(store, group); store.save()
@@ -243,13 +243,18 @@ class TaskRuns:
             if run.get('id') == run_ref:
                 for t in run.get('tasks') or []:
                     if not t.get('parent'): t.pop('staged', None)  # the host's turn is over: what it planned may start (or be confirmed); a helper waits for its member's turn
-            if run.get('id') == run_ref and (not turn or turn['job']['status'] != 'completed'):
+            if run.get('id') == run_ref and (not turn or turn['job']['status'] != 'completed') and kind == 'user':
+                # 插話 the host could not answer: tried once more, then left with a line in the chat; the run itself goes on
+                run['userMissed'] = run.get('userMissed', 0) + 1
+                if run['userMissed'] >= 2: drop = set(heard or run.get('userAdded') or []); run['userAdded'] = [x for x in run.get('userAdded') or [] if x not in drop]; run['userMissed'] = 0
+                group['messages'].append(dict(id=ID(), role='system', content='主持人沒能回覆你剛才的訊息%s。' % ('，請再傳一次' if not run['userMissed'] else '，Zook 會再試一次'), createdAt=NOW()))
+            elif run.get('id') == run_ref and (not turn or turn['job']['status'] != 'completed'):
                 run['hostMissed'] = run.get('hostMissed', 0) + 1
                 if kind == 'wake':  # the host did not get the reports: they are news again
                     told = set(run.get('wakeFor') or [])
                     run['delivered'] = [k for k in run.get('delivered') or [] if k.split(':')[0] not in told]
                 group['messages'].append(dict(id=ID(), role='system', content='主持人%s沒有完成這一輪。' % ('' if turn else '這次不能回覆，'), createdAt=NOW()))
-            else: run['hostMissed'] = 0
+            elif turn and turn['job']['status'] == 'completed': run['hostMissed'] = 0; run.pop('userMissed', None)
             if not turn: store.save(); self.task_poke(group_id); return
             group['activeJobIds'] = [x for x in group.get('activeJobIds') or [] if x != turn['job']['id']]; group['activeJobId'] = (group['activeJobIds'] or [None])[0]
             run = group.get('taskRun') or {}
