@@ -268,6 +268,7 @@ class GroupRuns:
         if attachments and isinstance(content, str) and not content.strip(): content = '（請看附件）'
         if not isinstance(content, str) or not content.strip() or len(content) > 30000: raise ValueError('訊息內容無效。')
         if group['status'] == 'running': raise RuntimeError('群組討論進行中，請等待或先停止。')
+        group_enough(self.store, group)
         group['runEffort'] = effort; group['runEffortPicked'] = picked  # a level chosen for this message is kept even when it is 標準
         members = [b for b in (self.store.find('bots', x) for x in group['botIds']) if b]
         if not members: raise RuntimeError('群組沒有可用的 Bot。')
@@ -329,6 +330,7 @@ class GroupRuns:
     def continue_group(self, group):
         """Carry on a discussion that stopped at its turn limit. Caller holds the store lock."""
         if group['status'] == 'running': raise RuntimeError('群組討論進行中，請等待或先停止。')
+        group_enough(self.store, group)
         paused = group.pop('paused', None)
         if not paused: raise ValueError('這個討論沒有可以繼續的內容。')
         paused = current_paused(self.store, group, paused)
@@ -338,6 +340,7 @@ class GroupRuns:
         """整理結論: one read-only turn by whoever closes the discussion. Caller holds the store lock."""
         if group['status'] == 'running': raise RuntimeError('群組討論進行中，請等待或先停止。')
         if not any(m.get('role') == 'assistant' and m.get('content') for m in group['messages']): raise ValueError('還沒有可以整理的討論內容。')
+        group_enough(self.store, group)
         closer = group_closer(store=self.store, group=group)
         if not closer: raise ValueError('群組沒有可用的 Bot。')
         return self.start_group(group, [], True, dict(kind='steps', broadcast=True, steps=[dict(role='final', bots=[closer], readonly=True)]))
@@ -658,3 +661,20 @@ class GroupRuns:
                         for m in group['messages']: m.pop('waiting', None)
                         self._answer_interjection(group)
                 store.save()
+
+
+def group_enough(store, group):
+    """A group left with fewer than two Bots takes no discussion, whoever starts it (a message, a schedule, a Bot, 繼續, 整理結論)."""
+    left = len([b for b in group['botIds'] if store.find('bots', b)])
+    if left < 2: raise RuntimeError('這個群組只剩 %d 位成員，請先在群組設定加成員再討論。' % left)
+
+
+def bot_leaves_groups(store, bot):
+    """Lock held. A deleted Bot leaves its groups, and each says so; one left with fewer than two cannot talk until someone is added (#217)."""
+    for g in store.data['groups']:
+        if bot['id'] not in g['botIds']: continue
+        was_host = group_host(store, g) == bot['id']
+        g['botIds'].remove(bot['id'])
+        if was_host: drop_group_host(store, g)
+        left = len(g['botIds'])
+        g['messages'].append(dict(id=ID(), role='system', createdAt=NOW(), content='%s 已刪除，群組少了一位成員%s。' % (bot['name'], '；只剩 %d 位，要再加成員才能討論' % left if left < 2 else '')))

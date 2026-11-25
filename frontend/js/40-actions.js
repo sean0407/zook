@@ -381,8 +381,10 @@
             toast('已刪除知識')
           }
           break;
-        case 'delete-bot':
-          if (confirm('確定刪除這個 Bot 及其對話？')) {
+        case 'delete-bot': {
+          const inGroups = (state.data.groups || []).filter(g => (g.botIds || []).includes($('#bot-form').dataset.id));
+          const tooFew = inGroups.filter(g => g.botIds.filter(id => state.data.bots.some(b => b.id === id)).length <= 2).map(g => g.name);
+          if (confirm('確定刪除這個 Bot 及其對話？' + (inGroups.length ? `\n它在這些群組裡：${inGroups.map(g => g.name).join('、')}，刪除後會少一位成員。` + (tooFew.length ? `\n${tooFew.join('、')} 會只剩 1 位，要再加成員才能討論。` : '') : ''))) {
             await api('bots/' + encodeURIComponent($('#bot-form').dataset.id), {
               method: 'DELETE'
             });
@@ -391,6 +393,7 @@
             toast('已刪除 Bot')
           }
           break;
+        }
         case 'choose-folder': {
           const picked = (await post('choose-folder')).path, form = $('#bot-form');
           if (picked && form) { form.elements.accessFolder.value = picked; form.querySelector('[data-access-path]').textContent = picked; saveBotDraft(form); }
