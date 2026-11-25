@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """Grok with 存取範圍 = 指定資料夾 starts inside that folder, where its own sandbox keeps it."""
-import http.client, json, os, subprocess, sys, tempfile, time, unittest
+import time, http.client, json, os, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 
 SERVER = Path(__file__).resolve().parents[1] / 'backend/server.py'
@@ -15,6 +15,13 @@ seen = dict(cwd=cwd, processCwd=os.getcwd(), args=sys.argv[1:], promptInside=os.
 json.dump(seen, open(os.path.join(here, 'seen.json'), 'w'), ensure_ascii=False)
 print(json.dumps({'type': 'text', 'data': 'ok'})); print(json.dumps({'type': 'end', 'stopReason': 'end_turn', 'usage': {'input_tokens': 10, 'output_tokens': 2}}))
 '''
+
+
+def gone(path, seconds=10):
+    """The clean-up runs right after the reply is marked finished: wait for it instead of checking at once (a slow CI machine)."""
+    end = time.time() + seconds
+    while time.time() < end and path.exists(): time.sleep(0.05)
+    return not path.exists()
 
 
 class GrokFolderTest(unittest.TestCase):
@@ -59,7 +66,7 @@ class GrokFolderTest(unittest.TestCase):
         self.assertIn('--sandbox', seen['args']); self.assertEqual(seen['args'][seen['args'].index('--sandbox') + 1], 'strict')
         self.assertIn('.zook-owned', seen['grok']); self.assertIn('config.toml', seen['grok'])
         self.assertIn('可以讀寫這個資料夾內的檔案', seen['prompt']); self.assertNotIn('碰不到使用者指定的資料夾', seen['prompt'])
-        self.assertFalse((folder / '.grok').exists())  # removed when the reply ended
+        self.assertTrue(gone(folder / '.grok'))  # removed when the reply ended (just after it is marked finished)
 
     def test_a_grok_folder_that_is_already_there_is_never_touched(self):
         folder = self.root / 'project'; (folder / '.grok').mkdir(); (folder / '.grok/config.toml').write_text('mine')
@@ -71,7 +78,7 @@ class GrokFolderTest(unittest.TestCase):
     def test_a_folder_left_by_a_crash_is_cleaned_up_and_other_scopes_stay_in_the_workspace(self):
         folder = self.root / 'project'; (folder / '.grok').mkdir(); (folder / '.grok/.zook-owned').write_text('old-job'); (folder / '.grok/.zook-prompt-old.txt').write_text('leftover')
         bot = self.req('POST', '/api/bots', {'name': 'G', 'provider': 'grok', 'access': 'folder', 'accessFolder': str(folder)})[1]
-        self.assertEqual(self.ask(bot)['status'], 'completed'); self.assertFalse((folder / '.grok').exists())
+        self.assertEqual(self.ask(bot)['status'], 'completed'); self.assertTrue(gone(folder / '.grok'))
         inside = self.req('POST', '/api/bots', {'name': 'W', 'provider': 'grok', 'access': 'workspace'})[1]
         self.assertEqual(self.ask(inside)['status'], 'completed')
         self.assertIn('workspaces', self.seen()['cwd']); self.assertNotEqual(self.seen()['cwd'], str(folder))
