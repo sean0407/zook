@@ -110,7 +110,7 @@ def backup_restore(app, name):
     halted = sync_halt(store)  # saved first: if Zook stops halfway, the older data is never sent to the other Macs
     # This Mac's own pairing, sign-ins and sync stay as they are: they belong to the machine, not to the copy.
     keep = {key: copy.deepcopy(store.data.get(key)) for key in ('remoteDevices', 'sync') if key in store.data}
-    keep_remote = copy.deepcopy(store.data['settings'].get('remote'))
+    keep_remote = {key: copy.deepcopy(store.data['settings'][key]) for key in ('remote', 'remoteExpiry') if key in store.data['settings']}
     # A triggered schedule goes on from where it is now, so files and mails it has already handled do not start it again.
     progress = {x['id']: {k: copy.deepcopy(x[k]) for k in ('watchSeen', 'mailState', 'mailWaiting') if k in x} for x in store.data['schedules']}
     for item in data.get('schedules') or []:
@@ -119,7 +119,7 @@ def backup_restore(app, name):
     previous = store.path.read_bytes(); root, aside = store.chat_root(), store.dir / (CHAT_FOLDER + '.old')
     try:
         data.update(keep)
-        if keep_remote is not None: data['settings']['remote'] = keep_remote
+        data.setdefault('settings', {}).update(keep_remote)  # with this Mac's phones goes how long they stay valid
         browser_keep_local(store.data, data)  # a copy never turns the browser on
         task_keep_local(store.data, data)  # nor 任務引擎, nor work that starts by itself
         usage_detect_keep_local(store.data, data)  # nor 自動偵測使用量
@@ -253,7 +253,7 @@ def drop_removed_providers(store):
 
 
 SETTING_NAMES = {'permissionMode': '主動性', 'webSearch': '上網搜尋', 'browserAutomation': '排程與觸發可用內建瀏覽器', 'provider': '預設提供者', 'model': '預設模型', 'fallbacks': '備用模型', 'access': '存取範圍', 'accessFolder': '存取範圍',
-                 'features': '功能開關', 'effort': '思考強度', 'remote': '手機連線', 'autoUpdateCheck': '自動檢查更新', 'usageDetectEvery': '自動偵測使用量', 'scheduleNotify': '通知', 'sharedMcp': '共用連接器', 'disabledSkills': 'Skills 開關',
+                 'features': '功能開關', 'effort': '思考強度', 'remote': '手機連線', 'remoteExpiryDays': '手機自動失效期限', 'autoUpdateCheck': '自動檢查更新', 'usageDetectEvery': '自動偵測使用量', 'scheduleNotify': '通知', 'sharedMcp': '共用連接器', 'disabledSkills': 'Skills 開關',
                  'disabledPlugins': '插件開關', 'autoModels': '自動選擇的模型', 'autoAccounts': '自動選擇的帳號', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步', 'voiceLang': '語音輸入語言', 'streamReplies': '回覆逐字顯示', 'queueWhenBusy': 'Bot 忙碌時排隊', 'usageCardSort': '剩餘額度排序', 'usageCardOrder': '剩餘額度排序', 'keepCli': '保持 CLI 開啟', 'backgroundRuns': '結束時繼續在背景跑', 'autoCompact': '對話過長時自動整理'}
 BOT_FIELD_NAMES = {'name': '名稱', 'persona': '人格檔案', 'instructions': '工作指示', 'provider': '模型', 'model': '模型', 'account': '帳號', 'permissionMode': '主動性', 'access': '存取範圍', 'accessFolder': '存取範圍',
                    'fallbacks': '備用模型', 'features': '功能開關', 'effort': '思考強度', 'isAdmin': '管理員身分', 'enabledMcp': '連接器', 'scripts': '允許本機腳本'}

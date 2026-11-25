@@ -1457,6 +1457,7 @@ button {
 .relay-input { width: 280px; max-width: 46vw; padding: 7px 10px; border: 1px solid #e2e2e2; border-radius: 9px; font-size: 13px; background: #fff; }
 .remote-status { font-size: 13px; color: #888; }
 .remote-status.ok { color: #0d8a55; } .remote-status.bad { color: #b42318; }
+.setting-copy .remote-expiry-note { color: #a26200; }
 .remote-devices { max-width: 760px; margin-top: 14px; }
 .remote-devices-head { display: flex; align-items: center; justify-content: space-between; padding-bottom: 6px; font-size: 14px; }
 .device-row { padding: 12px 0; }

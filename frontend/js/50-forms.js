@@ -111,6 +111,11 @@
       await loadRemote(true);
       return;
     }
+    if (e.target.dataset.remoteExpiry !== undefined) {
+      try { state.data.settings = await post('settings', {remoteExpiryDays: Number(e.target.value)}, 'PATCH'); toast(Number(e.target.value) ? '已更新自動失效期限' : '已改為永久有效，手機遺失時記得撤銷'); }
+      catch (err) { toast(err.message); }
+      render(true); return;
+    }
     if (e.target.dataset.fallbackSlot !== undefined) {
       const picks = [...document.querySelectorAll('[data-fallback-slot]')].map(x => x.value).filter(Boolean);
       try { state.data.settings = await post('settings', {fallbacks: [...new Set(picks)]}, 'PATCH'); toast(picks.length ? '備用順序：' + [...new Set(picks)].map(providerShort).join(' → ') : '已關閉自動換模型'); }
