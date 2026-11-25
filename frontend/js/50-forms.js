@@ -5,7 +5,8 @@
       else body = {access: input.value, accessFolder: st.accessFolder || ''};
     } else if (key === 'effort') body = {effort: input.value};
     else body = {features: {...(st.features || {}), [key]: input.checked}};
-    try { state.data.settings = await post('settings', body, 'PATCH'); toast('已更新 Bot 預設'); } catch (error) { toast(error.message); }
+    const title = rowTitle(input.closest('.setting-row')) || 'Bot 預設';  // say which one (#76③)
+    try { state.data.settings = await post('settings', body, 'PATCH'); toast('已更新「' + title + '」'); } catch (error) { toast(error.message); }
     render(true);
   }
   async function switchConnectorAccount(input) {
@@ -33,6 +34,7 @@
     if (e.target.name === 'connectorAccount') switchConnectorAccount(e.target);
     if (e.target.name === 'groupMode' && activeGroup()) { state.groupMode[activeGroup().id] = e.target.value; updateGroupEstimate(); }
     if (e.target.name === 'botIds' && e.target.closest('#group-form')) syncGroupHost(e.target.closest('#group-form'));
+    if (['botIds', 'hostId', 'mode'].includes(e.target.name) && e.target.closest('#group-form')) groupFormNote(e.target.closest('#group-form'));
     if (e.target.id === 'group-file-input' && activeGroup()) uploadGroupFiles(activeGroup(), [...e.target.files]);
     if (e.target.name === 'access' && e.target.closest('#bot-form')) e.target.closest('form').querySelector('[data-access-folder]').hidden = e.target.value !== 'folder';
     if (e.target.name === 'transport' && e.target.closest('#connector-form')) e.target.closest('form').querySelectorAll('[data-for]').forEach(x => x.hidden = x.dataset.for !== e.target.value);
@@ -264,7 +266,8 @@
     const form = e.target;
     if (form.dataset.busy) return;  // the first press is still on its way
     const empty = form.id === 'chat-form' ? null : [...form.elements].find(x => x.required && !x.disabled && !String(x.value).trim());
-    if (empty) { fieldError(empty); return; }
+    if (empty) { fieldError(empty); sayMissing(form); return; }  // also beside the button, which may be far from the field (#224)
+    if (form.id === 'group-form' && !groupFormNote(form)) { form.querySelector('[data-group-problem]')?.scrollIntoView({block: 'nearest'}); return; }
     const button = form.id === 'chat-form' ? null : form.querySelector('button.primary:not([type=button])'), label = button?.textContent, was = button?.disabled;
     if (button) { form.dataset.busy = '1'; button.disabled = true; button.textContent = busyWord(label); }
     try {
@@ -305,7 +308,7 @@
         };
         if (d.get('heldAccess') === 'full' && !form.querySelector('[data-held-access]').hidden) Object.assign(data, {access: 'full', accessFolder: ''});  // #284: back behind the gate
         if (!id) data.clientId = onceId(form);
-        if (data.access === 'folder' && !data.accessFolder) { toast('請先選擇資料夾'); return; }
+        if (data.access === 'folder' && !data.accessFolder) { if (form.querySelector('[data-access-row]')?.hidden) toast('請先選擇資料夾'); else needFolder(form); return; }
         let result = await post(id ? 'bots/' + encodeURIComponent(id) : 'bots', data, id ? 'PATCH' : 'POST');
         if (!id) { try { sessionStorage.removeItem('swarmr-new-bot-draft'); } catch (_) {} }
         closeModal();

@@ -5,7 +5,7 @@
   const kb = n => n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1024 / 1024).toFixed(1) + ' MB';
   function pendingFiles() {
     if (!pendingList().length) return '';
-    return `<div class="pending-files">${pendingList().map(f => `<div class="pending-file">${f.url ? `<img src="${esc(f.url)}" alt="">` : '<span class="file-icon">📄</span>'}<span class="pending-name">${esc(f.name)}<small>${f.uploading ? '上傳中…' : kb(f.size)}</small></span><button type="button" class="icon-btn mini" data-action="unattach" data-id="${esc(f.key)}" aria-label="移除 ${esc(f.name)}">×</button></div>`).join('')}</div>`;
+    return `<div class="pending-files">${pendingList().map(f => `<div class="pending-file">${f.url ? `<img src="${esc(f.url)}" alt="">` : '<span class="file-icon">📄</span>'}<span class="pending-name" title="${esc(f.name)}">${esc(midName(f.name, 24))}<small>${f.uploading ? '上傳中…' : kb(f.size)}</small></span><button type="button" class="icon-btn mini" data-action="unattach" data-id="${esc(f.key)}" aria-label="移除 ${esc(f.name)}">×</button></div>`).join('')}</div>`;
   }
   function attachmentsView(m) {
     if (!m.attachments || !m.attachments.length) return '';
@@ -14,11 +14,11 @@
       : `<a class="att-file" href="/api/uploads/${esc(a.id)}" download="${esc(a.name)}">📄 ${esc(a.name)}</a>`).join('')}</div>`;
   }
   async function addFiles(files) {
-    const list = pendingList();
+    const list = pendingList(), failed = []; let ok = 0;
     for (const f of files) {
-      if (list.length >= 10) { toast('每則訊息最多 10 個檔案'); break; }
-      if (f.size > 20 * 1024 * 1024) { toast(`「${f.name}」超過 20 MB，沒有加入`); continue; }
-      if (!f.size) { toast(`「${f.name}」是空的`); continue; }
+      if (list.length >= 10) { failed.push({name: f.name, reason: '每則訊息最多 10 個檔案'}); continue; }
+      if (f.size > 20 * 1024 * 1024) { failed.push({name: f.name, reason: '超過 20 MB'}); continue; }
+      if (!f.size) { failed.push({name: f.name, reason: '檔案是空的'}); continue; }
       const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
       const name = f.name && f.name !== 'image.png' ? f.name : `截圖-${stamp}.png`;
       const item = {key: Math.random().toString(36).slice(2), name, size: f.size, uploading: true, url: /^image\//.test(f.type) ? URL.createObjectURL(f) : ''};
@@ -27,10 +27,11 @@
         const res = await fetch('/api/uploads', {method: 'POST', headers: {'X-File-Name': encodeURIComponent(name), 'Content-Type': 'application/octet-stream'}, body: f});
         const meta = await res.json();
         if (!res.ok) throw new Error(meta.error || '上傳失敗');
-        Object.assign(item, {id: meta.id, kind: meta.kind, uploading: false});
-      } catch (e) { if (list.includes(item)) list.splice(list.indexOf(item), 1); toast(`「${name}」${e.message}`); }
+        Object.assign(item, {id: meta.id, kind: meta.kind, uploading: false}); ok++;
+      } catch (e) { if (list.includes(item)) list.splice(list.indexOf(item), 1); failed.push({name, reason: e.message || '上傳失敗'}); }
       render(true);
     }
+    if (failed.length) toast(fileSummary(ok, failed, '附上'));  // one summary at the end (#150), not one note per file that the next one covers
   }
   // A file path typed or pasted into the message box: offer to attach that file. Nothing is read until the user clicks 附上.
   state.pathSkip = state.pathSkip || new Set();
@@ -230,6 +231,7 @@
     if (!state.lastRestored) {  // after a reload, the conversation or group that was open before
       state.lastRestored = true;
       restoreLastOpen();
+      if (location.hash === '#settings') { state.page = 'settings'; setTimeout(() => loadPage('settings')); }  // reloaded on the settings page (#188④)
     }
     if (state.groupId && !activeGroup()) state.groupId = null;
     for (const job of state.data.jobs || []) state.jobDetails[job.id] = job;
@@ -345,6 +347,7 @@
       closeDropdowns(dd); dd.classList.toggle('open', open); btn.setAttribute('aria-expanded', String(open));
       if (open) {
         const r = btn.getBoundingClientRect(), menu = dd.querySelector('.dd-menu');
+        setTimeout(() => { if (dd.classList.contains('open')) (dd.querySelector('.dd-opt.selected:not([hidden])') || dd.querySelector('.dd-opt:not([hidden])'))?.focus({preventScroll: true}); });  // the arrow keys start from the current choice
         menu.style.minWidth = Math.max(r.width, 220) + 'px';
         menu.style.top = (r.bottom + 6) + 'px';
         menu.style.left = Math.max(8, Math.min(r.right - Math.max(menu.offsetWidth, r.width, 220), innerWidth - menu.offsetWidth - 8)) + 'px';
@@ -357,12 +360,31 @@
       dd.querySelectorAll('.dd-opt').forEach(o => { o.classList.toggle('selected', o === opt); o.setAttribute('aria-selected', String(o === opt)); });
       dd.querySelector('.dd-label').textContent = opt.dataset.label;
       closeDropdowns();
+      dd.querySelector('.dd-btn').focus({preventScroll: true});  // the keyboard stays on this menu, not back at the top of the page (#188⑤)
       if (input.value !== opt.dataset.value) { input.value = opt.dataset.value; input.dispatchEvent(new Event('change', {bubbles: true})); }
       e.stopPropagation(); return;
     }
     if (!e.target.closest?.('.dd-menu')) closeDropdowns();
   }, true);
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.querySelector('.dd.open')) { closeDropdowns(); e.stopPropagation(); } }, true);
+  document.addEventListener('keydown', e => {
+    const openDd = document.querySelector('.dd.open');
+    if (e.key === 'Escape' && openDd) { closeDropdowns(); openDd.querySelector('.dd-btn').focus({preventScroll: true}); e.stopPropagation(); }
+  }, true);
+  // Arrow keys move through an open menu, and open a closed one from its button; Home and End go to the ends; Tab closes it (#76②, #188⑤).
+  document.addEventListener('keydown', e => {
+    const dd = e.target.closest?.('.dd');
+    if (!dd || !e.target.closest('.dd-btn, .dd-menu') || e.isComposing || e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    const opts = [...dd.querySelectorAll('.dd-opt')].filter(o => !o.hidden), open = dd.classList.contains('open');
+    if (!opts.length) return;
+    if (e.key === 'Tab') { if (open) { closeDropdowns(); if (e.target.closest('.dd-menu')) { e.preventDefault(); dd.querySelector('.dd-btn').focus(); } } return; }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+    if (!open && (e.key === 'Home' || e.key === 'End')) return;
+    e.preventDefault();
+    if (!open) { dd.querySelector('.dd-btn').click(); return; }
+    const i = opts.indexOf(document.activeElement);
+    const next = e.key === 'Home' ? opts[0] : e.key === 'End' ? opts.at(-1) : e.key === 'ArrowDown' ? opts[i < 0 ? 0 : Math.min(opts.length - 1, i + 1)] : opts[i < 0 ? opts.length - 1 : Math.max(0, i - 1)];
+    next.focus({preventScroll: true}); next.scrollIntoView({block: 'nearest'});
+  });
   document.addEventListener('scroll', e => { if (!e.target.closest?.('.dd-menu')) closeDropdowns(); }, true);
 
   // Sidebar drag and drop.

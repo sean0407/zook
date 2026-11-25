@@ -40,6 +40,7 @@ CATALOG = {
     'gemini': dict(name='Gemini（Google）', vendor='Google', binary='gemini', kind='generic', tools=False,
                    install='Zook 會從 https://nodejs.org 下載 Node.js，再安裝 @google/gemini-cli', npm_package='@google/gemini-cli', terminal_login=True,
                    signed_in_file='~/.gemini/oauth_creds.json', run_env={'GEMINI_CLI_TRUST_WORKSPACE': 'true'}, args='-p {prompt}', model_args='-m {model}', full_args='--yolo',
+                   models=['pro', 'flash', 'flash-lite'], model_names={'pro': 'Pro（最強）', 'flash': 'Flash（較快）', 'flash-lite': 'Flash-Lite（最快、最省）'},
                    latest_url='https://registry.npmjs.org/@google/gemini-cli/latest',
                    docs='https://github.com/google-gemini/gemini-cli'),
 }
