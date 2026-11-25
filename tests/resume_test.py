@@ -124,7 +124,7 @@ class ResumeAfterRestart(unittest.TestCase):
         # A record from before #285 (or a try on a CLI whose output does not say when a tool starts): whether it ran one is not known.
         job = self.cut_off(); data = self.data()
         for j in data['jobs']:
-            if j['id'] == job: j.pop('toolWatch', None); j['nativeAccess'][3] = True  # its CLI could use its own tools
+            if j['id'] == job: j.pop('toolWatch', None); j.pop('toolsOn', None); j['nativeAccess'][3] = True  # its CLI could use its own tools
         (self.root / 'data/swarmr.json').write_text(json.dumps(data))
         self.start(); time.sleep(1.5)
         self.assertEqual(len(self.runs()), 2)
@@ -175,7 +175,7 @@ class TaskPickupTest(unittest.TestCase):
         tasks = group['taskRun']['tasks']
         # #285: the one that was running stops for the user (it may have run commands Zook cannot see yet); the reported one is only checked.
         self.assertEqual([t['status'] for t in tasks], ['done', 'stuck', 'verifying', 'pending'])
-        self.assertIn('請確認後按重試或接受結果', tasks[1]['note']); self.assertTrue(tasks[1]['resumed']); self.assertEqual(resumed, ['g'])
+        self.assertIn('再按「重試」', tasks[1]['note']); self.assertTrue(tasks[1]['resumed']); self.assertEqual(resumed, ['g'])
         self.assertIn('停下來等你確認', group['messages'][-1]['content']); self.assertIn('工作 2', group['messages'][-1]['content'])
         self.assertEqual(group['taskRun'].get('bonusAttempts', 0), 0)
         prompt = m.task_worker_prompt.__globals__['interrupt_note'](store.find('jobs', 'j1'))
@@ -266,6 +266,7 @@ class ToolWatchTest(unittest.TestCase):
         self.assertIn('指令', blocked(dict(toolWatch=True, usedTools=True, nativeAccess=['folder', '/x', 'ask', True])))
         self.assertIn('無法確認', blocked(dict(toolWatch=False, nativeAccess=['folder', '/x', 'ask', True])))
         self.assertIn('無法確認', blocked(dict()))  # older record
+        self.assertIn('無法確認', blocked(dict(toolWatch=False, toolsOn=True, nativeAccess=['folder', '/x', 'ask', False])))  # an earlier try could, on a CLI not watched
         self.assertIn('對外', blocked(dict(toolWatch=True, nativeAccess=['folder', '/x', 'ask', True], toolCalls=[dict(name='gmail_send', category='external_write', status='running')])))
 
 

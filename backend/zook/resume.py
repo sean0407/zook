@@ -10,7 +10,7 @@ RESUME_HOURS = 24
 RESUME_KINDS = ('codex', 'claude')  # CLIs whose conversation id is known while the reply is still running
 RESUME_MARK = '接續 Zook 重啟前中斷的回覆'
 RESUME_SAVED = '這個模型接不回原本的對話，改用 Zook 保存的對話內容'
-TASK_CUT_NOTE = 'Zook 重新啟動時這項工作還在做，可能已經做了一部分，請確認後按重試或接受結果。'
+TASK_CUT_NOTE = 'Zook 重新啟動時這項工作還在做，可能已經做了一部分，請確認做到哪裡後再按「重試」。'
 INTERRUPT_NOTE = ('\n\n（Zook 系統提示）Zook 剛才重新啟動，你上一次回覆在中途被中斷了。請先確認做到哪裡（例如檢查已經寫好或改過的檔案），'
                   '不要重複已經完成的動作，再從中斷的地方接著完成。之前等使用者核准的動作已經失效，需要的話會重新詢問。')
 
@@ -216,7 +216,7 @@ def resume_blocked(job):
     if task_acted_outward(job): return '中斷前可能已經對外做了一部分（例如寄出或改了連接的服務），所以沒有自動接著做。確認後可以按「接著做」。'
     if job.get('usedTools'): return '中斷前已經用了指令或工具，Zook 看不到它做到哪（可能已經做了一部分），所以沒有自動接著做。確認後可以按「接著做」。'
     access = job.get('nativeAccess')
-    could = not isinstance(access, list) or len(access) < 4 or bool(access[3])  # older records: not known
+    could = job['toolsOn'] if isinstance(job.get('toolsOn'), bool) else not isinstance(access, list) or len(access) < 4 or bool(access[3])  # older records: not known
     if could and job.get('toolWatch') is not True: return 'Zook 無法確認中斷前有沒有用過指令或工具（可能已經做了一部分），所以沒有自動接著做。確認後可以按「接著做」。'
     return ''
 
@@ -228,7 +228,12 @@ def resume_feed(store, job_id, kind, keep_session, resume, feed, where):
         job = store.find('jobs', job_id) or {}
         message = find_message(store.find('bots', job.get('botId')), job.get('messageId')) if job.get('resumeOf') else None
         if message is not None: message['note'] = RESUME_MARK if resume else RESUME_MARK + '（' + RESUME_SAVED + '）'
-        if job: job['toolWatch'] = job.get('toolWatch', True) is True and kind in WATCH_KINDS  # one try on a CLI it cannot watch: not known
+        if job:
+            access = job.get('nativeAccess') if isinstance(job.get('nativeAccess'), list) else []
+            job['toolsOn'] = bool(job.get('toolsOn')) or len(access) < 4 or bool(access[3])  # any try that could use its CLI's own tools
+            watched = job.get('toolWatch', True) is True and kind in WATCH_KINDS  # one try on a CLI it cannot watch: not known
+            if job.get('toolWatch', True) is True and not watched: job['toolWatch'] = False; store.save()  # on disk before this try starts
+            else: job['toolWatch'] = watched
     feed = tool_watch(store, job_id, kind, feed) if kind in WATCH_KINDS else feed
     if not keep_session or kind not in RESUME_KINDS: return feed
     spot = lambda sid: note_cli_session(store, job_id, *where[:3], where[3], sid)
@@ -335,6 +340,6 @@ class Resuming:
             if g.pop('before', None) == 'pending' and g.get('status') == 'cancelled': g.update(status='pending', since=time.time())
         cut = [t for t in run['tasks'] if t.get('note') == TASK_CUT_NOTE and t.get('status') == 'stuck']
         group['messages'].append(dict(id=ID(), role='system', content='Zook 重新啟動，任務從中斷的地方接著做：已完成的工作不重做' + (
-            '；中斷時還在做的%s停下來等你確認，看過後在任務看板上按「重試」或「接受結果」。' % ('、'.join('工作 %s' % t.get('n') for t in cut)) if cut else '。'), createdAt=NOW()))
+            '；中斷時還在做的%s停下來等你確認，看過後在任務看板上按「重試」。' % ('、'.join('工作 %s' % t.get('n') for t in cut)) if cut else '。'), createdAt=NOW()))
         task_board_update(self.store, group)
         self.task_resume(group)
