@@ -205,7 +205,7 @@
     if (i.google && i.needsLogin) return ['warn', '需要重新登入'];
     if (i.google && i.needsSetup) return ['', '尚未登入'];
     if (i.needsKey) return ['', '需要金鑰'];
-    if (i.needsLogin) return ['warn', '需要重新登入'];
+    if (i.needsLogin || t?.needsLogin) return ['warn', i.signedIn || i.needsLogin ? '需要重新登入' : '需要登入'];  // a 401 on the last test outranks an old 已登入
     if (i.signedIn) return ['ok', '已登入'];
     if (i.copied) return ['', '已複製到 Zook'];
     if (t?.status === 'ready') return ['ok', `已連線 · ${t.toolCount} 個工具`];
@@ -244,9 +244,9 @@
         const test = state.mcpTests[i.id], failed = test?.status === 'error' ? '原因：' + (test.error || '不明') : '', blocked = mcpBlocked(i);
         const gmailOn = (inv.mcp || []).some(x => x.gmail && !x.needsSetup);  // the two Google cards are two ways in, not one account twice
         const description = i.id === 'builtin:workspace' ? '在 Bot 自己的工作區讀寫檔案。' : i.needsKey ? '匯入時沒有帶金鑰，請貼上金鑰。' : i.copied ? 'Zook 已經有自己的一份，Bot 用的是 Zook 那一份。' : i.gmail && i.needsSetup ? '用應用程式密碼連接，可以搜尋、讀信、寫草稿和寄信。寄信前一定先問。' : i.google && i.needsSetup ? (gmailOn ? '另一種連法：用 Google 帳號登入，還能查行事曆和雲端硬碟。只要收發信的話，上面的 Gmail 已經連接好，不用登入這裡。' : '用 Google 帳號登入後，Bot 可以讀信、查行事曆和雲端硬碟。') : (t => t?.status === 'error' ? (i.editable ? connectorPlace(i.config) : '目前無法使用。') : t?.status === 'ready' ? '可用工具：' + (t.tools || []).slice(0, 8).map(x => x.name.replace(/_/g, ' ')).join('、') : i.gmail ? `已連接 ${i.address}。寄信前一定先問。` : i.editable ? connectorPlace(i.config) : sourceName(i.plugin || i.source, 'mcp') + '。按「測試連線」確認是否可以使用。')(state.mcpTests[i.id]);
-        return {id: i.id, icon: i.icon, name: i.id === 'builtin:workspace' ? 'Bot 工作區' : i.name, description, group: sourceName(i.plugin || i.source, 'mcp'), meta: i.copied ? '來源設定仍保留' : i.needsKey ? '等待金鑰' : on ? (blocked ? (i.needsLogin ? '已開啟 · 目前無法使用' : '已開啟') : '所有 Bot 共用中') : '未開啟',
+        return {id: i.id, icon: i.icon, name: i.id === 'builtin:workspace' ? 'Bot 工作區' : i.name, description, group: sourceName(i.plugin || i.source, 'mcp'), meta: i.copied ? '來源設定仍保留' : i.needsKey ? '等待金鑰' : on ? (blocked ? (i.needsLogin || test?.needsLogin ? '已開啟 · 目前無法使用' : '已開啟') : '所有 Bot 共用中') : '未開啟',
           on: on && !i.copied && !i.needsKey, toggle: 'mcp', toggleLabel: on ? (blocked ? '已開啟，但目前無法使用。按一下停用' : '停用這個連接器') : '開放給所有 Bot', status: i.copied ? null : [cls, label], test: i.id !== 'builtin:workspace' && !i.needsSetup && !i.needsKey && !i.copied, editable: !!i.editable, gmail: !!i.gmail, google: !!i.google, needsSetup: !!i.needsSetup,
-          needsKey: !!i.needsKey, note: failed, moved: i.copied ? '已複製' : '', copyable: !!i.copyable, canLogin: !!i.canLogin && (i.signedIn || i.needsLogin || test?.status !== 'error' || !!test.needsLogin), signedIn: !!i.signedIn, needsLogin: !!i.needsLogin, accounts: i.accounts || []};
+          needsKey: !!i.needsKey, note: failed, moved: i.copied ? '已複製' : '', copyable: !!i.copyable, canLogin: !!i.canLogin && (i.signedIn || i.needsLogin || test?.status !== 'error' || !!test.needsLogin), signedIn: !!i.signedIn && !test?.needsLogin, needsLogin: !!i.needsLogin || !!test?.needsLogin, accounts: i.accounts || []};
       });
     }
     return (inv.plugins || []).map(pl => ({id: pl.id, icon: pl.icon, name: pl.displayName, description: pl.description || '', group: pl.sourceName,

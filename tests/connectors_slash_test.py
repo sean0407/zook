@@ -103,6 +103,13 @@ console.log(JSON.stringify(ctx.out));
         a = self.items(self.state(mcp, {'zook:a': {'status': 'error', 'error': '需要登入', 'needsLogin': True}}))['zook:a']
         self.assertTrue(a['canLogin'])
 
+    def test_sign_in_refused_on_test_outranks_signed_in(self):
+        mcp = [{'id': 'zook:s', 'name': 'S', 'source': 'zook', 'canLogin': True, 'signedIn': True}]
+        s = self.items(self.state(mcp, {'zook:s': {'status': 'error', 'error': '需要登入', 'needsLogin': True}}))['zook:s']
+        self.assertEqual(s['status'][1], '需要重新登入')
+        self.assertIn('目前無法使用', s['meta'])
+        self.assertTrue(s['needsLogin']); self.assertFalse(s['signedIn'])  # the card offers 重新登入
+
     def test_needs_login_is_not_shared(self):
         mcp = [{'id': 'zook:n', 'name': 'Notion', 'source': 'zook', 'canLogin': True, 'signedIn': True, 'needsLogin': True}]
         n = self.items(self.state(mcp))['zook:n']
