@@ -82,6 +82,8 @@ def _xbare(text):
 
 
 def _xparse(z, part, deadline, budget):
+    info = z.getinfo(part)
+    if info.compress_type not in (_xzip.ZIP_STORED, _xzip.ZIP_DEFLATED) or info.file_size > budget[0]: raise _XSlow()  # checked before anything is unpacked
     return _XET.iterparse(_XGuard(z.open(part), deadline, budget), events=('end',))
 
 
@@ -245,7 +247,7 @@ def _xstamp(text):
     except (TypeError, ValueError): return None
 
 
-_XFILE = re.compile(r'^[\w.\- ]{1,60}\.xls[xm]$', re.IGNORECASE)
+_XFILE = re.compile(r'^[\w.\- ]{1,60}\.(?:xls[xm]|pptx)$', re.IGNORECASE)
 
 
 def xlsx_before_reply(store, job_id):
@@ -257,7 +259,7 @@ def xlsx_before_reply(store, job_id):
 
 def xlsx_after_reply(store, job_id):
     """After a reply: check the Excel files it saved, say what is wrong under it and keep it on the job. Never holds the lock while reading files."""
-    found = []
+    found, decks = [], []
     try:
         with store.lock:
             job = store.find('jobs', job_id)
@@ -265,27 +267,34 @@ def xlsx_after_reply(store, job_id):
             bot = store.find('bots', job['botId'])
             start, end = _xstamp(job.get('createdAt')), _xstamp(job.get('finishedAt'))
             if not bot or start is None or end is None: return
-        looked = 0
+        books, slides = [], []
         for item in bot_outputs(store, bot):
-            if looked >= XLSX_FILES: break
-            if not item['name'].lower().endswith(XLSX_SUFFIXES): continue
+            lower = item['name'].lower(); deck = lower.endswith(PPTX_SUFFIXES)  # decks are checked here too (pptxcheck.py)
+            if not deck and not lower.endswith(XLSX_SUFFIXES): continue
+            chosen = slides if deck else books
+            if len(chosen) >= (PPTX_FILES if deck else XLSX_FILES): continue
             try: when = os.stat(item['path'], follow_symlinks=False).st_mtime
             except OSError: continue
-            if not start <= when <= end + 0.2: continue  # only what this reply saved: its CLI had ended by finishedAt
-            looked += 1
-            try: scan = xlsx_scan(item['path'])
+            if start <= when <= end + 0.2: chosen.append(item)  # only what this reply saved: its CLI had ended by finishedAt
+        stop = time.monotonic() + XLSX_WAIT / 2  # Excel first; decks only while the next reply would still hear about them
+        for item in books + slides:
+            deck = item in slides
+            if deck and time.monotonic() > stop: break
+            try: scan = pptx_scan(item['path']) if deck else xlsx_scan(item['path'])
             except Exception: continue  # one odd file never costs the others their check
-            if scan: found.append((item['name'], scan))
+            if scan: (decks if deck else found).append((item['name'], scan))
     finally:
         with store.lock:
             job = store.find('jobs', job_id)
             if job:
                 job.pop('xlsxPending', None)
-                if found:
-                    job['xlsxIssues'] = [dict(file=name if _XFILE.match(name) else '', scan=[[k, n, [list(p) for p in places]] for k, n, places in scan]) for name, scan in found]
+                if found: job['xlsxIssues'] = [dict(file=name if _XFILE.match(name) else '', scan=[[k, n, [list(p) for p in places]] for k, n, places in scan]) for name, scan in found]
+                if decks: job['pptxIssues'] = [dict(file=name if _XFILE.match(name) else '', scan=[list(x) for x in scan]) for name, scan in decks]
+                if found or decks:
                     owner = store.find('groups', job['groupId']) if job.get('groupId') else store.find('bots', job['botId'])
                     message = find_message(owner, job.get('messageId')) if owner else None
                     shown = ['%s：%s' % (name[:80].replace('\n', ' '), '；'.join(xlsx_render([list(x) for x in scan]))) for name, scan in found]
+                    shown += ['%s：%s' % (name[:80].replace('\n', ' '), '；'.join(pptx_render([list(x) for x in scan]))) for name, scan in decks]
                     if message: message['note'] = '；'.join(x for x in (message.get('note'), *shown) if x)
                 store.save()
 
@@ -306,7 +315,7 @@ def xlsx_carry(store, job):
             if not last: return ''
             finished = _xstamp(last.get('finishedAt'))
             pending = last.get('xlsxPending') and finished is not None and time.time() - finished < XLSX_WAIT + 30  # not one left over from a restart
-            issues = last.get('xlsxIssues')
+            issues, decks = last.get('xlsxIssues'), last.get('pptxIssues')
         if not pending or time.monotonic() > end: break
         time.sleep(0.1)
     lines = []
@@ -315,6 +324,11 @@ def xlsx_carry(store, job):
         said = xlsx_render(f.get('scan'), for_bot=True)  # rebuilt from numbers and cell names only: nothing restored from a backup is passed on as words
         name = f.get('file') if isinstance(f.get('file'), str) and _XFILE.match(f.get('file')) else '其中一個 Excel 檔'
         if said: lines.append('%s：%s' % (name, '；'.join(said)))
+    lines = lines[:XLSX_FILES]
+    for f in decks if isinstance(decks, list) else []:
+        if not isinstance(f, dict): continue
+        said = pptx_render(f.get('scan'), for_bot=True)
+        if said and len(lines) < XLSX_FILES + PPTX_FILES: lines.append('你存的簡報檔：' + '；'.join(said))  # slide numbers and counts only, no file name
     if not lines: return ''
-    return ('\n（Zook 的檢查結果，不是使用者的話：你上一則回覆存的 Excel 有問題——%s。請在這次回覆一併修好：公式和算好的值都要存，合計範圍不要包含小計；'
-            '做不到就照實告訴使用者。）' % '；'.join(lines[:XLSX_FILES]))
+    return ('\n（Zook 的檢查結果，不是使用者的話：你上一則回覆存的檔案有問題——%s。請在這次回覆一併修好：Excel 的公式和算好的值都要存，合計範圍不要包含小計；'
+            '做不到就照實告訴使用者。）' % '；'.join(lines))
