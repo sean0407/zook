@@ -48,13 +48,13 @@ class LiveLost(Exception):
 
 class LiveCli:
     """One CLI process that stays open and answers one message at a time."""
-    def __init__(self, key, args, cwd, env, mark, ident, token, kind='claude'):
+    def __init__(self, key, args, cwd, env, mark, ident, token, kind='claude', popen=None):
         self.key, self.mark, self.ident, self.token, self.kind = key, mark, ident, token, kind
         self.home = env.get('HOME', '')  # an extra Antigravity account's folder: closed when that account is removed
         self.session, self.job_id, self.turn, self.used, self.turns, self.spoiled = '', None, None, time.monotonic(), 0, ''
         self.lock = threading.Lock(); self.err = bytearray(); self.cost = 0.0; self.reading = False
         self.writes = queue.Queue()  # one writer, so messages reach the CLI in the order they were sent
-        self.proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=str(cwd), env=dict(env, PWD=str(cwd)))  # PWD too: some CLIs take it as their folder
+        self.proc = popen(args, cwd, env) if popen else subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=str(cwd), env=dict(env, PWD=str(cwd)))  # PWD too: some CLIs take it as their folder
         for target in (self._write, self._read_err): threading.Thread(target=target, daemon=True).start()
 
     def alive(self): return self.proc.poll() is None
@@ -359,7 +359,7 @@ def live_turn(app, job, provider, kind, args, cwd, env, resume, prompt, on_outpu
     """Send this message to the conversation's kept CLI, starting one when there is none that fits. None means: start the CLI the
     usual way (the switch is off, this kind of reply is not kept, or everything that could be kept is busy)."""
     store = app.store
-    if kind not in LIVE_KINDS or not live_on(store) or app.__dict__.get('closing') or not job.get('chatId') or job.get('groupId') or job.get('internal') or job.get('liveOff') or '--no-session-persistence' in args: return None
+    if kind not in LIVE_KINDS or not live_on(store) or app.__dict__.get('closing') or not job.get('chatId') or job.get('groupId') or job.get('internal') or job.get('liveOff') or job.get('reattach') or '--no-session-persistence' in args: return None
     if app.__dict__.get('live_fails', 0) >= LIVE_FAILS or not live_able(app, provider): return None
     lives = app.__dict__.setdefault('lives', {}); ids = app.__dict__.setdefault('live_ids', {}); guard = app.__dict__.setdefault('live_lock', threading.Lock())
     key = (job['botId'], job['chatId'])
@@ -372,12 +372,13 @@ def live_turn(app, job, provider, kind, args, cwd, env, resume, prompt, on_outpu
                 idle = sorted((c for c in lives.values() if c.turn is None), key=lambda c: c.used)
                 if not idle: return None
                 live_close(app, idle[0])
-            ident = 'live-' + secrets.token_hex(12); token = secrets.token_urlsafe(32)
+            ident = 'live-' + secrets.token_hex(12); token = bg_token(app, job, ident) or secrets.token_urlsafe(32)  # made again from Zook's key after a restart
             started = list(args) + (['--input-format', 'stream-json', '--replay-user-messages'] if kind == 'claude' else [])  # Antigravity's run already reads messages this way
-            cli = LiveCli(key, started, cwd, dict(env, ZOOK_WORKER_URL='http://127.0.0.1:%d/api/worker/%s' % (app.server_address[1], ident), ZOOK_WORKER_TOKEN=token), mark, ident, token, kind)
+            cli = LiveCli(key, started, cwd, dict(env, ZOOK_WORKER_URL='http://127.0.0.1:%d/api/worker/%s' % (app.server_address[1], ident), ZOOK_WORKER_TOKEN=token), mark, ident, token, kind, popen=lambda a, c, e: bg_popen(app, job, a, c, e, True, kind, live=True, name=ident))
             cli.gate = [env.get('ZOOK_GATE_MARK'), env.get('ZOOK_GATE_NONCE'), 0] if env.get('ZOOK_GATE_NONCE') else None  # its own word (gate.py)
             lives[key] = cli; ids[ident] = cli
         else: job['kept'] = True  # this reply did not have to start the CLI
+        bg_note(store, job, cli.proc, True, cli.cost); store.save()  # where this reply's output starts, on disk before the CLI gets the message (background.py)
         return cli.begin(job['id'], prompt, MAX_CLI_OUTPUT, on_output)
 
 
@@ -408,6 +409,7 @@ def live_interject(app, job, text):
     """Lock on store held. Add the user's message to the reply that is running now. '' when it was added; otherwise why it could not be."""
     turn = app.processes.get(job['id'])
     if not isinstance(turn, LiveTurn) or turn.cli.kind not in INTERJECT_KINDS: return '這個模型無法在回覆途中接收訊息'
+    if isinstance(turn.cli, AdoptedCli): return '這則回覆是 Zook 重開後接回的'  # its input stayed with the Zook that closed (background.py)
     if (job.get('origin') or 'user') != 'user': return '這則回覆不是你發起的'
     return turn.add(text)
 
@@ -464,16 +466,16 @@ def interject_send(app, bot, body, by=''):
     return job, ''
 
 
-def live_worker(app, ident, auth):
+def live_worker(app, ident, check):
     """Lock held. (worker, job) for a tool call that came from a kept CLI: the reply it is answering right now, or (None, None).
     A call while it is answering nothing means it is working on its own: refused, and that CLI is not used again."""
     cli = app.__dict__.get('live_ids', {}).get(ident)
-    if not cli or not secrets.compare_digest(auth, 'Bearer ' + cli.token): return None, None
+    if not cli or not check(cli.token): return None, None  # signed with its token (background.py bg_worker)
     if not cli.job_id: cli.spoiled = cli.spoiled or '在兩則訊息之間呼叫工具'; return None, None
     return app.workers.get(cli.job_id), app.store.find('jobs', cli.job_id)
 
 
-def live_tidy(app, everything=False):
+def live_tidy(app, everything=False, spare=()):
     """Close kept CLIs that have not been used for a while, that ended on their own, that are no longer trusted, whose Bot or
     conversation is gone, or (everything=True) all of them. One that is answering is left alone unless Zook is closing."""
     guard = app.__dict__.get('live_lock')
@@ -481,6 +483,6 @@ def live_tidy(app, everything=False):
     with app.store.lock: here = {(b['id'], c['id']) for b in app.store.data['bots'] for c in b.get('chats') or []}; on = live_on(app.store)
     with guard:
         now = time.monotonic()
-        gone = [c for c in app.lives.values() if everything or not c.alive() or (c.turn is None and (now - c.used > LIVE_IDLE or c.spoiled or not on or c.key not in here))]
+        gone = [c for c in app.lives.values() if c.job_id not in spare and everything or c.job_id not in spare and not c.alive() or (c.turn is None and (now - c.used > LIVE_IDLE or c.spoiled or not on or c.key not in here))]
         for cli in gone: live_close(app, cli, wait=3 if everything else 0)
     return len(gone)

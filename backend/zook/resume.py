@@ -32,13 +32,14 @@ def finished_before_stop(store, job):
 
 def process_started(pid):
     """(when the process started, its command line) as ps says, or ('', '') when there is no such process."""
-    try: line = subprocess.run(['/bin/ps', '-o', 'lstart=,command=', '-p', str(int(pid))], capture_output=True, text=True, timeout=5).stdout.strip()
+    try: line = subprocess.run(['/bin/ps', '-o', 'lstart=,command=', '-p', str(int(pid))], capture_output=True, text=True, timeout=5, env=dict(os.environ, TZ='UTC0')).stdout.strip()  # the same text whatever the Mac's time zone
     except (OSError, ValueError, subprocess.SubprocessError): return '', ''
     return (line[:24].strip(), line[24:].strip()) if len(line) > 24 else ('', '')
 
 
 def note_cli_pid(store, job_id, proc, binary):
     """Lock held. The CLI's process and when it started, so one left running by a crash is stopped before its reply is carried on."""
+    if isinstance(getattr(getattr(proc, 'cli', None), 'proc', None) or proc, HostedProc): return  # its runner and placeholder end it (background.py)
     pid = getattr(proc, 'pid', None) or getattr(getattr(getattr(proc, 'cli', None), 'proc', None), 'pid', None)
     job = store.find('jobs', job_id)
     if job is None or not pid or (job.get('cliPid') or [0])[0] == int(pid): return
@@ -52,12 +53,13 @@ def stop_left_behind(record):
     pid, binary, seen = (list(record or []) + [0, '', ''])[:3]
     started, command = process_started(pid) if pid and binary and seen else ('', '')
     if not started or started != seen or str(binary) not in command: return  # gone, or the number now belongs to something else
+    group = int(pid)  # the group it leads; a CLI under a runner is never recorded here (note_cli_pid)
     for sig, wait in ((signal.SIGTERM, 3.0), (signal.SIGKILL, 2.0)):  # a group's number is not given out again while any member lives
-        try: os.killpg(int(pid), sig)
+        try: os.killpg(group, sig)
         except (ProcessLookupError, PermissionError): return
         end = time.monotonic() + wait
         while time.monotonic() < end:
-            try: os.killpg(int(pid), 0)
+            try: os.killpg(group, 0)
             except (ProcessLookupError, PermissionError): return
             time.sleep(0.1)
 
@@ -168,7 +170,7 @@ def resume_feed(store, job_id, kind, keep_session, resume, feed, where):
 class Resuming:
     def resume_then_drain(self):
         """At start: first what the last stop cut short, then the messages that were waiting (they would otherwise come after it)."""
-        try: self.resume_interrupted()
+        try: bg_reattach(self); self.resume_interrupted()  # what went on under its runner first (background.py)
         finally: self.queue_drain_all()
 
     def resume_interrupted(self):

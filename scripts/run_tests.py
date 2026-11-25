@@ -21,9 +21,46 @@ FILE_TIMEOUT = 900  # seconds one test file may take
 CLEAR_ENV = ('ZOOK_NO_INTRO',)
 
 
+RUN_MARK = 'zt%d-%s' % (os.getpid(), os.urandom(4).hex())  # in the environment of everything a test file starts
+
+
+def leftovers(mark):
+    """Processes a test file started that are still running (servers, runners, stand-in CLIs): found by the mark in their
+    environment, which only this user's own processes show (ps -E)."""
+    try: lines = subprocess.run(['/bin/ps', '-E', '-axww', '-o', 'pid=,command='], capture_output=True, text=True, timeout=20).stdout.splitlines()
+    except (OSError, subprocess.SubprocessError): return []
+    pids = []
+    for line in lines:
+        pid, _, rest = line.strip().partition(' ')
+        if 'ZOOK_TEST_RUN=' + mark + ' ' in rest + ' ' and pid.isdigit() and int(pid) != os.getpid(): pids.append(pid)
+    if not pids: return []
+    try: named = subprocess.run(['/bin/ps', '-ww', '-o', 'pid=,command=', '-p', ','.join(pids)], capture_output=True, text=True, timeout=20).stdout.splitlines()
+    except (OSError, subprocess.SubprocessError): named = []
+    def program(command):  # the program and its script only: never its arguments (a test may pass a password) or environment
+        words = command.split(); name = os.path.basename(words[0]) if words else ''
+        script = words[1] if len(words) > 1 and 'python' in name.lower() and words[1].endswith('.py') else ''  # a Python script's own name
+        return (name + ' ' + os.path.basename(script)).strip()
+    out = {int(l.split()[0]): program(l.strip().partition(' ')[2]) for l in named if l.strip()}
+    return [(int(p), out.get(int(p), '')) for p in pids]
+
+
+def sweep(mark):
+    """End what a test file left running (a moment first: a runner may still be finishing), and say what it was."""
+    end = time.monotonic() + 10
+    while leftovers(mark) and time.monotonic() < end: time.sleep(0.5)
+    left = leftovers(mark)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for pid, _ in leftovers(mark):
+            try: os.kill(pid, sig)
+            except OSError: pass
+        if sig == signal.SIGTERM: time.sleep(2)
+    return left
+
+
 def run_one(name):
     started = time.monotonic()
     env = {k: v for k, v in os.environ.items() if k not in CLEAR_ENV}; env['PYTHONDONTWRITEBYTECODE'] = '1'
+    mark = '%s-%s' % (RUN_MARK, name); env['ZOOK_TEST_RUN'] = mark
     proc = subprocess.Popen([sys.executable, '-m', 'unittest', 'discover', '-s', 'tests', '-p', name + '.py'], cwd=str(ROOT),
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, start_new_session=True)
     try: out, _ = proc.communicate(timeout=FILE_TIMEOUT); why = ''
@@ -32,6 +69,9 @@ def run_one(name):
         except OSError: pass
         out, _ = proc.communicate(); why = '超過 %d 秒，已停止' % FILE_TIMEOUT
     text = out.decode('utf-8', 'replace')
+    left = sweep(mark)
+    if left:  # a test that leaves processes behind fails: they pile up and end in crash reports later
+        text += '\n\n留下沒關掉的程序（已結束它們）：\n' + '\n'.join('  %d %s' % x for x in left) + '\n'; why = why or '留下沒關掉的程序'
     # unittest's own summary is the last 「Ran N tests」 line followed by OK or FAILED; anything a test printed earlier does not count.
     summary = list(re.finditer(r'^Ran (\d+) tests? in [\d.]+s\s*\n\s*\n(OK|FAILED)(?: \(([^)]*)\))?\s*$', text, re.M))
     last = summary[-1] if summary else None

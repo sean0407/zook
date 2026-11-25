@@ -216,6 +216,7 @@ class StoreBase:
         if bots and not any('isAdmin' in b for b in bots):
             for b in bots: b['isAdmin'] = b.get('name') == '管理員'
         for b in bots: b.setdefault('isAdmin', False); b.setdefault('persona', ''); b.setdefault('webSearch', False)
+        (self.dir / 'runs').mkdir(mode=0o700, exist_ok=True)  # replies' runners (background.py): there from the start, so what a Bot may read does not change after its first reply
         self.stopped_at = str(self.data.get('savedAt') or '')  # when the last run last saved: a restored backup keeps its own old time
         for group in self.data['groups']:
             group.pop('compacting', None); task_recover(group, self)
@@ -226,6 +227,7 @@ class StoreBase:
             for approval in job['approvals'] + (job.get('questions') or []):
                 if approval['status'] == 'pending': approval['status'] = 'expired'
             if job['status'] == 'running' and finished_before_stop(self, job): continue  # its answer was saved, only the job record was not
+            if job['status'] == 'running' and job.get('runner') and bg_alive(self, job): job['reattach'] = True; continue  # went on under its runner (background.py)
             if job['status'] == 'running':
                 job.update(status='failed', error='服務重新啟動，工作已中斷。'); interrupted_at(job, self.stopped_at)  # resume.py carries it on
                 self.finish_message(job, '', 'failed')

@@ -16,7 +16,7 @@ timeout) is a refusal.
 
 This is a careful reading of what the CLI asked for, not a sandbox: a program written to a file and run later is not read.
 """
-import json, os, re, shlex, shutil, stat, sys, urllib.error, urllib.parse, urllib.request
+import hmac, json, os, re, shlex, shutil, stat, sys, time, urllib.error, urllib.parse, urllib.request
 
 MAX_INPUT = 4 * 1024 * 1024
 HOME = os.path.expanduser('~')
@@ -621,13 +621,20 @@ def ask(actions):
     except ValueError: wait = 660
     items = [{'kind': k, 'title': t} for k, t in actions]
     body = json.dumps({'method': 'gate', 'params': dict({'actions': items}, **({'toolUseId': _TOOL_USE[0]} if _TOOL_USE[0] else {}))}).encode()
-    req = urllib.request.Request(url, data=body, headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+    # The token is never sent: the request is signed with it, and only an answer proved with it for this very request counts
+    # (another program on that port can neither learn it nor approve in Zook's place).
+    nonce, when = os.urandom(16).hex(), str(int(time.time() * 1000))
+    where = urllib.parse.urlsplit(url); target = '%s%s' % (where.port, where.path)  # for this address only: not usable at another
+    sig = hmac.new(token.encode(), b'\n'.join(x if isinstance(x, bytes) else x.encode() for x in ('call', nonce, when, target, body)), 'sha256').hexdigest()
+    req = urllib.request.Request(url, data=body, headers={'Content-Type': 'application/json', 'X-Zook-Nonce': nonce, 'X-Zook-Time': when, 'X-Zook-Sig': sig})
     try:
         with urllib.request.urlopen(req, timeout=wait) as response:
-            answer = json.loads(response.read(65536))
+            raw = response.read(65536); proof = response.headers.get('X-Zook-Proof') or ''; status = response.status
+        answer = json.loads(raw)
     except (urllib.error.URLError, ValueError, OSError):
         return False
-    return isinstance(answer, dict) and answer.get('approved') is True
+    expected = hmac.new(token.encode(), b'\n'.join(x if isinstance(x, bytes) else str(x).encode() for x in ('answer', nonce, status, raw)), 'sha256').hexdigest()
+    return hmac.compare_digest(proof, expected) and isinstance(answer, dict) and answer.get('approved') is True
 
 
 def _command_paths(command):

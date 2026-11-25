@@ -1,5 +1,5 @@
 # The running service: schedules, replies, group discussions. Loaded by backend/server.py into one shared namespace.
-class App(Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compacting, Teams, Intros, ThreadingHTTPServer):
+class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compacting, Teams, Intros, ThreadingHTTPServer):
     daemon_threads = True
     def __init__(self, address, store, assets, token):
         super().__init__(address, Handler)
@@ -13,7 +13,7 @@ class App(Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting,
         self.pairing = None
         self.logins = {}
         self.installs = {}
-        self.updater = Updater(lambda: any(j.get('status') == 'running' for j in self.store.data['jobs']))
+        self.updater = Updater(lambda: bg_busy(self))  # a reply that goes on under its runner does not hold an update back (background.py)
         self.notices, self.notice_seq = [], 0  # for Mac notifications; the window asks for new ones
 
     def notify(self, title, body, kind, target_id, message_id, always=False):
@@ -211,103 +211,6 @@ class App(Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting,
         store.data['jobs'].append(job); store.save(); self.start_job(job, prompt, provider, model, copy.deepcopy(bot), inventory)
         return job
 
-    def run_schedule(self, item, inventory, extra=''):
-        """Send a schedule's message now and add it to the schedule's history. Returns None when sent,
-        or the reason it could not be. Raises Busy when the Bot or group is working on something else. Lock held."""
-        run = dict(kind='group' if item.get('groupId') else 'bot', targetId=item.get('groupId') or item.get('botId'), status='running')
-        try:
-            if item.get('groupId'):
-                group = self.store.find('groups', item['groupId'])
-                if not group: raise RuntimeError('找不到這個群組。')
-                if group['status'] == 'running': raise Busy('群組正在討論，等討論結束再執行。')
-                run['runId'] = self.post_group_message(group, item['content'] + extra, author='排程')
-                run['messageId'] = next(m['id'] for m in reversed(group['messages']) if m['role'] == 'user')
-            else:
-                bot = self.store.find('bots', item.get('botId'))
-                if not bot: raise RuntimeError('找不到這個 Bot。')
-                run['chatId'] = schedule_chat(bot)
-                run['jobId'] = self.send_to_bot(bot, item['content'] + extra + (QUIET_NOTE if item.get('quiet') else ''), inventory, author='排程', chat_id=run['chatId'], origin='trigger' if extra else 'schedule')['id']
-                run['messageId'] = next(m['id'] for m in reversed(chat_messages(bot, run['chatId'])) if m['role'] == 'user')
-        except Busy: raise
-        except (ValueError, RuntimeError) as exc:
-            run.update(status='failed', reason=str(exc)[:300])
-        schedule_add_run(item, run)
-        if run['status'] == 'failed': self.notify_run(run, '失敗：' + run['reason'])
-        return run.get('reason')
-
-    def settle_schedule_runs(self):
-        """Finish the history entries of schedules whose reply has come in. Lock held."""
-        store = self.store
-        for item in store.data['schedules']:
-            for run in item.get('runs') or []:
-                if run.get('status') != 'running': continue
-                if run.get('kind') == 'group':
-                    group = store.find('groups', run.get('targetId'))
-                    if group and group.get('runId') == run.get('runId'): continue  # still discussing
-                    messages = (group or {}).get('messages') or []
-                    after = next((i for i, m in enumerate(messages) if m['id'] == run.get('messageId')), len(messages))
-                    replies = [m for m in messages[after + 1:] if m['role'] == 'assistant' and m.get('status') == 'completed' and m.get('content')]
-                    outcome = ('done', '', replies[-1]['content']) if replies else ('failed', '群組沒有產生回覆。', '')
-                else:
-                    job = store.find('jobs', run.get('jobId'))
-                    if job and job['status'] == 'running': continue
-                    if job and job['status'] == 'completed': outcome = ('done', '', job.get('content') or '')
-                    elif job and job['status'] == 'cancelled': outcome = ('failed', '回覆被停止了。', '')
-                    else: outcome = ('failed', (job or {}).get('error') or '找不到這次的回覆。', '')
-                if run.get('approvalExpired') and outcome[0] == 'done': outcome = ('done', '有動作等你核准超過 24 小時，視為拒絕。', outcome[2])
-                run.update(status=outcome[0], reason=outcome[1], summary=outcome[2][:300], finishedAt=NOW())
-                if outcome[0] == 'failed': item.update(lastStatus='failed', lastError=outcome[1])
-                if outcome[0] == 'done' and item.get('quiet') and run.get('kind') != 'group' and not outcome[1] and is_quiet_reply(outcome[2]):
-                    run['quiet'] = True; store.save(); continue  # nothing new: it is in the history, and nobody is interrupted
-                self.notify_run(run, first_sentence(outcome[2]) or '已完成。' if outcome[0] == 'done' else '失敗：' + outcome[1])
-                store.save()
-
-    def run_schedules(self, now=None):
-        """Send every schedule whose time has come. Runs a few times a minute while Zook is open."""
-        now = now or datetime.datetime.now(); store = self.store
-        def waiting():
-            for item in store.data['schedules']:
-                due = item.get('on') and (item.get('trigger') or 'time') == 'time' and schedule_last_due(item, now)
-                if due and due.isoformat() > item.get('since', ''): yield item, due
-        with store.lock:
-            self.settle_schedule_runs()
-            if not list(waiting()): return
-        inventory = inventory_for(store)
-        def handled(item, due, status, error=''):
-            item.pop('held', None)
-            item.update(since=due.isoformat(), lastAt=NOW(), lastStatus=status, lastError=error)
-            if item.get('repeat') == 'once': item.update(on=False, done=True)  # a one-time schedule is finished either way
-        with store.lock:
-            for item, due in list(waiting()):
-                late = (now - due).total_seconds()
-                missed = None
-                if late > 86400 or (late > 180 and not item.get('catchUp', True) and not item.get('held')): missed = '到時間時 Zook 沒有開著。'
-                else:
-                    try: problem = self.run_schedule(item, inventory)
-                    except Busy:
-                        item['held'] = True  # the Bot or group is busy with something else: try again shortly
-                        if late > 6 * 3600: missed = '一直在忙，這次沒有執行。'
-                        else: continue
-                if missed:
-                    run = schedule_add_run(item, dict(kind='group' if item.get('groupId') else 'bot', targetId=item.get('groupId') or item.get('botId'), status='missed', reason=missed))
-                    self.notify_run(run, '錯過：' + missed)
-                    handled(item, due, 'missed', missed); continue
-                handled(item, due, 'failed' if problem else 'sent', problem or '')
-            store.save()
-
-    def schedule_loop(self):
-        wait = float(os.environ.get('ZOOK_SCHEDULE_TICK') or 15)
-        while True:
-            time.sleep(wait)
-            for step in (self.run_schedules, self.run_triggers, self.sync_tick, lambda: live_tidy(self), lambda: usage_detect_tick(self)):  # 自動偵測使用量: usagewatch.py
-                try: step()
-                except Exception: pass
-            try:
-                with self.store.lock:
-                    backup_daily(self.store)
-                    if time.monotonic() - self.store.__dict__.get('_chat_swept', 0) >= CHAT_SWEEP_EVERY: self.store.save_chats()  # the once-a-minute look happens even when nothing else saves
-            except Exception: pass
-
     def note_skipped(self, job, session):
         """Under the reply: which connectors could not be used this time, including ones that failed when the Bot reached for them."""
         if not session or not session.unavailable: return
@@ -402,18 +305,20 @@ class App(Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting,
             elif name == 'zook_native_gate': approval['text'] = '\n'.join(str(x.get('title') or '') for x in approval['arguments'].get('actions') or [] if isinstance(x, dict)) or str(approval['arguments'].get('title') or '')[:200]
             elif describe_send(approval['label'], approval['arguments']) or describe_write(approval['label'], approval['arguments']):
                 approval['text'] = describe_send(approval['label'], approval['arguments']) or describe_write(approval['label'], approval['arguments'])
+            if bg_hold(self, job_id, approval): job.setdefault('approvals', []).append(approval); self.store.save(); return False  # Zook is closing for this reply (background.py)
             job.setdefault('approvals', []).append(approval); self.approval_events[approval_id] = event
             run = self.schedule_run_for(job)
             if run: self.notify_run(run, '需要你核准：' + (approval.get('text') or describe_call(dict(approval, name=name))))
             self.store.save()
-        event.wait(schedule_approval_wait() if run else APPROVAL_TIMEOUT)
+        gone = bg_await(event, schedule_approval_wait() if run else APPROVAL_TIMEOUT)  # no longer than the CLI still waits, nor once it stopped waiting
         with self.store.lock:
             self.approval_events.pop(approval_id, None)
+            if gone and approval['status'] in ('pending', 'approved'): approval.update(status='expired', withdrawn=True)  # the CLI no longer waits: nothing is done
             if approval['status'] == 'pending':
                 approval['status'] = 'expired'
                 if run: run['approvalExpired'] = True  # unattended and nobody answered: declined, and the history says why
                 self.store.save()
-            return approval['status'] == 'approved' and job['status'] == 'running'
+            bg_mark(approval); return approval['status'] == 'approved' and job['status'] == 'running'
 
     def withdraw(self, job_id, call_id):
         """The CLI stopped waiting for this action (its hook gave up or was ended): its card is taken down as expired."""
@@ -434,6 +339,8 @@ class App(Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting,
             self._run_job(job_id, prompt, provider, model, bot, inventory)
         finally:
             self.finish_session(job_id); agy_release(self, job_id)  # the next agy of this Bot may start
+            try: bg_stop(self, self.store.find('jobs', job_id) or {}); bg_sweep(self)  # a runner never taken up, then the files of runs that are over (background.py)
+            except OSError: pass
             with self.store.lock:
                 job = self.store.find('jobs', job_id)
                 if job and job.get('long') and job['status'] != 'running':  # nobody is expected to be watching a long task
@@ -462,6 +369,7 @@ class App(Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting,
             chain = [(x[0], x[1], x[2] if len(x) > 2 else '' if auto else None, len(x) > 2 and not named) for x in raw]
             if job.get('plan'): chain = [x for x in chain if provider_kind(x[0]) in PLAN_KINDS] or chain[:1]  # a backup must be held to read-only too
             chain = held_backups(bot, provider, chain)
+            if job.get('reattach'): chain, fixed = [(provider, model, (job.get('ran') or ['', '', ''])[2], False)], False  # the CLI already running (background.py)
             if not chain:
                 job.update(status='failed', error='這個 Bot 目前限在工作資料夾，不能用自訂 CLI 回覆。請在 Mac 的「編輯 Bot」換模型或放寬存取範圍。', finishedAt=NOW())
                 store.finish_message(job, '', 'failed'); store.save(); return
@@ -474,12 +382,12 @@ class App(Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting,
                 if reason and len(chain) > 1: skipped[x] = reason; chain.remove(x)
             keep = 1 if chain and chain[0] == first else 0  # the chosen model keeps its place; when it was skipped, every backup is sorted
             chain = chain[:keep] + backups_with_room(store, bot, chain[keep:])  # backups nearly used up go last (使用者 2026-11-22)
-            if budget_blocks(store, chain[0][0]) == 'stop':
+            if budget_blocks(store, chain[0][0]) == 'stop' and not job.get('reattach'):
                 job.update(status='failed', error='這個月的用量預算已用完。可到「各模型使用量」調整上限。', finishedAt=NOW())
                 store.finish_message(job, '', 'failed'); store.save(); return
             billing_keys = auto_billing_keys(store, bot, chain) if fixed else []; stale = auto_billing_stale(store, billing_keys)
         if stale: auto_recheck(store, [k for k in billing_keys if auto_billing_stale(store, [k]) and not auto_unwatched(k)])  # watched sign-ins, checked now
-        why, compacted = skipped.get(first), False
+        why, compacted = skipped.get(first), bool(job.get('reattach'))
         for index, (p, m, a, check) in enumerate(chain):
             final = index == len(chain) - 1
             run_bot = bot if a is None else dict(bot, account=a); fixed and auto_recheck_live(store, bot, p, a)  # the account picked; asked of the CLI now when Zook cannot watch it
@@ -577,10 +485,10 @@ class App(Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting,
                     lambda *a: self.approve(job_id, *a), lambda event: self.record_event(job_id, event), inventory=inventory,
                     extra_tools=(plan_safe if planning else list)(self.app_tools(bot, runtime, job.get('groupId'), job.get('origin') or 'user') + git_tools(store, bot, scope, root, runtime, kind) + ([] if job.get('groupId') or job.get('internal') else question_tools(self, job_id, runtime, job.get('origin') or 'user')) + browser_tools(self, job_id, bot, kind, job.get('origin') or 'user', runtime) + task_tools(self, job_id, runtime)), permission_mode=lambda bot_id=bot['id']: self.live_permission(bot_id, job_id))
                 session.read_only = planning; session.attachment_files = (job.get('attachments') or []) + ([str(group_copy_folder(store, bot['id']))] if job.get('groupFiles') else [])  # this reply's own
-                token = secrets.token_urlsafe(32)
                 with store.lock:
                     job = store.find('jobs', job_id)
                     if not job or job['status'] != 'running': return
+                    token = bg_token(self, job) or secrets.token_urlsafe(32)  # under a runner: made again from Zook's key after a restart (background.py)
                     self.workers[job_id] = {'token': token, 'session': session, 'tools': []}
                 tools = session.tools()  # May start external servers; never hold store.lock.
                 if session.lazy: prompt += '\n已連接的外部服務：%s。需要用到時，先用 zook_connector_tools 查它能做什麼，再用 zook_connector_call 執行；用不到就不必查。' % '、'.join(sorted(session.lazy))
@@ -703,7 +611,8 @@ class App(Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting,
                 if streaming: partial_start(job)
                 # A conversation's CLI may be kept open between messages (live.py); otherwise it is started for this one reply.
                 kept = live_turn(self, job, provider, kind, args, cli_cwd, env, resume, prompt, feed)
-                proc = kept or subprocess.Popen(args, stdin=subprocess.PIPE if stdin_prompt else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True, cwd=str(cli_cwd), env=dict(env, PWD=str(cli_cwd)))  # PWD too, so it matches the folder the CLI starts in
+                proc = kept or bg_popen(self, job, args, cli_cwd, env, stdin_prompt, kind)  # under a runner when it may go on while Zook is closed (background.py)
+                kept = kept or bg_turn(proc, kind, feed, job); proc = kept or proc  # a kept CLI's reply taken up after a restart
                 self.processes[job_id] = proc; note_cli_pid(store, job_id, proc, binary)  # resume.py
             try:
                 # A reply may take as long as it keeps working. It is stopped when nothing has happened for a while (no output from the
@@ -725,6 +634,10 @@ class App(Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting,
                     elif now >= deadline: stopped_for = '已超過時間上限。'
                     if stopped_for: raise subprocess.TimeoutExpired(args, quiet_limit)
                 output, stderr = pipes.result()
+                ended_by = getattr(getattr(getattr(proc, 'cli', None), 'proc', None) or proc, 'stopped', '')  # its runner ended it (background.py)
+                if isinstance(ended_by, str) and ended_by and ended_by != 'stopped':
+                    with store.lock: job['mayHaveActed'] = True  # what it did before is unknown: not tried again on another model
+                    raise RuntimeError('執行中止：' + ended_by)
                 with store.lock: now_job = store.find('jobs', job_id) or {}; untouched = now_job.get('status') == 'running' and not now_job.get('toolCalls')
                 if kept and kept.lost() and untouched and not self.__dict__.get('closing'): raise LiveLost()
                 if kept and kept.finished: self.live_fails = 0
@@ -795,7 +708,7 @@ class App(Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting,
                     self.remember_session(job, provider, model, account, cli_cwd, cli_session(kind, output.decode('utf-8', errors='replace')))
                     store.finish_message(job, content, 'completed')
                     if options: (find_message(store.find('bots', job['botId']), job['messageId']) or {})['options'] = options
-                    if isinstance(kept, LiveTurn) and kept.pending: (find_message(store.find('bots', job['botId']), job['messageId']) or {})['note'] = '回覆途中補充的訊息它沒有讀到，請再傳一次。'
+                    if isinstance(kept, LiveTurn) and (kept.pending or kept.__dict__.get('unsure')): (find_message(store.find('bots', job['botId']), job['messageId']) or {})['note'] = '回覆途中補充的訊息它沒有讀到，請再傳一次。' if kept.pending else '回覆途中補充的訊息，Zook 關閉前不確定它有沒有讀到；回覆沒提到的話，請再傳一次。'
                     store.save()
         except LiveLost:
             self.live_fails = self.__dict__.get('live_fails', 0) + 1
@@ -995,3 +908,4 @@ class App(Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting,
         if worker: threading.Thread(target=worker['session'].close, daemon=True).start()
         proc = self.processes.get(job['id'])
         if proc: terminate_tree(proc)
+        elif job.get('reattach'): bg_stop(self, job)  # taken up after a restart, not reached yet (background.py)

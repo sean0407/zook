@@ -82,6 +82,7 @@ class WaitingTest(unittest.TestCase):
     def test_line_survives_a_restart_and_the_interrupted_reply_goes_first(self):
         # #34: the reply the restart cut off is carried on (in its own message, once), then what was waiting is answered.
         (self.root / 'bin/delay').write_text('30')
+        self.req('PATCH', '/api/settings', {'backgroundRuns': False})  # on, the reply is not cut off at all (background_test.py)
         self.say('被中斷的'); self.say('等著的')
         time.sleep(0.5); self.stop()
         (self.root / 'bin/delay').write_text('0.2'); self.start()

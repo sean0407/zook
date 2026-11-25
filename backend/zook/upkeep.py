@@ -102,6 +102,10 @@ def backup_restore(app, name):
     try: data = backup_check(backup_read(path))
     except (OSError, EOFError, UnicodeError, RecursionError): raise ValueError('這份備份無法讀取，資料沒有變動。')
     for bot in data['bots']: bot.pop('queue', None)  # messages that were waiting when the copy was made have been sent since
+    for job in data.get('jobs') or []:  # a reply running when the copy was made belongs to the Zook that ran it: never started again here
+        if isinstance(job, dict) and job.get('status') == 'running':
+            for key in ('runner', 'runnerSalt', 'cliPid', 'interrupted', 'reattach'): job.pop(key, None)
+            job.update(status='failed', error='備份當時這則回覆還沒完成。')
     safety = backup_write(store, 'safety', store.data)
     halted = sync_halt(store)  # saved first: if Zook stops halfway, the older data is never sent to the other Macs
     # This Mac's own pairing, sign-ins and sync stay as they are: they belong to the machine, not to the copy.
@@ -248,7 +252,7 @@ def drop_removed_providers(store):
 
 SETTING_NAMES = {'permissionMode': '主動性', 'webSearch': '上網搜尋', 'browserAutomation': '排程與觸發可用內建瀏覽器', 'provider': '預設提供者', 'model': '預設模型', 'fallbacks': '備用模型', 'access': '存取範圍', 'accessFolder': '存取範圍',
                  'features': '功能開關', 'effort': '思考強度', 'remote': '手機連線', 'autoUpdateCheck': '自動檢查更新', 'usageDetectEvery': '自動偵測使用量', 'scheduleNotify': '通知', 'sharedMcp': '共用連接器', 'disabledSkills': 'Skills 開關',
-                 'disabledPlugins': '插件開關', 'autoModels': '自動選擇的模型', 'autoAccounts': '自動選擇的帳號', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步', 'voiceLang': '語音輸入語言', 'streamReplies': '回覆逐字顯示', 'queueWhenBusy': 'Bot 忙碌時排隊', 'usageCardSort': '剩餘額度排序', 'usageCardOrder': '剩餘額度排序', 'keepCli': '保持 CLI 開啟', 'autoCompact': '對話過長時自動整理'}
+                 'disabledPlugins': '插件開關', 'autoModels': '自動選擇的模型', 'autoAccounts': '自動選擇的帳號', 'rules': '固定規則', 'budgets': '用量預算', 'budgetOver': '用量預算', 'sync': '多台 Mac 同步', 'voiceLang': '語音輸入語言', 'streamReplies': '回覆逐字顯示', 'queueWhenBusy': 'Bot 忙碌時排隊', 'usageCardSort': '剩餘額度排序', 'usageCardOrder': '剩餘額度排序', 'keepCli': '保持 CLI 開啟', 'backgroundRuns': '結束時繼續在背景跑', 'autoCompact': '對話過長時自動整理'}
 BOT_FIELD_NAMES = {'name': '名稱', 'persona': '人格檔案', 'instructions': '工作指示', 'provider': '模型', 'model': '模型', 'account': '帳號', 'permissionMode': '主動性', 'access': '存取範圍', 'accessFolder': '存取範圍',
                    'fallbacks': '備用模型', 'features': '功能開關', 'effort': '思考強度', 'isAdmin': '管理員身分', 'enabledMcp': '連接器', 'scripts': '允許本機腳本'}
 
@@ -416,6 +420,9 @@ def upkeep_fields(data, body, changes):
     if 'textSize' in body:
         if body['textSize'] not in ('small', 'normal', 'large', 'xlarge'): raise ValueError('字體大小設定無效。')
         changes['textSize'] = body['textSize']
+    if 'backgroundRuns' in body:
+        if not isinstance(body['backgroundRuns'], bool): raise ValueError('backgroundRuns 無效。')
+        changes['backgroundRuns'] = body['backgroundRuns']
     if 'keepCli' in body:
         if not isinstance(body['keepCli'], bool): raise ValueError('keepCli 無效。')
         changes['keepCli'] = body['keepCli']
@@ -522,7 +529,7 @@ def trim_jobs(store):
 def state_view(store, whole=False):
     """Lock held. What the window and the phone load: everything except the trimmed jobs and the usage totals, which only the usage page needs."""
     view = dict(store.data, rev=store.rev)
-    view['jobs'] = [{k: v for k, v in j.items() if k not in ('thinking', 'cliSession', 'cliPid')} for j in store.data['jobs'] if not j.get('slim') and not j.get('internal')]
+    view['jobs'] = [{k: v for k, v in j.items() if k not in ('thinking', 'cliSession', 'cliPid', 'runner')} for j in store.data['jobs'] if not j.get('slim') and not j.get('internal')]
     if not whole: view['bots'] = [page_bot(b) for b in store.data['bots']]  # the newest part of each open conversation; older parts are asked for
     if not whole: view['groups'] = [page_group(g) for g in store.data['groups']]
     view.pop('usageArchive', None); view.pop('usageDaily', None); view['rings'] = usage_rings(store)

@@ -61,6 +61,12 @@
   });
 
   document.addEventListener('change', async e => {
+    if (e.target.dataset.backgroundRuns === undefined) return;
+    try { state.data.settings = await post('settings', {backgroundRuns: e.target.checked}, 'PATCH'); toast(e.target.checked ? '結束 Zook 時，進行中的回覆會繼續在背景跑' : '結束 Zook 時會停止進行中的回覆'); }
+    catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
+  });
+
+  document.addEventListener('change', async e => {
     if (e.target.dataset.keepCli === undefined) return;
     try { state.data.settings = await post('settings', {keepCli: e.target.checked}, 'PATCH'); toast(e.target.checked ? '同一個對話會保持 CLI 開啟' : '每則回覆都重新啟動 CLI'); }
     catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
