@@ -79,7 +79,17 @@
     return `<div class="effort-pick" title="思考強度">${dropdown('effort', currentEffort(), EFFORTS, 'data-effort')}</div>`;
   }
   const providerList = () => (state.providers || [{id: 'codex', name: 'Codex'}, {id: 'claude', name: 'Claude'}]).map(p => ({id: p.id, name: String(p.name).split('（')[0]}));
-  const providerShort = id => id === 'auto' ? '自動選擇' : providerList().find(p => p.id === id)?.name || id;
+  const providerShort = id => id === 'auto' ? '自動選擇' : providerList().find(p => p.id === id)?.name || String(id || '').replace(/^./, c => c.toUpperCase());
+  // A model in words for the Bot's header (#154②): the name its CLI gave when the list was read, else 「gemini-3.8-flash-medium」 as
+  // 「Gemini 3.8 Flash」 (the thinking level is said on its own beside it).
+  if (!state.modelNames) state.modelNames = {};
+  function modelWords(id, provider) {
+    const raw = String(id || '').trim(), known = state.modelNames[provider]?.[raw];
+    if (!raw || known) return known || '';
+    const words = raw.split(/[-_\s]+/).filter(Boolean);
+    while (words.length > 1 && /^(minimal|low|medium|high|xhigh|max)$/i.test(words.at(-1))) words.pop();
+    return words.map(w => /^(gpt|ai|xai)$/i.test(w) ? w.toUpperCase() : /^[a-z]/.test(w) ? w[0].toUpperCase() + w.slice(1) : w).join(' ');
+  }
   const permissionName = id => PERMISSIONS.find(p => p.id === id)?.name || '謹慎';
   // Shared controls: every choice in the UI is a dropdown (with optional descriptions) or an on/off switch.
   function dropdown(name, value, options, attrs = '') {
@@ -319,7 +329,7 @@
     const account = b.account ? ((state.providers || []).find(x => x.id === p)?.accounts || []).find(a => a.id === b.account)?.name || b.account : '';
     const last = (state.data.jobs || []).filter(j => j.botId === b.id && j.usage?.model && (p === 'auto' || !j.usage.provider || j.usage.provider === p)).slice(-1)[0]?.usage.model;
     const fixed = b.model || (p === (st.provider || 'codex') && st.model) || '';
-    const model = fixed || (last ? `預設型號（最近一次是 ${last}）` : '預設型號');
+    const model = fixed ? modelWords(fixed, p) || fixed : (last ? `預設型號（最近一次是 ${modelWords(last, p) || last}）` : '預設型號');  // #154②: readable model names
     const effort = '思考強度：' + (EFFORTS.find(x => x.id === (b.effort || st.effort))?.name || '標準');
     return [providerShort(p) + (account ? '（' + account + '）' : ''), model, withEffort ? effort : ''].filter(Boolean).join(' · ');
   }
@@ -359,6 +369,7 @@
       const current = form.elements.model.value;
       const wasCustom = select.value === '__custom__';
       const models = Array.isArray(data.models) ? data.models : [];
+      state.modelNames[provider] = Object.fromEntries(models.filter(m => m.name && m.name !== m.id).map(m => [m.id, m.name]));  // for the Bot's header
       const st = state.data.settings, named = provider === (st.provider || 'codex') && st.model ? (models.find(m => m.id === st.model)?.name || st.model) : '';
       const pinned = named && current !== st.model ? st.model : null;  // the default model shows once, as 預設; a Bot that picked it itself keeps it as （固定）
       select.innerHTML = `<option value="">${esc(form.id === 'bot-form' ? (named ? '預設（目前是 ' + named + '）' : '預設（這一家建議的型號）') : '建議的型號（由這一家決定）')}</option>` + models.filter(m => form.id !== 'bot-form' || m.id !== pinned).map(m => `<option value="${esc(m.id)}">${esc(m.name||m.id)}${m.source==='cache'?'（最近用過）':''}${form.id === 'bot-form' && named && m.id === st.model ? '（固定）' : ''}</option>`).join('') + '<option value="__custom__">自己輸入型號…</option>';

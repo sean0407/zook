@@ -3,20 +3,37 @@
   const pendingKey = () => activeGroup() ? effortKey() : effortKey() + ':' + ((state.data?.bots || []).find(b => b.id === state.selected)?.chatId || '');  // each conversation has its own
   const pendingList = () => state.pendingBy[pendingKey()] || (state.pendingBy[pendingKey()] = []);
   const kb = n => n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1024 / 1024).toFixed(1) + ' MB';
+  // #108: what a Bot can make sense of, a program file that it cannot, and an icon for each kind of file.
+  const ATTACH_HINT = 'Bot 看得懂文字、PDF、Word、Excel、簡報和圖片；程式或安裝檔（例如 .exe、.dmg）只能收下，讀不懂內容。';
+  const UNREADABLE = /\.(exe|msi|dll|dmg|pkg|app|bin|iso|apk|bat|cmd)$/i;
+  const unreadableNote = names => names.length ? `${names.map(n => midName(n)).join('、')} 是程式或安裝檔，Bot 讀不懂內容（仍已收下）` : '';
+  function fileIcon(name) {
+    const ext = (String(name || '').match(/\.([A-Za-z0-9]{1,8})$/) || [])[1]?.toLowerCase() || '';
+    if (/^(png|jpe?g|gif|webp|heic|bmp|tiff?|svg)$/.test(ext)) return '🖼';
+    if (ext === 'pdf') return '📕';
+    if (/^(xlsx?|xlsm|csv|numbers)$/.test(ext)) return '📊';
+    if (/^(pptx?|key)$/.test(ext)) return '📽';
+    if (/^(docx?|pages|rtf)$/.test(ext)) return '📘';
+    if (/^(md|markdown|txt|log)$/.test(ext)) return '📝';
+    if (/^(zip|rar|7z|gz|tar)$/.test(ext)) return '🗜';
+    if (UNREADABLE.test(String(name || ''))) return '⚙️';
+    return '📄';
+  }
   function pendingFiles() {
     if (!pendingList().length) return '';
-    return `<div class="pending-files">${pendingList().map(f => `<div class="pending-file">${f.url ? `<img src="${esc(f.url)}" alt="">` : '<span class="file-icon">📄</span>'}<span class="pending-name" title="${esc(f.name)}">${esc(midName(f.name, 24))}<small>${f.uploading ? '上傳中…' : kb(f.size)}</small></span><button type="button" class="icon-btn mini" data-action="unattach" data-id="${esc(f.key)}" aria-label="移除 ${esc(f.name)}">×</button></div>`).join('')}</div>`;
+    return `<div class="pending-files">${pendingList().map(f => `<div class="pending-file">${f.url ? `<img src="${esc(f.url)}" alt="">` : `<span class="file-icon">${fileIcon(f.name)}</span>`}<span class="pending-name" title="${esc(f.name)}">${esc(midName(f.name, 24))}<small>${f.uploading ? '上傳中…' : kb(f.size)}</small></span><button type="button" class="icon-btn mini" data-action="unattach" data-id="${esc(f.key)}" aria-label="移除 ${esc(f.name)}">×</button></div>`).join('')}</div>`;
   }
   function attachmentsView(m) {
     if (!m.attachments || !m.attachments.length) return '';
     return `<div class="attachments">${m.attachments.map(a => a.kind === 'image'
       ? `<button type="button" class="att-image" data-action="view-image" data-id="${esc(a.id)}" data-name="${esc(a.name)}"><img src="/api/uploads/${esc(a.id)}" alt="${esc(a.name)}"></button>`
-      : `<a class="att-file" href="/api/uploads/${esc(a.id)}" download="${esc(a.name)}">📄 ${esc(a.name)}</a>`).join('')}</div>`;
+      : `<a class="att-file" href="/api/uploads/${esc(a.id)}" download="${esc(a.name)}">${fileIcon(a.name)} ${esc(a.name)}</a>`).join('')}</div>`;
   }
   async function addFiles(files) {
-    const list = pendingList(), failed = []; let ok = 0;
+    const list = pendingList(), failed = [], odd = []; let ok = 0;
     for (const f of files) {
       if (list.length >= 10) { failed.push({name: f.name, reason: '每則訊息最多 10 個檔案'}); continue; }
+      if (f.name && f.name !== 'image.png' && list.some(x => x.name === f.name && x.size === f.size && !x.fromPath)) { failed.push({name: f.name, reason: '已經附上同一個檔案'}); continue; }
       if (f.size > 20 * 1024 * 1024) { failed.push({name: f.name, reason: '超過 20 MB'}); continue; }
       if (!f.size) { failed.push({name: f.name, reason: '檔案是空的'}); continue; }
       const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
@@ -28,10 +45,11 @@
         const meta = await res.json();
         if (!res.ok) throw new Error(meta.error || '上傳失敗');
         Object.assign(item, {id: meta.id, kind: meta.kind, uploading: false}); ok++;
+        if (UNREADABLE.test(name)) odd.push(name);
       } catch (e) { if (list.includes(item)) list.splice(list.indexOf(item), 1); failed.push({name, reason: e.message || '上傳失敗'}); }
       render(true);
     }
-    if (failed.length) toast(fileSummary(ok, failed, '附上'));  // one summary at the end (#150), not one note per file that the next one covers
+    if (failed.length || odd.length) toast([failed.length ? fileSummary(ok, failed, '附上') : '', unreadableNote(odd)].filter(Boolean).join('。'));  // one summary at the end (#150), not one note per file that the next one covers
   }
   // A file path typed or pasted into the message box: offer to attach that file. Nothing is read until the user clicks 附上.
   state.pathSkip = state.pathSkip || new Set();
@@ -223,7 +241,7 @@
   }
   function applyState(data) {
     state.data = data; state.loads = (state.loads || 0) + 1;
-    if (!state.providers) api('providers').then(r => { state.providers = r.providers; }).catch(() => {});
+    if (!state.providers) api('providers').then(r => { state.providers = r.providers; render(true); }).catch(() => {});  // names in words (Antigravity, not antigravity)
     if (!state.data.bots) state.data.bots = [];
     if (!state.data.knowledge) state.data.knowledge = [];
     if (!state.data.schedules) state.data.schedules = [];

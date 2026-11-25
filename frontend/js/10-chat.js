@@ -599,7 +599,10 @@
   const choiceOptions = (provider, account) => {
     const list = (state.providers || [{id: 'codex', name: 'Codex'}, {id: 'claude', name: 'Claude'}]);
     const picked = provider === 'auto' ? 'auto' : (provider || '') + (account ? '::' + account : '');
-    const mark = value => { const [p, a] = value.split('::'); return p === 'auto' ? '' : levelMark(accountLevel(p || state.data.settings.provider || 'codex', a || '')); };  // 已用完／剩不到 20%
+    // 已用完／剩不到 20% (#154③). Reading every account live can take a while; until it is back, a CLI's own sign-in goes by the
+    // figures the sidebar rings already have, so the words are in the list before anything is picked.
+    const ringMark = id => { const r = (state.data?.rings || []).find(x => x.id === id); return !r || r.left == null ? '' : r.left <= 0 ? '・已用完' : r.left < 20 ? '・剩不到 20%' : ''; };
+    const mark = value => { const [p, a] = value.split('::'), id = p || state.data.settings.provider || 'codex'; return p === 'auto' ? '' : !state.quota && !a ? ringMark(id) : levelMark(accountLevel(id, a || '')); };
     const opt = (value, label) => `<option value="${esc(value)}" ${picked === value ? 'selected' : ''}>${esc(label + mark(value))}</option>`;
     const kept = !provider && account ? list.flatMap(p => p.accounts || []).find(a => a.id === account) : null;  // an older Bot: the default CLI with one of its extra accounts
     const fallback = list.find(p => p.id === (state.data.settings.provider || 'codex')), short = String(fallback?.name || state.data.settings.provider || 'Codex').split('（')[0];
