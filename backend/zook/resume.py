@@ -10,7 +10,6 @@ RESUME_HOURS = 24
 RESUME_KINDS = ('codex', 'claude')  # CLIs whose conversation id is known while the reply is still running
 RESUME_MARK = '接續 Zook 重啟前中斷的回覆'
 RESUME_SAVED = '這個模型接不回原本的對話，改用 Zook 保存的對話內容'
-TASK_CUT_NOTE = 'Zook 重新啟動時這項工作還在做，可能已經做了一部分，請確認做到哪裡後再按「重試」。'
 INTERRUPT_NOTE = ('\n\n（Zook 系統提示）Zook 剛才重新啟動，你上一次回覆在中途被中斷了。請先確認做到哪裡（例如檢查已經寫好或改過的檔案），'
                   '不要重複已經完成的動作，再從中斷的地方接著完成。之前等使用者核准的動作已經失效，需要的話會重新詢問。')
 
@@ -323,7 +322,7 @@ class Resuming:
         run = group['taskRun']
         if run.get('status') != 'stopped': return
         if not resume_age_ok(run['interrupted']):
-            group['messages'].append(dict(id=ID(), role='system', content='Zook 關閉超過 %d 小時（或不知道關了多久），這個任務沒有自動接著做。要繼續的話，在任務看板上按「重試」。' % RESUME_HOURS, createdAt=NOW()))
+            group['messages'].append(dict(id=ID(), role='system', content='Zook 關閉超過 %d 小時（或不知道關了多久），這個任務沒有自動接著做。確認做到哪裡後，在任務看板上按「重試」或「接受結果」。' % RESUME_HOURS, createdAt=NOW()))
             return
         if group.get('status') == 'running' or not any(t.get('before') for t in run.get('tasks') or []): return  # nothing was planned yet: nothing to carry on
         for t in run['tasks']:
@@ -333,13 +332,13 @@ class Resuming:
             if before == 'verifying' or (before == 'running' and last.get('state') == 'reported' and last.get('outcome') == 'succeeded'):
                 t.update(status='verifying', verify=dict(state='waiting')); t.pop('note', None)  # the work reported done: only its check runs, nothing is done again
             elif before == 'running':  # #285: commands it ran are not known until its turn ends, so it is never done again by itself
-                t.update(status='stuck', resumed=True, note=TASK_CUT_NOTE)  # a 重試 is told it was cut off (task_worker_prompt)
+                t.update(status='stuck', resumed=True, cut=True, note=TASK_CUT_NOTE)  # a 重試 is told it was cut off (task_worker_prompt)
             elif before == 'review': t['status'] = 'review'
             else: t['status'] = before; t.pop('note', None)
         for g in run.get('gates') or []:
             if g.pop('before', None) == 'pending' and g.get('status') == 'cancelled': g.update(status='pending', since=time.time())
         cut = [t for t in run['tasks'] if t.get('note') == TASK_CUT_NOTE and t.get('status') == 'stuck']
         group['messages'].append(dict(id=ID(), role='system', content='Zook 重新啟動，任務從中斷的地方接著做：已完成的工作不重做' + (
-            '；中斷時還在做的%s停下來等你確認，看過後在任務看板上按「重試」。' % ('、'.join('工作 %s' % t.get('n') for t in cut)) if cut else '。'), createdAt=NOW()))
+            '；中斷時還在做的%s停下來等你確認：確認做到哪裡後，在任務看板上按「重試」或「接受結果」。' % ('、'.join('工作 %s' % t.get('n') for t in cut)) if cut else '。'), createdAt=NOW()))
         task_board_update(self.store, group)
         self.task_resume(group)

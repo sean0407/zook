@@ -175,11 +175,75 @@ class TaskPickupTest(unittest.TestCase):
         tasks = group['taskRun']['tasks']
         # #285: the one that was running stops for the user (it may have run commands Zook cannot see yet); the reported one is only checked.
         self.assertEqual([t['status'] for t in tasks], ['done', 'stuck', 'verifying', 'pending'])
-        self.assertIn('再按「重試」', tasks[1]['note']); self.assertTrue(tasks[1]['resumed']); self.assertEqual(resumed, ['g'])
+        self.assertIn('按「重試」或「接受結果」', tasks[1]['note']); self.assertTrue(tasks[1]['resumed']); self.assertEqual(resumed, ['g'])
         self.assertIn('停下來等你確認', group['messages'][-1]['content']); self.assertIn('工作 2', group['messages'][-1]['content'])
         self.assertEqual(group['taskRun'].get('bonusAttempts', 0), 0)
         prompt = m.task_worker_prompt.__globals__['interrupt_note'](store.find('jobs', 'j1'))
         self.assertIn('寫入 report.md', prompt)
+
+    def cut_run(self, m, fresh=True):
+        class Store:
+            def __init__(self): self.stopped_at = datetime.datetime.now(datetime.timezone.utc).isoformat() if fresh else '2020-01-01T00:00:00+00:00'
+            data = {'jobs': [dict(id='j1', toolCalls=[])], 'settings': {'taskEngine': True}, 'bots': []}
+            def find(self, kind, x): return next((j for j in self.data['jobs'] if j['id'] == x), None)
+            def save(self): pass
+        store = Store()
+        group = dict(id='g', status='idle', messages=[], taskRun=dict(id='r', status='running', tasks=[
+            dict(id='b', n=1, title='寄信', assignee='x', status='running', attempts=[dict(state='running', jobId='j1')]),
+            dict(id='d', n=2, title='整理', assignee='x', status='pending', deps=[1], attempts=[])]))
+        g = m.task_route.__globals__; self.addCleanup(g.__setitem__, 'task_board_update', g['task_board_update']); g['task_board_update'] = lambda *a: None
+        m.task_recover(group, store)
+        class App(m.Resuming):
+            def task_resume(self, g): pass
+        app = App(); app.store = store
+        app.task_pickup(group)
+        return store, group
+
+    def press(self, m, store, group, what, task='b'):
+        said = []
+        class Handler:
+            command = 'POST'
+            class server:
+                @staticmethod
+                def task_resume(g): pass
+                @staticmethod
+                def task_poke(g): pass
+            def error(self, code, text): said.append((code, text))
+            def respond(self, code, body): said.append((code, body))
+        m.task_route(Handler(), store, group, ['api', 'groups', 'g', 'tasks', task, what])
+        return said[-1]
+
+    def test_a_task_cut_by_a_restart_can_be_accepted(self):
+        # The user's call (2026-11-25): work cut off by a restart waits; the user picks 「重試」 or 「接受結果」.
+        m = load()
+        store, group = self.cut_run(m)
+        run = group['taskRun']; b = run['tasks'][0]
+        self.assertEqual(b['status'], 'stuck'); self.assertIn('按「重試」或「接受結果」', b['note'])
+        self.assertIn('「重試」或「接受結果」', group['messages'][-1]['content'])
+        self.assertIn('按「重試」或「接受結果」', m.task_board_text(None, run))  # the phone's board says both too
+        self.assertEqual(self.press(m, store, group, 'accept')[0], 202)
+        self.assertEqual(b['status'], 'done'); self.assertTrue(b['acceptedCut']); self.assertEqual(b['verify']['state'], 'accepted')
+        self.assertIn('中斷後手動接受', b['note']); self.assertIn('中斷後手動接受了工作 1', group['messages'][-1]['content'])
+        m.task_resolve_deps(run)
+        self.assertEqual(run['tasks'][1]['status'], 'ready')  # what waited for it can start
+        self.assertIn('沒有回報完成', m.task_upstream_line(None, b))  # the next step is told it has no report to go on
+        self.assertIn('中斷後手動接受', m.task_line(None, b)); self.assertIn('中斷後手動接受', m.task_board_text(None, run))
+        self.assertEqual(self.press(m, store, group, 'accept')[0], 409)  # once
+
+    def test_a_task_cut_by_a_late_restart_can_be_accepted_too(self):
+        m = load()
+        store, group = self.cut_run(m, fresh=False)
+        b = group['taskRun']['tasks'][0]
+        self.assertEqual(b['status'], 'unknown'); self.assertIn('「重試」或「接受結果」', group['messages'][-1]['content'])
+        self.assertEqual(self.press(m, store, group, 'accept')[0], 202); self.assertEqual(b['status'], 'done')
+
+    def test_a_retried_cut_task_is_no_longer_acceptable_without_a_report(self):
+        m = load()
+        store, group = self.cut_run(m)
+        b = group['taskRun']['tasks'][0]
+        self.assertEqual(self.press(m, store, group, 'retry')[0], 202); self.assertNotIn('cut', b)
+        b['status'] = 'stuck'; b['attempts'].append(dict(state='failed'))  # it failed on its own afterwards: nothing to accept
+        self.assertEqual(self.press(m, store, group, 'accept')[0], 409)
 
     def test_a_running_task_without_any_record_of_tools_also_stops(self):
         m = load()
