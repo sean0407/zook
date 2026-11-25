@@ -95,7 +95,8 @@
     else if (result.jobId) poll(result.jobId, s.body.botId);  // a message that is waiting in line has no reply yet; it is picked up when its turn comes
     return result;
   };
-  window.sentNote = m => m.queued ? (m.waiting ? '排在後面・這輪結束後回覆' : '排在後面') : m.interjected ? '已插話' : '';
+  // A group's 插話 (#94) says who takes it: who it went to, then who read it.
+  window.sentNote = m => m.queued ? (m.waiting ? '排在後面・這輪結束後回覆' : '排在後面') : !m.interjected ? '' : m.heardBy ? `已插話・${esc(m.heardBy)} 已讀到` : m.interjectTo ? `已插話・交給 ${esc(m.interjectTo)} 處理` : '已插話';
   document.addEventListener('click', e => {
     const el = e.target.closest?.('[data-sending-retry], [data-sending-drop]');
     const s = el && state.sending.find(x => x.id === (el.dataset.sendingRetry || el.dataset.sendingDrop));

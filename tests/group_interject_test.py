@@ -65,7 +65,7 @@ class GroupInterject(unittest.TestCase):
         self.assertEqual(self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '大家討論活動'})[0], 202)
         self.wait(lambda: self.req('GET', '/api/groups/' + g['id'])[1]['group']['status'] == 'running' and not self.slow.exists(), 'Alpha did not start')
         status, body = self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '@Gamma 預算改成五萬'})
-        self.assertEqual(status, 202, body); self.assertTrue(body['interjected']); self.assertEqual(body['next'], ['Gamma'])
+        self.assertEqual(status, 202, body); self.assertTrue(body['interjected']); self.assertEqual(body['next'], ['Gamma']); self.assertEqual(body['to'], 'Gamma')
         found = self.settle(g)
         order = [r['name'] for r in self.runs()]
         self.assertEqual(order, ['Alpha', 'Gamma', 'Beta'])  # Gamma jumped ahead of Beta
@@ -81,60 +81,69 @@ class GroupInterject(unittest.TestCase):
         self.settle(g)
         self.assertEqual([(r['name'], r['saw']) for r in self.runs()], [('Alpha', False), ('Alpha', True), ('Beta', True)])  # the new round goes to everyone
 
-    def test_a_structured_round_is_not_changed_half_way(self):
+    def test_a_structured_round_reads_it_at_the_next_step(self):
+        # #94／#126, decided by the user: 即時插入. 輪流 goes on in its order, and every step after it reads the message.
         g = self.group(('Alpha', 'Beta', 'Gamma')); self.slow.write_text('1')
         self.assertEqual(self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '輪流說', 'mode': 'turns'})[0], 202)
         self.wait(lambda: not self.slow.exists(), 'Alpha did not start')
         status, body = self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '預算改成五萬'})
-        self.assertEqual(status, 202, body); self.assertTrue(body['waiting'])
+        self.assertEqual(status, 202, body); self.assertEqual((body['interjected'], body['queued'], body['waiting']), (True, False, False))
+        self.assertEqual(body['to'], '下一位回覆的成員')
         found = self.settle(g)
+        self.assertEqual([(r['name'], r['saw']) for r in self.runs()], [('Alpha', False), ('Beta', True), ('Gamma', True)])  # read at once; no extra round
+        said = next(m for m in found['messages'] if '五萬' in m['content'])
+        self.assertTrue(said.get('interjected')); self.assertNotIn('queued', said); self.assertEqual(said.get('heardBy'), 'Beta')
+
+    def test_a_split_round_reads_it_before_the_host_merges(self):
+        # #126: the host's next turn has it, so the summary is not built on the old numbers.
+        status, g = self.req('POST', '/api/groups', {'botIds': [self.bots[n]['id'] for n in ('Alpha', 'Beta', 'Gamma')], 'hostId': self.bots['Gamma']['id']})
+        self.assertEqual(status, 201, g); self.slow.write_text('1')
+        self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '分工做', 'mode': 'split'})
+        self.wait(lambda: not self.slow.exists(), 'Alpha did not start')
+        body = self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '桌菜預算五萬'})[1]
+        self.assertTrue(body['interjected'])
+        self.settle(g)
         runs = self.runs()
-        self.assertEqual([r['saw'] for r in runs[:3]], [False, False, False])  # 輪流 went on as planned
-        self.assertTrue(runs[3:] and all(r['saw'] for r in runs[3:]))  # then the members answered it
-        said = next(m for m in found['messages'] if m.get('queued'))
-        self.assertNotIn('waiting', said)
+        self.assertEqual(runs[-1]['name'], 'Gamma'); self.assertTrue(runs[-1]['saw'])  # the merge read it
+        self.assertEqual(len([r for r in runs if r['name'] == 'Gamma']), 2)  # plan and merge only: no extra round for it
 
     def test_stop_leaves_nothing_waiting(self):
         g = self.group(('Alpha', 'Beta')); self.slow.write_text('1')
-        self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '輪流說', 'mode': 'turns'})
+        self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '@Alpha 寫個計畫'})
         self.wait(lambda: not self.slow.exists(), 'Alpha did not start')
-        self.assertTrue(self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '@Beta 預算改成五萬'})[1]['waiting'])
+        body = self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '@Beta 預算改成五萬'})[1]
+        self.assertTrue(body['interjected']); self.assertEqual(body['next'], ['Beta'])
         self.assertEqual(self.req('POST', '/api/groups/%s/stop' % g['id'], {})[0], 200)
         time.sleep(3)  # the stopped round would have answered it by now
         found = self.req('GET', '/api/groups/' + g['id'])[1]['group']
         self.assertEqual(found['status'], 'idle')
-        self.assertNotIn('waiting', next(m for m in found['messages'] if m.get('queued')))
+        self.assertNotIn('Beta', [r['name'] for r in self.runs()])  # Beta was not called after the stop (Alpha was cut off before it logged)
         self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '@Alpha 繼續'})
         self.settle(g)
         self.assertTrue(self.runs()[-1]['saw'] and self.runs()[-1]['name'] == 'Alpha')  # read like any message; Beta was not called by the old @
 
-    def test_something_new_waits_for_the_end_of_the_round(self):
-        # The same rule as with one Bot: a new request in an open discussion is not read by this round's turns.
+    def test_something_new_joins_too(self):
+        # 即時插入 for every message, not only a correction: the turns after it read it, and nothing waits for the end of the round.
         g = self.group(('Alpha', 'Beta', 'Gamma')); self.slow.write_text('1')
         self.assertEqual(self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '大家討論活動'})[0], 202)
         self.wait(lambda: not self.slow.exists(), 'Alpha did not start')
         status, body = self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '請幫我寫一份下個月展覽活動的完整企劃書，總預算是五萬元，給整個團隊參考'})
-        self.assertEqual(status, 202, body); self.assertEqual((body['interjected'], body['queued'], body['waiting']), (False, True, True))
+        self.assertEqual(status, 202, body); self.assertEqual((body['interjected'], body['queued'], body['waiting']), (True, False, False))
         found = self.settle(g)
-        runs = self.runs()
-        self.assertEqual([(r['name'], r['saw']) for r in runs[:3]], [('Alpha', False), ('Beta', False), ('Gamma', False)])  # the round went on as it was
-        self.assertTrue(runs[3:] and all(r['saw'] for r in runs[3:]))  # then it was answered
+        self.assertEqual([(r['name'], r['saw']) for r in self.runs()], [('Alpha', False), ('Beta', True), ('Gamma', True)])
         said = next(m for m in found['messages'] if '展覽' in m['content'])
-        self.assertTrue(said.get('queued')); self.assertNotIn('waiting', said)  # shown as 排在後面
+        self.assertTrue(said.get('interjected')); self.assertNotIn('waiting', said)
 
-    def test_a_correction_after_a_queued_message_does_not_drop_it(self):
+    def test_several_messages_each_reach_the_member_they_name(self):
         g = self.group(('Alpha', 'Beta', 'Gamma')); self.slow.write_text('1')
         self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '大家討論活動'})
         self.wait(lambda: not self.slow.exists(), 'Alpha did not start')
-        a = self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '@Beta 請另外寫一份下個月展覽活動的完整企劃書，總預算是五萬元'})[1]
-        b = self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '@Gamma 請寫一份給客戶的完整說明信，說明報價的計算方式'})[1]
+        a = self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '@Gamma 請另外寫一份下個月展覽活動的完整企劃書，總預算是五萬元'})[1]
+        b = self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '@Beta 請寫一份給客戶的完整說明信，說明報價的計算方式'})[1]
         c = self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '等等，短一點'})[1]
-        self.assertEqual([x['queued'] for x in (a, b, c)], [True, True, False])
+        self.assertEqual([x['interjected'] for x in (a, b, c)], [True, True, True]); self.assertEqual([a['to'], b['to']], ['Gamma', 'Beta'])
         found = self.settle(g)
-        names = [r['name'] for r in self.runs()]
-        self.assertEqual(names[:3], ['Alpha', 'Beta', 'Gamma'])  # the round, with the correction read on the way
-        self.assertEqual(sorted(names[3:]), ['Beta', 'Gamma'])  # then both waiting messages, each to the member it named
-        self.assertTrue(all(r['saw'] for r in self.runs()[3:]))
+        self.assertEqual([(r['name'], r['saw']) for r in self.runs()], [('Alpha', False), ('Gamma', True), ('Beta', True)])  # the named ones answered next, once each
         self.assertFalse(any(m.get('waiting') for m in found['messages']))
 
     def test_files_wait_for_the_end_of_the_discussion(self):
@@ -144,6 +153,13 @@ class GroupInterject(unittest.TestCase):
         status, body = self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '看這個', 'attachments': ['x']})
         self.assertEqual(status, 409); self.assertIn('附件', body.get('error', ''))
         self.settle(g)
+
+
+class InterjectNoteTest(unittest.TestCase):
+    def test_the_window_says_who_takes_it(self):
+        look = (Path(__file__).resolve().parents[1] / 'frontend/js/38-look.js').read_text(encoding='utf-8')
+        line = next(x for x in look.splitlines() if 'window.sentNote' in x)
+        self.assertIn('交給 ${esc(m.interjectTo)} 處理', line); self.assertIn('${esc(m.heardBy)} 已讀到', line)  # names escaped: the note is drawn as HTML
 
 
 if __name__ == '__main__': unittest.main()
