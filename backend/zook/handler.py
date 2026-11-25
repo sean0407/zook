@@ -645,6 +645,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/team' and self.command == 'POST' and not self.device:
                 body = self.body()
                 with store.lock: return self.respond(201, self.server.create_team(body))
+            if parts[:2] == ['api', 'backups'] and backup_unlocked(self, store, parts): return  # the folder chooser waits on the user: never under the lock
             if path == '/api/privacy-settings' and self.command == 'POST': return privacy_route(self)  # macOS's own privacy page, for a failed reply (errors.py)
             inventory, chat_body = None, self.body() if path == '/api/chat' and self.command == 'POST' else None
             if chat_body is not None: send_order_wait(self.server, chat_body)  # #142: after the message the app sent just before it

@@ -15,7 +15,7 @@
     else { const root = document.documentElement; root.style.zoom = zoom === 1 ? '' : String(zoom); root.style.setProperty('--zoom', String(zoom)); root.classList.toggle('zoomed', zoom !== 1); }
   }
   systemDark?.addEventListener?.('change', () => { lookApplied = ''; applyLook(); });
-  const lookSection = () => `<h2 class="settings-h">外觀</h2><div class="setting-list">${settingRow('深淺色', '跟隨系統時，Mac 切換深色模式 Zook 也會跟著切換', dropdown('appearance', state.data.settings.appearance || 'system', LOOKS, 'data-look="appearance"'))}${settingRow('字體大小', '所有畫面的文字與按鈕一起放大或縮小', dropdown('textSize', state.data.settings.textSize || 'normal', TEXT_SIZES, 'data-look="textSize"'))}</div>`;
+  const lookSection = () => `<h2 class="settings-h">外觀</h2><div class="setting-list">${settingRow('深淺色', '跟隨系統時，Mac 切換深色模式 Zook 也會跟著切換', dropdown('appearance', state.data.settings.appearance || 'system', LOOKS, 'data-look="appearance"'))}${settingRow('字體大小', '所有畫面的文字與按鈕一起放大或縮小，選了馬上套用。「大」「特大」會讓左側欄變窄，看不習慣隨時改回「標準」', dropdown('textSize', state.data.settings.textSize || 'normal', TEXT_SIZES, 'data-look="textSize"'))}</div>`;
   document.addEventListener('change', async e => {
     const key = e.target.dataset?.look;
     if (!key) return;
