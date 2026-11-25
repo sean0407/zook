@@ -144,7 +144,8 @@
           render(true);
           break;
         case 'dir-tab':
-          state.page = id; render();
+          if (el.dataset.clear !== undefined) state.dirQuery = '';
+          await loadPage(id); render();  // reads the list again: a plugin installed meanwhile shows up
           break;
         case 'dir-filter':
           state.dirFilter = id; render(true);
@@ -158,18 +159,23 @@
           const key = kind === 'skill' ? 'disabledSkills' : kind === 'mcp' ? 'sharedMcp' : 'disabledPlugins', off = new Set(state.data.settings[key] || []);
           off.has(id) ? off.delete(id) : off.add(id);
           state.data.settings = await post('settings', {[key]: [...off]}, 'PATCH');
-          if (kind === 'mcp') { render(true); toast(off.has(id) ? '已開放給所有 Bot' : '已停用這個連接器'); break; }
+          if (kind === 'mcp') { render(true); toast(off.has(id) ? '已開放給所有 Bot' : '已停用這個連接器，所有 Bot 都不會再用它'); break; }
           if (kind === 'plugin') state.integrations = await api('integrations');
           render(true);
-          toast(kind === 'skill' ? (off.has(id) ? '已停用這個 Skill' : '已開放給所有 Bot') : (off.has(id) ? '已停用插件' : '已啟用插件'));
+          toast(kind === 'skill' ? (off.has(id) ? '已停用這個 Skill，所有 Bot 都不會再用它' : '已開放給所有 Bot') : (off.has(id) ? '已停用插件，所有 Bot 都不會再用它' : '已啟用插件，所有 Bot 都能用'));
           break;
         }
-        case 'delete-memory':
-          if (await ask({title: '刪除這則記憶？', lines: ['刪除後無法復原，Bot 之後不會再參考它。'], run: () => api('memories/' + encodeURIComponent(id), {method: 'DELETE'})})) {
+        case 'delete-memory': {
+          const m = (state.data.memories || []).find(x => x.id === id);
+          if (!m) break;
+          const owner = m.botId && state.data.bots.find(b => b.id === m.botId)?.name;
+          const after = !m.botId ? '所有 Bot 之後都不會再記得這件事。' : owner ? `「${owner}」之後不會再記得這件事。` : '';
+          if (await ask({title: '刪除這則記憶？', lines: [`「${m.content}」`, '刪除後無法復原。' + after], run: () => api('memories/' + encodeURIComponent(id), {method: 'DELETE'})})) {
             await refresh();
             toast('已刪除記憶')
           }
           break;
+        }
         case 'group-continue': { const g = activeGroup(); await post('groups/' + encodeURIComponent(g.id) + '/continue'); await refresh(); pollGroup(g.id); break; }
         case 'group-discard': { const g = activeGroup(); await post('groups/' + encodeURIComponent(g.id) + '/continue', {discard: true}); await refresh(); break; }
         case 'group-summarize': { const g = activeGroup(); await post('groups/' + encodeURIComponent(g.id) + '/summarize'); await refresh(); pollGroup(g.id); break; }
@@ -178,7 +184,7 @@
         case 'group-verify-dismiss': delete (state.verifyNotes || {})[id]; render(true); break;
         case 'card-copy': { const m = groupMsgs(activeGroup()).find(x => x.id === id); await navigator.clipboard.writeText(cardText(m.card)); toast('已複製結論'); break; }
         case 'card-save': { const g = activeGroup(), m = groupMsgs(g).find(x => x.id === id); await post('knowledge', {title: g.name + ' 討論結論', content: cardText(m.card)}); toast('已存到知識庫'); break; }
-        case 'group-tab': state.groupTab = id; if (activeGroup()) delete state.groupFiles[activeGroup().id]; render(true); break;
+        case 'group-tab': state.groupTab = id; if (activeGroup()) { delete state.groupFiles[activeGroup().id]; if (state.groupFileNote) delete state.groupFileNote[activeGroup().id]; } render(true); break;
         case 'group-file-pick': $('#group-file-input').click(); break;
         case 'group-file-delete': { const g = activeGroup(); if (!(await ask({title: `刪除「${id}」？`, lines: ['這個檔案會從群組檔案刪除，無法復原。'], run: () => api('groups/' + encodeURIComponent(g.id) + '/files/' + encodeURIComponent(id), {method: 'DELETE'})}))) break; await loadGroupFiles(g); toast('已刪除檔案'); break; }
         case 'stop-group':
@@ -201,6 +207,7 @@
           state.selected = id;
           state.page = 'chat';
           state.launcher = false;
+          chooseChat(id);  // picking the Bot here: the conversation this window now shows is its own
           render();
           break;
         case 'remote-pair':
@@ -213,7 +220,7 @@
           break;
         case 'remote-revoke': {
           const d = state.remote?.devices.find(x => x.id === id);
-          if (!d || !(await ask({title: `撤銷「${d.name}」？`, lines: ['這台裝置會立刻無法連線，要再使用必須重新配對。'], ok: '撤銷'}))) break;
+          if (!d || !(await ask({title: `撤銷「${d.name}」？`, lines: ['這台裝置會立刻失效，正在連線的也會中斷。要再使用必須重新配對。'], ok: '撤銷'}))) break;
           state.remote = await api('remote/devices/' + encodeURIComponent(id), {method: 'DELETE'});
           render(true); toast('已撤銷「' + d.name + '」');
           break;
@@ -275,11 +282,16 @@
           scheduleModal(state.data.schedules.find(x => x.id === id));
           break;
         case 'delete-schedule':
-          if (await ask({title: '刪除這個排程？', lines: ['之後不會再自動執行，刪除後無法復原。'], run: () => api('schedules/' + encodeURIComponent(id), {method: 'DELETE'})})) {
+          if (await ask({title: `刪除排程「${scheduleTitle(state.data.schedules.find(x => x.id === id) || {})}」？`, lines: [(x => x ? scheduleWhen(x) + ' · ' + String(x.content || '').slice(0, 60) + (String(x.content || '').length > 60 ? '…' : '') : '')(state.data.schedules.find(x => x.id === id)), '之後不會再自動執行，刪除後無法復原。'], run: () => api('schedules/' + encodeURIComponent(id), {method: 'DELETE'})})) {
             await refresh();
             toast('已刪除排程');
           }
           break;
+        case 'sched-more': {
+          const text = el.closest('.sched-card')?.querySelector('.sched-content'), open = text?.classList.toggle('folded') === false;
+          el.textContent = open ? '收起' : '展開'; el.setAttribute('aria-expanded', String(open));
+          break;
+        }
         case 'schedule-history':
           scheduleHistory(state.data.schedules.find(x => x.id === id));
           break;
@@ -310,6 +322,10 @@
           await refresh(); poll(sent.jobId, b.id);
           break;
         }
+        case 'open-privacy':
+          await post('privacy-settings', {pane: el.dataset.pane});
+          toast('已打開系統設定。允許 Zook 後回來按「重試」');
+          break;
         case 'redo-again': {
           const b = activeBot();
           if (await redoAllowed(b)) await redo(b, {mode: 'again'});
@@ -338,13 +354,13 @@
           const b = activeBot(); state.memberWork = null;  // from a group's work page: back to a conversation with the Bot
           await post(`bots/${encodeURIComponent(b.id)}/chats`, {});
           if (state.modal) closeModal();
-          await refresh(); $('#chat-input')?.focus();
+          await refresh(); chooseChat(b.id); $('#chat-input')?.focus();
           break;
         }
         case 'open-chat': {
           const b = activeBot(); state.memberWork = null;
           if (id !== b.chatId) { await post(`bots/${encodeURIComponent(b.id)}/chats/${encodeURIComponent(id)}/open`, {}); }
-          closeModal(); await refresh();
+          closeModal(); await refresh(); chooseChat(b.id);
           break;
         }
         case 'rename-chat': {
@@ -355,7 +371,7 @@
         case 'delete-chat': {
           const b = activeBot(), c = b.chats.find(x => x.id === id);
           if (!(await ask({title: `刪除「${chatName(b, c)}」？`, lines: ['這段對話會刪除，無法復原。Bot 的其他對話不受影響。'], run: () => api(`bots/${encodeURIComponent(b.id)}/chats/${encodeURIComponent(id)}`, {method: 'DELETE'})}))) break;
-          await refresh(); chatsModal(activeBot()); toast('已刪除對話');
+          await refresh(); chooseChat(b.id); chatsModal(activeBot()); toast('已刪除對話');
           break;
         }
         case 'run-schedule':
@@ -403,7 +419,7 @@
           if (e.target === el) closeModal();
           break;
         case 'avatar-pick': { const panel = $('#bot-form .avatar-panel'); panel.hidden = !panel.hidden; break; }
-        case 'default-folder': { const picked = (await post('choose-folder')).path; if (picked) { state.data.settings = await post('settings', {access: 'folder', accessFolder: picked}, 'PATCH'); render(true); toast('已更新 Bot 預設'); } break; }
+        case 'default-folder': { const picked = (await post('choose-folder')).path; if (picked) { state.data.settings = await post('settings', {access: 'folder', accessFolder: picked}, 'PATCH'); render(true); toast('已更新「存取範圍」'); } break; }
         case 'shape':
           $('#bot-form [name=shape]').value = id;
           $$('.shape-btn').forEach(x => x.classList.toggle('selected', x.dataset.id === id));
@@ -472,7 +488,7 @@
           el.disabled = true; el.textContent = '匯入中…';
           const r = await post('skills/import', {ids});
           state.integrations = await api('integrations'); await refresh();
-          toast([r.imported.length ? `已匯入 ${r.imported.length} 個 Skill` : '沒有新的 Skill 可以匯入', r.skipped.length ? `${r.skipped.length} 個同名的只保留一份` : '', r.failed.length ? `${r.failed.length} 個匯入失敗：${r.failed[0].error}` : ''].filter(Boolean).join('，'));
+          toast([r.imported.length ? `已匯入 ${r.imported.length} 個 Skill：${r.imported.join('、')}` : '沒有新的 Skill 可以匯入', r.skipped.length ? `${r.skipped.length} 個同名的只保留一份` : '', r.failed.length ? `${r.failed.length} 個匯入失敗：${r.failed[0].error}` : ''].filter(Boolean).join('，'));
           break;
         }
         case 'skill-update':
@@ -579,7 +595,7 @@
         }
         case 'export': {
           let data = await post('export');
-          download(JSON.stringify(data, null, 2), 'Zook-export.json', 'application/json');
+          download(JSON.stringify(data, null, 2), `Zook-export-${fileDay()}.json`, 'application/json');
           break
         }
         case 'refresh-models':

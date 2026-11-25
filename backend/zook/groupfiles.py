@@ -206,6 +206,91 @@ def sync_group_files_in(store, group_id, bot_id, skip=()):
     return seen
 
 
+def _open_copy_folder(store, bot_id):
+    """The Bot's group-files copy folder, held open without following a link anywhere on the way and without making anything. None when there is none."""
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', str(bot_id)): return None
+    try: fd = os.open(str(store.dir / 'workspaces' / bot_id), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError: return None
+    try:
+        for name in ('attachments', GROUP_FILES_FOLDER):
+            nxt = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd); os.close(fd); fd = nxt
+        return fd
+    except OSError: os.close(fd); return None
+
+
+def _same_copy(folder_fd, name, size, digest):
+    """This entry's identity when it is a plain file of its own with exactly this content (Zook's copy, not something the Bot made), else None."""
+    try: fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=folder_fd)
+    except OSError: return None
+    with os.fdopen(fd, 'rb') as f:
+        info = os.fstat(f.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != size: return None
+        found = hashlib.sha256()
+        for chunk in iter(lambda: f.read(1 << 20), b''): found.update(chunk)
+        return (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size) if found.hexdigest() == digest else None
+
+
+def drop_group_files(store, server, group):
+    """Lock held. A deleted group's files go, and so do the copies of them Zook put in its members' workspaces (#213). Under the lock
+    the group's folder is only moved aside; the comparing and removing run in a thread of their own (the files can add up to 200 MB),
+    which is returned. Only a copy still exactly as Zook placed it (same name, same content, the same file when it is removed) goes;
+    anything else there stays. A Bot kept aside in 已刪除的 Bot is not a member any more and its workspace is left alone until it is
+    gone for good (forget_trashed_copies). A member in another group's turn right now is skipped: that turn has already replaced its
+    copy folder with the other group's files. Never raises: the group's deletion goes on whatever happens here."""
+    try:
+        folder = group_files_dir(store, group['id']); aside = folder.parent / ('.deleting-' + ID())
+        os.replace(str(folder), str(aside))
+    except (OSError, ValueError, KeyError): return None  # no files, so no copies of them either
+    members = [b for b in dict.fromkeys(group.get('botIds') or []) if isinstance(b, str)]
+    locks = server.__dict__.setdefault('group_copy_locks', {}) if server is not None and hasattr(server, '__dict__') else {}
+    def work():
+        try:
+            wanted = {}
+            for entry in _plain_files(aside):
+                try: wanted[entry.name] = (entry.stat(follow_symlinks=False).st_size, _file_hash(entry.path))
+                except OSError: pass
+            for bot_id in members:
+                with store.lock: alive = bool(store.find('bots', bot_id))
+                if not alive or not wanted: continue
+                lock = locks.setdefault(bot_id, threading.Lock())
+                if not lock.acquire(blocking=False): continue
+                try:
+                    fd = _open_copy_folder(store, bot_id)
+                    if fd is None: continue
+                    try:
+                        for name, (size, digest) in wanted.items():
+                            try:
+                                mark = _same_copy(fd, name, size, digest)
+                                now = os.stat(name, dir_fd=fd, follow_symlinks=False) if mark else None
+                                if now and (now.st_dev, now.st_ino, now.st_mtime_ns, now.st_size) == mark: os.unlink(name, dir_fd=fd)  # not swapped meanwhile
+                            except OSError: pass
+                    finally: os.close(fd)
+                except Exception: pass
+                finally: lock.release()
+        finally:
+            shutil.rmtree(str(aside), ignore_errors=True)
+            for old in aside.parent.glob('.deleting-*'):  # left by an earlier deletion that Zook quit in the middle of
+                try:
+                    if old.is_dir() and not old.is_symlink() and time.time() - old.stat().st_mtime > 3600: shutil.rmtree(str(old), ignore_errors=True)
+                except OSError: pass
+    thread = threading.Thread(target=work, daemon=True, name='zook-group-drop'); thread.start()
+    return thread
+
+
+def forget_trashed_copies(store, gone):
+    """Lock held. Bots that have left 已刪除的 Bot for good (#213): the group-files copy folder in each one's workspace is emptied.
+    Zook empties and refills that folder at every group turn, so all of it is Zook's copy; the rest of the workspace stays."""
+    alive = {b.get('id') for b in (store.data.get('bots') or []) + (store.data.get('deletedBots') or []) if isinstance(b, dict)}
+    for bot in gone:
+        bot_id = bot.get('id') if isinstance(bot, dict) else None
+        if not bot_id or bot_id in alive: continue
+        fd = _open_copy_folder(store, bot_id)
+        if fd is None: continue
+        try: clear_folder(fd)
+        except OSError: pass
+        finally: os.close(fd)
+
+
 def _read_bot_file(folder_fd, name, target):
     """Copy one regular file out of the Bot's folder, refusing links. Returns (size, hash), or None when it is not a plain file."""
     try: source = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=folder_fd)
@@ -304,3 +389,27 @@ def claimed_missing(store, group_id, bot_id, text, given=()):
         for name in CLAIM_WORD.findall(re.sub(r'(?:file://)?/[^\s「」『』，、。；）)]+', ' ', text)):
             if not _claim_present(name, known) and name not in missing: missing.append(name)
     return missing[:10]
+
+
+# #68①: a reply that says it looked at the pages as pictures (渲染、轉成圖片、逐頁預覽). Not 「逐頁檢查」 alone: reading the text page by
+# page is a check too. Only a clause that does not say it was not done, and is not asking or suggesting it.
+RENDER_CLAIM = re.compile(r'(?:逐頁|每一?頁|各頁|全部頁面|所有頁面|整份)[^。；;\n]{0,8}?(?:渲染|轉成?圖片?|轉圖|預覽|截圖)|(?:轉成?圖片|轉圖)[^。；;，,、\n]{0,6}?(?:檢查|確認|核對|看過|檢視)|已(?:轉成?圖|逐頁預覽|逐頁渲染)')
+RENDER_NOT = re.compile(r'沒有|沒|未|無法|不能|不到|不曾|並非|尚未|還沒|請|建議|需要|要再|之後|下次|可以')  # before the claim, in its clause
+RENDER_NOT_AFTER = re.compile(r'^[^。；;，,\n]{0,12}?(?:尚未|還沒|未完成|沒做|沒有做|沒辦法|無法|失敗)')  # 「逐頁渲染檢查尚未完成」
+RENDER_REPORTS = ('codex', 'claude', 'cursor', 'grok', 'antigravity')  # the CLIs whose commands Zook reads from their output
+
+
+def claimed_unrendered(text, calls, kind, others=()):
+    """Whether a reply says it looked at its pages as pictures while none of its commands made a picture. False when the CLI does
+    not report its commands to Zook (it cannot be told), the reply says nothing of the kind, or the clause names another member."""
+    if kind not in RENDER_REPORTS: return False
+    if any(c.get('rendered') and c.get('status') in ('completed', 'running') for c in calls or []): return False
+    text = str(text or '')[:20000]
+    for n, hit in enumerate(RENDER_CLAIM.finditer(text)):
+        if n >= 20: break
+        start = max(text.rfind(x, max(0, hit.start() - 200), hit.start()) for x in '。；;\n，,、！!？?') + 1
+        clause = text[start:hit.end()]
+        if RENDER_NOT.search(clause) or RENDER_NOT_AFTER.match(text[hit.end():hit.end() + 40]): continue
+        if any(name and name in clause for name in others): continue  # what another member said it did (a host's merge), not this reply's own claim
+        return True
+    return False
