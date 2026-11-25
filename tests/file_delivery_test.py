@@ -30,6 +30,7 @@ class FileDelivery(unittest.TestCase):
         self.assertIn('每一頁', text); self.assertIn('對比', text); self.assertIn('16:9', text)  # #27
         self.assertIn('mktemp -d', text); self.assertIn('不要放在交付位置或群組檔案裡', text); self.assertIn('群組主持人與成員', text)  # #22
         self.assertIn('Skill 的內部規則', text)  # #28
+        self.assertIn("<<'EOF'", text); self.assertIn('NT$608,000', text); self.assertIn('存完一定回讀檔案', text)  # #55: $ eaten by the shell
         self.assertIn('讀不到、失敗時', text); self.assertIn('沒轉出的頁', text)  # a Bot limited to one folder cannot read the helper in the app
 
     def test_group_and_task_prompts_carry_it(self):

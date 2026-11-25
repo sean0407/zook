@@ -666,7 +666,9 @@ FILE_DELIVERY_NOTE = ('要交出檔案（Excel、Word、簡報、PDF、圖片）
                       '只能讀不能寫的時候就讀內容，並說明哪些版面沒有看到。'
                       'Excel 要保留公式（使用者改明細才會跟著變），並同時存入算好的值（例如 xlsxwriter 的 write_formula 帶入 value），不然預覽和手機會顯示 0。'
                       '暫存程式和預覽圖只在需要時做，放在你新建的暫存資料夾（例如 mktemp -d；只能用指定資料夾時就在裡面另建子資料夾），不要放在交付位置或群組檔案裡；'
-                      '交付前刪掉這個暫存資料夾（只刪你這次建立的），交付位置只留成果。單聊、群組主持人與成員都一樣。') % PAGEPICS
+                      '交付前刪掉這個暫存資料夾（只刪你這次建立的），交付位置只留成果。'
+                      '用指令寫文字檔時，內容裡的 $、`、\\ 會被 shell 吃掉（NT$608,000 會變成 NT,000）：優先用寫檔工具直接寫；要用 heredoc 就用單引號的 <<\'EOF\'。'
+                      '存完一定回讀檔案，和你要交的內容比對（金額、數字、符號），一致才回報已存檔。單聊、群組主持人與成員都一樣。') % PAGEPICS
 # Which shared Skill fits: what it is for, not the file type it makes (#28). Also sent when a CLI conversation is continued.
 SKILL_PICK_NOTE = '任務明確是某個 Skill 寫的用途時，才用 zook_read_skill 讀取完整指示再照做；只是輸出格式相同不算，例如一般報表不用海報或藝術設計的 Skill'
 # Facts about the user's own company are not made up (巡檢 C01 twice: 「全系列通過嚴格檢驗」 that no one had said).
