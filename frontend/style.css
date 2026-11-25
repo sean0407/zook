@@ -1314,7 +1314,7 @@ button {
 .dir-status { padding: 1px 7px; border-radius: 6px; background: #eee; color: #777; }
 .dir-status.ok { background: #e6f7ef; color: #0d8a55; }
 .dir-status.bad { background: #fde8e8; color: #b42318; }
-.dir-note { margin: 0; font-size: 11.5px; color: #b07a00; }
+.dir-note { margin: 0; font-size: 11.5px; color: #b07a00; overflow-wrap: anywhere; }
 @media (max-width: 760px) { .dir-search { width: 100%; margin-left: 0; } }
 
 /* Plain-language activity and approvals */
