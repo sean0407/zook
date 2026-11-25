@@ -80,6 +80,15 @@ class Checks(unittest.TestCase):
         found = ' '.join(self.issues([cell('B5', 0, 'SUMIF(費用報銷明細表!:, A5, 費用報銷明細表!:)')]))
         self.assertIn('公式看起來不完整', found); self.assertIn('B5', found)
 
+    def test_excel_rules_for_repeats_separate_subtotals_and_strings(self):
+        self.assertEqual(self.issues([cell('A1', 2), cell('A2', 4, 'SUM(A1,A1)')]), [])  # every argument counts
+        self.assertIn('不符', ' '.join(self.issues([cell('A1', 2), cell('A2', 2, 'SUM(A1,A1)')])))
+        self.assertIn('不符', ' '.join(self.issues([cell('A1', 1e9), cell('A2', 1e9 + 10, 'SUM(A1)')])))
+        self.assertEqual(self.issues([cell('A1', 5), cell('C1', 1), cell('C2', 2), cell('A2', 3, 'SUM(C1:C2)'), cell('A3', 8, 'SUM(A1:A2)')]), [])  # A2 adds other rows
+        self.assertEqual(self.issues([cell('A1', 'ok', 'IF(1,"!:","ok")', 'str'), cell('A2', 1, "SUM('a!:b'!B1:B2)")]), [])
+        found = ' '.join(self.issues([cell('C4', 1), cell('C5', 2), cell('C6', '', 'SUM(C4:C5)'), cell('C7', '', 'SUM(C4:C6)'), cell('B1', '#REF!', 'X', 'e')]))
+        self.assertIn('重複加總', found); self.assertIn('沒有算好的值', found); self.assertIn('算出錯誤', found); self.assertIn('#REF!', found)
+
     def test_sheets_are_named_from_the_workbook(self):
         found = ' '.join(self.issues(None, sheets=[('明細', [cell('A1', 1)]), ('彙總', [cell('A1', 5, 'SUM(B1:B2)'), cell('B1', 1), cell('B2', 2)])]))
         self.assertIn('彙總!A1', found)
@@ -132,11 +141,30 @@ class AfterReply(unittest.TestCase):
     def test_the_next_message_tells_the_bot_until_a_later_reply(self):
         start = time.time(); write_xlsx(self.work / '報表.xlsx', [('業績', s01())])
         job, _ = self.reply(start, time.time() + 1); self.m.xlsx_after_reply(self.store, job['id'])
-        said = self.m.xlsx_carry(self.store, self.bot, 'c1')
-        self.assertIn('報表.xlsx', said); self.assertIn('重複加總', said)
-        self.assertEqual(self.m.xlsx_carry(self.store, self.bot, 'other'), '')
-        self.reply(time.time(), time.time() + 1, '修好了')
-        self.assertEqual(self.m.xlsx_carry(self.store, self.bot, 'c1'), '')
+        said = self.m.xlsx_carry(self.store, dict(id='new', botId=self.bot['id'], chatId='c1'))
+        self.assertIn('報表.xlsx', said); self.assertIn('重複加總', said); self.assertIn('第 1 張工作表!C12', said); self.assertNotIn('業績', said)  # the Bot reads places, not words from the file
+        self.assertEqual(self.m.xlsx_carry(self.store, dict(id='new', botId=self.bot['id'], chatId='other')), '')
+        later, _ = self.reply(time.time(), time.time() + 1, '修好了'); self.m.xlsx_after_reply(self.store, later['id'])
+        self.assertEqual(self.m.xlsx_carry(self.store, dict(id='new', botId=self.bot['id'], chatId='c1')), '')
+
+    def test_the_next_reply_waits_for_a_check_still_running_but_not_for_old_ones(self):
+        start = time.time(); write_xlsx(self.work / '報表.xlsx', [('業績', s01())])
+        job, _ = self.reply(start, time.time() + 1)
+        import threading; threading.Timer(0.5, self.m.xlsx_after_reply, (self.store, job['id'])).start()
+        self.assertIn('重複加總', self.m.xlsx_carry(self.store, dict(id='new', botId=self.bot['id'], chatId='c1')))
+        old, _ = self.reply(start - 3600, start - 3500)  # finished long ago and never checked (before this version)
+        began = time.time(); self.assertEqual(self.m.xlsx_carry(self.store, dict(id='new', botId=self.bot['id'], chatId='c1')), ''); self.assertLess(time.time() - began, 1)
+        self.store.data['jobs'][-1]['xlsxIssues'] = 5  # a restored backup with the wrong type
+        self.assertEqual(self.m.xlsx_carry(self.store, dict(id='new', botId=self.bot['id'], chatId='c1')), '')
+
+    def test_at_most_five_files_are_opened_per_reply(self):
+        start = time.time()
+        for i in range(8): write_xlsx(self.work / ('ok%d.xlsx' % i), [('a', [cell('A1', 1)])])
+        job, _ = self.reply(start, time.time() + 1); calls = []
+        real = self.m.xlsx_issues; self.m.xlsx_issues = lambda *a, **k: calls.append(a) or []
+        try: self.m.xlsx_after_reply(self.store, job['id'])
+        finally: self.m.xlsx_issues = real
+        self.assertEqual(len(calls), 5); self.assertTrue(job['xlsxChecked'])
 
 
 CODEX = r'''#!/usr/bin/env python3
@@ -179,10 +207,9 @@ class EndToEnd(unittest.TestCase):
     def last_prompt(self): return json.loads((self.root / 'bin/runs.jsonl').read_text().splitlines()[-1])['prompt']
 
     def test_the_note_shows_under_the_reply_and_the_bot_hears_it_next_time(self):
-        self.say('做報表 MAKE-XLSX'); end = time.time() + 10
-        while time.time() < end and '重複加總' not in (self.last_message().get('note') or ''): time.sleep(0.1)
-        self.assertIn('報表.xlsx：', self.last_message().get('note') or '')
-        self.say('好')
+        self.say('做報表 MAKE-XLSX'); self.say('好')  # sent the moment the reply shows as done
+        notes = [m.get('note') or '' for m in next(b for b in self.req('GET', '/api/state')[1]['bots'] if b['id'] == self.bot['id'])['messages']]
+        self.assertTrue(any(n.startswith('報表.xlsx：') and '業績!C12' in n for n in notes), notes)
         self.assertIn('重複加總', self.last_prompt()); self.assertTrue(self.last_prompt().rstrip().endswith('好'))  # the question still comes last
         self.say('再一次'); self.assertNotIn('重複加總', self.last_prompt())
 
