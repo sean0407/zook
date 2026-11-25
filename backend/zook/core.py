@@ -669,6 +669,10 @@ FILE_DELIVERY_NOTE = ('要交出檔案（Excel、Word、簡報、PDF、圖片）
                       '交付前刪掉這個暫存資料夾（只刪你這次建立的），交付位置只留成果。'
                       '用指令寫文字檔時，內容裡的 $、`、\\ 會被 shell 吃掉（NT$608,000 會變成 NT,000）：優先用寫檔工具直接寫；要用 heredoc 就用單引號的 <<\'EOF\'。'
                       '存完一定回讀檔案，和你要交的內容比對（金額、數字、符號），一致才回報已存檔。單聊、群組主持人與成員都一樣。') % PAGEPICS
+# What goes out to a customer is only for the customer (巡檢 #113 #193 #228: 「依據：…95 折」 notes, sources and internal discount
+# rules left in the letter, to be deleted by hand before sending).
+CLIENT_COPY_NOTE = ('要給客戶或外部的內容（信件、回覆、報價、公告）只放對方該看的：內部註記、依據、計算過程、內部折扣或報價規則、參考網址與出處都不要寫進去，'
+                    '需要的話放在草稿外面另起一段，標明「內部備註（不要寄出）」。')
 # Which shared Skill fits: what it is for, not the file type it makes (#28). Also sent when a CLI conversation is continued.
 SKILL_PICK_NOTE = '任務明確是某個 Skill 寫的用途時，才用 zook_read_skill 讀取完整指示再照做；只是輸出格式相同不算，例如一般報表不用海報或藝術設計的 Skill'
 # Facts about the user's own company are not made up (巡檢 C01 twice: 「全系列通過嚴格檢驗」 that no one had said).
@@ -685,7 +689,7 @@ def web_enabled():
 def identity_block(bot):
     """Who the Bot is: its own persona file, then its work instructions. Personal instruction files are not used."""
     now = datetime.datetime.now().astimezone()
-    parts = ['你是 %s%s。' % (bot['name'], '，職稱是「%s」' % bot['jobTitle'] if bot.get('jobTitle') else ''), '現在時間：%s（%s）。' % (now.strftime('%Y-%m-%d %H:%M'), now.tzname() or 'local'), ISOLATION_NOTE, NATURAL_REPLY_NOTE, FILE_DELIVERY_NOTE, FACTS_NOTE]
+    parts = ['你是 %s%s。' % (bot['name'], '，職稱是「%s」' % bot['jobTitle'] if bot.get('jobTitle') else ''), '現在時間：%s（%s）。' % (now.strftime('%Y-%m-%d %H:%M'), now.tzname() or 'local'), ISOLATION_NOTE, NATURAL_REPLY_NOTE, FILE_DELIVERY_NOTE, FACTS_NOTE, CLIENT_COPY_NOTE]
     if web_enabled():
         parts.append('你可以上網搜尋與讀取網頁來取得最新資訊。涉及價格、新聞、日期等會變動的事實時，先查證再回答，並註明來源網站與資料時間。')
     else:
