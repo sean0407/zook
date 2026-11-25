@@ -91,11 +91,11 @@
     return '';
   }
   // Redoing cannot undo what the last reply already did (files changed, mail sent): say so first.
-  function redoAllowed(b) {
+  async function redoAllowed(b) {
     const reply = (b.messages || []).filter(m => m.role !== 'user').slice(-1)[0];
     const job = reply && Object.values(state.jobDetails).find(j => j.messageId === reply.id);
     const acted = (job?.toolCalls || []).some(c => c.status === 'completed' && !['read', 'external_read'].includes(c.category));
-    return !acted || confirm('上一次回覆做過的動作不會復原。確定要重來？');
+    return !acted || ask({title: '重新回答？', lines: ['上一次回覆已經做過的動作（例如改了檔案、寄了信）不會復原，重新回答時可能再做一次。'], ok: '重新回答', danger: false});
   }
   async function redo(b, body) {
     const sent = await post('chat/redo', {...body, botId: b.id});
