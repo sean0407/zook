@@ -25,8 +25,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
         del self.notices[:-MAX_NOTICES]
 
     def notices_after(self, after):
-        with self.store.lock:
-            return dict(seq=self.notice_seq, items=[n for n in self.notices if n['seq'] > after])
+        return notices_for(self, after, device=False)  # the Mac's own; the phone's are kept apart (phonenotice.py)
 
     def target_name(self, kind, target_id):
         found = self.store.find('groups' if kind == 'group' else 'bots', target_id)
@@ -313,6 +312,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 approval['text'] = describe_send(approval['label'], approval['arguments']) or describe_write(approval['label'], approval['arguments'])
             if bg_hold(self, job_id, approval): job.setdefault('approvals', []).append(approval); self.store.save(); return False  # Zook is closing for this reply (background.py)
             job.setdefault('approvals', []).append(approval); self.approval_events[approval_id] = event
+            phone_notify_job(self, 'approval', job)  # the phone is told only that one waits, not what (phonenotice.py)
             run = self.schedule_run_for(job)
             if run: self.notify_run(run, '需要你核准：' + (approval.get('text') or describe_call(dict(approval, name=name))))
             self.store.save()
@@ -355,6 +355,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 if job and job.get('long') and job['status'] != 'running':  # nobody is expected to be watching a long task
                     body = '長任務完成：' + (first_sentence(job.get('content') or '') or '已完成。') if job['status'] == 'completed' else '長任務已停止。' if job['status'] == 'cancelled' else '長任務失敗：' + (job.get('error') or '')
                     self.notify(self.target_name('bot', job['botId']), body, 'bot', job['botId'], job.get('messageId'), always=True)
+                phone_job_ended(self, job)  # finished or failed, in plain words (phonenotice.py)
                 if trim_jobs(self.store): self.store.save()
                 bot_id = job['botId'] if job else None
             if bot_id:

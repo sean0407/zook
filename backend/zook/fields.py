@@ -128,6 +128,7 @@ def update(target, body, kind):
     if kind == 'settings' and 'scheduleNotify' in body:
         if not isinstance(body['scheduleNotify'], bool): raise ValueError('scheduleNotify 無效。')
         changes['scheduleNotify'] = body['scheduleNotify']
+    if kind == 'settings' and 'phoneNotify' in body: changes['phoneNotify'] = phone_setting(body['phoneNotify'], target)
     if kind == 'settings' and 'webSearch' in body:
         if not isinstance(body['webSearch'], bool): raise ValueError('webSearch 無效。')
         changes['webSearch'] = body['webSearch']
