@@ -1,5 +1,32 @@
   // ---- Attachments: each file is uploaded as soon as it is added, then sent with the message.
-  if (!state.pendingBy) state.pendingBy = {};  // files waiting to be sent, per Bot or group
+  // #153①: the files already uploaded are kept in this window's sessionStorage, so reloading the page does not drop them silently.
+  const PENDING_STORE = 'zook-pending-files';
+  function keepPending() {
+    const kept = {};
+    for (const [key, list] of Object.entries(state.pendingBy || {})) {
+      const done = (list || []).filter(f => f.id && !f.uploading).map(f => ({key: f.key, id: f.id, name: f.name, size: f.size, kind: f.kind || '', fromPath: f.fromPath || ''}));
+      if (done.length) kept[key] = done;
+    }
+    try { Object.keys(kept).length ? sessionStorage.setItem(PENDING_STORE, JSON.stringify(kept)) : sessionStorage.removeItem(PENDING_STORE); } catch (_) {}
+  }
+  function restorePending() {
+    let saved = {};
+    try { saved = JSON.parse(sessionStorage.getItem(PENDING_STORE) || '{}') || {}; } catch (_) {}
+    const out = {};
+    for (const [key, list] of Object.entries(saved)) {
+      if (!Array.isArray(list)) continue;
+      out[key] = list.filter(f => f && /^[0-9a-f]{32}$/.test(String(f.id))).slice(0, 10).map(f => ({key: String(f.key || Math.random().toString(36).slice(2)), id: f.id, name: String(f.name || '檔案'), size: Number(f.size) || 0, kind: f.kind === 'image' ? 'image' : 'file', fromPath: String(f.fromPath || ''), uploading: false, url: f.kind === 'image' ? '/api/uploads/' + f.id : ''}));
+    }
+    return out;
+  }
+  // × in the message box: the file is taken out, and Zook deletes its upload (it keeps one that a sent message uses).
+  function dropPending(key) {
+    const list = pendingList(), at = list.findIndex(f => f.key === key);
+    if (at < 0) return;
+    const [f] = list.splice(at, 1); keepPending();
+    if (f.id) api('uploads/' + encodeURIComponent(f.id), {method: 'DELETE'}).catch(() => {});
+  }
+  if (!state.pendingBy) state.pendingBy = restorePending();  // files waiting to be sent, per Bot or group
   const pendingKey = () => activeGroup() ? effortKey() : effortKey() + ':' + ((state.data?.bots || []).find(b => b.id === state.selected)?.chatId || '');  // each conversation has its own
   const pendingList = () => state.pendingBy[pendingKey()] || (state.pendingBy[pendingKey()] = []);
   const kb = n => n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1024 / 1024).toFixed(1) + ' MB';
@@ -30,7 +57,7 @@
       : `<a class="att-file" href="/api/uploads/${esc(a.id)}" download="${esc(a.name)}">${fileIcon(a.name)} ${esc(a.name)}</a>`).join('')}</div>`;
   }
   async function addFiles(files) {
-    const list = pendingList(), failed = [], odd = []; let ok = 0;
+    const list = pendingList(), failed = [], renamed = [], odd = []; let ok = 0;
     for (const f of files) {
       if (list.length >= 10) { failed.push({name: f.name, reason: '每則訊息最多 10 個檔案'}); continue; }
       if (f.name && f.name !== 'image.png' && list.some(x => x.name === f.name && x.size === f.size && !x.fromPath)) { failed.push({name: f.name, reason: '已經附上同一個檔案'}); continue; }
@@ -45,11 +72,14 @@
         const meta = await res.json();
         if (!res.ok) throw new Error(meta.error || '上傳失敗');
         Object.assign(item, {id: meta.id, kind: meta.kind, uploading: false}); ok++;
+        if (meta.name && meta.name !== name) { item.name = meta.name; renamed.push(`「${midName(name)}」已改名為「${midName(meta.name)}」`); }  // #153③: a name the Mac cannot keep as it is
+        if (!list.includes(item)) api('uploads/' + encodeURIComponent(meta.id), {method: 'DELETE'}).catch(() => {});  // × pressed while it was uploading
         if (UNREADABLE.test(name)) odd.push(name);
       } catch (e) { if (list.includes(item)) list.splice(list.indexOf(item), 1); failed.push({name, reason: e.message || '上傳失敗'}); }
       render(true);
     }
-    if (failed.length || odd.length) toast([failed.length ? fileSummary(ok, failed, '附上') : '', unreadableNote(odd)].filter(Boolean).join('。'));  // one summary at the end (#150), not one note per file that the next one covers
+    keepPending();
+    if (failed.length || renamed.length || odd.length) toast([failed.length ? fileSummary(ok, failed, '附上') : '', renamed.length ? renamed.join('、') + '（檔名裡有不能用的字元或太長）' : '', unreadableNote(odd)].filter(Boolean).join('；'));  // one summary at the end (#150), not one note per file that the next one covers
   }
   // A file path typed or pasted into the message box: offer to attach that file. Nothing is read until the user clicks 附上.
   state.pathSkip = state.pathSkip || new Set();
@@ -86,8 +116,9 @@
     try {
       const meta = await post('uploads/path', {path});
       Object.assign(item, {id: meta.id, name: meta.name, size: meta.size, kind: meta.kind, uploading: false, url: meta.kind === 'image' ? '/api/uploads/' + meta.id : ''});
+      if (!list.includes(item)) api('uploads/' + encodeURIComponent(meta.id), {method: 'DELETE'}).catch(() => {});  // × pressed while it was copied
     } catch (err) { if (list.includes(item)) list.splice(list.indexOf(item), 1); toast(err.message || '附上失敗'); }  // removed already if the user pressed ×
-    render(true); showPathOffers();
+    keepPending(); render(true); showPathOffers();
   });
   document.addEventListener('paste', e => {
     const files = [...(e.clipboardData?.files || [])];
@@ -210,10 +241,6 @@
     const target = x.groupId ? 'group:' + x.groupId : x.botId ? 'bot:' + x.botId : state.page === 'chat' && state.groupId ? 'group:' + state.groupId : 'bot:' + ((state.page === 'chat' && state.selected) || state.data.bots[0].id);
     modal(x.id ? '編輯排程' : '新增排程', `<form id="schedule-form"><div class="modal-body"><label class="field">名稱（可不填）<input name="name" maxlength="60" value="${esc(x.name || '')}" placeholder="例如：早上整理信件；不填就用要做的事開頭幾個字"></label><div class="field">對象${dropdown('target', target, scheduleTargets())}<small class="field-hint quota-warn" data-target-warn hidden></small></div><label class="field">要做的事<textarea name="content" required placeholder="例如：整理今天的行事曆和未讀信件，列出三件最重要的事">${esc(x.content || '')}</textarea></label><div class="field">觸發方式${dropdown('trigger', x.trigger || 'time', TRIGGER_OPTIONS)}</div><div class="trig-folder"><div class="field">要看的資料夾<div class="watch-pick"><input type="hidden" name="watchFolder" value="${esc(x.watchFolder || '')}"><span class="watch-path">${esc(x.watchFolder || '尚未選擇')}</span><button type="button" class="secondary small-btn" data-up="pick-watch">選擇資料夾</button></div><small class="muted">只看這一層的檔案，現有的檔案不算。Bot 的存取範圍要包含這個資料夾。</small></div></div><div class="trig-mail"><label class="field">寄件者包含（可不填）<input name="mailFrom" maxlength="200" value="${esc(x.mailFrom || '')}" placeholder="例如：boss@company.com"></label><label class="field">主旨包含（可不填）<input name="mailSubject" maxlength="200" value="${esc(x.mailSubject || '')}" placeholder="例如：報價"></label><small class="muted">只把寄件者和主旨交給 Bot；要寄信或改動仍會先問你。</small></div><div class="sched-when" data-repeat="${esc(x.repeat || 'daily')}"><div class="field">重複${dropdown('repeat', x.repeat || 'daily', REPEATS.map(r => ({id: r[0], name: r[1]})))}</div><div class="field when-date">日期${dropdown('date', date, dates)}</div><div class="field when-day">日${dropdown('day', String(x.day || new Date().getDate()), Array.from({length: 31}, (_, i) => ({id: String(i + 1), name: (i + 1) + ' 號', hint: i >= 28 ? '沒有這天的月份在月底執行' : ''})))}</div><div class="field when-hour">時${dropdown('hour', h, Array.from({length: 24}, (_, i) => ({id: two(i), name: two(i)})))}</div><div class="field">分${dropdown('minute', m, minutes.map(v => ({id: v, name: v})))}</div></div><div class="setting-list in-form">${settingRow('啟用', '關閉後不會自動執行。', toggle('name="on"', x.on !== false, '啟用'))}${settingRow('沒有新消息時不通知', '只適用於 Bot。沒有新消息時 Bot 只回一句話，不跳通知。', toggle('name="quiet"', x.id ? !!x.quiet : true, '沒有新消息時不通知'))}<div class="catchup-row">${settingRow('錯過時補跑', '錯過時，24 小時內開啟會補做一次。', toggle('name="catchUp"', x.catchUp !== false, '錯過時補跑'))}</div></div><small class="error-text sched-err" role="alert" hidden></small></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">儲存</button></div></form>`);
     $('#schedule-form').dataset.id = x.id || ''; $('#schedule-form').dataset.trigger = x.trigger || 'time'; scheduleTargetWarn($('#schedule-form'));
-  }
-  function noteModal(n = {}) {
-    modal(n.id ? '編輯知識' : '新增知識', `<form id="note-form"><div class="modal-body"><label class="field">標題<input name="title" required value="${esc(n.title||'')}"></label><label class="field">內容<textarea name="content" required>${esc(n.content||'')}</textarea></label><label class="field">標籤（以逗號分隔）<input name="tags" value="${esc((n.tags||[]).join(', '))}"></label><label class="field">關聯 Bot<select name="botId"><option value="">共用知識</option>${state.data.bots.map(b=>`<option value="${esc(b.id)}" ${(n.botId||(!n.id&&state.page==='chat'?state.selected:''))===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select></label></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">儲存</button></div></form>`);
-    $('#note-form').dataset.id = n.id || ''
   }
   function startPollers() {
     for (const j of state.data.jobs || [])

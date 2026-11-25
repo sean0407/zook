@@ -683,13 +683,13 @@ FILE_DELIVERY_NOTE = ('要交出檔案（Excel、Word、簡報、PDF、圖片）
                       '你這次寫的交付檔存完要回讀核對：文字檔比對全文，Excel、簡報用合適的工具核對關鍵數字與符號；一致才回報已存檔，寫不進指定位置、讀不回來或內容不符就照實說。單聊、群組主持人與成員都一樣。'
                       # #65: a weekly report came out first with garbled Chinese, no chart and headers out of line
                       'PDF 有中文時一定要內嵌中文字型（例如 reportlab 用 TTFont 註冊中文字型檔），第一版就轉圖檢查沒有亂碼或方塊再交；'
-                      '報表類 PDF 有數字趨勢或比較時至少放一張簡單圖表（例如長條圖），表格的表頭要和下面的欄位對齊。' '交件時在回覆裡列出成品的重點內容（短的回信、貼文直接貼全文），不能只說「已存檔」。使用者指定的存檔資料夾裡原本就有的檔案和子資料夾不要刪。') % PAGEPICS  # #104 #154
+                       '報表類 PDF 有數字趨勢或比較時至少放一張簡單圖表（例如長條圖），表格的表頭要和下面的欄位對齊。' 'Excel 要給別人看的表（主管、客戶）最後加合計列，加總範圍涵蓋到最後一筆資料；能從資料算出的欄位（年資、應有天數）用公式不要寫死；沒有資料的欄位不要整欄填【待確認】，拿掉或在說明裡講。' '交件時在回覆裡列出成品的重點內容（短的回信、貼文直接貼全文），不能只說「已存檔」。使用者指定的存檔資料夾裡原本就有的檔案和子資料夾不要刪。') % PAGEPICS  # #104 #154 #89
 # What goes out to a customer is only for the customer (巡檢 #113 #193 #228: 「依據：…95 折」 notes, sources and internal discount
 # rules left in the letter, to be deleted by hand before sending).
 CLIENT_COPY_NOTE = ('要給客戶或外部的內容（信件、回覆、報價、公告）和它的附件只放對方該看的：內部註記、依據、計算過程、內部折扣或報價規則、【待確認】都不要寫進去；'
                     '參考出處只保留收件人需要的公開引用。這些內部資訊和還沒確認的事寫在給使用者的說明裡（草稿與附件之外），標明「內部備註（不要寄出）」。')
 # Which shared Skill fits: what it is for, not the file type it makes (#28). Also sent when a CLI conversation is continued.
-SKILL_PICK_NOTE = '任務明確是某個 Skill 寫的用途時，才用 zook_read_skill 讀取完整指示再照做；只是輸出格式相同不算，例如一般報表不用海報或藝術設計的 Skill'
+SKILL_PICK_NOTE = '任務明確是某個 Skill 寫的用途時，才用 zook_read_skill 讀取完整指示再照做；只是輸出格式相同不算，例如一般報表不用海報或藝術設計的 Skill；Skill 寫明給某個品牌或公司用、而這次的品牌或公司不同時，不要套它的品牌樣式、配色與範本（#164③）'
 # Facts about the user's own company are not made up (巡檢 C01 twice: 「全系列通過嚴格檢驗」 that no one had said).
 FACTS_NOTE = ('公司事實（政策、檢驗、保固、價格、承諾）只寫使用者給的或你從適用的可靠來源確認過的；缺了又必要的寫成【待確認：…】讓使用者補，不必要的就不寫。'
               '行銷文案和提案也一樣：產品規格、功能、材質、通路範圍、活動、場地與外部報價，只寫資料裡有的；形容詞可以，但不能變成新的事實（資料只說「不漏」，就不能寫成「旋轉不滲漏」）。'

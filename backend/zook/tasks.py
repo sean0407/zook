@@ -15,6 +15,30 @@ TASK_STATES = dict(pending='等前面的工作', ready='待開始', running='進
                    done='完成', failed='沒有完成', stuck='已停下，等你決定', unknown='狀態不明', cancelled='已停止')
 TASK_SETTLED = ('done', 'failed', 'stuck', 'unknown', 'cancelled')
 TASK_NOTE = '（任務引擎）'
+TASK_FILE_CHARS = 1000  # one handed-in file, name or full path (#180: a long path was cut to 「…新人到職說明_2026-12.p」)
+_TASK_END = r'\.[A-Za-z0-9]{1,8}(?=$|[\s，。；、！？）)」』,;!?])'  # a file's extension, then the end of the name
+TASK_PATH = re.compile(r'(?:~|\.{1,2})?/[^\n，。；、！？）)」』,;!?]*?' + _TASK_END + r'|[^\s，。；、！？）)」』,;!?/]+' + _TASK_END
+                       + r'|(?:~|\.{1,2})?/[^\s，。；、！？）)」』,;!?]+')  # a file's path (spaces allowed), a file name, a folder's path
+
+
+def task_clip(value, n):
+    """At most about n characters for a short view, with 「…」 where it was cut. A file path or name is never cut in the middle (#180):
+    it is kept whole when not too long, otherwise left out from its start."""
+    value = str(value or '')
+    if len(value) <= n: return value
+    cut = value[:n]
+    for found in TASK_PATH.finditer(value):
+        if found.start() >= n: break
+        if found.end() > n:
+            cut = value[:found.end()] if found.end() - n <= 300 else value[:found.start()]
+            break
+    return cut.rstrip() + ('…' if len(cut) < len(value) else '')
+
+
+def task_file_names(files):
+    """What a member says it handed in: one line each, nothing hidden, never cut (#180)."""
+    clean = lambda x: ' '.join(''.join(' ' if unicodedata.category(ch) == 'Cc' else '' if unicodedata.category(ch) == 'Cf' else ch for ch in x).split())
+    return [y for y in (clean(x) for x in files) if y]
 
 
 def task_on(store): return (store.data.get('settings') or {}).get('taskEngine') is True
@@ -165,9 +189,9 @@ def task_board_text(store, run):
     for t in run['tasks']:
         a = t['attempts'][-1] if t.get('attempts') else {}
         said = t.get('question') if t['status'] == 'asked' else a.get('reason') if t['status'] == 'blocked' else (a.get('summary') or (t.get('note') if t.get('acceptedCut') else '')) if t['status'] in ('done', 'failed') else \
-            '；'.join((x or '')[:160] for x in (a.get('summary') if task_handed_in(t) else '', t.get('note')) if x)  # what it handed in and why it waits: each its own room
+            '；'.join(task_clip(x, 160) for x in (a.get('summary') if task_handed_in(t) else '', t.get('note')) if x)  # what it handed in and why it waits: each its own room
         lines.append('%s %d. %s — %s（%s）%s' % ('✓' if t['status'] == 'done' else '·', t['n'], t['title'], task_member_name(store, t['assignee']) if store else '',
-                                                 task_state_word(t), '\n   ' + said[:330] if said else ''))
+                                                 task_state_word(t), '\n   ' + task_clip(said, 330) if said else ''))
         if t.get('why') or t.get('basis'): lines.append('   派工依據：' + (t.get('why') or t['basis']))
     for g in run.get('gates') or []:
         if g.get('status') == 'pending': lines.append('等你決定：%s（%s）' % (g['question'], '／'.join(g['options'])))
@@ -213,7 +237,8 @@ def task_run_ok(run):
         if type(t.get('failures', 0)) is not int or type(t.get('sentBack', 0)) is not int or not 0 <= t.get('sentBack', 0) <= TASK_SEND_BACK or any(k in t and not isinstance(t[k], bool) for k in ('confirmed', 'staged', 'aborted', 'cut', 'acceptedCut')): return False
         if any(type(a.get('n', 0)) is not int or any(k in a and not isinstance(a[k], (str, type(None))) for k in ('id', 'jobId', 'cli', 'retryOf')) for a in t['attempts']): return False
         if 'decisions' in t and (not isinstance(t['decisions'], list) or any(not isinstance(d, list) or len(d) != 2 or not all(text(x, 600) for x in d) for d in t['decisions'])): return False
-        if any(not isinstance(a, dict) or any(k in a and not isinstance(a[k], (str, int, bool, type(None))) for k in ('state', 'summary', 'reason', 'outcome')) or not isinstance(a.get('files', []), list) for a in t['attempts']): return False
+        if any(not isinstance(a, dict) or any(k in a and not isinstance(a[k], (str, int, bool, type(None))) for k in ('state', 'summary', 'reason', 'outcome')) or not isinstance(a.get('files', []), list) or len(a.get('files', [])) > 20
+               or any(not isinstance(x, str) or len(x) > TASK_FILE_CHARS for x in a.get('files', [])) for a in t['attempts']): return False
     return True
 
 
@@ -560,11 +585,10 @@ def task_tools(app, job_id, runtime):
             if outcome not in ('succeeded', 'failed'): raise RuntimeError('outcome 只能是 succeeded 或 failed。')
             summary = text(args.get('summary'), 'summary', 4, 1200)
             files = args.get('files') or []
-            if not isinstance(files, list) or len(files) > 20 or any(not isinstance(x, str) or len(x) > 300 for x in files): raise RuntimeError('files 要是最多 20 個檔名。')
-            files = [' '.join(''.join(' ' if unicodedata.category(ch) == 'Cc' else '' if unicodedata.category(ch) == 'Cf' else ch for ch in x).split())[:200] for x in files]  # one line each, nothing hidden
+            if not isinstance(files, list) or len(files) > 20 or any(not isinstance(x, str) or len(x) > TASK_FILE_CHARS for x in files): raise RuntimeError('files 要是最多 20 個檔名或完整路徑，每個最多 %d 字。' % TASK_FILE_CHARS)
             with store.lock:
                 group, run, task, attempt = mine()
-                attempt.update(state='reported', outcome=outcome, summary=summary, files=[x.strip() for x in files if x.strip()], endedAt=NOW()); acted(True)
+                attempt.update(state='reported', outcome=outcome, summary=summary, files=task_file_names(files), endedAt=NOW()); acted(True)
                 store.save()
             app.task_poke(group_id)
             return dict(received=True, next='回報已收到。這項工作到此結束，直接結束這一輪，不要再做其他事。')
@@ -589,7 +613,7 @@ def task_tools(app, job_id, runtime):
 
         return [(schema('zook_task_done', 'Report your task: call exactly once when you finish, also when you could not finish (outcome failed). Then end your turn.',
                         {'outcome': S('succeeded or failed'), 'summary': S('Three sentences: what you did, what you found, what is left'),
-                         'files': {'type': 'array', 'items': {'type': 'string'}, 'description': 'Files you produced, if any'}}, ['outcome', 'summary']), done, False),
+                         'files': {'type': 'array', 'items': {'type': 'string'}, 'description': 'Files you produced, if any, each with its full path'}}, ['outcome', 'summary']), done, False),
                 (schema('zook_task_ask', 'Ask the host a question you need answered to go on. Then end your turn; Zook brings you the answer.', {'question': S('Your question')}, ['question']), ask, False),
                 (schema('zook_task_blocked', 'Tell the host you are blocked and why. Then end your turn.', {'reason': S('What blocks you')}, ['reason']), blocked, False)
                 ] + task_delegate_tool(app, store, job_id, group_id, run_id, task_id, mine, acted, schema, S, text)

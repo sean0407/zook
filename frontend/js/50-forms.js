@@ -292,7 +292,7 @@
         const sending = g ? sendingAdd(g.id, 'groups/' + encodeURIComponent(g.id) + '/messages', {content, attachments, effort: pickedEffort(), mode: currentGroupMode(g)}, g.id)
           : sendingAdd(botId + '/' + (b?.chatId || ''), 'chat', {botId, content, attachments, effort: pickedEffort(), plan: !!state.plan[botId], long: !!state.long[botId]});
         if (!g) chooseChat(botId);  // sending here makes this conversation this window's own
-        pendingList().length = 0; input.value = ''; updateInputMirror();
+        pendingList().length = 0; keepPending(); input.value = ''; updateInputMirror();
         if (g) { delete state.groupMode[g.id]; state.groupEstimate = null; } else { state.plan[botId] = false; state.long[botId] = false; }
         render(true); $('#chat-input')?.focus();
         await sendingSend(sending);
@@ -448,19 +448,7 @@
         const next = scheduleNext(saved || {});
         toast(next ? `已儲存排程，下次執行：${nextLabel(next)}` : '已儲存排程');
       } else if (form.id === 'note-form') {
-        let d = new FormData(form),
-          id = form.dataset.id;
-        let data = {
-          title: d.get('title').trim(),
-          content: d.get('content'),
-          tags: d.get('tags').split(',').map(x => x.trim()).filter(Boolean),
-          botId: d.get('botId') || ''
-        };
-        if (!id) data.clientId = onceId(form);
-        await post(id ? 'knowledge/' + encodeURIComponent(id) : 'knowledge', data, id ? 'PATCH' : 'POST');
-        closeModal();
-        await refresh();
-        toast('已儲存知識')
+        await saveNote(form, form.dataset.id ? '' : onceId(form));  // 36c-knowledge.js; a typed one is made once however often 儲存 is pressed
       } else if (form.id === 'settings-form') {
         let d = new FormData(form);
         await post('settings', {

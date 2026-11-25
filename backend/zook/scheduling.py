@@ -95,6 +95,6 @@ class Scheduling:
                 except Exception: pass
             try:
                 with self.store.lock:
-                    backup_daily(self.store)
+                    backup_daily(self.store); sweep_uploads(self.store)  # attachments never sent, once an hour even when nothing replies (uploadkeep.py)
                     if time.monotonic() - self.store.__dict__.get('_chat_swept', 0) >= CHAT_SWEEP_EVERY: self.store.save_chats()  # the once-a-minute look happens even when nothing else saves
             except Exception: pass
