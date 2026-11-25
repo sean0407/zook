@@ -449,6 +449,7 @@
           const { partial, ...rest } = j;  // the words in progress are painted by the stream, not by redrawing the page
           if (JSON.stringify(state.jobDetails[j.id]) !== JSON.stringify(rest)) changed = true; state.jobDetails[j.id] = rest;
         }
+        for (const j of Object.values(state.jobDetails)) if (j.groupId === groupId && j.stopping && !(data.jobs || []).some(x => x.id === j.id)) { delete j.stopping; changed = true; }  // ended meanwhile
         if (changed) render(true);
         if (data.group.status !== 'running' && !(data.jobs || []).some(j => j.stopping)) { if (state.groupTab === 'files') delete state.groupFiles[groupId]; if (state.groupId === groupId) render(true); break; }
         await new Promise(r => setTimeout(r, 1200));

@@ -2,7 +2,7 @@
   // (progress.py). Nothing here is made up from a timer: only the time is counted here, every step comes from the Mac.
   // Quiet for a long time: it says it may be stuck and that ■ stops it; it never stops anything itself. After ■, a reply whose
   // CLI has not ended is 「正在停止…」, and after a while it offers 強制停止.
-  const STUCK_AFTER = 5 * 60000, FORCE_AFTER = 10000;
+  const STUCK_AFTER = 5 * 60000 + 15000, FORCE_AFTER = 10000;  // lastAt moves in 15-second steps (progress.py): never early
   if (!state.stopAsked) state.stopAsked = {};  // job id -> when ■ was pressed here, before the Mac has answered
   function spanWords(ms) { const s = Math.max(0, Math.floor(ms / 1000)), m = Math.floor(s / 60); return m ? `${m} 分 ${s % 60} 秒` : `${s} 秒`; }
   function progressWords(p) {
@@ -23,7 +23,8 @@
   }
   function waitLine(m) {
     if (!m || m.role === 'user') return '';
-    const j = Object.values(state.jobDetails).find(x => x.messageId === m.id);
+    const all = Object.values(state.jobDetails).filter(x => x.messageId === m.id);
+    const j = all.find(x => x.status === 'running' || x.stopping) || all[0];  // a reply carried on again shares its message with the try before
     if (!j) return '';
     const asked = state.stopAsked[j.id], stopping = j.stopping || (asked && j.status === 'running');
     if (!stopping) {

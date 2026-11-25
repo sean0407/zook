@@ -52,7 +52,7 @@ def _progress_tool(name, where=''):
     if any(w in n for w in ('web', 'fetch', 'browse', 'url')): return 'web'
     if any(w in n for w in ('bash', 'shell', 'command', 'terminal', 'execute', 'exec_')): return 'command'
     if any(w in n for w in ('write', 'edit', 'replace', 'create', 'delete', 'patch', 'notebook')): return 'write'
-    if any(w in n for w in ('read', 'grep', 'glob', 'view', 'list', 'find', 'search', 'cat')) or n == 'ls': return 'read'
+    if any(w in n for w in ('read', 'view', 'cat')) and not any(w in n for w in ('glob', 'list', 'grep', 'search', 'find')): return 'read'  # a file opened, not names listed
     return None
 
 
@@ -123,18 +123,19 @@ def progress_feeder(kind, job_id, inner=None):
 
 
 def _progress_zook(job):
-    """Zook's own tools this reply used so far, as (read, write, other, last step, when it started)."""
-    read = write = other = 0; step = ''; at = 0.0
+    """Zook's own tools this reply used so far (done ones only), as (read, write, web, other, last step, when it started)."""
+    read = write = web = other = 0; step = ''; at = 0.0
     for c in job.get('toolCalls') or []:
         name = str(c.get('name') or '')
         if name == 'zook_native_gate' or name.startswith('native_') or name.startswith('web_'): continue  # the CLI's own step, counted from its output
-        if c.get('status') in ('denied', 'error', 'failed'): continue
+        if c.get('status') != 'completed': continue  # asked for, waiting or refused: not done
         if name in ('zook_workspace_read', 'zook_group_file_read', 'zook_read_skill_resource'): read += 1
         elif name == 'zook_workspace_write': write += 1
+        elif name.startswith('zook_browser_'): web += 1
         else: other += 1
         try: step, at = describe_call(c), datetime.datetime.fromisoformat(str(c.get('createdAt'))).timestamp()
         except Exception: step, at = '', 0.0
-    return read, write, other, step, at
+    return read, write, web, other, step, at
 
 
 def progress_view(job):
@@ -143,9 +144,9 @@ def progress_view(job):
     if job.get('id') in STOPPING: out['stopping'] = True; out['stoppingAt'] = int(STOPPING[job['id']] * 1000)
     rec = PROGRESS.get(job.get('id'))
     if job.get('status') != 'running' or rec is None: return out
-    read, write, other, zook_step, zook_at = _progress_zook(job)
+    read, write, web, other, zook_step, zook_at = _progress_zook(job)
     step = zook_step if zook_step and zook_at >= rec.get('stepAt', 0) else rec['step'] or zook_step  # whichever came last
-    out['progress'] = dict(read=rec['read'] + read, write=rec['write'] + write, command=rec['command'], web=rec['web'], tool=other, lastAt=int(rec['last'] * 1000), step=step)
+    out['progress'] = dict(read=rec['read'] + read, write=rec['write'] + write, command=rec['command'], web=rec['web'] + web, tool=other, lastAt=int(rec['last'] * 1000), step=step)
     return out
 
 
@@ -160,7 +161,9 @@ def progress_force(app, job_id):
     proc = app.processes.get(job_id)
     if proc is None or job_id not in STOPPING: return False
     FORCED.add(job_id)
-    threading.Thread(target=kill_group, args=(proc,), daemon=True).start()  # a runner is asked over a connection: not under the lock
+    inner = getattr(getattr(proc, 'cli', None), 'proc', None) or proc  # a kept CLI's reply stands for its process (live.py)
+    if isinstance(inner, HostedProc): threading.Thread(target=kill_group, args=(proc,), daemon=True).start()  # through its runner, over a connection: not under the lock
+    elif inner.poll() is None: kill_group(proc)  # its leader is not collected yet, so the group number is still its own; otherwise only the wait ends
     return True
 
 

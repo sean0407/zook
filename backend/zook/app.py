@@ -650,8 +650,9 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 if kept and kept.lost() and untouched and not self.__dict__.get('closing'): raise LiveLost()
                 if kept and kept.finished: self.live_fails = 0
             except subprocess.TimeoutExpired:
-                terminate_tree(proc)
-                if not pipes.wait(5): kill_group(proc); pipes.wait(2)
+                if job_id not in FORCED:  # 強制停止 already killed what could be killed safely: not signalled or waited for again
+                    terminate_tree(proc)
+                    if not pipes.wait(5): kill_group(proc); pipes.wait(2)
                 with store.lock: job['mayHaveActed'] = bool(native)  # stopped midway, so what its tools already did is unknown
                 raise RuntimeError('執行逾時：' + stopped_for)
             finally: self.__dict__.get('job_activity', {}).pop(job_id, None)

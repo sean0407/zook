@@ -60,6 +60,14 @@ class FeederTest(unittest.TestCase):
         self.assertTrue(v['stopping']); self.assertNotIn('progress', v)
         m.progress_end('j'); self.assertEqual(m.progress_view(dict(id='j', status='cancelled')), {})
 
+    def test_only_work_really_done_counts(self):
+        use = lambda i, name, **inp: dict(type='assistant', message=dict(content=[dict(type='tool_use', id=i, name=name, input=inp)]))
+        m, p = self.feed('claude', [use('a', 'Glob', pattern='*.md'), use('b', 'Grep', pattern='x'), use('c', 'LS', path='/x')])
+        self.assertEqual((p['read'], p['write'], p['command'], p['web']), (0, 0, 0, 0))  # names listed, no file opened
+        calls = [dict(name='zook_workspace_write', arguments=dict(path='/w/a.txt'), status='waiting_approval'), dict(name='zook_browser_open', arguments=dict(url='https://a.b'), status='completed')]
+        m.progress_start('k'); p = m.progress_view(dict(id='k', status='running', toolCalls=calls))['progress']
+        self.assertEqual((p['write'], p['web'], p['tool']), (0, 1, 0))
+
 
 CODEX = '''#!/usr/bin/env python3
 import json, os, signal, sys, time
