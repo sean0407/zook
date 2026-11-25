@@ -110,7 +110,7 @@ class TroubleInTheInterface(unittest.TestCase):
     def test_sidebar_chat_and_details_show_it(self):
         self.assertIn("${troubleBadge(b)}</span><span class=\"side-preview\">", self.code)  # sidebar card
         self.assertIn('</header>${troubleBanner(b)}', self.code)  # the chat
-        self.assertIn("'<p>${esc(botModelLine(b))}${troubleBadge(b)}</p>', self.code)  # 詳情
+        self.assertIn('<p>${esc(botModelLine(b))}${troubleBadge(b)}</p>', self.code)  # 詳情
 
     def test_words_follow_the_backup(self):
         self.assertIn('傳訊息時會自動改用 ${providerShort(backup)} 回覆，回覆裡會註明。', self.code)
