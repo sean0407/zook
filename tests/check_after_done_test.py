@@ -25,11 +25,12 @@ text = name + ' ' + role
 def save(): open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('quote')
 if name == '專員' and role in ('split_work', 'work', 'split_redo'):
     if flag('fail') or (role == 'split_redo' and flag('redofail')): time.sleep(0.2); sys.exit(3)
-    if not flag('claim') and not flag('vague') and folder: save()
+    if flag('slow'): time.sleep(3)
+    if not flag('claim') and not flag('vague') and not (role == 'split_redo' and flag('redonosave')) and folder: save() if role != 'split_redo' else open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('quote v2')
     text = ('已存好了。' if flag('vague') else '已存到群組檔案：報價單.xlsx') + ('\n@查核員 請幫我看' if flag('mention') else '')
 if name == '設計' and role in ('split_work', 'work') and flag('designfail'): time.sleep(0.2); sys.exit(3)
 if name == '專員' and role == 'split_resave':
-    if flag('resave') and folder: save()
+    if flag('resave') and folder: open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('quote resaved')
     text = '已存到群組檔案：報價單.xlsx' if not flag('cannot') else '這次存不了，權限不足。'
 if name == '查核員': text = '【判定】同意\n看過報價單.xlsx'
 if role == 'kickoff': text = '目標：報價\n@查核員：檢查使用者給的報價單' if flag('onlycheck') else '目標：報價\n@專員：做報價單' + ('' if flag('nocheck') else '\n@查核員：檢查報價單')
@@ -142,7 +143,7 @@ class CheckAfterDone(unittest.TestCase):
         self.assertEqual([r for n, r in self.order() if n == '查核員'], ['split_check'])
 
     def test_a_persona_that_says_it_does_not_check_is_a_maker(self):
-        self.bots['報價'] = self.req('POST', '/api/bots', {'name': '報價', 'provider': 'codex', 'persona': '我不負責查核，主要做報價單。'})[1]
+        self.bots['報價'] = self.req('POST', '/api/bots', {'name': '報價', 'provider': 'codex', 'persona': '我不是負責查核的，主要做報價單。'})[1]
         self.bots['審'] = self.req('POST', '/api/bots', {'name': '小審', 'provider': 'codex', 'persona': '負責驗收其他成員的成果。'})[1]
         g = self.req('POST', '/api/groups', {'botIds': [self.bots[n]['id'] for n in ('Alpha', '報價', '審')], 'hostId': self.bots['Alpha']['id'], 'mode': 'split'})[1]
         self.say(g)
@@ -168,6 +169,32 @@ class CheckAfterDone(unittest.TestCase):
         found = self.say(self.group())
         self.assertFalse(Path(str(self.log) + '.custom').exists())  # never started: it could have changed files
         self.assertTrue(any('查核員' in x and '只讀' in x for x in self.said(found)), self.said(found))
+
+    def test_host_and_a_checker_only(self):
+        self.say(self.group(names=('Alpha', '查核員')))
+        self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('查核員', 'split_check'), ('Alpha', 'split_merge')])
+        self.assertIn('read-only', self.runs()[1]['args'])
+
+    def test_redone_work_must_save_the_new_version(self):
+        self.flag('sendback'); self.flag('redonosave'); self.flag('resave')
+        self.say(self.group())
+        self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('專員', 'split_work'), ('查核員', 'split_check'), ('Alpha', 'split_merge'),
+                                        ('專員', 'split_redo'), ('專員', 'split_resave'), ('查核員', 'split_check'), ('Alpha', 'split_remerge')])
+
+    def test_the_user_naming_the_checker_mid_work_waits_for_the_check(self):
+        self.flag('slow'); g = self.group(mode='free')
+        self.assertEqual(self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '做一份報價單'})[0], 202)
+        for _ in range(100):
+            found = self.req('GET', '/api/groups/' + g['id'])[1]['group']
+            if any(m.get('botId') == self.bots['專員']['id'] and m.get('status') == 'running' for m in found['messages']): break
+            time.sleep(.1)
+        self.assertEqual(self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '@查核員 先看一下'})[0], 202)
+        for _ in range(300):
+            if self.req('GET', '/api/groups/' + g['id'])[1]['group']['status'] != 'running': break
+            time.sleep(.1)
+        self.assertEqual([r for n, r in self.order() if n == '查核員'], ['split_check'])
+        work = next(r for r in self.runs() if r['name'] == '專員'); check = next(r for r in self.runs() if r['name'] == '查核員')
+        self.assertGreaterEqual(check['began'], work['ended'])
 
     def test_nothing_handed_in_means_no_check(self):
         self.flag('fail')

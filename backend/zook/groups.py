@@ -737,7 +737,7 @@ class GroupRuns:
                             store.save()
                 at = 1 if later else 0  # members not run yet because of the turn limit go first; the busy ones wait after them
                 steps = steps[:at] + [dict(step, bots=busy, busySince=step.get('busySince') or time.time(), **unseen)] + steps[at:]
-            if step['role'] == 'split_plan' and done and steps and steps[0]['role'] == 'split_work': steps = self._skip_idle(group_id, run_id, done[0], steps)
+            if step['role'] == 'split_plan' and done and steps and steps[0]['role'] in ('split_work', 'split_check'): steps = self._skip_idle(group_id, run_id, done[0], steps)
             if step['role'] == 'verify' and done: steps = self._after_check(group_id, run_id, done[0], steps)
             if step['role'] == 'split_follow' and done: steps = self._hand_out(group_id, run_id, done[0], steps)
             if step['role'] in GROUP_CLOSING and done:
@@ -845,6 +845,8 @@ class GroupRuns:
                     group = store.find('groups', group_id) or {}
                     if group.get('runId') != run_id: return
                     first = [] if blind_next else [x for x in group.pop('interjectNext', None) or [] if x in group.get('botIds', [])]  # @-mentioned mid-discussion; after an independent round
+                if first and gate:  # #245: a 查核員 the user names before the check joins the check, it does not start now
+                    gate['bots'] += [x for x in first if x in gate.get('held', gate['bots']) and x not in gate['bots']]; first = [x for x in first if x not in gate.get('held', gate['bots'])]
                 if first: pending[:] = [(x, False, None) for x in first] + [p for p in pending if p[0] not in first]
                 if not pending and gate and not blind_next:
                     found = self._free_check(group_id, run_id, gate)

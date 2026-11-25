@@ -311,7 +311,7 @@ class TaskRuns:
             task.pop('resumed', None)  # told once (resume.py)
             handed = attempt['state'] == 'reported' and attempt.get('outcome') == 'succeeded' and turn['job']['status'] == 'completed'
         with store.lock:
-            gone = task_files_missing(store, group_id, dict(owner=task_member_name(store, task['assignee'])), task, attempt, turn['msg']) if handed else []  # #245: checked, with the lock, before anyone verifies them
+            gone = task_files_missing(store, store.find('groups', group_id) or dict(id=group_id), task_member_name(store, task['assignee']), attempt, turn['msg']) if handed else []  # #245: checked, with the lock, before anyone verifies them
             group = store.find('groups', group_id)
             if group:
                 group['activeJobIds'] = [x for x in group.get('activeJobIds') or [] if x != turn['job']['id']]; group['activeJobId'] = (group['activeJobIds'] or [None])[0]

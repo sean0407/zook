@@ -10,7 +10,8 @@
 # a host it comes after the members' independent round. In 任務引擎 a task reported with files that are not there is tried again
 # before another vendor checks it.
 CHECKER_NAME = re.compile(r'查核|驗收|審核|審查|校對|稽核|覆核|複核|把關|品管|(?<![A-Za-z])(?:QA|reviewer|checker)(?![A-Za-z])', re.I)
-CHECKER_DUTY = re.compile(r'(?<![不沒没非無无])(?:負責|專門|主要)(?:做|進行)?(?:查核|驗收|審核|審查|校對|稽核|覆核|複核|把關)')
+CHECKER_DUTY = re.compile(r'(?:負責|專門|主要)(?:做|進行)?(?:查核|驗收|審核|審查|校對|稽核|覆核|複核|把關)')
+CHECKER_NOT = re.compile(r'[不沒没非無无別]')  # 「不負責查核」「我不是負責查核的」: said not to be its job
 MODERATOR_RULES['split_check'] = ['現在輪到你查核。照主持人分派給你的查核工作，實際打開要查的檔案（成員交的，或使用者給的）逐項核對，不要只看別人的說法。',
                                   '第一行只寫【判定】同意、【判定】有疑慮 或 【判定】有錯誤 其中之一，接著用最多 4 點說明依據；有檔案沒打開，就寫明哪個沒看，不能判定通過。',
                                   '要給客戶或外部的內容，核對有沒有內部註記、計算過程、內部折扣或報價規則、【待確認】。',
@@ -23,14 +24,15 @@ MODERATOR_RULES['split_plan'] = MODERATOR_RULES['split_plan'][:-1] + ['負責查
 def group_is_checker(bot):
     """Whether a member's role is checking others' work: its name says so, or its persona starts by saying that is its job."""
     if CHECKER_NAME.search(str((bot or {}).get('name') or '')): return True
-    return bool(CHECKER_DUTY.search(str((bot or {}).get('persona') or (bot or {}).get('instructions') or '')[:80]))
+    persona = str((bot or {}).get('persona') or (bot or {}).get('instructions') or '')[:80]
+    return any(not CHECKER_NOT.search(persona[max(0, hit.start() - 4):hit.start()]) for hit in CHECKER_DUTY.finditer(persona))
 
 
 def split_checkers(store, ids):
-    """(members who make the work, members who check it) among these. Checkers wait only when someone else makes the work."""
+    """(members who make the work, members who check it) among these. A checker is always a checker: with nobody making
+    anything it checks what is there, still only reading."""
     checkers = [x for x in ids if group_is_checker(store.find('bots', x))]
-    producers = [x for x in ids if x not in checkers]
-    return (list(ids), []) if not producers or not checkers else (producers, checkers)
+    return [x for x in ids if x not in checkers], checkers
 
 
 def check_step(checkers, producers, fixes=None):
@@ -43,7 +45,7 @@ def split_work_steps(store, ids, fixes=None):
     fixes = fixes or {}
     producers, checkers = split_checkers(store, ids)
     work = dict(role='split_work', bots=producers, blind=True, waitBusy=True, **({'fixes': {k: v for k, v in fixes.items() if k in producers}} if fixes else {}))
-    return [work] + ([check_step(checkers, producers, {k: v for k, v in fixes.items() if k in checkers})] if checkers else [])
+    return ([work] if producers else []) + ([check_step(checkers, producers, {k: v for k, v in fixes.items() if k in checkers})] if checkers else [])
 
 
 def _same_file(name, pool, owner=''):
@@ -109,12 +111,16 @@ class CheckOrder:
             latest = {b: m for b, m in last.items() if m.get('status') == 'completed' and m.get('content')}
             unfinished = [b for b in step.get('gate', []) if b not in latest and store.find('bots', b) and b in group['botIds']]  # no reply, or one that did not finish: not handed in
             earlier = step.get('missing') if isinstance(step.get('missing'), dict) else {}  # what was missing before 補存 is looked for again, whatever the new reply says
-            said = {b: [n for n in dict.fromkeys(list(m.get('missingFiles') or []) + list(m.get('skippedFiles') or []) + list(earlier.get(b) or [])) if n != NOTHING_SAVED] for b, m in latest.items()}
+            said = {b: [n for n in dict.fromkeys(list(m.get('missingFiles') or []) + list(earlier.get(b) or [])) if n != NOTHING_SAVED and n not in (m.get('savedFiles') or [])] for b, m in latest.items()}
             checkers = _names(store, step['bots'])
-            gone = {b: checked_present(store, group_id, names) for b, names in said.items() if names}
-            pool = [e.name for e in _plain_files(group_files_dir(store, group_id))]
-            for b in latest:
-                if not gone.get(b) and _nothing_saved([m for m in group['messages'][start:] if m.get('role') == 'assistant' and m.get('botId') == b and not m.get('checkOf')], pool): gone[b] = [NOTHING_SAVED]
+            with _group_files_lock:  # nothing is being saved into the group's files while they are looked at
+                gone = {b: checked_present(store, group_id, names) for b, names in said.items() if names}
+                pool = [e.name for e in _plain_files(group_files_dir(store, group_id))]
+            for b, m in latest.items():
+                if m.get('skippedFiles'): gone[b] = list(dict.fromkeys((gone.get(b) or []) + list(m['skippedFiles'])))  # too big to keep: an older file of that name is not this work
+                replies = [x for x in group['messages'][start:] if x.get('role') == 'assistant' and x.get('botId') == b and not x.get('checkOf')]
+                if step.get('fresh') and 'savedFiles' in m and not m.get('savedFiles') and any(x.get('savedFiles') for x in replies): gone.setdefault(b, []).append(NOTHING_SAVED)  # redone work with files: the new version must be saved, not the old one checked
+                elif not gone.get(b) and _nothing_saved(replies, pool): gone[b] = [NOTHING_SAVED]
             gone = {b: names for b, names in gone.items() if names}
             note = lambda text: group['messages'].append(dict(id=ID(), role='system', content=text, createdAt=NOW()))
             if gone and not step.get('resaved'):  # 補存 first, also while another member's part is still missing
@@ -153,10 +159,19 @@ class CheckOrder:
         checked = checkers if redo else [x for x in checkers if x in fixes]  # redone work is checked, also when the first check did not run
         step = dict(role='split_redo', bots=redo, blind=False, fixes={k: fixes[k] for k in redo}) if redo else None
         again = check_step(checked, redo or producers, {k: v for k, v in fixes.items() if k in checkers}) if checked and (redo or any(x in fixes for x in checkers)) else None
+        if again and redo: again['fresh'] = True
         return step, again
 
 
-def task_files_missing(store, group_id, run, task, attempt, msg):
-    """Lock held. The files a task's report lists, or its reply says it saved, that are not there."""
+def task_files_missing(store, group, owner, attempt, msg):
+    """Lock held. The files a task's report lists, or its reply says it saved, that are not there as this member's: saved in this
+    reply, or last saved by this member (another member's file of the same name is not its work)."""
     listed = list(attempt.get('files') or [])
-    return checked_present(store, group_id, listed + list(msg.get('missingFiles') or []), exact=listed, owner=run.get('owner') or '')
+    with _group_files_lock:
+        gone = checked_present(store, group['id'], listed + list(msg.get('missingFiles') or []), exact=listed, owner=owner)
+        mine = set(msg.get('savedFiles') or []) | {n for n, info in (group.get('fileInfo') or {}).items() if (info or {}).get('by') == owner}
+        pool = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
+    for raw in listed:
+        base = re.sub(r'[（(][^（）()]{0,30}[）)]\s*$', '', ' '.join(str(raw or '').split())).strip(' 「」『』`\'"').rsplit('/', 1)[-1]
+        if base and base not in gone and _same_file(base, pool, owner) and not _same_file(base, [n for n in pool if n in mine], owner): gone.append(base)
+    return list(dict.fromkeys(gone + list(msg.get('skippedFiles') or [])))[:10]
