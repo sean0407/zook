@@ -3,18 +3,31 @@
   const GROUP_MODE_OPTIONS = [{id: 'free', name: '自由', hint: '跟問題有關的成員回覆，彼此可以 @ 接話；有主持人時由他帶討論和收尾'}, {id: 'turns', name: '輪流', hint: '每位成員依序各講一次，後面的人看得到前面說的'}, {id: 'debate', name: '辯論', hint: '成員分正反兩方，各講兩輪互相反駁，最後裁定哪邊站得住'}, {id: 'split', name: '主持人分工', hint: '一輪做完：主持人在對話裡分好工，成員同時各做一部分，主持人核對後合成一份答案'}, {id: 'compare', name: '比較', hint: '每位成員各自回答同一題、互相看不到，最後列出異同和最值得採用的'}];
   if (!state.groupMode) state.groupMode = {};
   if (!state.groupFiles) state.groupFiles = {};
-  const currentGroupMode = g => { const mode = state.groupMode[g.id] || g.mode || 'free'; return mode === 'auto' && !taskEngineOn() ? 'free' : mode; };
   const groupHostId = g => 'hostId' in g ? g.hostId : (groupMembers(g).find(b => b.isAdmin)?.id || '');
+  const autoReady = g => !!groupHostId(g) && groupMembers(g).length >= 2;  // 自動 needs a host and two members (#218)
+  const currentGroupMode = g => { const mode = state.groupMode[g.id] || g.mode || 'free'; return mode === 'auto' && (!taskEngineOn() || !autoReady(g)) ? 'free' : mode; };
   const hostOptions = ids => [{id: '', name: '不設主持人'}, ...ids.map(id => state.data.bots.find(b => b.id === id)).filter(Boolean).map(b => ({id: b.id, name: b.name}))];
   function groupSettingRows(g, chosen) {
     const host = g.id ? groupHostId(g) : '', limit = g.turnLimit || (host ? 16 : 8);
-    return `<div class="setting-list in-form"><div data-host-field>${settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', host, hostOptions([...chosen])))}</div>${settingRow('討論方式', '送出時也能在輸入框旁，只對這一則訊息改用別的方式', dropdown('mode', g.mode === 'auto' && !taskEngineOn() ? 'free' : g.mode || 'free', groupModeOptions()))}${settingRow('回合上限', '每則訊息最多幾次發言，到了就先停下', dropdown('turnLimit', String(limit), [4, 8, 12, 16].map(n => ({id: String(n), name: n + ' 次'}))))}</div>`;
+    return `<div class="setting-list in-form"><div data-host-field>${settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', host, hostOptions([...chosen])))}</div>${settingRow('討論方式', '送出時也能在輸入框旁，只對這一則訊息改用別的方式', dropdown('mode', g.mode === 'auto' && !taskEngineOn() ? 'free' : g.mode || 'free', groupModeOptions()))}${settingRow('回合上限', '每則訊息最多幾次發言，到了就先停下', dropdown('turnLimit', String(limit), [4, 8, 12, 16].map(n => ({id: String(n), name: n + ' 次'}))))}</div><p class="small error-text" data-group-problem role="alert" hidden></p><p class="muted small" data-group-hint hidden></p>`;
   }
   function syncGroupHost(form) {
     const ids = new FormData(form).getAll('botIds'), slot = form.querySelector('[data-host-field]'), now = form.elements.hostId.value;
     slot.innerHTML = settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', ids.includes(now) ? now : '', hostOptions(ids)));
   }
-  const groupModeControl = g => `<div class="effort-pick group-mode" title="討論方式">${dropdown('groupMode', currentGroupMode(g), groupModeOptions())}</div>`;
+  // What the form shows under the settings: why 自動 cannot be saved yet, and a hint when every member is the same vendor (#218).
+  const botFamily = b => { const p = b.provider || state.data.settings.provider || ''; return p === 'auto' ? '' : (state.providers || []).find(x => x.id === p)?.kind || p; };
+  function groupFormNote(form) {
+    const ids = new FormData(form).getAll('botIds'), mode = form.elements.mode?.value, host = form.elements.hostId?.value;
+    const members = ids.map(id => state.data.bots.find(b => b.id === id)).filter(Boolean);
+    const problem = mode !== 'auto' ? '' : !host ? '「自動」要由主持人拆工作、派給成員：請在「主持人」選一位成員，或改用其他討論方式。' : members.length < 2 ? '「自動」至少要 2 位成員，請再選一位。' : '';
+    const families = members.map(botFamily), one = members.length >= 2 && families.every(f => f && f === families[0]);
+    const el = form.querySelector('[data-group-problem]'), hint = form.querySelector('[data-group-hint]');
+    if (el) { el.textContent = problem; el.hidden = !problem; }
+    if (hint) { hint.textContent = one ? `成員都是 ${providerShort(families[0])}，沒有跨家驗收：結果要你自己看，或加一位別家的 Bot。` : ''; hint.hidden = !one; }
+    return !problem;
+  }
+  const groupModeControl = g => `<div class="effort-pick group-mode" title="討論方式">${dropdown('groupMode', currentGroupMode(g), groupModeOptions().filter(o => o.id !== 'auto' || autoReady(g)))}</div>`;
 
   // 預計用量: updated while typing, and never uses a model.
   function groupEstimateLine(g) {
@@ -106,14 +119,35 @@
     const files = state.groupFiles[g.id];
     if (!files) { setTimeout(() => loadGroupFiles(g), 0); return '<div class="detail-empty">正在讀取檔案…</div>'; }
     const base = '/api/groups/' + encodeURIComponent(g.id) + '/files/';
-    return `<div class="group-files"><button type="button" class="secondary" data-action="group-file-pick">＋ 上傳檔案</button><input type="file" id="group-file-input" multiple hidden>${files.length ? files.map(f => `<div class="group-file"><a href="${base}${encodeURIComponent(f.name)}" download="${esc(f.name)}" title="下載"><strong>${esc(f.name)}</strong><small>${esc([fileSize(f.size), f.by].filter(Boolean).join(' · '))}</small></a><button type="button" class="link danger" data-action="group-file-delete" data-id="${esc(f.name)}">刪除</button></div>`).join('') : '<div class="detail-empty">還沒有檔案。成員都能讀取和存入。</div>'}<small class="muted">單檔 20 MB，每個群組 200 MB。</small></div>`;
+    const note = state.groupFileNote?.[g.id];
+    return `<div class="group-files"><button type="button" class="secondary" data-action="group-file-pick">＋ 上傳檔案</button><input type="file" id="group-file-input" multiple hidden>${note ? `<div class="group-file-note${note.failed.length ? ' has-failed' : ''}" role="status"><span>${esc(note.failed.length ? `${note.ok ? `已上傳 ${note.ok} 個；` : ''}${note.failed.length} 個沒有上傳：` : fileSummary(note.ok, []))}</span>${note.failed.length ? `<ul>${note.failed.map(x => `<li><strong title="${esc(x.name)}">${esc(midName(x.name))}</strong>：${esc(x.reason)}</li>`).join('')}</ul>` : ''}</div>` : ''}${files.length ? files.map(f => `<div class="group-file"><a href="${base}${encodeURIComponent(f.name)}" download="${esc(f.name)}" title="下載 ${esc(f.name)}"><strong title="${esc(f.name)}">${esc(f.name)}</strong><small>${esc([fileSize(f.size), f.by].filter(Boolean).join(' · '))}</small></a><button type="button" class="link danger" data-action="group-file-delete" data-id="${esc(f.name)}">刪除</button></div>`).join('') : '<div class="detail-empty">還沒有檔案。成員都能讀取和存入。</div>'}<small class="muted">單檔 20 MB，每個群組 200 MB。</small></div>`;
   }
+  // Several files at once (#150): each one is tried, a bad one is skipped, and the end says which went in and which did not, and why.
   async function uploadGroupFiles(g, list) {
+    const ok = [], failed = [];
+    state.groupFileNote = state.groupFileNote || {};
     for (const f of list) {
-      const res = await fetch('/api/groups/' + encodeURIComponent(g.id) + '/files', {method: 'POST', headers: {'X-File-Name': encodeURIComponent(f.name), 'Content-Type': 'application/octet-stream'}, body: f});
-      if (!res.ok) { toast((await res.json().catch(() => ({}))).error || '上傳失敗'); break; }
+      try {
+        const res = await fetch('/api/groups/' + encodeURIComponent(g.id) + '/files', {method: 'POST', headers: {'X-File-Name': encodeURIComponent(f.name), 'Content-Type': 'application/octet-stream'}, body: f});
+        if (res.ok) { ok.push(f.name); continue; }
+        failed.push({name: f.name, reason: (await res.json().catch(() => ({}))).error || '上傳失敗'});
+      } catch (e) { failed.push({name: f.name, reason: '連不上 Zook，沒有上傳'}); }
     }
+    state.groupFileNote[g.id] = {ok: ok.length, failed};
+    toast(fileSummary(ok.length, failed));
     await loadGroupFiles(g);
+  }
+  // One summary for several files, used by the group's files and the message box alike: 「已上傳 2 個；1 個沒有上傳：空檔.txt（檔案是空的）」.
+  function fileSummary(ok, failed, verb = '上傳') {
+    const done = ok ? `已${verb} ${ok} 個` : `沒有${verb}任何檔案`;
+    if (!failed.length) return done;
+    return `${done}；${failed.length} 個沒有${verb}：` + failed.map(x => `${midName(x.name)}（${String(x.reason).replace(/[。.]+$/, '')}）`).join('、');
+  }
+  // A long file name shortened in the middle, so its end and extension still show (報告⋯⋯第三季.xlsx).
+  function midName(name, max = 32) {
+    const s = String(name || ''); if ([...s].length <= max) return s;
+    const chars = [...s], dot = s.lastIndexOf('.'), ext = dot > 0 && s.length - dot <= 10 ? [...s.slice(dot)].length : 0, tail = Math.min(ext + 6, max - 6);
+    return chars.slice(0, max - tail - 1).join('') + '…' + chars.slice(-tail).join('');
   }
 
   // A member's own window on a group discussion: for each time it spoke, what it looked up and which Skills it used on the way,

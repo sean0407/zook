@@ -28,9 +28,11 @@ MODERATOR_RULES = {
     'pro_rebut': ['這是辯論的第二回合，你是正方。直接反駁反方最強的論點，說明為什麼仍然成立。最多 3 點。', _NO_MENTION],
     'con_rebut': ['這是辯論的第二回合，你是反方。直接反駁正方最強的論點，說明為什麼仍然站不住腳。最多 3 點。', _NO_MENTION],
     'verdict': ['你是這場辯論的裁定者，要公正，不偏向自己先前的立場。說明哪一方的論證比較站得住腳和原因。', _NO_MENTION, GROUP_SUMMARY_FORMAT + '。', _ONLY_SAID],
-    'split_plan': ['你負責分工。第一行寫「本次目標與產出：」，接著把工作拆開，每位成員一行：「成員名稱：要做的事」，不要重疊。', '不要自己做成員的工作。開場保持簡短。', _NO_MENTION],
+    'split_plan': ['你負責分工，也負責其中一份。第一行寫「本次目標與產出：」，接著把工作拆開，每位成員一行：「成員名稱：要做的事」，你自己也一行：「你的名稱（主持人）：要做的事」，'
+                   '彼此不要重疊；大部分交給成員，你只接一份。',
+                   '分工寫完後，在這一則回覆裡接著把你自己那一份做完（另起一段，標題寫「我負責的部分」）；成員那幾份留給他們，不要替他們做。分工的部分保持簡短。', _NO_MENTION],
     'split_work': ['只完成分派給你的那一部分，其他成員正同時做各自的部分。用重點條列，附上依據。', _NO_MENTION],
-    'split_merge': ['你負責彙整。把成員各自完成的部分合併成一份完整的成果，指出遺漏或互相矛盾的地方。',
+    'split_merge': ['你負責彙整。把成員各自完成的部分和你自己那一份合併成一份完整的成果，指出遺漏或互相矛盾的地方。',
                     '彙整前核對每位成員交的東西和他說的是否一致（例如說有公式卻是寫死的數字、說已預覽卻沒有），有檔案就打開看。'
                     '不一致、需要那位成員修的，在回覆最前面每位寫一行「【退回】成員名稱：要修的地方」，Zook 會請他修一次，再請你彙整；其餘照常彙整。',
                     _NO_MENTION, GROUP_SUMMARY_FORMAT + '。', _ONLY_SAID],
@@ -38,6 +40,10 @@ MODERATOR_RULES = {
                    '修完用重點條列寫改了什麼、怎麼確認的；沒做到或沒確認的直接說，不要說已經做到。', _NO_MENTION],
     'split_remerge': ['你負責彙整。這是成員修正後的第二次彙整，不能再退回。重新核對被退回的部分有沒有修好，有檔案就打開看。',
                       '仍然不符合的，在回覆最前面寫「未通過的地方：」逐項列出，交給使用者決定，不要當成完成。', _NO_MENTION, GROUP_SUMMARY_FORMAT + '。', _ONLY_SAID],
+    'split_follow': ['你是這個群組的主持人。這個群組用「主持人分工」：你派工、自己也負責一份，成員做各自的部分，最後由你彙整。使用者這次只點名你。',
+                     '只是問問題、要你說明或找檔案時，直接回答，不用派工。',
+                     '需要做事時，照之前的分工計畫：成員負責的部分（還沒做的、要重做或要補的）在回覆最前面每位寫一行「【派工】成員名稱：要做的事」，Zook 會請他們做，做完再請你彙整。'
+                     '你只做你自己那一份，不要把成員的部分自己做完；成員正在忙也照樣派給他，Zook 會等他有空再補上。', _NO_MENTION],
     'compare': ['其他成員正同時回答同一個問題，你看不到他們的內容。用你自己的判斷完整作答，不要猜測或引用他們。', _NO_MENTION],
     'compare_diff': ['成員已經各自回答同一個問題。比較他們的答案：哪裡相同、哪裡不同、各自的強項，以及哪一個最值得採用。', _NO_MENTION, GROUP_SUMMARY_FORMAT + '。', _ONLY_SAID],
 }
@@ -46,7 +52,13 @@ MODERATOR_RULES['verify'] = ['你負責查核下面這則回覆的事實、推�
                              '來源、受眾和判定都由你自己核對，不要採用被查回覆對它自己的說法。',
                              '要給客戶或外部的內容（含附件），核對正文裡有沒有內部註記、依據、計算過程、內部折扣或報價規則、【待確認】。',
                              '特別核對：產品規格、功能、通路、價格與數字是否出自使用者的資料或可核對的可靠來源（或能從它們重算）；多出來的事實或沒有來源的數字要列出。', '不要改寫這則回覆，不要修改檔案，不要對外動作。', _NO_MENTION]
-GROUP_CLOSING = ('final', 'verdict', 'split_merge', 'split_remerge', 'compare_diff')
+MODERATOR_RULES['check_final'] = ['你是這個群組的主持人。上面成員的回覆已經由另一位成員查核已通過，現在由你替使用者收尾，討論到這裡結束。不要再 @ 任何人。',
+                                  '第一行寫【結論】，接著只用一段話寫最終結論：使用者要的東西做好了什麼、重點是什麼。不要再分其他小標。',
+                                  '最後一行寫「檔案位置：」，逐一列出這次交出的檔案完整檔名，位置寫「群組檔案」；使用者另外指定、成員也說存好的位置，照成員說的寫上。沒有檔案就寫「檔案位置：這次沒有檔案」。',
+                                  _ONLY_SAID]
+GROUP_CLOSING = ('final', 'verdict', 'split_merge', 'split_remerge', 'compare_diff', 'check_final')
+try: GROUP_BUSY_WAIT = max(1, int(os.environ.get('ZOOK_GROUP_BUSY_WAIT') or 1200))  # 分工 (#71): how long a busy member's share waits for it, in seconds
+except ValueError: GROUP_BUSY_WAIT = 1200
 GROUP_SEND_BACK = 1  # times a 分工 host's check sends work back by itself before it is the user's call (not decided by the user yet: the careful choice)
 _CARD_PARTS = dict(結論='conclusion', 待你決定='decisions', 行動項目='actions', 未解問題='questions')
 
@@ -59,13 +71,14 @@ def group_card(content):
     return dict({k: ('' if v in ('無', '沒有', '暫無') else v) for k, v in card.items()}, body=pieces[0].strip(' \n*#'))
 
 
-def split_send_back(content, bots):
-    """{member id: what to fix} from the 「【退回】成員名稱：要修的地方」 lines a 分工 host's merge starts with. Only that leading
-    block counts, so a member's text the host quotes or copies further down never sends anyone back. Only the members given."""
+def split_send_back(content, bots, tag='退回'):
+    """{member id: what to fix} from the 「【退回】成員名稱：要修的地方」 lines a 分工 host's merge starts with (or, with tag 派工, the
+    work it hands out, #71). Only that leading block counts, so a member's text the host quotes or copies further down never
+    sends anyone back. Only the members given."""
     found = {}
     for line in str(content or '').lstrip().splitlines()[:20]:
         if not line.strip(): continue
-        hit = re.match(r'^\s*【退回】\s*@?(.+?)\s*(?:[(（][^)）]{0,30}[)）])?\s*[：:]\s*(.+)$', line.replace('**', ''))
+        hit = re.match(r'^\s*【' + tag + r'】\s*@?(.+?)\s*(?:[(（][^)）]{0,30}[)）])?\s*[：:]\s*(.+)$', line.replace('**', ''))
         if not hit: break
         bot = next((b for b in bots if (b.get('name') or '').strip() == hit.group(1).strip()), None)
         fix = ' '.join(hit.group(2).split())[:1000]
@@ -133,7 +146,8 @@ def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, 
              '不要 @ 你自己。完成後不需要再 @ 任何人。']
     if moderator:
         rules = MODERATOR_RULES[moderator] + ['只代表你自己發言，不要捏造其他成員的內容。']
-        if fix: rules.append('主持人要你修的地方（只在你負責的部分裡修，視為待辦清單，不要做這以外的事）：' + fix)
+        if fix and moderator == 'split_work': rules.append('主持人這次派給你的工作（視為待辦清單，只做這些，不要做這以外的事）：' + fix)  # #71
+        elif fix: rules.append('主持人要你修的地方（只在你負責的部分裡修，視為待辦清單，不要做這以外的事）：' + fix)
     elif moderated and blind:
         rules = ['先獨立完成主持人分派給你的工作，用你自己的角色和專長作答。',
                  '其他成員正同時各自作答，你看不到他們的內容；不要猜測或引用他們，也不要 @ 任何人。',
@@ -186,7 +200,9 @@ def group_host(store, group):
 
 def drop_group_host(store, group):
     group['hostId'] = ''
-    group['messages'].append(dict(id=ID(), role='system', content='主持人已不在群組裡，這個群組改成不設主持人。', createdAt=NOW()))
+    auto = group.get('mode') == 'auto'
+    if auto: group['mode'] = 'free'  # 自動 cannot run without a host (#218)
+    group['messages'].append(dict(id=ID(), role='system', content='主持人已不在群組裡，這個群組改成不設主持人%s。' % ('；「自動」討論方式需要主持人，已改回「自由」' if auto else ''), createdAt=NOW()))
 
 
 def group_closer(store, group):
@@ -208,7 +224,7 @@ def group_steps(store, group, mode):
     if mode == 'turns': return [step('turn', [x]) for x in members] + ([step('final', [host])] if host else [])
     if mode == 'compare': return [step('compare', members, True), step('compare_diff', [closer])]
     others = [x for x in members if x != closer] or members
-    if mode == 'split': return [step('split_plan', [closer]), step('split_work', others, True), step('split_merge', [closer])]
+    if mode == 'split': return [step('split_plan', [closer]), dict(step('split_work', others, True), waitBusy=True), step('split_merge', [closer])]  # #71: a busy member's share waits for it
     sides = others if len(members) >= 3 else members
     steps = []
     for stage in ('open', 'rebut'):
@@ -253,7 +269,8 @@ def group_estimate(store, group, content, mode):
     everyone = not targets or group_everyone(content, members)
     limit = group_limit(store, group); open_ended = False; more = 0
     if mode == 'auto' and not task_on(store): mode = 'free'  # 任務引擎 is off: it runs as 自由
-    if not everyone: count = len(targets)
+    if not everyone and mode == 'split' and len(members) > 1 and targets == [group_host(store, group)]: count, open_ended = len(members) + 1, True  # #71: the host may hand out work, then merges
+    elif not everyone: count = len(targets)
     elif mode == 'auto' and len(members) > 1: count, open_ended = len(members) + 1, True  # the host plans, each member works, the host sums up
     elif mode != 'free' and len(members) > 1:
         steps = group_steps(store, group, mode); count = sum(len(s['bots']) for s in steps)
@@ -335,25 +352,30 @@ class GroupRuns:
         return {'runId': self.post_group_message(group, body.get('content'), attachments=attachments_for(self.store, body.get('attachments')), effort=body.get('effort'), mode=body.get('mode'))}
 
     def interject_group(self, group, content, attachments=None):
-        """插話: the user speaks while the discussion runs. Caller holds the store lock. In an open discussion (自由／主持) every
-        later turn reads it and a member it @-mentions answers next; a member answering right now sees it on its next turn. A
-        structured discussion (輪流、辯論、分工、比較) or a 任務 is not changed half way: the message waits and is answered when
-        the round ends. Either way, a message no turn has read is answered in a new round, as if it had been sent then.
-        It never changes who started the discussion, so a discussion a schedule or a Bot started keeps its limits."""
+        """插話 (#94, decided by the user: 即時插入): the user speaks while the discussion runs, and it joins at once, in every
+        討論方式. Caller holds the store lock. The group's CLIs take nothing in the middle of a reply, so the turn that reads it
+        is the next one to start: in an open discussion a member it @-mentions answers next; in 輪流、辯論、分工、比較 the next
+        step reads it; in a 任務 the host answers it as soon as it is free, also while a result waits for 「接受結果」 (a question
+        is not an acceptance: the card stays). A message no turn has read is answered after the round, by the members it names
+        or else by whoever closes. It never changes who started the discussion, so a discussion a schedule or a Bot started keeps its limits."""
         if attachments: raise RuntimeError('討論進行中只能傳文字；附件請等這輪結束或先停止。')
         if not isinstance(content, str) or not content.strip() or len(content) > 30000: raise ValueError('訊息內容無效。')
         members = [b for b in (self.store.find('bots', x) for x in group['botIds']) if b]
-        open_run = group.get('runKind') == 'free'
-        joins = open_run and interject_wanted(content, [b['name'] for b in members])  # the same rule as with one Bot: a correction joins, anything new waits
         message = dict(id=ID(), role='user', content=content.strip(), createdAt=NOW())
         date_check_message(message)
         group['messages'].append(message)
-        if joins: self._join_run(group, message, members); log_activity(self.store, 'group', '在討論途中插話（%s）' % group.get('name', ''))
-        else:  # 排在後面: turns of this round do not read it; it is answered in a round of its own when this one ends
-            message.update(waiting=True, queued=True); group.setdefault('interjectQueued', []).append(message['id'])
-            log_activity(self.store, 'group', '討論途中傳送，排在這輪後面（%s）' % group.get('name', ''))
-        named = [] if group_everyone(content, members) else group_mentions(content, members)
-        return dict(runId=group.get('runId'), interjected=joins, queued=not joins, waiting=not joins, next=[(self.store.find('bots', x) or {}).get('name') for x in named] if joins else [])
+        run = group.get('taskRun')
+        if isinstance(run, dict) and run.get('status') == 'running' and run.get('groupRunId') == group.get('runId'):  # 任務: to the host
+            message['interjected'] = True; run.setdefault('userAdded', []).append(message['id'])
+            handler = [task_member_name(self.store, run['hostId'])]
+            self.task_poke(group['id'])
+        else:
+            self._join_run(group, message, members)
+            named = [] if group_everyone(content, members) else group_mentions(content, members)
+            handler = [(self.store.find('bots', x) or {}).get('name') for x in named]
+        message['interjectTo'] = '、'.join(n for n in handler if n) or '下一位回覆的成員'
+        log_activity(self.store, 'group', '在討論途中插話，交給%s（%s）' % (message['interjectTo'], group.get('name', '')))
+        return dict(runId=group.get('runId'), interjected=True, queued=False, waiting=False, next=[n for n in handler if n], to=message['interjectTo'])
 
     def _join_run(self, group, message, members):
         """Lock held. 插話 into the open discussion that is running: every later turn reads it; a member it @-mentions answers next."""
@@ -457,7 +479,13 @@ class GroupRuns:
             store.save()
             unseen = group.get('interjectUnseen'); kept = {m['id'] for m in group['messages'][-GROUP_KEEP:] if not m.get('waiting')}
             seen = unseen if unseen in kept and not step.get('promptFor') and unseen not in set(step.get('hide') or ()) else None  # 插話 this turn's prompt holds
-            return dict(job=job, msg=msg, prompt=prompt, provider=provider, model=model, bot=copy.deepcopy(bot), role=role, writable=writable, skipFiles=set(step.get('hideFiles') or ()), saved=[], seen=seen, staged=staged, check=check)
+            heard = [] if step.get('promptFor') else [m for m in group['messages'][-GROUP_KEEP:] if m.get('interjected') and not m.get('waiting') and m['id'] not in set(step.get('hide') or ())]
+            members_now = [b for b in (store.find('bots', x) for x in group['botIds']) if b]
+            named = [m for m in heard if bot_id not in (m.get('readBy') or []) and bot_id in group_mentions(m['content'], members_now)]  # 插話 naming it that it reads for the first time
+            for m in heard:
+                m.setdefault('heardBy', bot['name'])  # the window says who read the 插話 first (a 任務's host: taskrun.py)
+                if bot_id not in m.setdefault('readBy', []): m['readBy'] = (m['readBy'] + [bot_id])[-20:]
+            return dict(job=job, msg=msg, prompt=prompt, provider=provider, model=model, bot=copy.deepcopy(bot), role=role, writable=writable, skipFiles=set(step.get('hideFiles') or ()), saved=[], seen=seen, staged=staged, check=check, heard=bool(named))
 
     def _group_job(self, group_id, turn):
         """One Bot's turn, with its own copy of the group's files."""
@@ -537,6 +565,50 @@ class GroupRuns:
         order = [b['id'] for b in bots if b['id'] in fixes]
         return [dict(role='split_redo', bots=order, blind=False, fixes=fixes), dict(role='split_remerge', bots=[closer], blind=False, sentBack=step.get('sentBack', 0) + 1)] + steps
 
+    def _hand_out(self, group_id, run_id, turn, steps):
+        """#71 主持人分工, a later message naming only the host: the work its reply hands out (「【派工】成員名稱：要做的事」) goes to
+        those members, each on its own and at the same time, then the host merges. A reply that hands out nothing ends the round."""
+        with self.store.lock:
+            group = self.store.find('groups', group_id)
+            if not group or group.get('runId') != run_id or turn['job']['status'] != 'completed': return steps
+            host = turn['bot']['id']
+            bots = [b for b in (self.store.find('bots', x) for x in group['botIds']) if b and b['id'] != host]
+            work = split_send_back(turn['job'].get('content'), bots, '派工')
+            if not work: return steps
+            group['messages'].append(dict(id=ID(), role='system', content='主持人照分工派給 %s，做完再由主持人彙整。' % '、'.join(b['name'] for b in bots if b['id'] in work), createdAt=NOW()))
+            self.store.save()
+        order = [b['id'] for b in bots if b['id'] in work]
+        return [dict(role='split_work', bots=order, blind=True, waitBusy=True, fixes=work), dict(role='split_merge', bots=[host], blind=False)] + steps
+
+    def _wait_free(self, group_id, run_id, step):
+        """#71 (decisions #5): a 分工 member that was busy in another conversation does its share once it is free. Returns the
+        members of the step free now, [] when it waited too long (the merge goes on without them), False when the run ended."""
+        while True:
+            with self.store.lock:
+                group = self.store.find('groups', group_id)
+                if not group or group.get('runId') != run_id or group['status'] != 'running': return False
+                working = {j['botId'] for j in self.store.data['jobs'] if j.get('status') == 'running'}
+                free = [x for x in step['bots'] if x not in working]
+                if free: return free
+                if time.time() - step.get('busySince', 0) > GROUP_BUSY_WAIT:
+                    names = '、'.join(b['name'] for b in (self.store.find('bots', x) for x in step['bots']) if b)
+                    group['messages'].append(dict(id=ID(), role='system', content='%s 一直在其他對話中工作，這次沒有補上它的部分；主持人會照現有的內容彙整。' % names, createdAt=NOW()))
+                    self.store.save(); return []
+            time.sleep(1)
+
+    def _after_check(self, group_id, run_id, check, steps):
+        """#222 (decided by the user): a 請其他成員查核 that passes (同意) is wrapped up by the host at once, one more reply: a
+        paragraph of conclusion and where the files are. 有疑慮／有錯誤 stay the user's call; a group without a host keeps its
+        整理結論 button; a round that already has its conclusion (a host's or a 任務's closing card) is not concluded twice."""
+        with self.store.lock:
+            group = self.store.find('groups', group_id)
+            if not group or group.get('runId') != run_id or check['job']['status'] != 'completed' or check['msg'].get('verdict') != '同意': return steps
+            host = group_host(self.store, group)
+            if not host or not self.store.find('bots', host): return steps
+            asked = next((i for i in range(len(group['messages']) - 1, -1, -1) if group['messages'][i].get('role') == 'user'), 0)
+            if any(m.get('card') for m in group['messages'][asked:] if m.get('role') == 'assistant' and not m.get('checkOf')): return steps
+        return steps + [dict(role='check_final', bots=[host], readonly=True, msg=dict(afterCheck=True))]
+
     def _group_stage_failed(self, job_id, why=''):
         """The files of a turn could not be put safely into the Bot's workspace: the turn does not run without them."""
         agy_release(self, job_id)
@@ -546,12 +618,16 @@ class GroupRuns:
             job.update(status='failed', error=why or '沒辦法把群組檔案安全地放進這個 Bot 的工作資料夾（裡面可能有捷徑），這一輪已停止。請檢查後再試一次。', finishedAt=NOW())
             self.store.finish_message(job, '', 'failed'); self.store.save()
 
-    def _group_batch(self, group_id, run_id, batch, moderated, blind, step=None):
-        """Run these turns together. Returns the turns that ran, or False when the discussion ended."""
+    def _group_batch(self, group_id, run_id, batch, moderated, blind, step=None, busy=None):
+        """Run these turns together. Returns the turns that ran, or False when the discussion ended. A member busy elsewhere in a
+        step that waits for it (分工, #71) is added to busy instead."""
         turns_here = []
         for bot_id, may_pass, role in batch:
             turn = self._group_turn(group_id, run_id, bot_id, may_pass, role, moderated, blind, step)
             if turn is False: return False
+            if turn == 'busy':
+                if busy is not None: busy.append(bot_id)
+                continue
             if turn: turns_here.append(turn)
         threads = [threading.Thread(target=self._group_job, args=(group_id, t), daemon=True) for t in turns_here]
         for th in threads: th.start()
@@ -560,6 +636,10 @@ class GroupRuns:
             group = self.store.find('groups', group_id)
             if not group or group.get('runId') != run_id: return False
             group['activeJobIds'] = []; group['activeJobId'] = None
+            finished = [t for t in turns_here if t['job']['status'] == 'completed']
+            if any(t.get('seen') and t['seen'] == group.get('interjectUnseen') for t in finished): group.pop('interjectUnseen', None)  # 插話 a finished turn read: nothing is left to answer for it, in every 討論方式
+            if group.get('interjectNext') and (step or {}).get('role'):  # 輪流、分工 and the like: a member it named that read it in its own step has answered it
+                group['interjectNext'] = [x for x in group['interjectNext'] if x not in {t['bot']['id'] for t in finished if t.get('heard')}]
             for t in turns_here:
                 if t['job']['status'] != 'completed':
                     if t['role'] == 'verify': t['msg']['error'] = '查核已停止。' if t['job']['status'] == 'cancelled' else t['job'].get('error') or '查核沒有完成。'  # kept with the check: shown under the reply after a reload too
@@ -582,6 +662,8 @@ class GroupRuns:
         texts = [m['content'] for m in queued + ([said] if said else [])]
         everyone = everyone or any(group_everyone(t, members) for t in texts)
         targets = [] if everyone else named or list(dict.fromkeys(x for t in texts for x in group_mentions(t, members)))
+        if not targets and not everyone and group['runMode'] != 'free':  # 輪流、分工、任務 and the like: whoever closes answers it, not the whole round again (#133)
+            targets = [x for x in [group_closer(self.store, group)] if x]
         self.start_group(group, targets or [b['id'] for b in members], not targets)
 
     def _pause_group(self, group, limit, paused):
@@ -594,13 +676,34 @@ class GroupRuns:
         while steps:
             step = steps[0]; room = limit - turns
             if room <= 0: break
-            now, later = step['bots'][:room], step['bots'][room:]
-            done = self._group_batch(group_id, run_id, [(x, False, step['role']) for x in now], True, step.get('blind'), step)
+            if step.get('busySince'):  # 分工: only members busy elsewhere are left in this step
+                free = self._wait_free(group_id, run_id, step)
+                if free is False: return
+                if not free: steps = steps[1:]; continue
+                step = dict(step, bots=free + [x for x in step['bots'] if x not in free])
+            now, later, busy = step['bots'][:room], step['bots'][room:], []
+            done = self._group_batch(group_id, run_id, [(x, False, step['role']) for x in now], True, step.get('blind'), step, busy)
             if done is False: return
-            turns += len(now)
+            turns += len(now) - len(busy)
             # Members who answer independently still do not see each other's answers after 繼續.
-            steps = ([dict(step, bots=later, hide=list(step.get('hide') or []) + [t['msg']['id'] for t in done], hideFiles=list(step.get('hideFiles') or []) + [n for t in done for n in t['saved']])] if later else []) + steps[1:]
+            unseen = dict(hide=list(step.get('hide') or []) + [t['msg']['id'] for t in done], hideFiles=list(step.get('hideFiles') or []) + [n for t in done for n in t['saved']])
+            steps = ([dict(step, bots=later, **unseen)] if later else []) + steps[1:]
+            if step.get('blind') and done:  # the rest of this independent step, wherever it was put (later, busy), never sees these answers
+                for x in steps:
+                    if x['role'] == step['role'] and x.get('blind'):
+                        x['hide'] = list(dict.fromkeys(list(x.get('hide') or []) + unseen['hide'])); x['hideFiles'] = list(dict.fromkeys(list(x.get('hideFiles') or []) + unseen['hideFiles']))
+            if busy:  # #71 (decisions #5): the others go on now; a busy member does its share once free, before the merge
+                if not step.get('busySince'):
+                    with store.lock:
+                        group = store.find('groups', group_id)
+                        if group and group.get('runId') == run_id:
+                            group['messages'].append(dict(id=ID(), role='system', content='%s 正在其他對話中工作，主持人和其他成員先做各自的部分，等它有空再補上。' % '、'.join(b['name'] for b in (store.find('bots', x) for x in busy) if b), createdAt=NOW()))
+                            store.save()
+                at = 1 if later else 0  # members not run yet because of the turn limit go first; the busy ones wait after them
+                steps = steps[:at] + [dict(step, bots=busy, busySince=step.get('busySince') or time.time(), **unseen)] + steps[at:]
             if step['role'] == 'split_plan' and done and steps and steps[0]['role'] == 'split_work': steps = self._skip_idle(group_id, run_id, done[0], steps)
+            if step['role'] == 'verify' and done: steps = self._after_check(group_id, run_id, done[0], steps)
+            if step['role'] == 'split_follow' and done: steps = self._hand_out(group_id, run_id, done[0], steps)
             if step['role'] in GROUP_CLOSING and done:
                 before = steps
                 if step['role'] in ('split_merge', 'split_remerge'): steps = self._send_back(group_id, run_id, step, done[0], steps)
@@ -612,7 +715,7 @@ class GroupRuns:
         if steps:
             with store.lock:
                 group = store.find('groups', group_id)
-                if group and group.get('runId') == run_id: self._pause_group(group, limit, dict(kind='steps', steps=steps, broadcast=True))
+                if group and group.get('runId') == run_id: self._pause_group(group, limit, dict(kind='steps', steps=[{k: v for k, v in x.items() if k != 'busySince'} for x in steps], broadcast=True))
 
     def compact_group(self, group_id, run_id):
         """A discussion that has grown long: everything before the most recent messages becomes a summary every member is given
@@ -676,6 +779,10 @@ class GroupRuns:
             mode = group.get('runMode') or 'free'
             planned = (resume or {}).get('steps') if (resume or {}).get('kind') == 'steps' else group_steps(store, group, mode) if not resume and broadcast and mode not in ('free', 'auto') and len(members) > 1 else None
             engine = mode == 'auto' and not resume and broadcast and len(members) > 1 and task_on(store)
+            asked = next((m for m in reversed(group.get('messages') or []) if m.get('role') == 'user'), {})  # the user really named the host (not 插話 handed to whoever closes)
+            if planned is None and not resume and not broadcast and mode == 'split' and host and len(members) > 1 and list(targets) == [host] \
+                    and group_mentions(asked.get('content') or '', members) == [host] and not group_everyone(asked.get('content'), members):
+                planned = [dict(role='split_follow', bots=[host], blind=False)]  # #71: naming only the host, it hands out work by the plan instead of doing it all
             if group.get('runId') == run_id:
                 group['runKind'] = 'free' if not engine and planned is None else 'steps'  # 插話 joins only an open discussion
                 if group['runKind'] == 'free':  # sent while it was getting ready: a correction joins after all, anything new keeps waiting
@@ -717,7 +824,6 @@ class GroupRuns:
                     group = store.find('groups', group_id)
                     if not group or group.get('runId') != run_id: return
                     members = [b for b in (store.find('bots', x) for x in group['botIds']) if b]
-                    if any(t['seen'] and t['seen'] == group.get('interjectUnseen') and t['job']['status'] == 'completed' for t in turns_here): group.pop('interjectUnseen', None)
                     for t in turns_here:
                         job, msg, role, bot_id = t['job'], t['msg'], t['role'], t['bot']['id']
                         if job['status'] != 'completed': continue
