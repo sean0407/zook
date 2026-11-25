@@ -839,7 +839,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             except ValueError as exc: raise RuntimeError(str(exc))
         def listing(args):
             with store.lock:
-                return {'schedules': [dict(id=x['id'], target=schedule_target_name(store, x), kind='group' if x.get('groupId') else 'bot', content=x['content'],
+                return {'schedules': [dict(id=x['id'], target=schedule_target_name(store, x), kind='group' if x.get('groupId') else 'bot', name=x.get('name') or '', content=x['content'],
                                            when=schedule_when(x), enabled=bool(x.get('on')), finished=bool(x.get('done')), lastResult=x.get('lastStatus') or '')
                                       for x in store.data['schedules']], 'limit': MAX_SCHEDULES}
         def create(args):
@@ -859,7 +859,8 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             with store.lock:
                 item = find(args); store.data['schedules'].remove(item); store.save()
                 return dict(id=item['id'], deleted=True)
-        fields = {'target': S('Exact Bot or group name. Empty = this conversation (the group when in a group chat, otherwise you)'),
+        fields = {'name': S('Optional short name shown in the schedule list; empty = the first words of content'),
+                  'target': S('Exact Bot or group name. Empty = this conversation (the group when in a group chat, otherwise you)'),
                   'content': S('What to do each time, written as the message the Bot or group will receive'),
                   'repeat': S('daily | weekdays | mon | tue | wed | thu | fri | sat | sun | hourly | monthly | once'),
                   'time': S('24-hour HH:MM in the Mac\'s local time; for hourly only the minutes count'),

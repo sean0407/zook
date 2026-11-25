@@ -416,16 +416,24 @@
         const d = new FormData(form), id = form.dataset.id;
         const [kind, targetId] = String(d.get('target')).split(':');
         const trigger = d.get('trigger') || 'time', repeat = trigger === 'time' ? d.get('repeat') : 'daily';
-        const data = {trigger, [kind === 'group' ? 'groupId' : 'botId']: targetId, content: d.get('content'), repeat, time: trigger !== 'time' ? '00:00' : (repeat === 'hourly' ? '00' : d.get('hour')) + ':' + d.get('minute'), on: d.get('on') === 'on', catchUp: d.get('catchUp') === 'on', quiet: d.get('quiet') === 'on'};
+        const data = {trigger, name: String(d.get('name') || '').trim(), [kind === 'group' ? 'groupId' : 'botId']: targetId, content: d.get('content'), repeat, time: trigger !== 'time' ? '00:00' : (repeat === 'hourly' ? '00' : d.get('hour')) + ':' + d.get('minute'), on: d.get('on') === 'on', catchUp: d.get('catchUp') === 'on', quiet: d.get('quiet') === 'on'};
         if (repeat === 'once') data.date = d.get('date');
         if (repeat === 'monthly') data.day = Number(d.get('day'));
         if (trigger === 'folder') data.watchFolder = d.get('watchFolder');
         if (trigger === 'mail') { data.mailFrom = d.get('mailFrom'); data.mailSubject = d.get('mailSubject'); }
+        // Problems stay under the form until fixed, instead of a toast that fades (#166, #168)
+        const err = form.querySelector('.sched-err'), problem = !String(data.content || '').trim() ? '請填寫要 Bot 做的事。'
+          : data.on && repeat === 'once' && trigger === 'time' && new Date(`${data.date}T${data.time}:00`) <= new Date() ? '這個時間已經過了，請改日期或時間。' : '';
+        if (err) { err.textContent = problem; err.hidden = !problem; if (problem) err.scrollIntoView({block: 'nearest'}); }
+        if (problem) return;
         if (!id) data.clientId = onceId(form);
-        await post(id ? 'schedules/' + encodeURIComponent(id) : 'schedules', data, id ? 'PATCH' : 'POST');
+        let saved;
+        try { saved = await post(id ? 'schedules/' + encodeURIComponent(id) : 'schedules', data, id ? 'PATCH' : 'POST'); }
+        catch (error) { if (!err) throw error; err.textContent = error.message; err.hidden = false; err.scrollIntoView({block: 'nearest'}); return; }
         closeModal();
         await refresh();
-        toast('已儲存排程');
+        const next = scheduleNext(saved || {});
+        toast(next ? `已儲存排程，下次執行：${nextLabel(next)}` : '已儲存排程');
       } else if (form.id === 'note-form') {
         let d = new FormData(form),
           id = form.dataset.id;

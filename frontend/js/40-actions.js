@@ -281,11 +281,16 @@
           scheduleModal(state.data.schedules.find(x => x.id === id));
           break;
         case 'delete-schedule':
-          if (await ask({title: '刪除這個排程？', lines: ['之後不會再自動執行，刪除後無法復原。'], run: () => api('schedules/' + encodeURIComponent(id), {method: 'DELETE'})})) {
+          if (await ask({title: `刪除排程「${scheduleTitle(state.data.schedules.find(x => x.id === id) || {})}」？`, lines: [(x => x ? scheduleWhen(x) + ' · ' + String(x.content || '').slice(0, 60) + (String(x.content || '').length > 60 ? '…' : '') : '')(state.data.schedules.find(x => x.id === id)), '之後不會再自動執行，刪除後無法復原。'], run: () => api('schedules/' + encodeURIComponent(id), {method: 'DELETE'})})) {
             await refresh();
             toast('已刪除排程');
           }
           break;
+        case 'sched-more': {
+          const text = el.closest('.sched-card')?.querySelector('.sched-content'), open = text?.classList.toggle('folded') === false;
+          el.textContent = open ? '收起' : '展開'; el.setAttribute('aria-expanded', String(open));
+          break;
+        }
         case 'schedule-history':
           scheduleHistory(state.data.schedules.find(x => x.id === id));
           break;
