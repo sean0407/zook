@@ -43,6 +43,7 @@
   });
   document.addEventListener('input', e => {
     if (e.target.id === 'chat-input' && activeGroup()) scheduleGroupEstimate();
+    if ('memberSearch' in (e.target.dataset || {})) filterGroupMembers(e.target);
     if (e.target.closest('#bot-form')) saveBotDraft(e.target.closest('form'));
     if (e.target.name === 'modelCustom') {
       const f = e.target.closest('form');
@@ -396,8 +397,8 @@
         toast('已送出授權碼');
         state.accounts = await api('accounts'); render(true); pollAccounts();
       } else if (form.id === 'group-form') {
-        const d = new FormData(form), id = form.dataset.id;
-        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds'), hostId: d.get('hostId') || '', mode: d.get('mode') || 'free', turnLimit: Number(d.get('turnLimit')) || 4, ...(id ? {} : {clientId: onceId(form)})}, id ? 'PATCH' : 'POST');
+        const d = new FormData(form), id = form.dataset.id, keepAuto = groupKeepsAuto(form);  // #223②: not quietly saved as 自由
+        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds'), hostId: d.get('hostId') || '', ...(keepAuto ? {} : {mode: d.get('mode') || 'free'}), turnLimit: Number(d.get('turnLimit')) || 4, ...(id ? {} : {clientId: onceId(form)})}, id ? 'PATCH' : 'POST');
         closeModal();
         state.groupId = result.id;
         state.page = 'chat';

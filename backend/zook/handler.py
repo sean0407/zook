@@ -811,10 +811,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self.respond(200, group_estimate(store, group, body.get('content', ''), mode))
                     if len(parts) >= 5 and parts[3] in ('tasks', 'gates'): return task_route(self, store, group, parts)  # 任務引擎 (taskcheck.py)
                     if len(parts) == 4 and parts[3] == 'stop' and self.command == 'POST':
-                        ids = group.get('activeJobIds') or ([group['activeJobId']] if group.get('activeJobId') else [])
-                        group.update(status='idle', runId=None, activeJobId=None, activeJobIds=[]); group_stopped(store, group)
-                        for job in [j for j in (store.find('jobs', x) for x in ids) if j]: self.server.cancel_job(job)
-                        store.save(); return self.respond(200, group)
+                        group_stop_now(self.server, store, group); store.save(); return self.respond(200, group)
                     return self.error(404, '找不到資源。')
                 if len(parts) == 3 and parts[:2] == ['api', 'memories'] and self.command == 'DELETE':
                     item = store.find('memories', parts[2])
@@ -933,6 +930,7 @@ def main():
     except KeyboardInterrupt: pass
     finally:
         app.closing = True  # replies end now because Zook is closing: what is waiting in line stays there for next time
+        bg_starting(app)  # a CLI still starting is waited for, as the lock once made it (background.py, #290)
         if app.__dict__.get('script_api'):
             try: app.script_api.close()
             except Exception: pass

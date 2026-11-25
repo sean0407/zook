@@ -24,16 +24,18 @@
       return {text: '主持人正在看成員的回報，決定下一步；你不用做什麼。'};
     }
     const again = taskEngineOn() ? '按那一項的「重試」，或在下方再送一次訊息告訴主持人怎麼調整' : '在下方再送一次訊息（任務引擎已關閉，不能重試）';
-    const why = run.interrupted ? '（Zook 重新啟動時中斷了）' : run.status === 'stopped' ? '（已停止）' : '';
+    // Why it stopped, as the Mac wrote it (run.stopWhy: 你按了停止、主持人連續兩次沒有完成…), leads the next step (#130).
+    const lead = run.status === 'stopped' && !run.interrupted && run.stopWhy ? '停下的原因：' + String(run.stopWhy).replace(/[。.]*$/, '。') : '';
+    const why = run.interrupted ? '（Zook 重新啟動時中斷了）' : run.status === 'stopped' && !lead ? '（已停止）' : '';
     if (!tasks.length) {
       if (run.status === 'done') return {text: '主持人直接回答，沒有建立工作。'};
       const said = groupMsgs(g).filter(x => x.role === 'assistant' && x.botId === run.hostId && !x.checkOf).slice(-1)[0];
       const error = said && said.status === 'failed' ? said.error || Object.values(state.jobDetails).find(j => j.messageId === said.id)?.error || '' : '';
-      return {you: true, text: `主持人還沒排出工作就停下了${why}${error ? '：' + error : ''}。在下方再送一次訊息就會重新開始。`};
+      return {you: true, text: `${lead}主持人還沒排出工作就停下了${why}${error ? '：' + error : ''}。在下方再送一次訊息就會重新開始。`};
     }
     const handed = tasks.filter(taskHandedIn), left = tasks.filter(t => t.status !== 'done' && !taskHandedIn(t));
     const parts = [handed.length ? `${list(handed)} 已交出：${taskEngineOn() ? '看過結果後按「接受結果」，要重做按「重試」' : '任務引擎已關閉，要接受或重試請先在「設定」打開任務引擎'}` : '', left.length ? `${list(left)} 沒有完成${why}：${again}` : ''].filter(Boolean);
-    if (parts.length) return {you: true, text: parts.join('；') + '。'};
+    if (parts.length) return {you: true, text: lead + parts.join('；') + '。'};
     return {text: '全部完成，主持人的整理在下方。'};
   }
   const nextLine = next => `<span class="task-next${next.you ? ' you' : ''}"><strong>${next.you ? '下一步（要你處理）' : '下一步'}</strong>${esc(next.text)}</span>`;
