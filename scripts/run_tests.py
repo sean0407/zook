@@ -111,7 +111,7 @@ def main():
         if not result['ok']:
             again = run_one(result['name'])  # alone, on a quieter machine
             if again['ok']:
-                flaky.append(result['name'])
+                flaky.append((result['name'], re.findall(r'^(?:FAIL|ERROR): (\S+)', result['output'], re.M), result['output']))
                 print('\n==== %s 第一次失敗，單獨重跑通過：不穩定（%.0f 秒）====\n%s' % (result['name'], result['seconds'], result['output'].rstrip()), flush=True)
             else:
                 print('\n==== %s 失敗（兩次都失敗）====\n---- 第一次 ----\n%s\n---- 單獨重跑 ----\n%s' % (result['name'], result['output'].rstrip(), again['output'].rstrip()), flush=True)
@@ -126,7 +126,13 @@ def main():
     total, skipped = sum(r['ran'] for r in results), sum(r['skipped'] for r in results)
     slowest = sorted(results, key=lambda r: -r['seconds'])[:5]
     print('\nRan %d tests in %.0fs（%d 個檔案、同時 %d 個；最久：%s）' % (total, time.monotonic() - started, len(results), workers, '、'.join('%s %.0fs' % (r['name'], r['seconds']) for r in slowest)))
-    if flaky: print('不穩定（重跑才通過）：' + ', '.join(flaky))
+    if flaky:
+        print('不穩定（重跑才通過）：' + ', '.join('%s（%s）' % (n, '、'.join(t) or '沒有測試名稱') for n, t, _ in flaky))
+        try:  # kept whole on disk, so whoever saw only the last lines can still attach the first failure
+            fd, log = tempfile.mkstemp(prefix='zook-flaky-', suffix='.log')
+            with os.fdopen(fd, 'w', encoding='utf-8') as f: f.write('\n\n'.join('==== %s ====\n%s' % (n, out) for n, _, out in flaky))
+            print('第一次失敗的完整輸出：' + log)
+        except OSError: pass
     print('FAILED: ' + ', '.join(failed) if failed else 'OK' + (' (skipped=%d)' % skipped if skipped else ''))
     return 1 if failed else 0
 

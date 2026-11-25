@@ -27,6 +27,7 @@ def tool():
 count = 0
 def answer(text):
     global count; count += 1
+    open(os.path.join(here, 'got.log'), 'a').write('%d\n' % os.getpid())  # the test waits for this instead of guessing how long delivery takes
     if 'DIE' in text and live: os._exit(3)
     if os.path.exists(os.path.join(here, 'slow.flag')):  # (the text of earlier messages is part of a later prompt, so a word in it cannot be the signal)
         import time; time.sleep(float(open(os.path.join(here, 'slow.flag')).read() or 30))
@@ -45,8 +46,16 @@ if live:
         if os.path.exists(os.path.join(here, 'stray.flag')):  # says something more after it has answered
             os.remove(os.path.join(here, 'stray.flag')); time.sleep(0.3)
             print(json.dumps({'type': 'result', 'result': 'STRAY', 'is_error': False, 'session_id': session, 'usage': {'input_tokens': 1, 'output_tokens': 1}}), flush=True)
+            open(os.path.join(here, 'stray.done'), 'w').write('x')
 else: answer(sys.stdin.read())
 '''
+
+
+def wait_for(check, seconds=20):
+    """Wait until check() is true instead of a fixed sleep: under load (the whole suite at once, CI) things take longer."""
+    end = time.time() + seconds
+    while time.time() < end and not check(): time.sleep(0.05)
+    return check()
 
 
 def alive(pid):
@@ -149,10 +158,12 @@ class LiveTest(unittest.TestCase):
         conn.request('POST', '/api/worker/live-000000000000000000000000', json.dumps({'method': 'tools/list'}), {'Authorization': 'Bearer x', 'Host': '127.0.0.1:%d' % self.port})
         self.assertEqual(conn.getresponse().status, 403); conn.close()
 
+    def got(self): return len((self.root / 'bin/got.log').read_text().split()) if (self.root / 'bin/got.log').exists() else 0
+
     def test_stopping_a_reply_ends_the_cli_and_the_next_message_works(self):
         self.ask(); pid = self.starts()[0]['pid']
         (self.root / 'bin/slow.flag').write_text('30')
-        sent = self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': 'take your time'})[1]; time.sleep(0.5)
+        before = self.got(); sent = self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': 'take your time'})[1]; wait_for(lambda: self.got() > before)
         self.req('POST', '/api/jobs/%s/cancel' % sent['jobId'], {}); (self.root / 'bin/slow.flag').unlink()
         self.assertEqual(self.req('GET', '/api/jobs/' + sent['jobId'])[1]['status'], 'cancelled')
         for _ in range(60):
@@ -165,13 +176,13 @@ class LiveTest(unittest.TestCase):
         self.ask()
         (self.root / 'bin/call.json').write_text(json.dumps(dict(name='zook_remember', arguments=dict(content='偷偷記下', scope='shared'))))
         (self.root / 'bin/late.flag').write_text('x')
-        self.ask(); time.sleep(1.2); (self.root / 'bin/call.json').unlink()  # in the reply itself the call is fine (and is saved once); the one after it is not
+        self.ask(); self.assertTrue(wait_for(lambda: (self.root / 'bin/late.log').exists() and (self.root / 'bin/late.log').stat().st_size > 0))  # the file is opened before its words are written; (self.root / 'bin/call.json').unlink()  # in the reply itself the call is fine (and is saved once); the one after it is not
         self.assertIn('連線已中斷', (self.root / 'bin/late.log').read_text(encoding='utf-8'))  # a tool call while no reply is running reaches nothing
         self.assertNotIn('偷偷記下', json.dumps(self.req('GET', '/api/state')[1]['memories'], ensure_ascii=False).replace('偷偷記下', '', 1))
         job = self.ask()
         self.assertNotIn('kept', job); self.assertEqual(len(self.starts()), 2)  # and that CLI is replaced
         (self.root / 'bin/stray.flag').write_text('x')
-        self.ask(); time.sleep(0.8)
+        self.ask(); self.assertTrue(wait_for(lambda: (self.root / 'bin/stray.done').exists())); time.sleep(0.3)  # let Zook read the stray line
         job = self.ask()
         self.assertNotEqual(job['content'], 'STRAY'); self.assertIn('reply 1 from', job['content']); self.assertEqual(len(self.starts()), 3)  # words after the answer are no reply either
 
@@ -187,7 +198,7 @@ class LiveTest(unittest.TestCase):
     def test_switching_it_off_does_not_cut_a_reply_short(self):
         self.ask(); pid = self.starts()[0]['pid']
         (self.root / 'bin/slow.flag').write_text('3')
-        sent = self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': 'take a moment'})[1]; time.sleep(0.3)
+        before = self.got(); sent = self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': 'take a moment'})[1]; self.assertTrue(wait_for(lambda: self.got() > before))
         self.req('PATCH', '/api/settings', {'keepCli': False}); (self.root / 'bin/slow.flag').unlink()
         for _ in range(100):
             job = self.req('GET', '/api/jobs/' + sent['jobId'])[1]
@@ -204,11 +215,11 @@ class LiveTest(unittest.TestCase):
         bots = [self.req('POST', '/api/bots', {'name': 'B%d' % i, 'provider': 'claude'})[1] for i in range(6)]
         for b in bots: self.ask(bot=b)
         pids = [s['pid'] for s in self.starts()]
-        time.sleep(3.5)
+        wait_for(lambda: sum(alive(p) for p in pids) <= 4)
         self.assertEqual(sum(alive(p) for p in pids), 4)
         self.assertEqual(self.ask(bot=bots[5]).get('kept'), True); self.assertNotIn('kept', self.ask(bot=bots[0]))  # the one unused longest made room
         self.proc.terminate(); self.proc.wait(timeout=15)
-        time.sleep(0.5)
+        wait_for(lambda: not any(alive(s['pid']) for s in self.starts()), 10)
         self.assertEqual([p for p in [s['pid'] for s in self.starts()] if alive(p)], [])
 
 
