@@ -117,10 +117,16 @@ class TaskCheckTest(base.TaskEngineTest):
             group = self.req('GET', '/api/groups/' + self.group['id'])[1]['group']
             if (group.get('taskRun') or {}).get('awaitingConfirm'): self.confirm(group)
             time.sleep(0.1)
-        self.restart(lambda data: None)
+        # Zook was off longer than resuming allows (a recent stop carries on by itself since 0.24.0; resume_test covers that).
+        self.restart(lambda data: data.update(savedAt='2026-01-01T00:00:00+00:00'))
         task = self.req('GET', '/api/groups/' + self.group['id'])[1]['group']['taskRun']['tasks'][0]
         self.assertEqual(task['status'], 'unknown')
-        time.sleep(1); self.assertEqual(self.req('GET', '/api/groups/' + self.group['id'])[1]['group']['status'], 'idle')  # nothing redone by itself
+        end = time.time() + 20  # wait until the start-up pass has looked at it, instead of guessing how long that takes
+        while time.time() < end and not any('沒有自動接著做' in m.get('content', '') for m in self.req('GET', '/api/groups/' + self.group['id'])[1]['group']['messages']): time.sleep(0.1)
+        group = self.req('GET', '/api/groups/' + self.group['id'])[1]['group']
+        self.assertTrue(any('沒有自動接著做' in m.get('content', '') for m in group['messages']))
+        self.assertEqual(group['status'], 'idle')  # nothing redone by itself
+        self.assertEqual(group['taskRun']['tasks'][0]['status'], 'unknown')
         self.rules([{'match': '=== 工作', 'calls': [done()]}, {'match': WAKE, 'reply': SUMMARY}])
         self.assertEqual(self.req('POST', '/api/groups/%s/tasks/%s/retry' % (self.group['id'], task['id']), {})[0], 202)
         time.sleep(0.3)
