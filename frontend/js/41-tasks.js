@@ -6,26 +6,69 @@
   // Stopped to wait for you although its member reported it done: what it handed in is there to look at (as tasks.py task_handed_in).
   const taskHandedIn = t => ['stuck', 'review', 'unknown'].includes(t.status) && Array.isArray(t.attempts) && t.attempts.length > 0 && t.attempts[t.attempts.length - 1].state === 'reported' && t.attempts[t.attempts.length - 1].outcome === 'succeeded';
   const taskEngineOn = () => state.data?.settings?.taskEngine === true;
-  const groupModeOptions = () => GROUP_MODE_OPTIONS.concat(taskEngineOn() ? [{id: 'auto', name: '自動（主持人決定）', hint: '主持人拆工作、派給成員，回報後整理結果'}] : []);
+  const groupModeOptions = () => GROUP_MODE_OPTIONS.concat(taskEngineOn() ? [{id: 'auto', name: '自動（主持人決定）', hint: '多步驟的工作：主持人拆成幾項、列在「任務板」派給成員，交出後由別家模型驗收，可以來回好幾輪直到完成'}] : []);
+
+  // #130: the board as steps. Each task is its own card, its words one per line; above them 「下一步」 says who has to act now.
+  const taskName = id => state.data.bots.find(b => b.id === id)?.name || '已刪除的 Bot';
+  function taskNextStep(g, run) {
+    const tasks = run.tasks, n = t => '工作 ' + t.n, list = a => a.map(n).join('、');
+    if (run.status === 'running') {
+      if (run.awaitingConfirm) return {you: true, text: '主持人排好了工作：看下方的清單，按「照這個做」才會開始。'};
+      const gate = (run.gates || []).find(x => x.status === 'pending');
+      if (gate) return {you: true, text: `主持人在等你決定：${gate.question}（在下方選一個）`};
+      const review = tasks.filter(t => t.status === 'review');
+      if (review.length) return {you: true, text: `${list(review)} 沒有別家的模型可以驗收：${taskEngineOn() ? '看過結果後按「接受結果」' : '任務引擎已關閉，要接受結果請先在「設定」打開任務引擎'}。`};
+      if (!tasks.length) return {text: '工作排好後會列在這裡；你不用做什麼。'};
+      const going = tasks.filter(t => ['running', 'verifying', 'asked'].includes(t.status));
+      if (going.length) return {text: `正在進行：${going.map(t => `${n(t)}（${taskName(t.assignee)}${t.status === 'verifying' ? '，驗收中' : t.status === 'asked' ? '，等主持人回答' : ''}）`).join('、')}。做完會自動往下走，你不用做什麼。`};
+      return {text: '主持人正在看成員的回報，決定下一步；你不用做什麼。'};
+    }
+    const again = taskEngineOn() ? '按那一項的「重試」，或在下方再送一次訊息告訴主持人怎麼調整' : '在下方再送一次訊息（任務引擎已關閉，不能重試）';
+    const why = run.interrupted ? '（Zook 重新啟動時中斷了）' : run.status === 'stopped' ? '（已停止）' : '';
+    if (!tasks.length) {
+      if (run.status === 'done') return {text: '主持人直接回答，沒有建立工作。'};
+      const said = groupMsgs(g).filter(x => x.role === 'assistant' && x.botId === run.hostId && !x.checkOf).slice(-1)[0];
+      const error = said && said.status === 'failed' ? said.error || Object.values(state.jobDetails).find(j => j.messageId === said.id)?.error || '' : '';
+      return {you: true, text: `主持人還沒排出工作就停下了${why}${error ? '：' + error : ''}。在下方再送一次訊息就會重新開始。`};
+    }
+    const handed = tasks.filter(taskHandedIn), left = tasks.filter(t => t.status !== 'done' && !taskHandedIn(t));
+    const parts = [handed.length ? `${list(handed)} 已交出：${taskEngineOn() ? '看過結果後按「接受結果」，要重做按「重試」' : '任務引擎已關閉，要接受或重試請先在「設定」打開任務引擎'}` : '', left.length ? `${list(left)} 沒有完成${why}：${again}` : ''].filter(Boolean);
+    if (parts.length) return {you: true, text: parts.join('；') + '。'};
+    return {text: '全部完成，主持人的整理在下方。'};
+  }
+  const nextLine = next => `<span class="task-next${next.you ? ' you' : ''}"><strong>${next.you ? '下一步（要你處理）' : '下一步'}</strong>${esc(next.text)}</span>`;
+  const taskStep = (num, title, who, pill, tone, lines, acts = '') => `<li class="task-step"><span class="task-num" aria-hidden="true">${esc(String(num))}</span><div class="task-body"><div class="task-head"><strong class="task-title">${esc(String(title))}</strong><span class="pill ${tone}">${esc(pill)}</span></div>${who ? `<div class="task-who">負責：${esc(who)}</div>` : ''}${lines.map(x => `<div class="task-detail">${esc(x)}</div>`).join('')}${acts ? `<div class="task-acts">${acts}</div>` : ''}</div></li>`;
 
   function taskBoardView(g, m) {
     const run = g.taskRun && g.taskRun.id === m.taskBoard && Array.isArray(g.taskRun.tasks) ? g.taskRun : null;
-    if (!run) return `<div class="system-note">${esc(m.content)}</div>`;  // an older board: its words
-    const name = id => state.data.bots.find(b => b.id === id)?.name || '已刪除的 Bot';
+    if (!run) return oldBoardView(m);
     const done = run.tasks.filter(t => t.status === 'done').length, handed = run.tasks.filter(taskHandedIn).length;
-    const head = run.tasks.length ? `已完成 ${done}／${run.tasks.length}${handed ? `，${handed} 項已交出，等你看結果` : ''}` : (run.status === 'running' ? `${esc(name(run.hostId))} 正在規劃工作…` : '主持人直接回答，沒有建立工作');
+    const head = run.tasks.length ? `已完成 ${done}／${run.tasks.length}${handed ? `，${handed} 項已交出，等你看結果` : ''}` : (run.status === 'running' ? `${esc(taskName(run.hostId))} 正在規劃工作…` : '沒有建立工作');
     const rows = run.tasks.map(t => {
       const attempts = Array.isArray(t.attempts) ? t.attempts : [], last = attempts[attempts.length - 1] || {};
       const detail = [last.summary, t.status === 'asked' && t.question ? '問主持人：' + t.question : '', last.reason, t.note, t.why || (t.basis ? '派工依據：' + t.basis : ''),
         Array.isArray(t.deps) && t.deps.length && ['pending', 'ready'].includes(t.status) ? '等工作 ' + t.deps.join('、') + ' 完成' : '',
-        t.verify?.verdict ? `${name(t.verify.bot)} 驗收${t.verify.verdict === 'pass' ? '通過' : '沒有通過：' + (t.verify.reasons || '')}` : t.status === 'verifying' && t.verify?.bot ? `${name(t.verify.bot)} 驗收中` : '',
+        t.verify?.verdict ? `${taskName(t.verify.bot)} 驗收${t.verify.verdict === 'pass' ? '通過' : '沒有通過：' + (t.verify.reasons || '')}` : t.status === 'verifying' && t.verify?.bot ? `${taskName(t.verify.bot)} 驗收中` : '',
         t.failures ? `已經 ${t.failures} 次沒完成` : '', t.confirmed === false && ['pending', 'ready'].includes(t.status) ? '等你確認' : '', Array.isArray(last.files) && last.files.length ? '產出：' + last.files.join('、') : '', attempts.length > 1 ? `第 ${attempts.length} 次` : ''].filter(x => typeof x === 'string' && x);
       const canAccept = ['review', 'stuck', 'unknown'].includes(t.status) && last.state === 'reported' && last.outcome === 'succeeded' || ['stuck', 'unknown'].includes(t.status) && t.cut === true;  // cut by a restart: the user retries it or accepts what is there
       const retry = !taskEngineOn() ? '' : (!t.aborted && (TASK_RETRY.includes(t.status) && g.status !== 'running' || ['stuck', 'unknown'].includes(t.status)) ? `<button type="button" class="link" data-task-retry="${esc(t.id)}">重試</button>` : '') + (canAccept ? `<button type="button" class="link" data-task-accept="${esc(t.id)}">接受結果</button>` : '');
-      return `<li class="task-row"><span class="pill ${['stuck', 'unknown'].includes(t.status) && taskHandedIn(t) ? 'warn' : TASK_TONE[t.status] || ''}">${esc(['stuck', 'unknown'].includes(t.status) && taskHandedIn(t) ? '已交出，等你決定' : TASK_STATE[t.status] || t.status)}</span><span class="task-title"><strong>${esc(String(t.n))}. ${esc(String(t.title))}</strong> <span class="muted">${esc(name(t.assignee))}</span>${detail.length ? `<span class="task-detail">${esc(detail.join(' · '))}</span>` : ''}</span>${retry}</li>`;
+      const handedIn = ['stuck', 'unknown'].includes(t.status) && taskHandedIn(t);
+      return taskStep(t.n, t.title, taskName(t.assignee), handedIn ? '已交出，等你決定' : TASK_STATE[t.status] || t.status, handedIn ? 'warn' : TASK_TONE[t.status] || '', detail, retry);
     }).join('');
     const live = run.status === 'running' ? '<span class="browsing-dot" aria-hidden="true"></span>' : '';
-    return `<details class="task-board" data-task-board="${esc(run.id)}" ${state.taskOpen?.[run.id] ? 'open' : ''}><summary>${live}<strong>任務板</strong> <span class="muted">${head}${run.status === 'stopped' ? ' · 已停止' : ''}</span></summary>${taskBoundaryView(run)}${rows ? `<ol class="task-list">${rows}</ol>` : ''}</details>`;
+    return `<details class="task-board" data-task-board="${esc(run.id)}" ${state.taskOpen?.[run.id] ? 'open' : ''}><summary>${live}<strong>任務板</strong> <span class="muted">${head}${run.status === 'stopped' ? ' · 已停止' : ''}</span>${nextLine(taskNextStep(g, run))}</summary>${taskBoundaryView(run)}${rows ? `<ol class="task-steps">${rows}</ol>` : ''}</details>`;
+  }
+  // A board whose run was replaced by a newer one: only its words are kept (tasks.py task_board_text). Each task gets its own card again.
+  function oldBoardView(m) {
+    const lines = String(m.content || '').split('\n'), head = (lines.shift() || '').replace(/^任務板：/, ''), items = [], rest = [];
+    for (const line of lines) {
+      const task = line.match(/^([✓·]) (\d+)\. (.*) — (.*)（([^（）]*)）$/);
+      if (task) items.push({n: task[2], title: task[3], who: task[4], state: task[5], tone: task[1] === '✓' ? 'ok' : '', lines: []});
+      else if (/^\s/.test(line) && items.length) items[items.length - 1].lines.push(line.trim());
+      else if (line.trim()) rest.push(line.trim());
+    }
+    const steps = items.map(t => taskStep(t.n, t.title, t.who, t.state, t.tone, t.lines)).join('');
+    return `<details class="task-board" data-task-board="${esc(m.taskBoard)}" ${state.taskOpen?.[m.taskBoard] ? 'open' : ''}><summary><strong>任務板</strong> <span class="muted">${esc(head)}</span>${nextLine({text: '這是較早的一輪，只留下文字紀錄；要接著做，在下方再送一次訊息。'})}</summary>${steps ? `<ol class="task-steps">${steps}</ol>` : ''}${rest.map(x => `<div class="task-detail">${esc(x)}</div>`).join('')}</details>`;
   }
 
   // 邊界 (#174): the goal and when it counts as done, as the host wrote them; the user's own words until it does.
