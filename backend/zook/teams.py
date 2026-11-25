@@ -17,11 +17,14 @@ TEAM_ASK = '''請為下面這件事規劃一個工作團隊。只輸出一個 JS
 - worksWith：和誰協作、交接什麼（用其他角色的 name）。
 - notDoing：不負責什麼（寫出容易和別人重疊的地方歸誰）。
 - persona：說話方式與做事風格，一句話。
+- model：使用者在句子裡指定這個角色用的模型（例如 Claude、Codex、Grok、Gemini、Antigravity、Cursor），照原文寫；沒指定就寫空字串。
+- effort：使用者指定這個角色的思考強度（快速、標準、深入）；沒指定就寫空字串。
 
 規則：
 - coordinator 是統籌：拆解目標、分派、整合成果、追進度；自己不做各領域的專業工作。
 - members 要 %d 到 %d 位，依這件事真正需要的職能決定人數，不要為了湊數加人。
 - 每位成員的分工都相對於統籌和其他成員來定義，彼此不重疊；每件重要的事只有一個負責人。
+- 使用者指定的模型和思考強度只寫在 model、effort，不要寫進其他欄位。
 
 要做的事：
 '''
@@ -51,13 +54,125 @@ def parse_team(text, existing=()):
     if not isinstance(data, dict): raise ValueError('模型沒有照格式回覆，請再試一次。')
     taken = {str(n).strip().lower() for n in existing}
     lead = clean_team_role(data.get('coordinator'), taken)
-    members = [r for r in (clean_team_role(x, taken) for x in (data.get('members') if isinstance(data.get('members'), list) else [])[:TEAM_MEMBERS[1]]) if r]
+    members = []
+    for raw in (data.get('members') if isinstance(data.get('members'), list) else [])[:TEAM_MEMBERS[1]]:
+        role = clean_team_role(raw, taken)
+        if role: members.append(role); _team_wish(role, raw)
+    if lead: _team_wish(lead, data.get('coordinator'))
     if not lead or len(members) < TEAM_MEMBERS[0]: raise ValueError('模型規劃的團隊不完整，請再試一次，或把要做的事說得更具體。')
     titles = set()
     for role in [lead] + members:  # two people with one title would be told apart by nothing
         if role['jobTitle'] in titles: role['jobTitle'] = role['name'][:TEAM_FIELDS['jobTitle']]
         titles.add(role['jobTitle'])
     return dict(team=_team_text(data.get('team'), 30) or '新團隊', coordinator=lead, members=members)
+
+
+# The model and thinking level a sentence names for a role (「查核用 Grok、查核要深入」). The model writes them into its JSON; what it
+# leaves out is read from the sentence, and a model named for nobody is said in the preview, never dropped without a word.
+TEAM_ALIASES = (('claude', ('claude', 'anthropic', '克勞德')), ('codex', ('codex', 'chatgpt', 'openai', 'gpt')), ('grok', ('grok',)),
+                ('antigravity', ('antigravity',)), ('gemini', ('gemini',)), ('cursor', ('cursor',)))
+TEAM_EFFORT_WORDS = (('deep', ('深入', '仔細', '徹底')), ('fast', ('快速', '快一點')), ('standard', ('標準',)))
+
+
+def _team_pattern(table, verb):
+    words = sorted((w for _, ws in table for w in ws), key=len, reverse=True)
+    return re.compile(verb + '(' + '|'.join(map(re.escape, words)) + ')', re.I)
+
+
+# Only a word right after 用／交給／要 counts: 「做 ChatGPT 外掛」 or 「快速上市」 names no model and no level.
+_TEAM_MODEL_RE = _team_pattern(TEAM_ALIASES, r'(?:要|請|就|都|需要|得|改|再)?(?:用|使用|交給|給|由|讓)\s*')
+_TEAM_EFFORT_RE = _team_pattern(TEAM_EFFORT_WORDS, r'(?:要|請|需要|得|調成|改成|設為)\s*')
+
+
+def _team_find(text, table):
+    """(id, where it starts) for the word of the table that comes first in the text, or ('', -1)."""
+    low, best = str(text or '').lower(), ('', -1)
+    for key, words in table:
+        for w in words:
+            at = low.find(w)
+            if at >= 0 and (best[1] < 0 or at < best[1]): best = (key, at)
+    return best
+
+
+def team_named_provider(text): return _team_find(text, TEAM_ALIASES)[0]
+
+
+def team_effort(text):
+    value = str(text or '').strip().lower()
+    return TOOL_EFFORTS.get(value) or _team_find(value, TEAM_EFFORT_WORDS)[0] if value else ''
+
+
+def _team_wish(role, raw):
+    raw = raw if isinstance(raw, dict) else {}
+    role['wanted'] = team_named_provider(raw.get('model')); role['effort'] = team_effort(raw.get('effort'))
+
+
+def team_sentence_wishes(goal):
+    """[(key, value, word, subject)] for each 「文案、設計用 Claude」「查核要深入」 in the sentence. The subject of a wish is what comes after
+    the wish before it in the same clause, so 「文案用 Claude、設計用 Codex」 gives 文案 → Claude and 設計 → Codex."""
+    out = []
+    for clause in re.split(r'[，,。；;！!？?\n]+', goal):
+        found = sorted([(m, 'wanted', TEAM_ALIASES) for m in _TEAM_MODEL_RE.finditer(clause)] + [(m, 'effort', TEAM_EFFORT_WORDS) for m in _TEAM_EFFORT_RE.finditer(clause)], key=lambda x: x[0].start())
+        end = 0
+        for m, key, table in found:
+            if m.start() < end: continue
+            word = m.group(1); value = next(k for k, ws in table if word.lower() in ws)
+            for part in re.split(r'[、和與及跟/]+', clause[end:m.start()]):
+                part = part.strip()
+                if part: out.append((key, value, word, part))
+            end = m.end()
+    return out
+
+
+def _team_role_for(subject, roles):
+    """The one role whose name or title holds the end of the subject (「讓文案」 → 文案企劃), or None."""
+    for n in (4, 3, 2):
+        if len(subject) < n: continue
+        hits = [r for r in roles if subject[-n:] in r['name'] + r['jobTitle']]
+        if len(hits) == 1: return hits[0]
+    return None
+
+
+def team_effort_ok(store, provider):
+    """Lock held. Whether the thinking level can be set for this CLI (自動選擇: each message's model uses it when it can)."""
+    if provider == AUTO: return True
+    return 'effort' in ABILITY_CHECKS.get(provider_kind(provider), {}) and 'effort' not in ((store.data.get('abilityChecks') or {}).get(provider) or {}).get('missing', {})
+
+
+def team_provider_problem(store, provider):
+    """Lock held. Why this CLI cannot be used for a new Bot on this Mac, or ''."""
+    name = provider_label(provider).split('（')[0]
+    if provider not in P.active_ids(store.data): return '這台 Mac 沒有加入 %s。' % name
+    if not find_cli(provider): return '這台 Mac 沒有安裝 %s。' % name
+    if ((store.data.get('autoStatus') or {}).get(provider) or {}).get('signedIn') is False: return '%s 還沒登入。' % name
+    return ''
+
+
+def team_models(store, goal, roles):
+    """Lock held. Each role's model for the preview: the one named, 自動選擇 (with what it would pick now), or '' with the reason when
+    the named one cannot be used here and the user has to choose. Returns (choices for the dropdown, warnings for the whole team)."""
+    low, warnings = goal.lower(), []
+    for role in roles:  # what the model wrote is kept only when the sentence names it at all
+        if role.get('wanted') and not any(w in low for w in dict(TEAM_ALIASES)[role['wanted']]): role['wanted'] = ''
+        if role.get('effort') and not _TEAM_EFFORT_RE.search(goal): role['effort'] = ''
+    for key, value, word, subject in team_sentence_wishes(goal):  # the sentence itself comes first
+        role = _team_role_for(subject, roles)
+        if role: role[key] = value
+        else: warnings.append('句子裡「%s%s%s」沒有對應到唯一的成員，請在下面替%s選擇%s。' % (subject, '用 ' if key == 'wanted' else '要', word, '要用它的成員' if key == 'wanted' else '成員', '模型' if key == 'wanted' else '思考強度'))
+    choices = [dict(id=AUTO, name='自動選擇', problem='', effort=True)]
+    choices += [dict(id=pid, name=provider_label(pid).split('（')[0], problem=team_provider_problem(store, pid), effort=team_effort_ok(store, pid)) for pid in P.active_ids(store.data)]
+    for role in roles:
+        wanted = role.pop('wanted', '') or ''
+        problem = team_provider_problem(store, wanted) if wanted else ''
+        role.update(provider=AUTO if not wanted else '' if problem else wanted, problem='', wanted=wanted)
+        if problem: role['problem'] = '句子指定 %s，但%s請選一個要用的模型。' % (provider_label(wanted).split('（')[0], problem)
+        if role['provider'] and role.get('effort') and not team_effort_ok(store, role['provider']):
+            warnings.append('「%s」用的 %s 不能調整思考強度，指定的強度沒有套用。' % (role['name'], provider_label(role['provider']).split('（')[0])); role['effort'] = ''
+        if role['provider'] == AUTO and 'autoStatus' in store.data:
+            task = bot_work(dict(name=role['name'], jobTitle=role['jobTitle'], persona=role.get('persona', '')), False)
+            try: role['autoPick'] = auto_choice_name(*auto_choices(store, task, AUTO_TASKS[task][1])[0])
+            except ValueError: pass
+    return choices, warnings
 
 
 def team_instructions(role, team, goal, lead, everyone):
@@ -97,10 +212,25 @@ def tool_bot_fields(store, args):
     if args.get('effort'):
         level = TOOL_EFFORTS.get(str(args['effort']).strip().lower()); cli = fields.get('provider', '')
         if not level: notes.append('思考強度「%s」看不懂，用預設。' % args['effort'])
-        elif cli and cli != AUTO and ('effort' not in ABILITY_CHECKS.get(provider_kind(cli), {}) or 'effort' in ((store.data.get('abilityChecks') or {}).get(cli) or {}).get('missing', {})):
+        elif cli and not team_effort_ok(store, cli):
             notes.append('%s 不能調整思考強度，沒有套用。' % provider_label(cli).split('（')[0])
         else: fields['effort'] = level
     return fields, notes
+
+
+def team_role_model(store, raw, name):
+    """Lock held. {provider, effort} the user confirmed for one role. A role sent without a model (an older window) is 自動選擇; one
+    left on 「請選擇」, or with a model this Mac cannot use, stops the whole team before anything is made."""
+    provider = raw.get('provider')
+    provider = AUTO if provider is None else str(provider).strip()
+    if not provider: raise ValueError('請替「%s」選擇要用的模型。' % name)
+    if provider != AUTO:
+        problem = team_provider_problem(store, provider)
+        if problem: raise ValueError('「%s」：%s請改選其他模型。' % (name, problem))
+    effort = str(raw.get('effort') or '').strip()
+    if effort and effort not in EFFORTS: raise ValueError('「%s」的思考強度無效。' % name)
+    if effort and not team_effort_ok(store, provider): raise ValueError('「%s」：%s 不能調整思考強度。' % (name, provider_label(provider).split('（')[0]))
+    return dict(provider=provider, effort=effort)
 
 
 class Teams:
@@ -121,26 +251,28 @@ class Teams:
         finally:
             with store.lock: store.data['jobs'][:] = [j for j in store.data['jobs'] if j['id'] != helper['id']]
         if helper.get('status') != 'completed' or not (helper.get('content') or '').strip(): raise RuntimeError(str(helper.get('error') or '模型沒有回覆，請再試一次。')[:300])
-        return dict(parse_team(helper['content'], existing), goal=goal.strip())
+        draft = dict(parse_team(helper['content'], existing), goal=goal.strip())
+        with store.lock: choices, warnings = team_models(store, draft['goal'], [draft['coordinator']] + draft['members'])
+        return dict(draft, choices=choices, warnings=warnings)
 
     def create_team(self, body):
         """Lock held. Makes every Bot and the group, or nothing at all. Started by the user in the window, so it is not an approval."""
         store = self.store; goal = _team_text(body.get('goal'), 2000); team = _team_text(body.get('team'), 30)
         roles = body.get('roles')
         if not team or not goal or not isinstance(roles, list): raise ValueError('團隊資料不完整。')
-        taken = {b['name'].strip().lower() for b in store.data['bots']}; cleaned = []
+        taken = {b['name'].strip().lower() for b in store.data['bots']}; cleaned, models = [], []
         for raw in roles:
             role = clean_team_role(raw, set())
             if not role: raise ValueError('每個角色都要有名稱、職稱和負責的事。')
             if role['name'].lower() in taken: raise ValueError('已經有名為「%s」的 Bot，請改一個名稱。' % role['name'])
-            taken.add(role['name'].lower()); cleaned.append(role)
+            taken.add(role['name'].lower()); cleaned.append(role); models.append(team_role_model(store, raw, role['name']))
         if not 1 + TEAM_MEMBERS[0] <= len(cleaned) <= 1 + TEAM_MEMBERS[1]: raise ValueError('團隊要有一位統籌和 %d 到 %d 位成員。' % TEAM_MEMBERS)
         if any(g['name'].strip().lower() == team.lower() for g in store.data['groups']): raise ValueError('已經有同名的群組，請改一個團隊名稱。')
         lead, bots, at = cleaned[0], [], len(store.data['bots'])
         for i, role in enumerate(cleaned):
             bot = dict(id=ID(), name=role['name'], color=colors_for(at + i), shape=str((at + i) % 13), instructions='', persona='', provider=AUTO, model='', pinned=False, section=team, messages=[], enabledSkills=[], enabledMcp=[], allowCommands=True, isAdmin=False)
-            update(bot, dict(name=role['name'], jobTitle=role['jobTitle'], persona=role['persona'], instructions=team_instructions(role, team, goal, lead, cleaned)), 'bot')
-            auto_on_create(store, bot, instructions=False, grant=True); ensure_chats(bot); bots.append(bot)  # the team's shared instructions would make every member look alike
+            update(bot, dict(models[i], name=role['name'], jobTitle=role['jobTitle'], persona=role['persona'], instructions=team_instructions(role, team, goal, lead, cleaned)), 'bot')
+            set_gate_full(bot); auto_on_create(store, bot, instructions=False, grant=True); ensure_chats(bot); bots.append(bot)  # the team's shared instructions would make every member look alike
         group = dict(id=ID(), name='', botIds=[], messages=[], status='idle', runId=None, activeJobId=None, createdAt=NOW())
         store.data['bots'].extend(bots)
         try: set_group_fields(store, group, dict(botIds=[b['id'] for b in bots], name=team, hostId=bots[0]['id']), creating=True)
