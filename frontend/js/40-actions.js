@@ -305,11 +305,13 @@
           break;
         }
         case 'unattach':
-          pendingList().splice(pendingList().findIndex(f => f.key === id), 1); render(true);
+          dropPending(id); render(true);
           break;
-        case 'view-image':
-          modal(el.dataset.name || '圖片', `<div class="modal-body image-view"><img src="/api/uploads/${esc(id)}" alt="${esc(el.dataset.name || '')}"></div>`, '', true);
+        case 'view-image': {  // an attached picture: gone or broken says so (#153④⑤)
+          const url = '/api/uploads/' + encodeURIComponent(id), {body, missing} = await previewBody(url, 'image', el.dataset.name || '');
+          modal(el.dataset.name || '圖片', `<div class="modal-body">${body}</div>${missing ? '' : `<div class="modal-foot"><a class="secondary button-link" href="${url}" download="${esc(el.dataset.name || '')}">下載</a><button type="button" class="primary" data-action="close-modal">關閉</button></div>`}`, '', true);
           break;
+        }
         case 'run-plan': {
           const b = activeBot();
           const sent = await post('chat', {botId: b.id, content: '請照上面的計畫執行。', effort: pickedEffort()});
@@ -337,11 +339,17 @@
           break;
         }
         case 'redo-model': {
-          const b = activeBot(), installed = (state.providers || []).filter(p => p.installed !== false);
-          const options = installed.map(p => ({id: p.id, name: String(p.name).split('（')[0], hint: p.id === (b.provider || state.data.settings.provider) ? '這個 Bot 目前用的' : ''}));
+          const b = activeBot(), options = redoModelOptions(b);
           if (!options.length) { toast('沒有其他可用的模型'); break; }
-          const other = options.find(o => !o.hint) || options[0];
-          modal('換模型重答', `<form id="redo-model-form"><div class="modal-body"><p class="muted">只有這一次用別的模型回答，不會改變 Bot 的設定。</p><div class="setting-list in-form">${settingRow('模型', '用預設版本回答', dropdown('provider', other.id, options))}</div></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">重答</button></div></form>`);
+          const pick = options.find(o => !o.current && !o.out) || options.find(o => !o.current) || options[0];
+          modal('換模型重答', `<form id="redo-model-form"><div class="modal-body"><p class="muted">只有這一次用別的模型回答，不會改變 Bot 的設定。</p><div class="setting-list in-form">${settingRow('模型', `<span data-redo-model>${esc(redoModelLine(pick.id))}</span>`, dropdown('provider', pick.id, options))}</div></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">重答</button></div></form>`);
+          if (!state.quota) api('quota').then(q => {  // 已用完 beside each model once the figures are in
+            state.quota = q; const form = $('#redo-model-form');
+            if (!form?.isConnected) return;
+            const chosen = form.elements.provider.value, fresh = redoModelOptions(b), keep = fresh.find(o => o.id === chosen && !o.out) || fresh.find(o => !o.current && !o.out) || fresh.find(o => o.id === chosen) || fresh[0];
+            form.querySelector('.dd')?.replaceWith(Object.assign(document.createElement('div'), {innerHTML: dropdown('provider', keep.id, fresh)}).firstElementChild);
+            form.querySelector('[data-redo-model]').textContent = redoModelLine(keep.id);
+          }).catch(() => {});
           break;
         }
         case 'open-message':
