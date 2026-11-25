@@ -80,23 +80,25 @@
   const newId = () => crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2, 12);
   // where: 'bot/chat' or the group's id. path and body are the request, sent again unchanged by 重新傳送.
   // A message sent while the one before it to the same Bot is still on its way says so ('after'): two requests can reach the Mac
-  // in either order, and the Mac then takes them in the order they were sent (#142).
+  // in either order, and the Mac then takes them in the order they were sent (#142). One the Mac has only said it took in (#289) still
+  // counts as on its way until the conversation shows it.
   window.sendingAdd = (where, path, body, group) => {
-    const before = path === 'chat' ? state.sending.filter(x => x.path === 'chat' && x.body.botId === body.botId && !x.done && !x.error).pop() : null;
+    state.sending = state.sending.filter(x => !(x.accepted && Date.now() - x.at > 120000));  // long since shown, or said in the conversation as not sent
+    const before = path === 'chat' ? state.sending.filter(x => x.path === 'chat' && x.body.botId === body.botId && (!x.done || x.accepted) && !x.error).pop() : null;
     const s = {id: newId(), where, path, body: {...body, clientId: newId(), ...(before ? {after: before.body.clientId} : {})}, group, at: Date.now()};
     state.sending.push(s); return s;
   };
   const forget = s => { state.sending = state.sending.filter(x => x !== s); };
   // Drawn until the conversation itself has it, so it never blinks out between the answer and the refresh, and never shows twice.
-  const arrived = (s, messages, waiting) => [...messages.filter(m => m.role === 'user'), ...waiting].some(m => m.content === s.body.content && Date.parse(m.createdAt) >= s.at - 2000);
-  window.sendingView = (where, messages, waiting = []) => state.sending.filter(s => s.where === where && !(!s.error && arrived(s, messages, waiting))).map(s => `<div class="message user sending" data-sending="${esc(s.id)}"><div class="bubble">${esc(s.body.content || '（請看附件）')}</div>${s.error ? `<div class="interject-note error-text">沒有送出：${esc(s.error)}<button class="link" data-sending-retry="${esc(s.id)}">重新傳送</button><button class="link" data-sending-drop="${esc(s.id)}">移除</button></div>` : `<div class="interject-note">${s.done ? '已送出' : '傳送中…'}</div>`}</div>`).join('');
+  const arrived = (s, messages, waiting) => [...messages.filter(m => m.role === 'user'), ...waiting].some(m => m.content === (s.body.content && s.body.content.trim() ? s.body.content : '（請看附件）') && Date.parse(m.createdAt) >= s.at - 2000);
+  window.sendingView = (where, messages, waiting = []) => (state.sending = state.sending.filter(s => !(s.accepted && s.where === where && arrived(s, messages, waiting)))).filter(s => s.where === where && !(!s.error && arrived(s, messages, waiting))).map(s => `<div class="message user sending" data-sending="${esc(s.id)}"><div class="bubble">${esc(s.body.content || '（請看附件）')}</div>${s.error ? `<div class="interject-note error-text">沒有送出：${esc(s.error)}<button class="link" data-sending-retry="${esc(s.id)}">重新傳送</button><button class="link" data-sending-drop="${esc(s.id)}">移除</button></div>` : `<div class="interject-note">${s.done ? '已送出' : '傳送中…'}</div>`}</div>`).join('');
   window.sendingSend = async s => {
     s.error = ''; s.done = false;
     let result;
     try { result = await post(s.path, s.body); }
     catch (err) { s.error = err.message || '沒有送出'; render(true); return null; }
-    s.done = true;
-    try { await refresh(); forget(s); } catch (_) { render(true); }  // kept (as 已送出) until a later refresh shows it
+    s.done = true; s.accepted = !!result.accepted;  // taken in, still being got ready on the Mac: kept (as 已送出) until the conversation shows it
+    try { await refresh(); if (!s.accepted) forget(s); } catch (_) { render(true); }  // kept (as 已送出) until a later refresh shows it
     if (s.group) pollGroup(s.group);
     else if (result.jobId) poll(result.jobId, s.body.botId);  // a message that is waiting in line has no reply yet; it is picked up when its turn comes
     return result;
