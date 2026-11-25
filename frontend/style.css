@@ -2001,3 +2001,8 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 
 /* A required field left empty is outlined in red once the person tries to send the form, so it is clear which one. */
 .modal input:user-invalid, .modal textarea:user-invalid, .modal select:user-invalid { border-color: #d33; box-shadow: 0 0 0 1px #d33; }
+/* 等待時的進度 (#236) */
+.wait-line { font-size:12px; color:var(--muted, #8b8b8b); margin-top:4px; line-height:1.5; }
+.message > .wait-line { flex-basis:100%; margin-left:44px; }
+.wait-line.stuck { color:#b26b00; }
+.wait-line .link { margin-left:8px; font-size:12px; }

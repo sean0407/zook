@@ -688,7 +688,7 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) == 4 and parts[:2] == ['api', 'jobs'] and parts[3] == 'cancel'  and self.command == 'POST':
                     job = store.find('jobs', parts[2])
                     if not job: return self.error(404, '找不到工作。')
-                    self.server.cancel_job(job)
+                    self.server.cancel_job(job, progress_asks_force(self))
                     return self.respond(200, job_view(job))
                 if path == '/api/chat' and self.command == 'POST':
                     body = self.body(); bot = store.find('bots', body.get('botId'))
@@ -778,7 +778,7 @@ class Handler(BaseHTTPRequestHandler):
                     group = store.find('groups', parts[2])
                     if not group: return self.error(404, '找不到群組。')
                     if len(parts) == 3 and self.command == 'GET':
-                        ids = group.get('activeJobIds') or ([group['activeJobId']] if group.get('activeJobId') else [])
+                        ids = (group.get('activeJobIds') or ([group['activeJobId']] if group.get('activeJobId') else [])) + progress_stopping_in(store, group)  # stopped, still ending
                         return self.respond(200, {'group': page_group(group), 'jobs': [job_view(j) for j in (store.find('jobs', x) for x in ids) if j]})
                     if len(parts) == 4 and parts[3] == 'messages' and self.command == 'GET':
                         return self.respond(200, page_group_messages(group, parse_qs(urlsplit(self.path).query), store))

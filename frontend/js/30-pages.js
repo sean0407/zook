@@ -291,8 +291,9 @@
       delete j.partial;  // painted by the stream; leaving it here would redraw the whole page for every few words
       const changed = JSON.stringify(state.jobDetails[jobId]) !== JSON.stringify(j);
       state.jobDetails[jobId] = j;
+      if (state.pollers[jobId]) state.pollers[jobId].stopping = j.status !== 'running' && j.status !== 'queued';  // stopped, its CLI still ending (37b-progress.js)
       if (changed) render(true);
-      if (j.status === 'running' || j.status === 'queued') {
+      if (j.status === 'running' || j.status === 'queued' || j.stopping) {  // watched until its CLI is gone
         setTimeout(() => poll(jobId, botId), 1200);
         return
       }
