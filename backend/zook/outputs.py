@@ -1,6 +1,7 @@
 # 產出: the files a Bot made or changed, for its detail panel. Listing only; nothing here widens what a Bot can reach.
 # Loaded by backend/server.py into one shared namespace.
 OUTPUT_LIMIT = 200
+OUTPUT_SECONDS = 4  # 產出 answers within this, with what it found by then
 OUTPUT_PREVIEW = {'.txt': 'text', '.md': 'markdown', '.markdown': 'markdown', '.csv': 'text', '.json': 'text', '.log': 'text', '.py': 'text', '.js': 'text', '.ts': 'text', '.html': 'text', '.css': 'text',
                   '.swift': 'text', '.sh': 'text', '.yml': 'text', '.yaml': 'text', '.xml': 'text', '.sql': 'text', '.pdf': 'pdf'}
 _OUTPUT_SKIP = ('attachments', 'node_modules', '__pycache__')
@@ -91,8 +92,8 @@ def bot_outputs(store, bot):
         if since is not None and not since <= info.st_mtime <= until: return
         found[path] = dict(id=hashlib.sha256(path.encode()).hexdigest()[:20], name=name, path=path, size=info.st_size, kind=_output_kind(name),
                            at=datetime.datetime.fromtimestamp(info.st_mtime, datetime.timezone.utc).isoformat())
-    pending = [(workspace, 0)]; seen = 0
-    while pending and seen < 2000:
+    pending = [(workspace, 0)]; seen = 0; deadline = time.monotonic() + OUTPUT_SECONDS  # a slow disk or huge folders: list what was found in time
+    while pending and seen < 2000 and time.monotonic() < deadline:
         folder, depth = pending.pop()
         try: entries = list(os.scandir(folder))
         except OSError: continue
@@ -121,6 +122,7 @@ def bot_outputs(store, bot):
     attached = os.path.join(workspace, 'attachments')
     named = [(p, a, b) for text, a, b in said for p in named_paths(text) if not _inside(os.path.realpath(p), attached)]  # the user's own files are not outputs
     for path, started, finished in wrote[-400:] + named[-200:]:  # what a tool reported comes first
+        if time.monotonic() > deadline: break
         if not path or len(path) >= 300 or not os.path.isabs(path) or '..' in pathlib.PurePosixPath(path).parts: continue  # cut off, relative, or climbing out
         try:
             since = datetime.datetime.fromisoformat(started).timestamp() - 2
@@ -135,6 +137,7 @@ def bot_outputs(store, bot):
     # The folder the work was sent to, or that the reply named: files a command wrote there leave no other trace.
     home = os.path.realpath(os.path.expanduser('~')).casefold()
     for path, started, finished in ([(p, a, b) for text, a, b in said + asked for p in named_folders(text)] + kept)[-100:]:
+        if time.monotonic() > deadline: break
         try:
             since = datetime.datetime.fromisoformat(started).timestamp() - 2
             until = datetime.datetime.fromisoformat(finished).timestamp() + 5 if finished else since + JOB_TIMEOUT + 60

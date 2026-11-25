@@ -1,8 +1,10 @@
   // 產出: the files a Bot made or changed, with a preview.
   if (!state.outputs) state.outputs = {};
   async function loadOutputs(botId, quiet) {
-    try { state.outputs[botId] = (await api('bots/' + encodeURIComponent(botId) + '/outputs')).outputs; }
-    catch (error) { state.outputs[botId] = state.outputs[botId] || []; if (!quiet) toast(error.message); }
+    const stop = new AbortController(), timer = setTimeout(() => stop.abort(), 20000);  // never 「正在讀取」 for minutes
+    try { state.outputs[botId] = (await api('bots/' + encodeURIComponent(botId) + '/outputs', {signal: stop.signal})).outputs; }
+    catch (error) { state.outputs[botId] = state.outputs[botId] || []; if (!quiet) toast(stop.signal.aborted ? '產出讀取太久，請按「重新整理」再試一次。' : error.message); }
+    finally { clearTimeout(timer); }
     render(true);
   }
   function outputsPanel(b) {

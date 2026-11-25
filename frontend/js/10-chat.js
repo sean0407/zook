@@ -445,6 +445,7 @@
         if (changed) state.loads = (state.loads || 0) + 1;  // a full refresh asked for before this is older: it must not put the group back as it was
         for (const j of data.jobs || []) {
           if (j.status === 'running') streamJob(j);
+          pollPartial(j);
           const { partial, ...rest } = j;  // the words in progress are painted by the stream, not by redrawing the page
           if (JSON.stringify(state.jobDetails[j.id]) !== JSON.stringify(rest)) changed = true; state.jobDetails[j.id] = rest;
         }

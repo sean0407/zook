@@ -14,10 +14,19 @@
     if (follow && box) box.scrollTop = box.scrollHeight;
   }
 
+  // The browser keeps only about six connections to Zook at once: streams for replies not on screen are closed and at most
+  // STREAM_MOST are open, so a click (產出, 檔案, a message) is never queued behind them (#107/#161). The rest follow by polling.
+  const STREAM_MOST = 3;
+  const onScreen = job => !!job && (job.groupId ? job.groupId === state.groupId : !state.groupId && job.botId === state.selected);
+  function pollPartial(j) {  // a reply that is not streamed: each poll brings its words so far
+    if (j && j.status === 'running' && j.partial && j.messageId && !streams[j.id] && j.partial.length >= (state.partials[j.messageId] || '').length) { state.partials[j.messageId] = j.partial; paintPartial(j.messageId); }  // never back to older words
+  }
   function streamJob(job) {
     if (!job || !job.id || !job.messageId || streams[job.id] || !streamingOn() || typeof EventSource === 'undefined') return;
+    for (const id of Object.keys(streams)) if (!onScreen(state.jobDetails[id] || streams[id].job)) { streams[id].close(); delete streams[id]; }
     if (job.partial) { state.partials[job.messageId] = job.partial; paintPartial(job.messageId); }  // what a poll already brought
-    const source = streams[job.id] = new EventSource('/api/jobs/' + encodeURIComponent(job.id) + '/stream');
+    if (!onScreen(job) || Object.keys(streams).length >= STREAM_MOST) return;  // the next poll brings its words
+    const source = streams[job.id] = new EventSource('/api/jobs/' + encodeURIComponent(job.id) + '/stream'); source.job = job;
     const stop = () => { source.close(); delete streams[job.id]; };
     source.onmessage = e => {
       let d; try { d = JSON.parse(e.data); } catch (_) { return; }
