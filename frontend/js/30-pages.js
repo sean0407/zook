@@ -222,6 +222,7 @@
     if (!state.lastRestored) {  // after a reload, the conversation or group that was open before
       state.lastRestored = true;
       restoreLastOpen();
+      restorePage();
     }
     if (state.groupId && !activeGroup()) state.groupId = null;
     for (const job of state.data.jobs || []) state.jobDetails[job.id] = job;

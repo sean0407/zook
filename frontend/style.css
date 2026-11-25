@@ -2086,3 +2086,16 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .quota-billed { display:flex; flex-direction:column; gap:2px; }
 .quota-billed b { font-size:14px; }
 .quota-billed small { color:var(--muted, #777); }
+
+/* #182 #183 #197: connectors page and the / menu */
+.form-error { margin: 4px 0 12px; padding: 8px 10px; border-radius: 8px; background: #fdecec; color: #b42318; font-size: 13px; line-height: 1.5; }
+.form-error[hidden] { display: none; }
+.connector-panes { display: grid; }
+.connector-panes > [data-for] { grid-area: 1 / 1; }
+.connector-panes > [data-for][hidden] { display: block; visibility: hidden; }  /* both kinds take the same room: switching does not move the buttons */
+.template-card .dir-desc { display: block; -webkit-line-clamp: unset; }
+.dir-card.fresh { outline: 2px solid #2585f6; outline-offset: 4px; border-radius: 10px; }
+.slash-keys { padding: 6px 10px 2px; border-top: 1px solid #eee; margin-top: 4px; font-size: 11.5px; color: #888; }
+.slash-empty { padding: 8px 10px; font-size: 13px; color: #555; line-height: 1.5; }
+.page:has(.dir-bar) { scrollbar-gutter: stable; }
+@media (max-width: 940px) { .dir-search { order: 3; flex: 1 0 100%; width: 100%; margin-left: 0; } }
