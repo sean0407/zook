@@ -223,7 +223,7 @@
   }
   function applyState(data) {
     state.data = data; state.loads = (state.loads || 0) + 1;
-    if (!state.providers) api('providers').then(r => { state.providers = r.providers; }).catch(() => {});
+    if (!state.providers) api('providers').then(r => { state.providers = r.providers; render(true); }).catch(() => {});  // names in words (Antigravity, not antigravity)
     if (!state.data.bots) state.data.bots = [];
     if (!state.data.knowledge) state.data.knowledge = [];
     if (!state.data.schedules) state.data.schedules = [];

@@ -1,11 +1,17 @@
   // 產出: the files a Bot made or changed, with a preview.
   if (!state.outputs) state.outputs = {};
+  // One request at a time per Bot: asked again meanwhile (a running reply wrote another file), it reads once more when this one is back.
+  const outputsBusy = {};
   async function loadOutputs(botId, quiet) {
+    if (outputsBusy[botId]) { outputsBusy[botId] = quiet && outputsBusy[botId] !== 'loud' ? 'again' : 'loud'; return; }
+    outputsBusy[botId] = true;
     const stop = new AbortController(), timer = setTimeout(() => stop.abort(), 20000);  // never 「正在讀取」 for minutes
     try { state.outputs[botId] = (await api('bots/' + encodeURIComponent(botId) + '/outputs', {signal: stop.signal})).outputs; }
     catch (error) { state.outputs[botId] = state.outputs[botId] || []; if (!quiet) toast(stop.signal.aborted ? '產出讀取太久，請按「重新整理」再試一次。' : error.message); }
     finally { clearTimeout(timer); }
+    const again = outputsBusy[botId]; delete outputsBusy[botId];
     render(true);
+    if (again !== true) loadOutputs(botId, again === 'again');
   }
   // #176 (#96②): the script a Bot wrote to make its files (create_report.py) is not what it handed over. Beside other files it goes
   // under a switch; a Bot that only wrote code keeps its code in the list.
