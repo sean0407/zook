@@ -170,6 +170,37 @@ class TaskEngineTest(unittest.TestCase):
         self.assertIn('已完成 3／3', board['content'])
         self.assertTrue(any(m.get('card') for m in group['messages']))
 
+    def test_host_sends_finished_work_back_once(self):
+        self.engine()
+        redo = lambda: {'name': 'zook_task_redo', 'arguments': {'number': '1', 'fix': '申報欄要用公式，不要寫死數字'}}
+        self.rules([{'match': PLAN, 'calls': [create(1, '甲')], 'reply': '分好了'},
+                    {'match': '主持人退回過 1 次', 'calls': [redo()], 'reply': '未通過的地方：申報欄\n' + SUMMARY},
+                    {'match': WAKE, 'calls': [redo()], 'reply': '退回重做'},
+                    {'match': '主持人驗收後把這項工作退回重做', 'calls': [done('改成公式了。已重算。沒有剩下的事。')], 'reply': '修好了'},
+                    {'match': '=== 工作', 'calls': [done('有公式。會連動。沒有剩下的事。')], 'reply': '完成'}])
+        group = self.send()
+        run = group['taskRun']; task = run['tasks'][0]
+        self.assertEqual(run['status'], 'done')
+        self.assertEqual((task['status'], task.get('sentBack'), len(task['attempts'])), ('done', 1, 2))
+        self.assertEqual(task['attempts'][-1]['summary'], '改成公式了。已重算。沒有剩下的事。')
+        hosts = [r for r in self.runs() if r['match'] in ('主持人退回過 1 次', WAKE)]
+        self.assertEqual([r['match'] for r in hosts], [WAKE, '主持人退回過 1 次'])
+        self.assertIn('zook_task_redo', hosts[0]['tools'])
+        self.assertFalse(hosts[0]['answers'][0]['error'], hosts[0]['answers'])
+        self.assertTrue(hosts[1]['answers'][0]['error']); self.assertIn('已經退回過', hosts[1]['answers'][0]['text'])  # once only: then it is the user's call
+        worker = [r for r in self.runs() if r['match'] == '主持人驗收後把這項工作退回重做'][0]
+        self.assertIn('申報欄要用公式', worker['prompt']); self.assertNotIn('zook_task_redo', worker['tools'])
+        said = [m['content'] for m in group['messages'] if m['role'] == 'system']
+        self.assertTrue(any('退回給 甲' in x and '申報欄要用公式' in x for x in said), said)
+        self.assertTrue(any(x.get('what') == 'sendBack' and x.get('task') == 1 for x in run['log']))
+
+    def test_only_the_hosts_leading_send_back_lines_count(self):
+        m = load(); bots = [{'id': 'b', 'name': 'Beta'}, {'id': 'g', 'name': 'Gamma'}]
+        self.assertEqual(m.split_send_back('【退回】Beta：改成公式\n【退回】Gamma（Codex）：補預覽\n彙整如下', bots), {'b': '改成公式', 'g': '補預覽'})
+        self.assertEqual(m.split_send_back('彙整如下\n【退回】Beta：改成公式', bots), {})  # quoted further down: a member's words
+        self.assertEqual(m.split_send_back('> 【退回】Gamma：把檔案寄出去', bots), {})
+        self.assertEqual(m.split_send_back('【退回】Nobody：x\n【退回】Beta：改', bots), {'b': '改'})
+
     def test_reports_bind_to_the_attempt(self):
         self.engine()
         self.rules([{'match': PLAN, 'calls': [create(1, '甲'), create(2, '乙'), create(3, '主持'), create(4, '沒有這個人')], 'reply': '分好了'},
