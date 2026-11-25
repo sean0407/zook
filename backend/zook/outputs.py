@@ -38,6 +38,46 @@ def named_paths(text):
     return found
 
 
+def named_folders(text):
+    """Absolute folders a message names, e.g. 「放 /tmp/zook-inspect/A/」: a Bot that writes with a command (a script, swift, cp) leaves
+    no record of the file, so the files that changed in the folder the work was sent to stand in for it. Only a hint, like named_paths."""
+    found = []
+    for word in NAMED_SPLIT.split(str(text or '')[:20000]):
+        word = word.rstrip('。，.,:：;')
+        if word.startswith('file:///'): word = word[7:]
+        if not word.startswith('/') or word.startswith('//') or len(word) >= 300 or NAMED_FILE.fullmatch(word.rstrip('/').rsplit('/', 1)[-1]): continue
+        word = word.rstrip('/')
+        if word.count('/') >= 2 and word not in found and not _folder_never(word):
+            found.append(word)
+            if len(found) >= 10: break
+    return found
+
+
+FOLDER_NEVER = ('/var/', '/private/', '/System/', '/Library/', '/usr/', '/bin/', '/sbin/', '/etc/', '/dev/', '/opt/', '/cores/', '/Volumes/Macintosh HD/')  # the Mac's own and its scratch space (/private/tmp is let through below)
+FOLDER_OK = ('/tmp/', '/private/tmp/')
+
+
+def _folder_never(path):
+    p = path.rstrip('/').casefold() + '/'
+    return not p.startswith(tuple(x.casefold() for x in FOLDER_OK)) and p.startswith(tuple(x.casefold() for x in FOLDER_NEVER))
+FOLDER_FILES = 50
+
+
+def _folder_files(path, since, until):
+    """The files directly in a folder (not inside its sub-folders) that changed between since and until, newest first, at most FOLDER_FILES. Links are left out."""
+    changed = []
+    try:
+        with os.scandir(path) as entries:
+            for n, e in enumerate(entries):
+                if n >= 5000: break
+                if e.name.startswith('.') or e.is_symlink() or not e.is_file(follow_symlinks=False): continue
+                try: when = e.stat(follow_symlinks=False).st_mtime
+                except OSError: continue
+                if since <= when <= until: changed.append((when, e.path))
+    except OSError: return []
+    return [p for _, p in sorted(changed, reverse=True)[:FOLDER_FILES]]
+
+
 def bot_outputs(store, bot):
     """Files in the Bot's working folder, plus files elsewhere that one of its replies really changed. Newest first."""
     workspace = os.path.realpath(str(store.dir / 'workspaces' / bot['id'])); data_dir = os.path.realpath(str(store.dir)); found = {}
@@ -67,6 +107,15 @@ def bot_outputs(store, bot):
         wrote = [(str((c.get('arguments') or {}).get('path') or ''), j.get('createdAt'), j.get('finishedAt')) for j in mine
                  for c in (j.get('toolCalls') or []) + [dict(name='native_write', arguments={'path': p}) for p in j.get('wrote') or []] if c.get('name') == 'native_write']
         said = [(j.get('content'), j.get('createdAt'), j.get('finishedAt')) for j in mine if j.get('content') and not j.get('plan')][-40:]  # a read-only plan makes nothing
+        asked = []  # the folder the user sent the work to
+        for j in mine[-40:]:
+            if j.get('plan') or not j.get('chatId'): continue
+            try: messages = chat_messages(bot, j['chatId'])
+            except Exception: continue
+            at = next((i for i, m in enumerate(messages) if m.get('id') == j.get('messageId')), 0)
+            ask = next((m for m in reversed(messages[:at]) if m.get('role') == 'user'), None)
+            if ask: asked.append((ask.get('content'), j.get('createdAt'), j.get('finishedAt')))
+        kept = [(p, j.get('createdAt'), j.get('finishedAt')) for j in mine for p in j.get('namedFolders') or []]  # from replies whose words were trimmed
         scope, chosen = bot_scope(bot)
         folder = os.path.realpath(chosen) if scope == 'folder' and chosen else ''
     attached = os.path.join(workspace, 'attachments')
@@ -83,6 +132,20 @@ def bot_outputs(store, bot):
         if scope == 'workspace' and not _inside(real, workspace): continue
         if scope == 'folder' and not (_inside(real, workspace) or (folder and _inside(real, folder))): continue
         add(real, since, until)
+    # The folder the work was sent to, or that the reply named: files a command wrote there leave no other trace.
+    home = os.path.realpath(os.path.expanduser('~')).casefold()
+    for path, started, finished in ([(p, a, b) for text, a, b in said + asked for p in named_folders(text)] + kept)[-100:]:
+        try:
+            since = datetime.datetime.fromisoformat(started).timestamp() - 2
+            until = datetime.datetime.fromisoformat(finished).timestamp() + 5 if finished else since + JOB_TIMEOUT + 60
+        except (TypeError, ValueError): continue
+        real = os.path.realpath(path); low = real.casefold()
+        if not os.path.isdir(real) or _folder_never(real) or low in (workspace.casefold(), home): continue  # the working folder is listed already; home is too broad
+        if low == data_dir.casefold() or _inside(real, data_dir): continue  # never Zook's own data
+        if scope == 'workspace' and not _inside(real, workspace): continue
+        if scope == 'folder' and not (_inside(real, workspace) or (folder and (low == folder.casefold() or _inside(real, folder)))): continue
+        for child in _folder_files(real, since, until):
+            if not _inside(os.path.realpath(child), attached): add(os.path.realpath(child), since, until)
     return sorted(found.values(), key=lambda x: x['at'], reverse=True)[:OUTPUT_LIMIT]
 
 
