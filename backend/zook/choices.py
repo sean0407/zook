@@ -80,7 +80,7 @@ def question_tools(app, job_id, runtime, origin='user'):
             if any(q['status'] == 'pending' for q in asked): raise RuntimeError('上一個問題還沒有回答。')
             if len(asked) >= MAX_QUESTIONS: raise RuntimeError('這次回覆已經問了 %d 個問題，請把其餘的問題寫在回覆裡。' % MAX_QUESTIONS)
             if bg_hold(app, job_id, question): asked.append(question); store.save(); raise RuntimeError('Zook 正在關閉。')
-            asked.append(question); events[question['id']] = event; store.save()
+            asked.append(question); events[question['id']] = event; store.save(); phone_notify_job(app, 'question', job)
         gone = bg_await(event, APPROVAL_TIMEOUT)
         with store.lock:
             events.pop(question['id'], None)

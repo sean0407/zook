@@ -106,7 +106,11 @@
   const withDefault = (options, current, own = '', label = '') => { const d = options.find(o => o.id === current), name = label || (d || options[0]).name; return [{id: '', name: '預設（目前是 ' + name + '）', hint: (d?.hint ? d.hint + '。' : '') + '跟著「設定」改'}, ...options.filter(o => !d || o.id !== d.id || o.id === own).map(o => d && o.id === d.id ? {...o, name: o.name + '（固定）', hint: '不跟著「設定」的預設改'} : o)]; };
   // Remote access: off unless turned on here. Pairing and revoking can only be done on this Mac.
   // App updates: checked automatically unless turned off; installing is always the user's decision.
-  const noticeSection = () => `<h2 class="settings-h">通知</h2><div class="setting-list">${settingRow('排程通知', '排程做完、失敗或要你核准時，在 Mac 右上角跳出通知', toggle('data-schedule-notify', state.data.settings.scheduleNotify !== false, '排程通知'))}</div>`;
+  // Phone notifications (#243): only these four reach a paired phone; everything else stays on the Mac and in 活動紀錄.
+  const PHONE_NOTICES = [['done', '手機：回覆完成', 'Bot 回覆完成或群組討論結束時通知手機'], ['failed', '手機：失敗', '回覆或群組討論沒有完成時通知手機'],
+    ['approval', '手機：等你核准', '有動作要你核准時通知手機'], ['question', '手機：等你回答', 'Bot 問你問題、等你回答時通知手機']];
+  const phoneOn = key => (state.data.settings.phoneNotify || {})[key] !== false;
+  const noticeSection = () => `<h2 class="settings-h">通知</h2><div class="setting-list">${settingRow('排程通知', '排程做完、失敗或要你核准時，在 Mac 右上角跳出通知', toggle('data-schedule-notify', state.data.settings.scheduleNotify !== false, '排程通知'))}${PHONE_NOTICES.map(([key, title, desc]) => settingRow(title, desc + '。通知只寫 Bot 或群組名稱，不含對話內容', toggle(`data-phone-notify="${key}"`, phoneOn(key), title))).join('')}</div>`;
   function updateSection() {
     const u = state.update || {};
     const status = u.state === 'checking' ? '正在檢查…' : u.available ? `有新版 ${esc(u.latest)}` : u.error ? esc(u.error) : u.latest ? '已是最新版' : '尚未檢查';
