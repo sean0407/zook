@@ -111,6 +111,11 @@
       await loadRemote(true);
       return;
     }
+    if (e.target.dataset.remoteExpiry !== undefined) {
+      try { state.data.settings = await post('settings', {remoteExpiryDays: Number(e.target.value)}, 'PATCH'); toast(Number(e.target.value) ? '已更新自動失效期限' : '已改為永久有效，手機遺失時記得撤銷'); }
+      catch (err) { toast(err.message); }
+      render(true); return;
+    }
     if (e.target.dataset.fallbackSlot !== undefined) {
       const picks = [...document.querySelectorAll('[data-fallback-slot]')].map(x => x.value).filter(Boolean);
       try { state.data.settings = await post('settings', {fallbacks: [...new Set(picks)]}, 'PATCH'); toast(picks.length ? '備用順序：' + [...new Set(picks)].map(providerShort).join(' → ') : '已關閉自動換模型'); }
@@ -152,7 +157,8 @@
       try {
         state.data.settings = await post('settings', {[key]: [...set]}, 'PATCH');
         if (kind === 'plugin') state.integrations = await api('integrations');
-        render(true); toast(turnOn ? '已開啟' : '已關閉');
+        const what = {skill: '這個 Skill', mcp: '這個連接器', plugin: '這個插件'}[kind] || '';
+        render(true); toast(turnOn ? `已開放${what}給所有 Bot` : `已停用${what}，所有 Bot 都不會再用它`);
       } catch (err) { e.target.checked = !turnOn; e.target.disabled = false; toast(err.message); }
       return;
     }
@@ -236,9 +242,30 @@
     }
     if (form.id === 'bot-form') saveBotDraft(form);
   });
+  // #63: a form's main button goes off and says 建立中… / 儲存中… the moment it is pressed, until the answer comes back, so a
+  // second press (or Enter) while making a Bot takes its few seconds sends nothing. What a form makes also carries an id for this
+  // opening of the form (onceId), so a repeat that still reaches the Mac gets the first one back instead of a copy.
+  const busyWord = label => { const w = String(label || '').trim().match(/^(建立|儲存|新增|送出|連接|連結|匯入)/); return (w ? w[1] : '處理') + '中…'; };
+  const onceId = form => form.dataset.once || (form.dataset.once = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 14));
+  // A required field left empty is said next to it, in words, not only with the browser's small bubble at the top (#63).
+  function fieldError(input) {
+    let note = input.parentElement.querySelector('.field-error');
+    if (!note) { note = document.createElement('small'); note.className = 'field-error'; note.setAttribute('role', 'alert'); input.insertAdjacentElement('afterend', note); }
+    note.textContent = input.dataset.need || '這一欄要填寫。';
+    input.setAttribute('aria-invalid', 'true'); input.scrollIntoView({block: 'center'}); input.focus();
+  }
+  document.addEventListener('input', e => {
+    if (e.target.getAttribute?.('aria-invalid') !== 'true') return;
+    e.target.removeAttribute('aria-invalid'); e.target.parentElement.querySelector('.field-error')?.remove();
+  });
   document.addEventListener('submit', async e => {
     e.preventDefault();
     const form = e.target;
+    if (form.dataset.busy) return;  // the first press is still on its way
+    const empty = form.id === 'chat-form' ? null : [...form.elements].find(x => x.required && !x.disabled && !String(x.value).trim());
+    if (empty) { fieldError(empty); return; }
+    const button = form.id === 'chat-form' ? null : form.querySelector('button.primary:not([type=button])'), label = button?.textContent, was = button?.disabled;
+    if (button) { form.dataset.busy = '1'; button.disabled = true; button.textContent = busyWord(label); }
     try {
       if (form.id === 'chat-form') {
         let input = $('#chat-input'),
@@ -275,6 +302,8 @@
           account: d.has('providerChoice') ? String(d.get('providerChoice')).split('::')[1] || '' : d.get('account') || '',
           access: d.get('access') || '', accessFolder: d.get('access') === 'folder' ? d.get('accessFolder') || '' : ''
         };
+        if (d.get('heldAccess') === 'full' && !form.querySelector('[data-held-access]').hidden) Object.assign(data, {access: 'full', accessFolder: ''});  // #284: back behind the gate
+        if (!id) data.clientId = onceId(form);
         if (data.access === 'folder' && !data.accessFolder) { toast('請先選擇資料夾'); return; }
         let result = await post(id ? 'bots/' + encodeURIComponent(id) : 'bots', data, id ? 'PATCH' : 'POST');
         if (!id) { try { sessionStorage.removeItem('swarmr-new-bot-draft'); } catch (_) {} }
@@ -357,7 +386,7 @@
         state.accounts = await api('accounts'); render(true); pollAccounts();
       } else if (form.id === 'group-form') {
         const d = new FormData(form), id = form.dataset.id;
-        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds'), hostId: d.get('hostId') || '', mode: d.get('mode') || 'free', turnLimit: Number(d.get('turnLimit')) || 8}, id ? 'PATCH' : 'POST');
+        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds'), hostId: d.get('hostId') || '', mode: d.get('mode') || 'free', turnLimit: Number(d.get('turnLimit')) || 8, ...(id ? {} : {clientId: onceId(form)})}, id ? 'PATCH' : 'POST');
         closeModal();
         state.groupId = result.id;
         state.page = 'chat';
@@ -388,15 +417,24 @@
         const d = new FormData(form), id = form.dataset.id;
         const [kind, targetId] = String(d.get('target')).split(':');
         const trigger = d.get('trigger') || 'time', repeat = trigger === 'time' ? d.get('repeat') : 'daily';
-        const data = {trigger, [kind === 'group' ? 'groupId' : 'botId']: targetId, content: d.get('content'), repeat, time: trigger !== 'time' ? '00:00' : (repeat === 'hourly' ? '00' : d.get('hour')) + ':' + d.get('minute'), on: d.get('on') === 'on', catchUp: d.get('catchUp') === 'on', quiet: d.get('quiet') === 'on'};
+        const data = {trigger, name: String(d.get('name') || '').trim(), [kind === 'group' ? 'groupId' : 'botId']: targetId, content: d.get('content'), repeat, time: trigger !== 'time' ? '00:00' : (repeat === 'hourly' ? '00' : d.get('hour')) + ':' + d.get('minute'), on: d.get('on') === 'on', catchUp: d.get('catchUp') === 'on', quiet: d.get('quiet') === 'on'};
         if (repeat === 'once') data.date = d.get('date');
         if (repeat === 'monthly') data.day = Number(d.get('day'));
         if (trigger === 'folder') data.watchFolder = d.get('watchFolder');
         if (trigger === 'mail') { data.mailFrom = d.get('mailFrom'); data.mailSubject = d.get('mailSubject'); }
-        await post(id ? 'schedules/' + encodeURIComponent(id) : 'schedules', data, id ? 'PATCH' : 'POST');
+        // Problems stay under the form until fixed, instead of a toast that fades (#166, #168)
+        const err = form.querySelector('.sched-err'), problem = !String(data.content || '').trim() ? '請填寫要 Bot 做的事。'
+          : data.on && repeat === 'once' && trigger === 'time' && new Date(`${data.date}T${data.time}:00`) <= new Date() ? '這個時間已經過了，請改日期或時間。' : '';
+        if (err) { err.textContent = problem; err.hidden = !problem; if (problem) err.scrollIntoView({block: 'nearest'}); }
+        if (problem) return;
+        if (!id) data.clientId = onceId(form);
+        let saved;
+        try { saved = await post(id ? 'schedules/' + encodeURIComponent(id) : 'schedules', data, id ? 'PATCH' : 'POST'); }
+        catch (error) { if (!err) throw error; err.textContent = error.message; err.hidden = false; err.scrollIntoView({block: 'nearest'}); return; }
         closeModal();
         await refresh();
-        toast('已儲存排程');
+        const next = scheduleNext(saved || {});
+        toast(next ? `已儲存排程，下次執行：${nextLabel(next)}` : '已儲存排程');
       } else if (form.id === 'note-form') {
         let d = new FormData(form),
           id = form.dataset.id;
@@ -406,6 +444,7 @@
           tags: d.get('tags').split(',').map(x => x.trim()).filter(Boolean),
           botId: d.get('botId') || ''
         };
+        if (!id) data.clientId = onceId(form);
         await post(id ? 'knowledge/' + encodeURIComponent(id) : 'knowledge', data, id ? 'PATCH' : 'POST');
         closeModal();
         await refresh();
@@ -420,7 +459,10 @@
         toast('已儲存設定')
       }
     } catch (err) {
-      toast(err.message)
+      toast(/^(建立|新增)/.test(String(label || '').trim()) ? '建立失敗：' + err.message : err.message)
+    } finally {
+      delete form.dataset.busy;
+      if (button?.isConnected) { button.disabled = was; button.textContent = label; }
     }
   });
   document.addEventListener('keydown', e => {
