@@ -589,7 +589,7 @@
     return null;
   }
   const nextLabel = d => { const two = n => String(n).padStart(2, '0'), today = new Date(), diff = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - new Date(today.getFullYear(), today.getMonth(), today.getDate())) / 864e5); return `${diff === 0 ? '今天 ' : diff === 1 ? '明天 ' : ''}${d.getMonth() + 1}/${d.getDate()}（週${WEEKDAY[d.getDay()]}）${two(d.getHours())}:${two(d.getMinutes())}`; };
-  const longText = t => String(t || '').length > 120 || String(t || '').split('\n').length > 3;
+  const longText = t => String(t || '').length > 60 || String(t || '').split('\n').length > 3;
   function schedulesPage() {
     const items = state.data.schedules || [];
     const intro = '<p class="muted sched-intro">時間到，或有新檔案、新信件時，自動送出訊息。Mac 和 Zook 要開著。</p>';

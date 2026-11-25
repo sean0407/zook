@@ -609,10 +609,11 @@ def describe_schedule_call(store, bot, group_id, name, args):
         if name == 'zook_create_schedule':
             body = schedule_tool_body(store, bot, group_id, args, True)
             item = dict(body, groupId=body.get('groupId', ''), botId=body.get('botId', ''))
-            return '建立排程：%s，在「%s」執行「%s」' % (schedule_when(item), schedule_target_name(store, item), str(args.get('content') or '')[:80])
+            return '建立排程%s：%s，在「%s」執行「%s」' % ('「%s」' % str(args['name']).strip()[:60] if str(args.get('name') or '').strip() else '', schedule_when(item), schedule_target_name(store, item), str(args.get('content') or '')[:80])
         item = store.find('schedules', args.get('schedule_id'))
         if not item: return '修改排程' if name == 'zook_update_schedule' else '刪除排程'
-        what = '「%s」（%s）' % (schedule_title(item), schedule_when(item))
+        what = '「%s」（%s）' % (item.get('content', '')[:40], schedule_when(item))
+        if (item.get('name') or '').strip(): what = '「%s」' % item['name'].strip() + what
         if name == 'zook_delete_schedule': return '刪除排程' + what
         body = schedule_tool_body(store, bot, group_id, args, False)
         after = dict(item, **{k: v for k, v in body.items() if k in ('repeat', 'time', 'date', 'day')})
