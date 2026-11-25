@@ -491,7 +491,9 @@ def trim_jobs(store):
         if job.get('status') == 'running' or job.get('slim') or job['id'] in waiting or job.get('groupId') in talking: continue
         seen[job['botId']] = seen.get(job['botId'], 0) + 1
         if seen[job['botId']] > JOBS_WITH_ANSWER and job.get('content'):
-            said = job.pop('content'); named = [] if job.get('plan') else named_paths(said)  # the files its answer named still count for 產出
+            said = job.pop('content'); named = [] if job.get('plan') else named_paths(said)
+            folders = [] if job.get('plan') else named_folders(said)
+            if folders: job['namedFolders'] = list(dict.fromkeys((job.get('namedFolders') or []) + folders))[:10]  # the files its answer named still count for 產出
             if named: job['wrote'] = list(dict.fromkeys((job.get('wrote') or []) + named))[:50]
             changed = True
         if seen[job['botId']] <= JOBS_FULL_PER_BOT and job['botId'] in alive: continue  # a deleted Bot's replies keep only their usage figures
@@ -499,6 +501,7 @@ def trim_jobs(store):
         small = {k: job[k] for k in JOB_SLIM_KEEP if k in job}
         if job.get('error'): small['error'] = str(job['error'])[:300]
         if wrote: small['wrote'] = [p for p in dict.fromkeys(wrote) if p][:50]
+        if job.get('namedFolders'): small['namedFolders'] = job['namedFolders'][:10]
         job.clear(); job.update(small, slim=True, toolCalls=[], approvals=[]); changed = True
     cutoff = time.time() - JOBS_SLIM_DAYS * 86400
     old = [j for j in jobs if j.get('slim') and _job_time(j) < cutoff]
