@@ -777,7 +777,7 @@ class GroupRuns:
             store.save()
 
     def run_group(self, group_id, run_id, targets, broadcast, resume=None):
-        store = self.store; turns = 0; spoke = False
+        store = self.store; turns = 0; spoke = False; failed = False; ended = False
         self.compact_group(group_id, run_id)
         with store.lock:
             group = store.find('groups', group_id) or {'botIds': []}
@@ -808,8 +808,9 @@ class GroupRuns:
         spent = dict(n=turns); began = turns
         rounds = (resume or {}).get('rounds', 0); blind_next = (resume or {}).get('blind', False); hidden = list((resume or {}).get('hide') or []); hidden_files = list((resume or {}).get('hideFiles') or [])
         try:
-            if engine: return self.run_task_engine(group_id, run_id)
-            if planned is not None: return self._run_steps(group_id, run_id, planned, limit, spent)
+            if engine or planned is not None:
+                result = self.run_task_engine(group_id, run_id) if engine else self._run_steps(group_id, run_id, planned, limit, spent)
+                ended = True; return result  # one that raised is told as not finished
             while turns < limit:
                 with store.lock:
                     group = store.find('groups', group_id) or {}
@@ -836,6 +837,7 @@ class GroupRuns:
                     members = [b for b in (store.find('bots', x) for x in group['botIds']) if b]
                     for t in turns_here:
                         job, msg, role, bot_id = t['job'], t['msg'], t['role'], t['bot']['id']
+                        failed = failed or job['status'] == 'failed'
                         if job['status'] != 'completed': continue
                         content = job.get('content') or ''
                         if is_pass(content):
@@ -860,6 +862,7 @@ class GroupRuns:
                     self._pause_group(group, limit, dict(kind='free', pending=pending, rounds=rounds, moderated=moderated, blind=blind_next, hide=hidden, hideFiles=hidden_files, broadcast=broadcast))
                 elif group and group.get('runId') == run_id and turns > began and not spoke and broadcast:
                     group['messages'].append(dict(id=ID(), role='system', content='沒有成員認為需要回覆。可以用 @ 指定由誰回答。', createdAt=NOW()))
+            ended = True
         finally:
             with store.lock:
                 group = store.find('groups', group_id)
@@ -869,6 +872,7 @@ class GroupRuns:
                     if not group.get('paused'):
                         for m in group['messages']: m.pop('waiting', None)
                         self._answer_interjection(group)
+                        phone_notify(self, 'done' if ended and not (failed and not spoke) else 'failed', 'group', group_id)  # told once, when it ends (phonenotice.py)
                 store.save()
 
 

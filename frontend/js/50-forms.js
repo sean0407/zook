@@ -145,6 +145,12 @@
       catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
       return;
     }
+    if (e.target.dataset.phoneNotify !== undefined) {
+      const label = e.target.getAttribute('aria-label') || '手機通知';
+      try { state.data.settings = await post('settings', {phoneNotify: {[e.target.dataset.phoneNotify]: e.target.checked}}, 'PATCH'); toast((e.target.checked ? '已開啟' : '已關閉') + label.replace('手機：', '手機「') + '」'); }
+      catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
+      return;
+    }
     if (e.target.dataset.scheduleSwitch !== undefined) {
       const on = e.target.checked;
       try { await post('schedules/' + encodeURIComponent(e.target.dataset.id), {on}, 'PATCH'); await refresh(); toast(on ? '已啟用排程' : '已停用排程'); }
