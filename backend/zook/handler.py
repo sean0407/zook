@@ -866,6 +866,10 @@ class Handler(BaseHTTPRequestHandler):
                         bot['chats'].append(chat); open_chat(bot, chat['id']); store.save(); return self.respond(201, chat)
                     chat = next((c for c in bot['chats'] if c['id'] == parts[4]), None) if len(parts) >= 5 else None
                     if not chat: return self.error(404, '找不到這個對話。')
+                    if len(parts) == 6 and parts[5] == 'folder' and self.command == 'POST':  # 打開資料夾: this conversation's files in Finder
+                        self.body(); folder = chat_folder(store, bot['id'], chat['id'])
+                        if not os.environ.get('ZOOK_NO_BROWSER'): subprocess.run(['/usr/bin/open', str(folder)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                        return self.respond(200, {'path': str(folder)})
                     if len(parts) == 6 and parts[5] == 'open' and self.command == 'POST':
                         self.body(); open_chat(bot, chat['id']); store.save(); return self.respond(200, {k: v for k, v in chat.items() if k != 'messages'})
                     if len(parts) == 5 and self.command == 'PATCH':
