@@ -39,6 +39,8 @@ def _progress_add(rec, what, ref, where=''):
     if ref is not None:
         if ref in rec['seen']: return
         if len(rec['seen']) < 5000: rec['seen'].add(ref)
+    if what == 'write' and isinstance(where, str) and where.startswith('/') and len(where) < 300 and len(rec.setdefault('paths', [])) < 50 and where not in rec['paths']:
+        rec['paths'].append(where)  # before the count, so 產出 read for the new count finds it (#53, outputs.py)
     rec[what] += 1; rec['stepAt'] = time.time()
     name = _progress_base(where)
     rec['step'] = {'read': '讀取檔案「%s」' % name if name else '讀取檔案', 'write': '修改檔案「%s」' % name if name else '修改檔案',
