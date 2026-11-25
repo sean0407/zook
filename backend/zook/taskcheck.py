@@ -30,13 +30,37 @@ def task_failed_attempt(task, why, job=None):
     task['failures'] = task.get('failures', 0) + 1
     task['feedback'] = str(why or '')[:600]
     if job and task_acted_outward(job):
-        task['status'] = 'stuck'; task['note'] = '這次嘗試可能已經對外做了一部分（例如寄出或改了連接的服務），自動重試可能重複，停下來等你決定。'
+        task['status'] = 'stuck'; task['note'] = task_outward_note(job) + '自動重試可能重複，停下來等你決定。'
     elif task['failures'] < TASK_FAILS: task['status'] = 'ready'
     else: task['status'] = 'stuck'; task['note'] = '連續 %d 次沒有完成，停下來等你決定。' % TASK_FAILS
 
 
+# Careful guesses from the kind of step, never a record that it did (#179): a step meant to reach outside, or a command, which Zook cannot read.
+TASK_OUTWARD_NOTE = '這次嘗試可能已經對外做了一部分（例如寄出或改了連接的服務），'
+TASK_COMMAND_NOTE = '這次用了指令，Zook 無法確認有沒有對外，'
+TASK_OUTWARD_NOTES = (TASK_OUTWARD_NOTE, TASK_COMMAND_NOTE)
+
+
+def task_outward_kind(job):
+    """'tool' when a reply started a step meant to reach outside this Mac (an approved send, a change to a connected service),
+    'command' when it only ran commands (any command may have: Zook cannot tell), None when it did neither. A step counts once it
+    started, whatever came of it: one that failed may still have reached out. Only one never run (refused, still asking) does not.
+    A command counts unless its record says plainly it did not (outward False); a missing or empty mark is a may."""
+    kind = None
+    for c in job.get('toolCalls') or []:
+        if c.get('status') in ('denied', 'waiting_approval'): continue
+        if c.get('name') == 'native_command' and c.get('category') == 'code':
+            if c.get('outward') is not False: kind = kind or 'command'
+        elif c.get('category') in ('external_write', 'danger', 'code'): return 'tool'
+    return kind
+
+
 def task_acted_outward(job):
-    return any(c.get('category') in ('external_write', 'danger', 'code') and c.get('status') in ('completed', 'running') for c in job.get('toolCalls') or [])
+    return task_outward_kind(job) is not None
+
+
+def task_outward_note(job):
+    return TASK_COMMAND_NOTE if task_outward_kind(job) == 'command' else TASK_OUTWARD_NOTE
 
 
 def task_job_cli(store, job, bot):

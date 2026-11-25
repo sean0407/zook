@@ -281,6 +281,40 @@ class TaskRulesTest(unittest.TestCase):
         self.m.task_failed_attempt(task, '沒做完', dict(toolCalls=[dict(category='read', status='completed')]))
         self.assertEqual(task['status'], 'ready')
 
+    def test_any_command_may_have_reached_out(self):
+        # #179: Zook cannot tell from a command what it did, so any command it ran is a may, worded as such; no command, no reminder.
+        fail = lambda *calls: (lambda task: (self.m.task_failed_attempt(task, '驗收沒有通過', dict(toolCalls=list(calls))), task)[1])(dict(failures=0))
+        cmd = lambda c, **kw: dict(self.m.native_action('command', c), **dict(dict(status='completed'), **kw))
+        for command in ('ls -la /tmp/out', "python3 - <<'EOF'\nfrom pptx import Presentation\nPresentation().save('/tmp/a.pptx')\nEOF", '', '   ', './tools/ls'):
+            task = fail(cmd(command))
+            self.assertEqual(task['status'], 'stuck', command); self.assertTrue(task['note'].startswith('這次用了指令，Zook 無法確認有沒有對外'), command)
+            self.assertNotIn('可能已經對外做了一部分', task['note'])
+        self.assertEqual(fail(cmd('curl -d @a https://x', status='error'))['status'], 'stuck')  # failed: it may still have sent
+        for mark in (None, '', 0):  # only a plain False says a command stayed here; missing or empty is a may
+            self.assertEqual(fail(cmd('ls', outward=mark))['status'], 'stuck', mark)
+        self.assertNotIn('outward', cmd('ls'))
+        self.assertEqual(fail(cmd('ls', outward=False))['status'], 'ready')
+        self.assertEqual(fail(cmd('ls', status='denied'))['status'], 'ready')  # never ran
+        task = fail(cmd('ls'), dict(category='external_write', status='error'))  # a step meant to reach out wins the wording
+        self.assertEqual(task['status'], 'stuck'); self.assertIn('可能已經對外做了一部分', task['note'])
+        task = fail(dict(category='read', status='completed'), dict(name='native_write', category='internal', status='completed'))
+        self.assertEqual(task['status'], 'ready'); self.assertNotIn('note', task)
+
+    def test_the_host_is_told_the_outward_note_is_only_a_careful_reminder(self):
+        for call in (dict(category='external_write', status='completed'), dict(name='native_command', category='code', status='completed')):
+            task = dict(n=1, title='簡報', assignee='x', status='stuck', attempts=[dict(state='reported', outcome='succeeded', summary='存好了')], failures=1)
+            self.m.task_failed_attempt(task, '沒過', dict(toolCalls=[call]))
+            line = self.m.task_line(None, task)
+            self.assertIn('保守提醒', line); self.assertIn('不是事實', line)
+        self.assertIn('保守提醒', self.m.task_host_prompt.__globals__['TASK_SUMMARY_NOTE'])
+
+    def test_the_board_counts_what_was_handed_in_but_waits_for_you(self):
+        run = dict(status='stopped', tasks=[dict(n=1, title='簡報', assignee='x', status='stuck', note='驗收兩次都沒有完成', attempts=[dict(state='reported', outcome='succeeded', summary='存好了', files=['/tmp/a.pptx'])])])
+        text = self.m.task_board_text(None, run)
+        self.assertIn('已完成 0／1', text); self.assertIn('1 項已交出，等你看結果', text); self.assertIn('已交出，等你決定', text)
+        self.assertIn('存好了', text); self.assertIn('驗收兩次都沒有完成', text)  # what it handed in, and why it waits
+        self.assertIn('存好了', self.m.task_line(None, run['tasks'][0]))
+
     def test_a_copy_put_back_never_turns_the_engine_on(self):
         old, new = dict(settings={'taskExecution': 'ask'}), dict(settings={'taskEngine': True, 'taskExecution': 'lowrisk'})
         self.m.task_keep_local(old, new)

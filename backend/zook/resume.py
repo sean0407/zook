@@ -257,10 +257,11 @@ class Resuming:
             if not before or t.get('aborted') or t.get('status') not in ('unknown', 'cancelled', 'stuck'): continue
             last = (t.get('attempts') or [{}])[-1]
             cut = self.store.find('jobs', last.get('jobId')) if last.get('jobId') else None
-            if before == 'running' and cut and task_acted_outward(cut):
-                t.update(status='stuck', note='這次嘗試可能已經對外做了一部分（例如寄出或改了連接的服務），自動接著做可能重複，停下來等你決定。'); continue
             if before == 'verifying' or (before == 'running' and last.get('state') == 'reported' and last.get('outcome') == 'succeeded'):
-                t.update(status='verifying', verify=dict(state='waiting')); t.pop('note', None)
+                t.update(status='verifying', verify=dict(state='waiting')); t.pop('note', None)  # the work reported done: only its check runs, nothing is done again
+                if cut and not last.get('cli'): last['cli'] = task_job_cli(self.store, cut, None)  # cut off before the turn wrote it: who may check depends on it
+            elif before == 'running' and cut and task_acted_outward(cut):
+                t.update(status='stuck', note=task_outward_note(cut) + '自動接著做可能重複，停下來等你決定。'); continue
             elif before == 'running':
                 t.update(status='pending' if t.get('deps') else 'ready', resumed=True); t.pop('note', None)
                 if not t.get('resumeBonus'):  # the try that was cut off (or only reserved), once per task: restarts never lift the cap for good
