@@ -45,6 +45,13 @@
       label = label.split('\n').map(x => x.trim()).join(' ');  // a long name the Bot wrapped onto two lines
       return open ? hold(open) + label + hold(open.startsWith('<a') ? '</a>' : '</button>') : label;
     });
+    // #45: a bare file:///… written in the text opens like a link to that file. It ends at a space or Chinese punctuation
+    // (「圖在file:///tmp/a.png，請看」); a trailing full stop or comma is not part of it.
+    s = s.replace(/(?<![A-Za-z0-9+.\-/])file:\/\/(?:localhost)?\/[^\s<>()（）"'`*\u0000，。、；：！？「」『』【】《》]+/gi, whole => {
+      let n = whole.length; while (n && /[.,;:!?]/.test(whole[n - 1])) n--;  // a loop, not a regex: no slow backtracking
+      const url = whole.slice(0, n), {path} = mdTarget(url);
+      return path ? hold(`<button type="button" class="link local-link" data-path="${esc(path)}" title="${esc(path)}">${esc(url)}</button>`, url) + whole.slice(n) : whole;
+    });
     s = esc(s)
       .replace(/(^|[\s(（])(https?:\/\/[^\s<)）\u0000]+)/g, (_, p, u) => `${p}<a href="${u}" rel="noopener noreferrer">${u}</a>`)
       .replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g, '<strong>$1</strong>')
