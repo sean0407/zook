@@ -183,7 +183,7 @@ def team_instructions(role, team, goal, lead, everyone):
     return '\n'.join(lines)[:10000]
 
 
-TOOL_EFFORTS = {'fast': 'fast', 'low': 'fast', '快速': 'fast', '低': 'fast', 'standard': 'standard', 'medium': 'standard', '標準': 'standard', '中': 'standard', '中度': 'standard',
+TOOL_EFFORTS = {'fast': 'fast', 'low': 'fast', '快速': 'fast', '低': 'fast', 'standard': 'standard', '標準': 'standard', 'medium': 'medium', '中': 'medium', '中度': 'medium',
                 'deep': 'deep', 'high': 'deep', '深入': 'deep', '高': 'deep'}
 
 

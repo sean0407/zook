@@ -267,7 +267,7 @@
     if (c.status === 'error' || c.status === 'failed') return ['bad', humanError(c.error)];
     return ['ok', c.approvedBy === 'user' ? '你允許後完成' : c.autoApproved ? '已自動完成' : '完成'];  // who allowed it, apart from whether it worked
   }
-  const EFFORT_WORDS = {fast: '快速', low: '快速', standard: '標準', medium: '標準', deep: '深入', high: '深入'};
+  const EFFORT_WORDS = {fast: '快速', low: '快速', standard: '標準', medium: '中', deep: '深入', high: '深入'};
   const scheduleLabel = id => String((state.data?.schedules || []).find(x => x.id === id)?.content || '排程').slice(0, 40);
   // Lists and nested details read as words, never [object Object].
   function plainValue(v, depth = 0) {
@@ -558,9 +558,10 @@
     const opt = (value, label) => `<option value="${esc(value)}" ${picked === value ? 'selected' : ''}>${esc(label + mark(value))}</option>`;
     const kept = !provider && account ? list.flatMap(p => p.accounts || []).find(a => a.id === account) : null;  // an older Bot: the default CLI with one of its extra accounts
     const fallback = list.find(p => p.id === (state.data.settings.provider || 'codex')), short = String(fallback?.name || state.data.settings.provider || 'Codex').split('（')[0];
-    return opt('', short + '（預設）') + (kept ? opt('::' + account, short + '・' + kept.name + '（預設）') : '') + opt('auto', '自動配（依人格和工作指示）') + list.map(p => {
-      const name = String(p.name).split('（')[0], extra = p.accounts || [];
-      return opt(p.id, extra.length ? name + '（預設帳號）' : name) + extra.map(a => opt(p.id + '::' + a.id, name + '（' + a.name + (a.type === 'key' ? '・API 金鑰' : '') + '）')).join('');
+    // The default CLI on its own sign-in is the 預設 line, so it is not listed again, unless this Bot picked it itself (then （固定）).
+    return opt('', '預設（目前是 ' + short + '）') + (kept ? opt('::' + account, '預設（目前是 ' + short + '）・' + kept.name) : '') + opt('auto', '自動配（依人格和工作指示）') + list.map(p => {
+      const name = String(p.name).split('（')[0], extra = p.accounts || [], own = p.id === fallback?.id ? (picked === p.id ? '固定' : null) : '';
+      return (own === null ? '' : opt(p.id, extra.length || own ? name + '（' + [extra.length ? '預設帳號' : '', own].filter(Boolean).join('・') + '）' : name)) + extra.map(a => opt(p.id + '::' + a.id, name + '（' + a.name + (a.type === 'key' ? '・API 金鑰' : '') + '）')).join('');
     }).join('');
   };
   const providerOptions = (selected, withDefault, withAuto) => (withDefault ? `<option value="" ${!selected ? 'selected' : ''}>使用預設</option>` : '') + (withAuto ? `<option value="auto" ${selected === 'auto' ? 'selected' : ''}>自動選擇</option>` : '') + (state.providers || [{id: 'codex', name: 'Codex'}, {id: 'claude', name: 'Claude'}]).map(p => `<option value="${esc(p.id)}" ${selected === p.id ? 'selected' : ''}>${esc(p.name)}${p.installed === false ? '（未安裝）' : ''}</option>`).join('');
