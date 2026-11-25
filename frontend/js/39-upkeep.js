@@ -1,5 +1,5 @@
   // Backups, the activity record, usage budgets and the rules every Bot follows.
-  const fmtTokens = n => n >= 1e8 ? (n / 1e8).toFixed(n % 1e8 ? 1 : 0) + ' 億' : n >= 1e4 ? Math.round(n / 1e4).toLocaleString() + ' 萬' : String(n);
+  const fmtTokens = n => fmtTok(n);  // the usage page's one unit (32-usage.js)
   const fmtSize = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
 
   function rulesSection() {
