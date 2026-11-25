@@ -572,17 +572,12 @@
           el.disabled = true;
           try { await forceStop(id); } finally { el.disabled = false; }  // a failed try can be tried again
           break;
-        case 'share': {
-          const g = activeGroup();
-          if (g) {
-            const name = id => state.data.bots.find(b => b.id === id)?.name || 'Bot';
-            const all = (await api('groups/' + encodeURIComponent(g.id) + '/messages?all=1')).messages;  // the whole discussion, not only the part on the page
-            download(`# ${g.name}\n\n${all.filter(m=>m.content).map(m=>m.role==='system'?`> ${m.content}`:`## ${m.role==='user'?'我':name(m.botId)}\n\n${m.content}`).join('\n\n')}`, `${g.name.replace(/[\\/:*?"<>|]/g,'_')}-群組對話.md`, 'text/markdown;charset=utf-8');
-            break
-          }
-          let b = activeBot();
-          const whole = (await api(`bots/${encodeURIComponent(b.id)}/messages?chat=${encodeURIComponent(b.chatId)}&all=1`)).messages;  // not only the part on the page
-          download(`# ${b.name}\n\n${whole.map(m=>`## ${m.role==='user'?'我':b.name}\n\n${m.content}`).join('\n\n')}`, `${b.name.replace(/[\\/:*?"<>|]/g,'_')}-對話.md`, 'text/markdown;charset=utf-8');
+        case 'share': {  // the open conversation as Markdown (chatexport.py)
+          const g = activeGroup(), b = g ? null : activeBot();
+          const out = await api(g ? 'groups/' + encodeURIComponent(g.id) + '/export' : `bots/${encodeURIComponent(b.id)}/export?chat=${encodeURIComponent(b.chatId)}`);
+          if (out.empty) { toast('這段對話還沒有內容'); break; }
+          download(out.markdown, out.name, 'text/markdown;charset=utf-8');
+          toast(`已送出下載：${out.name}`);
           break
         }
         case 'export': {
