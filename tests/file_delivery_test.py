@@ -34,7 +34,7 @@ class FileDelivery(unittest.TestCase):
         self.assertIn('旋轉不滲漏', text); self.assertIn('沒有來源的數字', text)  # #41 #127: no made-up product facts or prices
         self.assertIn('多出來的事實或沒有來源的數字', ' '.join(m.MODERATOR_RULES['verify']))  # and a check looks for them
         self.assertIn('內部折扣或報價規則', ' '.join(m.MODERATOR_RULES['verify']))
-        self.assertIn("<<'EOF'", text); self.assertIn('NT$608,000', text); self.assertIn('存完一定回讀檔案', text)  # #55: $ eaten by the shell
+        self.assertIn("ZOOK_END_7f3a", text); self.assertIn('NT$608,000', text); self.assertIn('交付檔存完要回讀核對', text)  # #55: $ eaten by the shell
         self.assertIn('讀不到、失敗時', text); self.assertIn('沒轉出的頁', text)  # a Bot limited to one folder cannot read the helper in the app
 
     def test_group_and_task_prompts_carry_it(self):
