@@ -268,10 +268,19 @@
   }
   const EFFORT_WORDS = {fast: '快速', low: '快速', standard: '標準', medium: '標準', deep: '深入', high: '深入'};
   const scheduleLabel = id => String((state.data?.schedules || []).find(x => x.id === id)?.content || '排程').slice(0, 40);
+  // Lists and nested details read as words, never [object Object].
+  function plainValue(v, depth = 0) {
+    if (v == null || v === '') return '';
+    if (typeof v !== 'object') return String(v);
+    if (depth > 3) return '…';
+    if (Array.isArray(v)) return v.map(x => plainValue(x, depth + 1)).filter(Boolean).join(depth ? '；' : '、');
+    const parts = Object.entries(v).map(([x, y]) => [x, plainValue(y, depth + 1)]).filter(([, y]) => y).map(([x, y]) => humanWords(x) + '：' + y);
+    return !parts.length ? '' : depth ? '（' + parts.join('，') + '）' : parts.join('，');
+  }
   function argsList(args) {
-    const entries = Object.entries(args || {}).filter(([, v]) => v !== '' && v != null);
+    const entries = Object.entries(args || {}).filter(([, v]) => v !== '' && v != null && (typeof v !== 'object' || plainValue(v)));
     if (!entries.length) return '<p class="muted">沒有其他內容。</p>';
-    return `<dl class="args-list">${entries.map(([k, v]) => `<dt>${esc(FIELD_NAMES[k] || humanWords(k))}</dt><dd>${esc(Array.isArray(v) ? v.join('、') : typeof v === 'object' ? Object.entries(v).map(([x, y]) => humanWords(x) + '：' + y).join('，') : k === 'effort' ? EFFORT_WORDS[String(v).toLowerCase()] || String(v) : k === 'skill_id' ? skillName(v) : k === 'repeat' ? repeatName(v) : k === 'enabled' ? (v === 'off' ? '停用' : '啟用') : k === 'schedule_id' ? scheduleLabel(v) : String(v))}</dd>`).join('')}</dl>`;
+    return `<dl class="args-list">${entries.map(([k, v]) => `<dt>${esc(FIELD_NAMES[k] || humanWords(k))}</dt><dd>${esc(v && typeof v === 'object' ? plainValue(v) : k === 'effort' ? EFFORT_WORDS[String(v).toLowerCase()] || String(v) : k === 'skill_id' ? skillName(v) : k === 'repeat' ? repeatName(v) : k === 'enabled' ? (v === 'off' ? '停用' : '啟用') : k === 'schedule_id' ? scheduleLabel(v) : String(v))}</dd>`).join('')}</dl>`;
   }
   // The page a Bot is reading in Zook's built-in browser, while it reads it. The link opens it in your own browser.
   function browsingCard(botId, jobs) {
