@@ -62,6 +62,18 @@ class TypedPaths(unittest.TestCase):
         self.assertEqual(sorted(got[3]), ['/tmp/a.txt', '/tmp/b.txt'])  # two paths stay two, not one long one
         self.assertEqual(sorted(got[4]), ['/Users/sean/Documents/Claude code/x.xlsx', '/tmp/plain.csv'])
 
+    def test_punctuation_and_sentences_around_it(self):
+        got = self.offers(['檔案在 /Users/a/Claude code/r.pdf。請看', '（/Users/a/My Docs/x.csv）和「/Users/a/b c/y.txt」', '/Users/a/b c/one.txt、/Users/a/b c/two.txt'])
+        self.assertEqual(got[0], ['/Users/a/Claude code/r.pdf'])
+        self.assertEqual(sorted(got[1]), ['/Users/a/My Docs/x.csv', '/Users/a/b c/y.txt'])
+        self.assertEqual(sorted(got[2]), ['/Users/a/b c/one.txt', '/Users/a/b c/two.txt'])
+
+    def test_long_near_paths_stay_fast(self):
+        code = block(JS('30-pages.js'), 'const PATH_WORD', '\n  function showPathOffers') + """
+const worst = ['/' + 'a b '.repeat(5000) + '/x', ' /a/b c'.repeat(3300), ' /a/b c.d e'.repeat(1800), '/a/' + 'w.tx '.repeat(4000) + '/b', ' /'.repeat(10000)];
+const t = Date.now(); for (let i = 0; i < 5; i++) worst.forEach(typedPaths); console.log(JSON.stringify(Date.now() - t));"""
+        self.assertLess(run_node(code, []), 2000)
+
     def test_no_fragments_and_still_at_most_three(self):
         got = self.offers(['/Users/sean/Claude code/a.txt', ' '.join('/tmp/f%d.txt' % i for i in range(6)), 'a' * 20000 + ' /x/y z'])
         self.assertEqual(got[0], ['/Users/sean/Claude code/a.txt'])
