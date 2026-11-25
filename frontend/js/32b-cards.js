@@ -1,6 +1,6 @@
 
-  // 剩餘額度 on the usage page: one card per account, every card the same size, the accounts of one CLI side by side.
-  // The card shows what is left; sign-in, version, abilities and removal are behind 詳細. CLIs that are not installed
+  // 剩餘額度 on the usage page: one card per CLI, with a row for each of its accounts (#242).
+  // A row shows what is left; sign-in, version, abilities and removal are behind 詳細. CLIs that are not installed
   // stay out of the grid and are installed from ＋ 新增模型, except while an install is running or has just failed.
   const ACCOUNT_BADGE = {logged_in: ['ok', '已登入'], not_logged_in: ['warn', '尚未登入'], installed: ['', '已安裝'], unknown: ['', '狀態不明'], not_installed: ['warn', '未安裝']};
   function flowView(l, kind, id, account = '') {
@@ -83,10 +83,10 @@
       const buttons = loginButtons(p, a);
       return done + (buttons ? `<div class="card-login"><p class="quota-empty">尚未登入</p><div class="card-actions">${buttons}</div></div>` : `<p class="quota-empty">${esc(p.loginNote || '尚未登入。')}</p>`);
     }
+    if (q?.apiBilling || who.type === 'key') return done + '<div class="quota-billed"><b>依用量計費</b><small>API 金鑰帳號沒有 5 小時、每週額度，用多少付多少。</small></div>';  // #199: never a subscription's figures
     if (!state.quota) return loadingBlock('正在偵測使用量…');
     if (state.quota.error) return `<p class="error-text small">${esc(state.quota.error)}</p>`;
     const s = q?.quota;
-    if (q?.apiBilling || who.type === 'key') return '<p class="quota-empty">用 API 金鑰，依用量計費，沒有額度上限可顯示。</p>';
     if (!a && p.issue) return done;  // the line above already says why this sign-in cannot be used and what to do
     if (q?.noQuotaApi) return '<p class="quota-empty">這個 CLI 不提供額度資料。</p>';
     if (q?.quotaUnread && !(s?.windows || []).length) return '<p class="quota-empty">讀不到額度</p>';
@@ -104,27 +104,37 @@
     if (lv.clock) return `下一步：${other ? other + '，或' : ''}等到 ${lv.clock} 重置後再用。`;
     return `下一步：${other ? other + '；' : ''}這家沒有說何時重置，稍後按「偵測使用量」再看${other ? '' : '，或按「＋ 帳號」加入其他帳號'}。`;
   }
-  function accountCard(p, a) {
-    const q = quotaFor(p.id, a ? a.id : undefined), who = a || p, lv = p.installed ? accountLevel(p.id, a ? a.id : '') : {level: ''};
+  // One account inside its family card: what is left, 自動選用 and 詳細. A row is dragged inside its card when the card has several.
+  function accountRow(p, a, many) {
+    const q = quotaFor(p.id, a ? a.id : undefined), lv = p.installed ? accountLevel(p.id, a ? a.id : '') : {level: ''};
     const levelLine = lv.level === 'out' ? `<div class="quota-state out"><span class="out-badge">已用完</span><small>${esc(lv.reset || '未提供重置時間')}</small><p class="quota-next">${esc(outNext(p, a, lv))}</p></div>` : lv.level === 'low' ? `<p class="quota-state low">快用完・剩不到 20%</p>` : '';
-    const line = a ? [a.name, a.email].filter(Boolean).join(' · ') : [(p.profiles || []).length ? '預設帳號' : '', p.email || p.method].filter(Boolean).join(' · ') || p.vendor || '';
+    const name = a ? a.name : (p.profiles || []).length ? '預設帳號' : '', line = (a ? [a.email || a.method] : [p.email || p.method || (name ? '' : p.vendor)]).filter(Boolean).join(' · ');
     const auto = q?.autoOn === undefined ? '' : `<label class="auto-pick small-switch">${toggle(`${a ? `data-auto-account="${esc(a.id)}"` : `data-auto-model="${esc(p.id)}"`} ${q.autoBilled ? 'disabled' : ''}`, q.autoOn, '自動選用')}<span ${lv.level === 'out' && q.autoOn ? 'title="這個帳號已用完，重置前自動選用會先跳過它"' : ''}>${q.autoBilled ? 'API 計費，不會自動選用' : '自動選用'}</span></label>`;
-    const add = !a && p.installed && (p.canAddLogin || p.canAddKey) ? `<button class="secondary small-btn" data-action="profile-add" data-id="${esc(p.id)}">＋ 帳號</button>` : '';
     const keys = (p.profiles || []).filter(x => x.type === 'key').length;
     const issue = a ? '' : p.issue;  // a sign-in problem of the CLI's own account; extra accounts (API keys) are not affected
-    const warn = issue || (p.changed || []).length ? `<p class="error-text small">${esc(issue || '這個版本有變動，暫時關閉：' + p.changed.join('、'))}${issue && keys ? `（已加入的 ${keys} 把 API 金鑰不受影響，可直接在 Bot 設定選用。）` : ''}</p>` : '';
-    return `<article class="left-card account-card ${lv.level ? 'quota-' + lv.level : ''}" draggable="true" data-card-key="${esc(cardKey(p, a))}" title="拖動可以調整順序"><header class="account-head"><div class="account-title"><h3>${esc(cliShort(p))}${p.custom ? ' <span class="pill">自訂</span>' : ''}</h3><span title="${esc(line)}">${esc(line)}</span></div>${p.version?.updateAvailable ? `<span class="new-version" title="有新版 ${esc(p.version.latest)}">有新版</span>` : ''}</header><div class="account-body">${warn}${levelLine}${cardBody(p, a, q)}</div><footer class="account-foot">${auto}<div class="card-actions">${add}<button class="secondary small-btn" data-action="account-detail" data-id="${esc(p.id)}" data-account="${esc(a ? a.id : '')}">詳細</button></div></footer></article>`;
+    const warn = issue || (!a && (p.changed || []).length) ? `<p class="error-text small">${esc(issue || '這個版本有變動，暫時關閉：' + p.changed.join('、'))}${issue && keys ? `（已加入的 ${keys} 把 API 金鑰不受影響，可直接在 Bot 設定選用。）` : ''}</p>` : '';
+    const head = name || line ? `<div class="acct-row-head"><strong>${esc(name || line)}</strong>${name && line ? `<span title="${esc(line)}">${esc(line)}</span>` : ''}</div>` : '';
+    return `<section class="acct-row ${lv.level ? 'quota-' + lv.level : ''}" ${many ? 'draggable="true" ' : ''}data-row-key="${esc(cardKey(p, a))}"${many ? ' title="拖動可以調整這張卡裡的順序"' : ''}>${head}<div class="account-body">${warn}${levelLine}${cardBody(p, a, q)}</div><footer class="account-foot">${auto}<div class="card-actions"><button class="secondary small-btn" data-action="account-detail" data-id="${esc(p.id)}" data-account="${esc(a ? a.id : '')}">詳細</button></div></footer></section>`;
   }
-  // The order of the cards: dragged by the user (自訂), or most left first (自動); kept in the settings so the phone lists them the same way.
+  // One card per CLI: its name, ＋ 帳號 and a row for each of its accounts (the CLI's own sign-in and those added).
+  function familyCard(f) {
+    const p = f.p, many = f.rows.length > 1;
+    const add = p.installed && (p.canAddLogin || p.canAddKey) ? `<button class="secondary small-btn" data-action="profile-add" data-id="${esc(p.id)}">＋ 帳號</button>` : '';
+    return `<article class="left-card account-card family-card" draggable="true" data-card-key="${esc(f.key)}" title="拖動可以調整順序"><header class="account-head"><div class="account-title"><h3>${esc(cliShort(p))}${p.custom ? ' <span class="pill">自訂</span>' : ''}</h3>${many ? `<span>${f.rows.length} 個帳號</span>` : ''}</div><div class="family-tools">${p.version?.updateAvailable ? `<span class="new-version" title="有新版 ${esc(p.version.latest)}">有新版</span>` : ''}${add}</div></header><div class="family-rows">${f.rows.map(r => accountRow(r.p, r.a, many)).join('')}</div></article>`;
+  }
+  // The order: dragged by the user (自訂), or most left first (自動); kept in the settings so the phone lists them the same way.
+  // The setting stays a list of account keys ('codex', 'codex::<id>'), as before the families: a family comes where its first
+  // account comes, and its accounts keep their order inside it.
   const cardKey = (p, a) => a ? p.id + '::' + a.id : p.id;
   const CARD_SORTS = [{id: 'custom', name: '自訂（可拖動）'}, {id: 'auto', name: '自動（剩最多的在前）'}];
-  // 自動: [rank, percent] like the Mac's usage_card_focus. 0 has figures, 1 none, 2 used up, 3 not signed in. The percent is that of
-  // the limit worth watching now: the five-hour one when there is one, otherwise the weekly one.
+  // 自動: [rank, percent] like the Mac's usage_card_focus. 0 has figures, 1 none (API keys too), 2 used up, 3 not signed in. The percent is
+  // that of the limit worth watching now: the five-hour one when there is one, otherwise the weekly one.
   function cardFocus(p, a) {
     if ((a || p).status !== 'logged_in') return [3, 0];
     const q = quotaFor(p.id, a ? a.id : undefined), s = q?.quota, rows = (s?.windows || []).filter(w => typeof w.usedPercent === 'number').map(w => ({label: String(w.label || ''), left: windowLeft(w)}));  // a limit without a figure is skipped, as on the Mac
+    if (q?.apiBilling || (a && a.type === 'key')) return [1, 0];  // paid by use: a subscription's old figures say nothing about it
     if (limitNow(s) || rows.some(r => r.left <= 0)) return [2, 0];
-    if (!rows.length || q?.apiBilling || (a && a.type === 'key')) return [1, 0];
+    if (!rows.length) return [1, 0];
     const focus = rows.find(r => r.label.includes('小時')) || rows.find(r => r.label.includes('週')) || rows[0];
     return [0, focus.left];
   }
@@ -136,6 +146,32 @@
     if (state.data?.settings?.usageCardSort !== 'auto') return cards;
     cards.forEach((c, n) => { c.n = n; c.f = cardFocus(c.p, c.a); });
     return cards.sort((x, y) => x.f[0] - y.f[0] || y.f[1] - x.f[1] || x.n - y.n);
+  }
+  // The accounts in order, grouped by CLI: in 自動 the family whose best account has most left comes first.
+  function usageFamilies(shown) {
+    const fams = [];
+    for (const c of orderedCards(shown)) {
+      let f = fams.find(x => x.key === c.p.id);
+      if (!f) fams.push(f = {key: c.p.id, p: c.p, rows: []});
+      f.rows.push(c);
+    }
+    return fams;
+  }
+  // The saved order after a card (kind 'card') or an account inside its card (kind 'row') is put before or after another;
+  // null when the move is not allowed (an account into another card).
+  function usageOrderAfterMove(fams, kind, moving, target, after) {
+    fams = fams.map(f => ({key: f.key, rows: [...f.rows]}));
+    if (kind === 'card') {
+      const m = fams.find(f => f.key === moving), rest = fams.filter(f => f !== m), at = rest.findIndex(f => f.key === target);
+      if (!m || at < 0) return null;
+      rest.splice(after ? at + 1 : at, 0, m); fams = rest;
+    } else {
+      const f = fams.find(x => x.rows.includes(moving));
+      if (!f || !f.rows.includes(target) || moving === target) return null;
+      f.rows = f.rows.filter(k => k !== moving); const at = f.rows.indexOf(target);
+      f.rows.splice(after ? at + 1 : at, 0, moving);
+    }
+    return fams.flatMap(f => f.rows);
   }
   async function saveCardOrder(change) {
     const before = {...state.data.settings};
@@ -149,25 +185,37 @@
     const shown = list.filter(p => p.installed || p.install?.state === 'running');  // a failed install is retried from ＋ 新增模型
     const waiting = list.length - shown.length;
     const sort = `<div class="card-sort"><span class="usage-auto-label">排序</span>${dropdown('usageCardSort', state.data?.settings?.usageCardSort === 'auto' ? 'auto' : 'custom', CARD_SORTS, 'data-card-sort')}</div>`;
-    const help = '<p class="muted small usage-help">「5 小時」「每週」是訂閱方案的兩種用量上限，用完要等重置；任一種用完，這個帳號就暫時不能用。「自動選用」打開時，Bot 選「自動」就可能用到這個帳號。</p>';
-    return `<section class="usage-block"><div class="overview-head"><h2>剩餘額度</h2>${shown.length ? sort : ''}</div>${shown.length ? help : ''}${shown.length ? `<div class="left-grid account-grid">${orderedCards(shown).map(c => accountCard(c.p, c.a || undefined)).join('')}</div>` : '<div class="blank">還沒有安裝任何模型，按右上角「＋ 新增模型」。</div>'}${waiting ? `<p class="muted small">另有 ${waiting} 個已加入但尚未安裝的模型，可在「＋ 新增模型」安裝。</p>` : ''}</section>`;
+    const help = '<p class="muted small usage-help">同一家的帳號放在同一張卡。「5 小時」「每週」是訂閱方案的兩種用量上限，用完要等重置；任一種用完，這個帳號就暫時不能用。API 金鑰依用量計費，沒有這兩種上限。「自動選用」打開時，Bot 選「自動」就可能用到這個帳號。</p>';
+    return `<section class="usage-block"><div class="overview-head"><h2>剩餘額度</h2>${shown.length ? sort : ''}</div>${shown.length ? help : ''}${shown.length ? `<div class="left-grid account-grid family-grid">${usageFamilies(shown).map(familyCard).join('')}</div>` : '<div class="blank">還沒有安裝任何模型，按右上角「＋ 新增模型」。</div>'}${waiting ? `<p class="muted small">另有 ${waiting} 個已加入但尚未安裝的模型，可在「＋ 新增模型」安裝。</p>` : ''}</section>`;
   }
   document.addEventListener('change', e => {
     if (e.target.dataset?.cardSort === undefined) return;
     saveCardOrder({usageCardSort: e.target.value === 'auto' ? 'auto' : 'custom'});
     toast(e.target.value === 'auto' ? '剩餘額度依剩下多少自動排序' : '剩餘額度照你拖動的順序');
   });
-  // Dragging a card: it goes before or after the card it is dropped on, and the order becomes 自訂.
-  let draggingCard = null;
-  const clearCardMarks = () => document.querySelectorAll('.account-card.drop-before, .account-card.drop-after').forEach(el => el.classList.remove('drop-before', 'drop-after'));
-  const cardDrop = e => { const el = draggingCard && e.target.closest?.('[data-card-key]'); if (!el || el.dataset.cardKey === draggingCard) return null; const r = el.getBoundingClientRect(); return {el, after: e.clientX > r.left + r.width / 2}; };
+  // Dragging: a card goes before or after the card it is dropped on; an account row before or after another row of the same card.
+  // Either way the order becomes 自訂.
+  let draggingUsage = null;
+  const DROP_MARKS = '.drop-before, .drop-after';
+  const clearCardMarks = () => document.querySelectorAll(`.account-card:is(${DROP_MARKS}), .acct-row:is(${DROP_MARKS})`).forEach(el => el.classList.remove('drop-before', 'drop-after'));
+  const cardDrop = e => {
+    if (!draggingUsage) return null;
+    const el = draggingUsage.kind === 'row' ? e.target.closest?.('[data-row-key]') : e.target.closest?.('[data-card-key]');
+    if (!el) return null;
+    const key = draggingUsage.kind === 'row' ? el.dataset.rowKey : el.dataset.cardKey;
+    if (key === draggingUsage.key || (draggingUsage.kind === 'row' && el.closest('[data-card-key]')?.dataset.cardKey !== draggingUsage.family)) return null;
+    const r = el.getBoundingClientRect();
+    return {el, key, after: draggingUsage.kind === 'row' ? e.clientY > r.top + r.height / 2 : e.clientX > r.left + r.width / 2};
+  };
   document.addEventListener('dragstart', e => {
-    const card = e.target.closest?.('[data-card-key]');
-    if (!card || e.target.closest('button, input, a, .dd')) return;
-    draggingCard = card.dataset.cardKey; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', draggingCard);
-    requestAnimationFrame(() => card.classList.add('dragging'));
+    const el = e.target.closest?.('[draggable="true"][data-row-key], [data-card-key]');
+    if (!el || e.target.closest('button, input, a, .dd, label')) return;
+    const row = el.dataset.rowKey !== undefined;
+    draggingUsage = {kind: row ? 'row' : 'card', key: row ? el.dataset.rowKey : el.dataset.cardKey, family: el.closest('[data-card-key]')?.dataset.cardKey};
+    e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', draggingUsage.key);
+    requestAnimationFrame(() => el.classList.add('dragging'));
   });
-  document.addEventListener('dragend', () => { draggingCard = null; clearCardMarks(); document.querySelectorAll('.account-card.dragging').forEach(el => el.classList.remove('dragging')); });
+  document.addEventListener('dragend', () => { draggingUsage = null; clearCardMarks(); document.querySelectorAll('.account-card.dragging, .acct-row.dragging').forEach(el => el.classList.remove('dragging')); });
   document.addEventListener('dragover', e => {
     const t = cardDrop(e);
     if (!t) return;
@@ -176,20 +224,20 @@
     if (!t.el.classList.contains(cls)) { clearCardMarks(); t.el.classList.add(cls); }
   });
   document.addEventListener('drop', e => {
-    const t = cardDrop(e), moving = draggingCard;
+    const t = cardDrop(e), moving = draggingUsage;
     clearCardMarks();
     if (!t) return;
-    e.preventDefault(); draggingCard = null;
-    window.moveUsageCard(moving, t.el.dataset.cardKey, t.after);
+    e.preventDefault(); draggingUsage = null;
+    (moving.kind === 'row' ? window.moveUsageRow : window.moveUsageCard)(moving.key, t.key, t.after);
   });
   // Also what the drop above does; usable without a mouse (and by the browser tests).
-  window.moveUsageCard = (moving, target, after) => {
-    const keys = [...document.querySelectorAll('[data-card-key]')].map(el => el.dataset.cardKey).filter(k => k !== moving);
-    const at = keys.indexOf(target);
-    if (at < 0 || !moving) return;
-    keys.splice(after ? at + 1 : at, 0, moving);
-    saveCardOrder({usageCardOrder: keys, usageCardSort: 'custom'});
+  const shownFamilies = () => [...document.querySelectorAll('[data-card-key]')].map(el => ({key: el.dataset.cardKey, rows: [...el.querySelectorAll('[data-row-key]')].map(r => r.dataset.rowKey)}));
+  const moveUsage = kind => (moving, target, after) => {
+    const keys = moving ? usageOrderAfterMove(shownFamilies(), kind, moving, target, after) : null;
+    if (keys) saveCardOrder({usageCardOrder: keys, usageCardSort: 'custom'});
   };
+  window.moveUsageCard = moveUsage('card');
+  window.moveUsageRow = moveUsage('row');
   // 詳細: everything about one account that is not about what is left.
   function accountDetail(id, account) {
     const p = (state.accounts?.providers || []).find(x => x.id === id);
