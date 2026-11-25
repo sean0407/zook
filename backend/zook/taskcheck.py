@@ -108,6 +108,17 @@ def task_pick_verifier(store, group, run, task, working):
     return 'wait' if busy else 'none'
 
 
+TASK_LAYOUT_FILES = re.compile(r'\.(pptx|ppt|key|pdf|docx|doc|pages)(?![A-Za-z0-9])', re.I)
+
+
+def task_layout_rule(attempt):
+    """#164① (#114): a deck, PDF or document handed in is checked by its pictures, or the checker says plainly that the layout was not seen."""
+    said = ' '.join([str(attempt.get('summary') or '')] + [str(x) for x in attempt.get('files') or []])
+    if not TASK_LAYOUT_FILES.search(said) and not re.search(r'簡報|投影片|PDF|Word|文件|海報|傳單', said, re.I): return ''
+    return ('交回的是簡報、PDF 或文件時，版面要看過畫面才算數：用 /usr/bin/python3 "%s" 檔案 暫存資料夾（另開一個新的，不算修改檔案）把每一頁轉成圖片看過；'
+            '讀不到或失敗時改用 qlmanage -t -s 1600 -o 暫存資料夾 檔案（只有第一頁）。沒看到畫面的部分，reasons 要寫「版面未驗證」，不要說版面沒問題。' % PAGEPICS)
+
+
 def task_verify_prompt(store, group, run, task, bot):
     attempt = next((a for a in reversed(task['attempts']) if a.get('state') == 'reported'), {})
     rules = ['你負責驗收群組「%s」裡的一項工作。依「怎樣算完成」檢查成員交回的結果，只檢查，不要修改任何檔案，也不要自己重做。' % group['name'],
@@ -116,6 +127,7 @@ def task_verify_prompt(store, group, run, task, bot):
              'reasons 和回覆一律用繁體中文，不要用簡體字。']
     shared = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
     if shared: rules.append('群組共用檔案在 %s：%s。用你的讀檔工具查看；讀不到時改用 zook_group_file_read。' % (group_copy_folder(store, bot['id']), '、'.join(shared[:40])))
+    if task_layout_rule(attempt): rules.append(task_layout_rule(attempt))
     known = ['使用者的決定：%s → %s' % (q, a) for q, a in task.get('decisions') or []]
     if task.get('question') and task.get('answer'): known.append('成員問主持人：%s；主持人回答：%s' % (task['question'], task['answer']))
     claims = ['工作 %d「%s」的回報：%s' % (t['n'], t['title'], ((t['attempts'] or [{}])[-1].get('summary') or '')) for t in run['tasks'] if t['n'] in (task.get('deps') or []) and t['status'] == 'done']
