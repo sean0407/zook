@@ -241,7 +241,10 @@ def sync_group_files_out(store, group_id, bot_name, bot_id, seen):
                 size, digest = copied
                 with _group_files_lock:
                     name = _short_name(entry_name); current = shared / name
-                    if os.path.lexists(str(current)) and _file_hash(current) != seen.get(entry_name): name = free_group_file_name(shared, name, bot_name)
+                    now = _file_hash(current) if os.path.lexists(str(current)) else None
+                    if now is not None and now != seen.get(entry_name):
+                        if now == digest: continue  # someone saved the very same file meanwhile: no second copy named after this Bot (#176)
+                        name = free_group_file_name(shared, name, bot_name)
                     if size > MAX_UPLOAD or group_files_size(store, group_id, name) + size > GROUP_FILES_TOTAL: skipped.append(name); continue
                     os.replace(str(temp), str(shared / name)); saved.append(name)
             finally:

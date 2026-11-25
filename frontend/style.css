@@ -1113,7 +1113,7 @@ button {
 .member-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 14px; text-align: left; border-radius: 10px; }
 .member-row:hover { background: #f5f5f5; }
 .member-row span { display: grid; gap: 2px; min-width: 0; }
-.member-row small { color: #888; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.member-row small { color: #888; font-size: 11px; overflow-wrap: anywhere; }  /* #176: the whole model and permission line, wrapped */
 .member-row .avatar { width: 28px; height: 28px; }
 .member-pick { border: 1px solid #eee; border-radius: 12px; max-height: 300px; overflow: auto; }
 .member-pick .ability-option span { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; align-items: center; }
@@ -2014,6 +2014,9 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
   .page-top { flex-wrap: wrap; gap: 10px; margin: 4px 0 18px; }
   .modal-overlay { padding: 12px; }
   .modal-foot { flex-wrap: wrap; padding: 12px 16px; }
+  /* #176: a card's 刪除／編輯 is a finger-sized target */
+  .card .actions { gap: 4px; margin-top: 10px; }
+  .card .actions .link { min-height: 44px; min-width: 44px; padding: 0 10px; font-size: 13px; }
 }
 
 /* A required field left empty is outlined in red once the person tries to send the form, so it is clear which one. */
@@ -2091,3 +2094,5 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .quota-billed { display:flex; flex-direction:column; gap:2px; }
 .quota-billed b { font-size:14px; }
 .quota-billed small { color:var(--muted, #777); }
+/* #176: 產出's switch for the scripts a Bot wrote to make its files */
+.output-scripts { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; padding: 0 2px; font-size: 12px; color: #777; cursor: pointer; }

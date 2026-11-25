@@ -27,6 +27,7 @@
   }
   document.addEventListener('change', e => {
     if (e.target.name === 'providerChoice' && e.target.closest('#bot-form')) syncFeatureRows(e.target.closest('#bot-form'));
+    if (e.target.dataset.showScripts) { state.showScripts = {...state.showScripts, [e.target.dataset.showScripts]: e.target.checked}; render(true); }  // 產出: a Bot's build scripts (#176)
     if (e.target.dataset.autoModel) saveAutoModel(e.target);
     if (e.target.dataset.botDefault) saveBotDefault(e.target);
     if (e.target.name === 'connectorAccount') switchConnectorAccount(e.target);
