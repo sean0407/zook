@@ -234,7 +234,7 @@ class Page(unittest.TestCase):
 
     def test_preview_says_gone_empty_and_broken(self):
         outputs = (JS / '36-outputs.js').read_text(encoding='utf-8')
-        code = outputs[outputs.index('  const UNREADABLE'):outputs.index('  async function openOutput')]
+        code = outputs[outputs.index('  const CANT_OPEN'):outputs.index('  async function openOutput')]
         out = run_node(PREVIEW.replace('__CODE__', code))
         self.assertTrue(out['/gone']['missing']); self.assertIn('找不到這個檔案', out['/gone']['body'])
         self.assertIn('是空的', out['/empty']['body'])

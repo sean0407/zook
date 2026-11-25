@@ -1,11 +1,17 @@
   // 產出: the files a Bot made or changed, with a preview.
   if (!state.outputs) state.outputs = {};
+  // One request at a time per Bot: asked again meanwhile (a running reply wrote another file), it reads once more when this one is back.
+  const outputsBusy = {};
   async function loadOutputs(botId, quiet) {
+    if (outputsBusy[botId]) { outputsBusy[botId] = quiet && outputsBusy[botId] !== 'loud' ? 'again' : 'loud'; return; }
+    outputsBusy[botId] = true;
     const stop = new AbortController(), timer = setTimeout(() => stop.abort(), 20000);  // never 「正在讀取」 for minutes
     try { state.outputs[botId] = (await api('bots/' + encodeURIComponent(botId) + '/outputs', {signal: stop.signal})).outputs; }
     catch (error) { state.outputs[botId] = state.outputs[botId] || []; if (!quiet) toast(stop.signal.aborted ? '產出讀取太久，請按「重新整理」再試一次。' : error.message); }
     finally { clearTimeout(timer); }
+    const again = outputsBusy[botId]; delete outputsBusy[botId];
     render(true);
+    if (again !== true) loadOutputs(botId, again === 'again');
   }
   // #176 (#96②): the script a Bot wrote to make its files (create_report.py) is not what it handed over. Beside other files it goes
   // under a switch; a Bot that only wrote code keeps its code in the list.
@@ -30,7 +36,7 @@
   }
   // #153④⑥: what the preview window shows. A file that is gone says so and has nothing to download; one that cannot be read
   // (a picture that is not one, a 「PDF」 that is not a PDF, an empty file) says so in plain words and can still be downloaded.
-  const UNREADABLE = '這個檔案打不開，可能已損壞或副檔名不對。可以下載後用其他程式開啟。';
+  const CANT_OPEN = '這個檔案打不開，可能已損壞或副檔名不對。可以下載後用其他程式開啟。';
   const imageOpens = src => new Promise(done => { const img = new Image(); img.onload = () => done(img.naturalWidth > 0); img.onerror = () => done(false); img.src = src; });
   async function previewBody(url, kind, name) {
     let res = null;
@@ -41,9 +47,9 @@
     if (!blob.size) return {body: '<p class="muted">這個檔案是空的（0 位元組），沒有內容可以顯示。</p>'};
     if (kind === 'image') {
       const local = URL.createObjectURL(blob);
-      return (await imageOpens(local)) ? {body: `<div class="image-view"><img src="${esc(local)}" alt="${esc(name)}"></div>`} : {body: `<p class="muted">${UNREADABLE}</p>`};
+      return (await imageOpens(local)) ? {body: `<div class="image-view"><img src="${esc(local)}" alt="${esc(name)}"></div>`} : {body: `<p class="muted">${CANT_OPEN}</p>`};
     }
-    if (kind === 'pdf') return (await blob.slice(0, 1024).text()).includes('%PDF-') ? {body: pdfFrame(url, name)} : {body: `<p class="muted">${UNREADABLE}</p>`};
+    if (kind === 'pdf') return (await blob.slice(0, 1024).text()).includes('%PDF-') ? {body: pdfFrame(url, name)} : {body: `<p class="muted">${CANT_OPEN}</p>`};
     if (kind === 'text' || kind === 'markdown') {
       const text = (await blob.text()).slice(0, 200000);
       return {body: kind === 'markdown' ? `<div class="md output-text">${markdown(text)}</div>` : `<pre class="output-text">${esc(text)}</pre>`};

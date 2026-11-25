@@ -79,7 +79,17 @@
     return `<div class="effort-pick" title="思考強度">${dropdown('effort', currentEffort(), EFFORTS, 'data-effort')}</div>`;
   }
   const providerList = () => (state.providers || [{id: 'codex', name: 'Codex'}, {id: 'claude', name: 'Claude'}]).map(p => ({id: p.id, name: String(p.name).split('（')[0]}));
-  const providerShort = id => id === 'auto' ? '自動選擇' : providerList().find(p => p.id === id)?.name || id;
+  const providerShort = id => id === 'auto' ? '自動選擇' : providerList().find(p => p.id === id)?.name || String(id || '').replace(/^./, c => c.toUpperCase());
+  // A model in words for the Bot's header (#154②): the name its CLI gave when the list was read, else 「gemini-3.8-flash-medium」 as
+  // 「Gemini 3.8 Flash」 (the thinking level is said on its own beside it).
+  if (!state.modelNames) state.modelNames = {};
+  function modelWords(id, provider) {
+    const raw = String(id || '').trim(), known = state.modelNames[provider]?.[raw];
+    if (!raw || known) return known || '';
+    const words = raw.split(/[-_\s]+/).filter(Boolean);
+    while (words.length > 1 && /^(minimal|low|medium|high|xhigh|max)$/i.test(words.at(-1))) words.pop();
+    return words.map(w => /^(gpt|ai|xai)$/i.test(w) ? w.toUpperCase() : /^[a-z]/.test(w) ? w[0].toUpperCase() + w.slice(1) : w).join(' ');
+  }
   const permissionName = id => PERMISSIONS.find(p => p.id === id)?.name || '謹慎';
   // Shared controls: every choice in the UI is a dropdown (with optional descriptions) or an on/off switch.
   function dropdown(name, value, options, attrs = '') {
@@ -312,9 +322,20 @@
     return `<div class="detail-title">記憶 <button class="link" data-action="page" data-id="memory">查看全部</button></div><div class="detail-empty">${own || shared ? `這個 Bot 記住 ${own} 則，另外知道所有 Bot 共用的 ${shared} 則。` : '還沒有記憶。對 Bot 說「記住…」它就會記下。'}</div>`;
   }
 
+  // #96⑧/#215③: which CLI and account a Bot uses, the model it really runs on (a Bot on 預設 says the one its last reply used)
+  // and its thinking level, in one line: 「Codex（Waifdance）· gpt-6-luna · 思考強度：深入」.
+  function botModelLine(b, withEffort = true) {
+    const st = state.data.settings, p = b.provider || st.provider || 'codex';
+    const account = b.account ? ((state.providers || []).find(x => x.id === p)?.accounts || []).find(a => a.id === b.account)?.name || b.account : '';
+    const last = (state.data.jobs || []).filter(j => j.botId === b.id && j.usage?.model && (p === 'auto' || !j.usage.provider || j.usage.provider === p)).slice(-1)[0]?.usage.model;
+    const fixed = b.model || (p === (st.provider || 'codex') && st.model) || '';
+    const model = b.model ? modelWords(b.model, p) || b.model : fixed ? modelWords(fixed, p) || fixed : (last ? `預設型號（最近一次是 ${last}）` : '預設型號');  // the set model in words, as #154② (live_outputs_test)
+    const effort = '思考強度：' + (EFFORTS.find(x => x.id === (b.effort || st.effort))?.name || '標準');
+    return [providerShort(p) + (account ? '（' + account + '）' : ''), model, withEffort ? effort : ''].filter(Boolean).join(' · ');
+  }
   function detail(b) {
     let notes = state.data.knowledge.filter(n => n.botId === b.id);
-    return `${detailBackdrop()}<aside class="detail" aria-label="詳情"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatar(b,'big')}<h2>${esc(b.name)}</h2><p>${esc([providerShort(b.provider || state.data.settings.provider || 'codex'), b.model, '思考強度：' + (EFFORTS.find(x => x.id === (b.effort || state.data.settings.effort))?.name || '標準')].filter(Boolean).join(' · '))}</p><p>${esc(permText(b))}</p>${b.autoAssigned && b.autoReason ? `<p class="muted small">自動配好：${esc(b.autoReason)}</p>` : ''}<button class="secondary detail-edit" data-action="edit-bot">編輯設定</button></div><div class="tabs"><button data-action="detail" data-id="persona" class="${state.detail==='persona'?'active':''}">人格</button><button data-action="detail" data-id="activity" class="${state.detail==='activity'?'active':''}">動態</button><button data-action="detail" data-id="database" class="${state.detail==='database'?'active':''}">資料庫</button><button data-action="detail" data-id="outputs" class="${state.detail==='outputs'?'active':''}">產出</button></div>${state.detail==='persona'?personaPanel(b):state.detail==='outputs'?outputsPanel(b):state.detail==='database'?`<div class="detail-title">知識 <button class="link" data-action="new-note">＋ 新增</button></div>${notes.length?notes.map(n=>`<button class="note-row" data-action="edit-note" data-id="${esc(n.id)}"><strong>${esc(n.title)}</strong><small>${esc(n.content)}</small></button>`).join(''):'<div class="detail-empty">尚未新增知識。加入資料，讓這個 Bot 有更多背景。</div>'}${memoryNote(b)}`:`<div class="detail-title">最近動態</div>${toolTimeline(b.id)}${(b.messages||[]).length?`<div class="detail-empty">最近對話 ${esc(formatDate(b.messages.at(-1).createdAt))}</div>`:'<div class="detail-empty">這裡會顯示最近的對話動態。</div>'}`}${usageDock()}</aside>`
+    return `${detailBackdrop()}<aside class="detail" aria-label="詳情"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatar(b,'big')}<h2>${esc(b.name)}</h2><p>${esc(botModelLine(b))}</p><p>${esc(permText(b))}</p>${b.autoAssigned && b.autoReason ? `<p class="muted small">自動配好：${esc(b.autoReason)}</p>` : ''}<button class="secondary detail-edit" data-action="edit-bot">編輯設定</button></div><div class="tabs"><button data-action="detail" data-id="persona" class="${state.detail==='persona'?'active':''}">人格</button><button data-action="detail" data-id="activity" class="${state.detail==='activity'?'active':''}">動態</button><button data-action="detail" data-id="database" class="${state.detail==='database'?'active':''}">資料庫</button><button data-action="detail" data-id="outputs" class="${state.detail==='outputs'?'active':''}">產出</button></div>${state.detail==='persona'?personaPanel(b):state.detail==='outputs'?outputsPanel(b):state.detail==='database'?`<div class="detail-title">知識 <button class="link" data-action="new-note">＋ 新增</button></div>${notes.length?notes.map(n=>`<button class="note-row" data-action="edit-note" data-id="${esc(n.id)}"><strong>${esc(n.title)}</strong><small>${esc(n.content)}</small></button>`).join(''):'<div class="detail-empty">尚未新增知識。加入資料，讓這個 Bot 有更多背景。</div>'}${memoryNote(b)}`:`<div class="detail-title">最近動態</div>${toolTimeline(b.id)}${(b.messages||[]).length?`<div class="detail-empty">最近對話 ${esc(formatDate(b.messages.at(-1).createdAt))}</div>`:'<div class="detail-empty">這裡會顯示最近的對話動態。</div>'}`}${usageDock()}</aside>`
   }
 
   function formatDate(d) {
@@ -348,6 +369,7 @@
       const current = form.elements.model.value;
       const wasCustom = select.value === '__custom__';
       const models = Array.isArray(data.models) ? data.models : [];
+      state.modelNames[provider] = Object.fromEntries(models.filter(m => m.name && m.name !== m.id).map(m => [m.id, m.name]));  // for the Bot's header
       const st = state.data.settings, named = provider === (st.provider || 'codex') && st.model ? (models.find(m => m.id === st.model)?.name || st.model) : '';
       const pinned = named && current !== st.model ? st.model : null;  // the default model shows once, as 預設; a Bot that picked it itself keeps it as （固定）
       select.innerHTML = `<option value="">${esc(form.id === 'bot-form' ? (named ? '預設（目前是 ' + named + '）' : '預設（這一家建議的型號）') : '建議的型號（由這一家決定）')}</option>` + models.filter(m => form.id !== 'bot-form' || m.id !== pinned).map(m => `<option value="${esc(m.id)}">${esc(m.name||m.id)}${m.source==='cache'?'（最近用過）':''}${form.id === 'bot-form' && named && m.id === st.model ? '（固定）' : ''}</option>`).join('') + '<option value="__custom__">自己輸入型號…</option>';

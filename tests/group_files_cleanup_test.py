@@ -106,7 +106,7 @@ class PageSide(unittest.TestCase):
 
     def test_a_long_name_keeps_the_delete_button(self):
         css = (ROOT / 'frontend/style.css').read_text(encoding='utf-8')
-        self.assertIn('.group-file > button { flex-shrink: 0;', css); self.assertIn('grid-template-columns: minmax(0, 1fr)', css)
+        self.assertIn('.group-file > a, .group-file > button.link { flex-shrink: 0;', css); self.assertIn('grid-template-columns: minmax(0, 1fr)', css)
         groups = (ROOT / 'frontend/js/35-groups.js').read_text(encoding='utf-8'); pages = (ROOT / 'frontend/js/30-pages.js').read_text(encoding='utf-8')
         self.assertIn('<strong title="${esc(f.name)}">', groups); self.assertIn('class="pending-name" title="${esc(f.name)}">${esc(midName(f.name, 24))}', pages)
 

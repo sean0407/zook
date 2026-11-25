@@ -415,6 +415,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             if job.get('compact') and not compacted: compacted = True; prompt = self.compact_chat(job_id, prompt, (p, m), run_bot, inventory)  # two long replies in a row: start this one from a summary
             with store.lock: before = len(store.find('jobs', job_id).get('toolCalls') or [])
             self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)
+            if self.__dict__.get('no_starts'): return  # Zook is closing: no other model is tried, the reply is left as it is now
             with store.lock:
                 job = store.find('jobs', job_id) or {}
                 acted = any(c.get('category') not in ('read', 'external_read') for c in (job.get('toolCalls') or [])[before:])
@@ -622,7 +623,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             feed = resume_feed(store, job_id, kind, keep_session, resume, progress_feeder(kind, job_id, partial_feeder(kind, job_id) if streaming else None), (provider, model, account, cli_cwd))  # resume.py
             with store.lock:
                 job = store.find('jobs', job_id)
-                if not job or job['status'] != 'running': return
+                if not job or job['status'] != 'running' or self.__dict__.get('no_starts'): return  # Zook closing: left to bg_closing (background.py)
                 started_at = time.time()
                 if streaming: partial_start(job)
                 progress_start(job_id)  # progress.py
@@ -631,6 +632,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 proc = kept or bg_popen(self, job, args, cli_cwd, env, stdin_prompt, kind)  # under a runner when it may go on while Zook is closed (background.py)
                 kept = kept or bg_turn(proc, kind, feed, job); proc = kept or proc  # a kept CLI's reply taken up after a restart
                 self.processes[job_id] = proc; note_cli_pid(store, job_id, proc, binary)  # resume.py
+            bg_ready(self, proc)  # its runner's report is waited for with the lock let go (#290, background.py)
             try:
                 # A reply may take as long as it keeps working. It is stopped when nothing has happened for a while (no output from the
                 # CLI, no tool use), or at the overall limit. A 長任務 is given its whole time even when its CLI stays silent.

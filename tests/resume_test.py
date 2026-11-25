@@ -4,15 +4,16 @@ import datetime, http.client, importlib.util, json, os, signal, subprocess, sys,
 from pathlib import Path
 
 SERVER = Path(__file__).resolve().parents[1] / 'backend/server.py'
-# A Codex stand-in: a prompt with SLOW says which conversation it writes into, then works for a long time (Zook is stopped meanwhile).
+# A Codex stand-in: a message with SLOW (not the history sent with it) says which conversation it writes into, then works for a long time (Zook is stopped meanwhile).
 CODEX = r'''#!/usr/bin/env python3
 import json, os, sys, time
 a = sys.argv[1:]; here = os.path.dirname(sys.argv[0]); text = sys.stdin.read()
 with open(os.path.join(here, 'runs.jsonl'), 'a') as f: f.write(json.dumps(dict(args=a, prompt=text)) + '\n')
 n = len(open(os.path.join(here, 'runs.jsonl')).readlines())
 print(json.dumps(dict(type='thread.started', thread_id=a[a.index('resume') + 1] if 'resume' in a else 'thread-%d' % n)), flush=True)
-if 'CMD' in text and '重新啟動' not in text: print(json.dumps(dict(type='item.started', item=dict(id='i1', type='command_execution', command='curl -X POST x', status='in_progress'))), flush=True)
-if ('SLOW' in text or 'CMD' in text) and '重新啟動' not in text: time.sleep(60)
+asked = text.split('對話紀錄：', 1)[1].rsplit('\n使用者：', 1)[-1] if '對話紀錄：' in text else text  # this message only, not the history sent with it
+if 'CMD' in asked and '重新啟動' not in text: print(json.dumps(dict(type='item.started', item=dict(id='i1', type='command_execution', command='curl -X POST x', status='in_progress'))), flush=True)
+if ('SLOW' in asked or 'CMD' in asked) and '重新啟動' not in text: time.sleep(60)
 print(json.dumps(dict(type='item.completed', item=dict(type='agent_message', text='接著做完了'))))
 '''
 
@@ -67,6 +68,9 @@ class ResumeAfterRestart(unittest.TestCase):
         self.until(lambda: self.state()['messages'][-1].get('status') == 'completed')
         sent = self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': text})[1]
         self.until(lambda: any((j.get('cliSession') or {}).get('session') and (wait is None or j.get(wait)) for j in self.data()['jobs'] if j['id'] == sent['jobId']))  # saved on the Mac, never sent to a window
+        # A reply that goes on in a CLI conversation notes it before its CLI starts (resume_feed): Zook is stopped only once the CLI
+        # has its prompt. Stopped sooner, under load, the CLI never ran and the next message was sent the whole history.
+        self.until(lambda: any(text in r['prompt'] for r in self.runs()))
         self.assertNotIn('cliSession', self.req('GET', '/api/jobs/' + sent['jobId'])[1])
         self.stop(hard)
         return sent['jobId']

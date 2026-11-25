@@ -193,7 +193,7 @@ def task_run_ok(run):
     if not isinstance(run, dict) or not text(run.get('id'), 64) or not text(run.get('status'), 20) or not isinstance(run.get('tasks'), list) or len(run['tasks']) > TASK_MAX_ALL: return False
     if not task_round_ok(run): return False
     if any(k in run and (type(run[k]) is not int or run[k] < 0) for k in ('wakes', 'attempts', 'batches', 'hostMissed', 'userMissed', 'bonusAttempts', 'bonusWakes')): return False
-    if any(k in run and not text(run[k], 4000) for k in ('origin', 'hostId', 'goal', 'goalId', 'groupRunId')): return False
+    if any(k in run and not text(run[k], 4000) for k in ('origin', 'hostId', 'goal', 'goalId', 'groupRunId', 'stopWhy')): return False
     if run.get('origin') not in ORIGIN_NAMES or not text(run.get('hostId'), 64): return False  # an empty or unknown origin would read as the user's
     if any(k in run and (not isinstance(run[k], dict) or any(not isinstance(v, list) or not all(isinstance(x, str) for x in v) for v in run[k].values())) for k in ('use', 'lanes')): return False
     if 'delivered' in run and (not isinstance(run['delivered'], list) or not all(isinstance(x, str) for x in run['delivered'])): return False
@@ -228,7 +228,7 @@ def task_stop(store, group):
     """Lock held. The user stopped the group: its run ends now, whatever its loop is still doing."""
     run = group.get('taskRun')
     if not isinstance(run, dict) or run.get('status') != 'running': return
-    run['status'] = 'stopped'
+    run['status'] = 'stopped'; run['stopWhy'] = '你按了停止。'
     for t in run.get('tasks') or []:
         if t.get('parent') and t.get('staged'): task_handoff_abort(run, t['parent'])  # its member's turn is being stopped
     for t in run.get('tasks') or []:
