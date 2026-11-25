@@ -15,6 +15,34 @@ import ctypes, ctypes.util, os, re, shutil, signal, subprocess, sys, tempfile, t
 PML = ('http://schemas.openxmlformats.org/presentationml/2006/main', 'http://purl.oclc.org/ooxml/presentationml/main')
 
 
+MOST = [0]      # --pages N: picture only the first N pages (Zook's preview); 0 is every page
+SKIPPED = [0]   # pages left out by --pages
+_children = []  # Quick Look or osascript running now: ended with pagepics
+
+
+def _run(command, timeout=120):
+    """One helper program in its own group, ended (with whatever it started) on time-out or when pagepics is stopped."""
+    proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    _children.append(proc)
+    try: proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired: _end(proc)
+    finally:
+        if proc in _children: _children.remove(proc)
+
+
+def _end(proc):
+    try: os.killpg(proc.pid, signal.SIGKILL)
+    except OSError: pass
+    try: proc.wait(timeout=5)
+    except subprocess.TimeoutExpired: pass
+
+
+def _first(count):
+    """How many of count pages to picture."""
+    if MOST[0] and count > MOST[0]: SKIPPED[0] = count - MOST[0]; return MOST[0]
+    return count
+
+
 class _Rect(ctypes.Structure):
     _fields_ = [('x', ctypes.c_double), ('y', ctypes.c_double), ('w', ctypes.c_double), ('h', ctypes.c_double)]
 
@@ -54,7 +82,7 @@ def pdf_pages(path, out, width=1600):
     if not doc: raise SystemExit('讀不到這個 PDF：%s' % path)
     png_type, space, done, missing = cf.CFStringCreateWithCString(None, b'public.png', 0x08000100), cg.CGColorSpaceCreateDeviceRGB(), [], []
     stem = os.path.splitext(os.path.basename(path))[0]
-    for n in range(1, cg.CGPDFDocumentGetNumberOfPages(doc) + 1):
+    for n in range(1, _first(cg.CGPDFDocumentGetNumberOfPages(doc)) + 1):
         page = cg.CGPDFDocumentGetPage(doc, n)
         box, turn = cg.CGPDFPageGetBoxRect(page, 1), cg.CGPDFPageGetRotationAngle(page) % 360  # 1 = crop box
         w, h = (box.h, box.w) if turn in (90, 270) else (box.w, box.h)
@@ -85,7 +113,7 @@ def pdf_pages(path, out, width=1600):
 
 def quicklook(path, out, width=1600):
     """Quick Look's picture of the file's first page (no window). Returns the PNG or None."""
-    subprocess.run(['/usr/bin/qlmanage', '-t', '-s', str(width), '-o', out, path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+    _run(['/usr/bin/qlmanage', '-t', '-s', str(width), '-o', out, path])
     made = os.path.join(out, os.path.basename(path) + '.png')
     return made if os.path.exists(made) else None
 
@@ -104,7 +132,7 @@ def pptx_pages(path, out, width=1600):
     stem, done, missing = os.path.splitext(os.path.basename(path))[0], [], []
     work = tempfile.mkdtemp(prefix='.zook-pagepics-', dir=out)  # inside the scratch folder: cleaning that up removes it too
     try:
-        for n, keep in enumerate(ids, 1):
+        for n, keep in enumerate(ids[:_first(len(ids))], 1):
             one = pres[:listed.start()] + listed.group(1) + keep + listed.group(3) + pres[listed.end():]
             copy = os.path.join(work, '%s-%02d.pptx' % (stem, n))
             with zipfile.ZipFile(copy, 'w', zipfile.ZIP_DEFLATED) as z:
@@ -143,7 +171,7 @@ def docx_pages(path, out, width=1600):
         stem = os.path.splitext(os.path.basename(path))[0]
         script, pdf = os.path.join(work, 'layout.js'), os.path.join(work, stem + '.pdf')
         with open(script, 'w', encoding='utf-8') as f: f.write(DOCX_TO_PDF)
-        subprocess.run(['/usr/bin/osascript', '-l', 'JavaScript', script, os.path.abspath(path), pdf], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+        _run(['/usr/bin/osascript', '-l', 'JavaScript', script, os.path.abspath(path), pdf])
         if not os.path.exists(pdf) or not os.path.getsize(pdf): return [], []
         try: return pdf_pages(pdf, out, width)
         except SystemExit: return [], []  # an unreadable layout: Quick Look's first page instead
@@ -165,11 +193,13 @@ def _orphaned(parent):
 
 
 def _stop(signum, frame):
+    for proc in list(_children): _end(proc)  # Quick Look or the Word layout it was waiting on goes too
     raise SystemExit(128 + signum)  # Zook stopping the job: unwind so the one-slide copies are removed
 
 
 def main(argv):
-    if len(argv) != 3: raise SystemExit('用法：python3 pagepics.py <檔案> <輸出資料夾>')
+    if len(argv) == 5 and argv[3] == '--pages' and argv[4].isdigit(): MOST[0] = int(argv[4]); argv = argv[:3]
+    if len(argv) != 3: raise SystemExit('用法：python3 pagepics.py <檔案> <輸出資料夾> [--pages 頁數]')
     path, out = argv[1], argv[2]
     for sig in (signal.SIGTERM, signal.SIGHUP): signal.signal(sig, _stop)
     threading.Thread(target=_orphaned, args=(os.getppid(),), daemon=True).start()
@@ -183,6 +213,7 @@ def main(argv):
         pages, missing = [(made, 0, 0)] if made else [], []
         if made: print('（這個格式只能轉第一頁；其餘內容請直接讀檔確認）')
     for target, w, h in pages: print('%s\t比例 %s' % (target, ratio(w, h)))
+    if SKIPPED[0]: print('（共 %d 頁，只轉了前 %d 頁）' % (SKIPPED[0] + MOST[0], MOST[0]))
     if missing: raise SystemExit('這幾頁沒有轉出圖片：第 %s 頁（%s）。請改讀這幾頁的內容確認，並告訴使用者哪些版面沒有看到。'
                                  % ('、'.join(map(str, missing)), path))
     if not pages: raise SystemExit('沒有轉出圖片：%s' % path)

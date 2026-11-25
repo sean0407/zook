@@ -109,8 +109,9 @@ def office_preview(store, path, strict=False):
         if type(pages) is int and 1 <= pages <= PREVIEW_PAGES:
             return dict(status='ready', pages=pages, total=total if type(total) is int and pages <= total <= 100000 else pages, note=str(done.get('note') or '')[:200], version=key)
         failed = _preview_json(store, key, 'failed.json')
-        if failed and time.time() - float(failed.get('at') or 0) < PREVIEW_RETRY: return dict(status='failed', reason=str(failed.get('reason') or ''))
-        if info.st_size > MAX_UPLOAD: return dict(status='failed', reason='這個檔案超過 20 MB，無法產生預覽，請下載後開啟。')
+        at = failed and failed.get('at')
+        if type(at) in (int, float) and 0 <= time.time() - at < PREVIEW_RETRY: return dict(status='failed', reason=str(failed.get('reason') or ''))
+        if info.st_size > MAX_UPLOAD: return dict(status='failed', reason='這個檔案超過 20 MB，無法在 Zook 裡預覽，請在 Finder 開啟。')
         with _preview_lock:
             if key in _preview_running: return dict(status='working')
             if len(_preview_running) >= PREVIEW_WAITING: return dict(status='failed', reason='Zook 正在產生其他檔案的預覽，請過一會兒再開一次。')
@@ -126,9 +127,9 @@ def office_preview(store, path, strict=False):
 
 
 def office_render(source, out):
-    """([pictures of every page, in order], a note when some are missing). Tests put a fake in its place: CI has no dependable Quick Look."""
+    """([pictures of its first PREVIEW_PAGES pages, in order], a note when some are missing, how many pages it has). Tests put a fake in its place: CI has no dependable Quick Look."""
     if not os.path.exists('/usr/bin/qlmanage'): raise RuntimeError('這台 Mac 沒有 Quick Look，無法產生預覽，可以下載後用其他程式開啟。')
-    proc = subprocess.Popen([sys.executable, PAGEPICS, source, out], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
+    proc = subprocess.Popen([sys.executable, PAGEPICS, source, out, '--pages', str(PREVIEW_PAGES)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
     try: said = proc.communicate(timeout=PREVIEW_SECONDS)[0].decode('utf-8', 'replace')
     except subprocess.TimeoutExpired:
         for sig in (signal.SIGTERM, signal.SIGKILL):  # pagepics and the Quick Look it started
@@ -143,7 +144,8 @@ def office_render(source, out):
     if not made: raise RuntimeError('這份檔案沒辦法轉成預覽圖，可能已損壞或用了特殊格式。可以下載後用其他程式開啟。')
     note = '有幾頁沒有轉出預覽圖，完整內容請下載後查看。' if proc.returncode else '只預覽了第一頁，完整內容請下載後查看。' if '只能轉第一頁' in said else ''  # pagepics ends with 1 when pages are missing
     if source.lower().endswith('.xlsx'): note = '試算表只能預覽第一個工作表的開頭，完整內容請下載後查看。'  # Quick Look pictures one sheet's first screen
-    return [os.path.join(out, n) for n in made], note
+    whole = re.search(r'共 (\d+) 頁，只轉了前', said)  # a longer file: only its first PREVIEW_PAGES pages were pictured
+    return [os.path.join(out, n) for n in made], note, int(whole.group(1)) if whole else len(made)
 
 
 def _unpacks_safely(path):
@@ -166,12 +168,12 @@ def _make_preview(store, root, key, path, suffix, data):
                 with os.fdopen(fd, 'wb') as f: f.write(data)
                 try:
                     if not _unpacks_safely(str(copy)): raise RuntimeError('這份檔案解開後太大，無法產生預覽，請下載後開啟。')
-                    (pages, note), reason = office_render(str(copy), str(work / 'pages')), ''
-                except RuntimeError as exc: pages, note, reason = [], '', str(exc)
-                except Exception: pages, note, reason = [], '', '無法產生預覽，可以下載後用其他程式開啟。'
+                    (pages, note, total), reason = office_render(str(copy), str(work / 'pages')), ''
+                except RuntimeError as exc: pages, note, total, reason = [], '', 0, str(exc)
+                except Exception: pages, note, total, reason = [], '', 0, '無法產生預覽，可以下載後用其他程式開啟。'
                 _remove_preview(store, key); folder.mkdir(mode=0o700)
                 for n, picture in enumerate(pages[:PREVIEW_PAGES], 1): os.replace(picture, str(folder / ('%d.png' % n)))
-                if pages: _preview_write_json(folder / 'done.json', dict(pages=min(len(pages), PREVIEW_PAGES), total=len(pages), note=note, path=path))
+                if pages: _preview_write_json(folder / 'done.json', dict(pages=min(len(pages), PREVIEW_PAGES), total=max(total, len(pages)), note=note, path=path))
                 else: _preview_write_json(folder / 'failed.json', dict(reason=reason, path=path, at=time.time()))
             finally: _remove_preview(store, work.name)
     except OSError: pass  # the disk is full or the folder went away: the next look tries again

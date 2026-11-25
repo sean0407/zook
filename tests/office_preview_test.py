@@ -35,7 +35,7 @@ class OfficePreviewLogic(unittest.TestCase):
             pages = []
             for n in (1, 2, 10):  # numbered pages come back in page order, not as text sorts them
                 p = os.path.join(out, 'preview-%d.png' % n); Path(p).write_bytes(PNG + str(n).encode()); pages.append(p)
-            return pages, ''
+            return pages, '', 3
         server.office_render = fake
         self.doc = self.root / '報告.docx'; self.doc.write_bytes(b'PK first')
 
@@ -65,7 +65,7 @@ class OfficePreviewLogic(unittest.TestCase):
         self.assertNotEqual(wait_ready(self.store, str(self.doc))['version'], first); self.assertEqual(len(self.made), 2)
 
     def test_a_note_says_what_the_pictures_leave_out(self):
-        server.office_render = lambda source, out: (os.makedirs(out) or Path(out, '1.png').write_bytes(PNG) and [os.path.join(out, '1.png')], '有幾頁沒有轉出預覽圖')
+        server.office_render = lambda source, out: (os.makedirs(out) or Path(out, '1.png').write_bytes(PNG) and [os.path.join(out, '1.png')], '有幾頁沒有轉出預覽圖', 1)
         self.assertEqual(wait_ready(self.store, str(self.doc))['note'], '有幾頁沒有轉出預覽圖')
 
     def test_clearing_never_reaches_through_links(self):
@@ -76,6 +76,31 @@ class OfficePreviewLogic(unittest.TestCase):
         self.assertEqual((outside / 'keep/a.txt').read_text(), 'keep'); self.assertEqual(os.listdir(str(self.store.dir / 'previews')), [])
         moved = self.root / 'moved'; (self.store.dir / 'previews').rename(moved); (self.store.dir / 'previews').symlink_to(outside)
         self.assertEqual(server._remove_preview(self.store, 'keep'), 0); self.assertTrue((outside / 'keep/a.txt').exists())
+
+    def test_a_broken_failure_record_is_tried_again(self):
+        def broken(source, out): raise RuntimeError('壞了')
+        server.office_render = broken; wait_ready(self.store, str(self.doc))
+        key = server._preview_key(str(self.doc), os.stat(str(self.doc))); record = self.store.dir / 'previews' / key / 'failed.json'
+        for at in ([1], float('inf'), 'x'):
+            record.write_text(json.dumps(dict(reason='舊的', path=str(self.doc), at=at)))
+            self.assertNotEqual(server.office_preview(self.store, str(self.doc)).get('reason'), '舊的')
+            wait_ready(self.store, str(self.doc))
+
+    def test_long_files_picture_only_the_first_pages(self):
+        calls = []
+        import importlib.util as iu
+        spec2 = iu.spec_from_file_location('zook_pics_cap', ROOT / 'backend/pagepics.py'); pics = iu.module_from_spec(spec2); spec2.loader.exec_module(pics)
+        deck = self.root / 'd.pptx'
+        import zipfile
+        with zipfile.ZipFile(str(deck), 'w') as z:
+            z.writestr('ppt/presentation.xml', '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldIdLst>' + ''.join('<p:sldId id="%d"/>' % (256 + n) for n in range(5)) + '</p:sldIdLst><p:sldSz cx="12192000" cy="6858000"/></p:presentation>')
+        def fake(path, folder, width=1600):
+            calls.append(path); made = os.path.join(folder, os.path.basename(path) + '.png'); Path(made).write_bytes(PNG); return made
+        pics.quicklook = fake; out = self.root / 'pics'
+        import io, contextlib
+        said = io.StringIO()
+        with contextlib.redirect_stdout(said): pics.main(['pagepics.py', str(deck), str(out), '--pages', '2'])
+        self.assertEqual(len(calls), 2); self.assertIn('共 5 頁，只轉了前 2 頁', said.getvalue())
 
     def test_a_planted_cache_link_shows_nothing(self):
         key = server._preview_key(str(self.doc), os.stat(str(self.doc))); outside = self.root / 'outside'; outside.mkdir()
