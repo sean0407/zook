@@ -89,7 +89,7 @@
   const toggle = (attrs, on, label) => `<input type="checkbox" class="switch" role="switch" aria-label="${esc(label)}" ${attrs} ${on ? 'checked' : ''}>`;
   const settingRow = (title, desc, control) => `<div class="setting-row"><div class="setting-copy"><strong>${title}</strong>${desc ? `<span>${desc}</span>` : ''}</div><div class="setting-control">${control}</div></div>`;
   // Where a Bot's built-in tools may work. Only set here on the Mac.
-  const ACCESS = [{id: 'full', name: '整台 Mac', hint: '可以讀寫任何檔案、執行任何指令，和直接使用 CLI 一樣'},
+  const ACCESS = [{id: 'full', name: '整台 Mac', hint: '可以讀寫任何檔案、執行任何指令，就像你自己在用這台 Mac'},
                   {id: 'folder', name: '指定資料夾', hint: '只能讀寫你選的那個資料夾'},
                   {id: 'workspace', name: '只限 Bot 工作區', hint: '只能讀寫 Zook 為它準備的資料夾'}];
   const permissionOptions = () => PERMISSIONS.map(p => ({id: p.id, name: p.name, hint: p.hint}));
@@ -97,17 +97,20 @@
   const GATED_CLIS = ['claude', 'cursor'];
   const gatedCli = id => GATED_CLIS.includes(id || state.data.settings.provider || 'codex');
   const BOUNDARY_TEXT = '刪除檔案、對外送出、金鑰密碼、安裝軟體或改系統設定前會先問你（Zook 依指令內容判斷，盡力攔下；先寫成檔案再執行的程式可能認不出來）';
+  // #284: a Claude or Cursor Bot that Zook held in keeps the menu, so it can be widened where the notice says, back behind the gate.
+  const HELD_ACCESS = [{id: 'workspace', name: '只限 Bot 工作區', hint: 'Zook 自動收緊後的設定：只能讀寫 Zook 為它準備的資料夾'}, {id: 'full', name: '整台 Mac', hint: BOUNDARY_TEXT}];
+  const HELD_ACCESS_NOTE = 'Zook 自動收緊了這個 Bot。改成「整台 Mac」後，要這台 Mac 的安全檢查生效才會用到整台 Mac；生效前的那一則只能用 Bot 的工作資料夾。';
   const permText = b => b.provider !== 'auto' && gatedCli(b.provider) && b.gateFull ? '整台 Mac，' + BOUNDARY_TEXT : '主動性：' + permissionName(b.permissionMode || state.data.settings.permissionMode) + (b.permissionMode ? '' : '（預設）');
   // A setting that follows 設定: one 「預設（目前是 …）」 line, then the other values, so no choice is listed twice. Picking it again goes back to following.
   // own: the Bot's own value. One that happens to equal the default is still its own: it stays listed, as 「…（固定）」. label: a default no single option names.
   const withDefault = (options, current, own = '', label = '') => { const d = options.find(o => o.id === current), name = label || (d || options[0]).name; return [{id: '', name: '預設（目前是 ' + name + '）', hint: (d?.hint ? d.hint + '。' : '') + '跟著「設定」改'}, ...options.filter(o => !d || o.id !== d.id || o.id === own).map(o => d && o.id === d.id ? {...o, name: o.name + '（固定）', hint: '不跟著「設定」的預設改'} : o)]; };
   // Remote access: off unless turned on here. Pairing and revoking can only be done on this Mac.
   // App updates: checked automatically unless turned off; installing is always the user's decision.
-  const noticeSection = () => `<h2 class="settings-h">通知</h2><div class="setting-list">${settingRow('排程通知', '排程完成、失敗或需要核准時通知', toggle('data-schedule-notify', state.data.settings.scheduleNotify !== false, '排程通知'))}</div>`;
+  const noticeSection = () => `<h2 class="settings-h">通知</h2><div class="setting-list">${settingRow('排程通知', '排程做完、失敗或要你核准時，在 Mac 右上角跳出通知', toggle('data-schedule-notify', state.data.settings.scheduleNotify !== false, '排程通知'))}</div>`;
   function updateSection() {
     const u = state.update || {};
     const status = u.state === 'checking' ? '正在檢查…' : u.available ? `有新版 ${esc(u.latest)}` : u.error ? esc(u.error) : u.latest ? '已是最新版' : '尚未檢查';
-    return `<h2 class="settings-h">更新</h2><div class="setting-list">${settingRow('目前版本', `${esc(u.current || '開發版本')} · ${status}`, u.available ? '<button class="primary" data-action="update-open">更新</button>' : '<button class="secondary" data-action="update-check">檢查更新</button>')}${settingRow('自動檢查更新', '有新版時提醒，不會自動安裝。', toggle('data-auto-update', state.data.settings.autoUpdateCheck !== false, '自動檢查更新'))}</div>`;
+    return `<h2 class="settings-h">更新</h2><div class="setting-list">${settingRow('目前版本', `${u.current ? 'Zook ' + esc(u.current) : '測試用的 Zook（沒有版本號）'} · ${status}`, u.available ? '<button class="primary" data-action="update-open">更新</button>' : '<button class="secondary" data-action="update-check">檢查更新</button>')}${settingRow('自動檢查更新', '有新版時提醒，不會自動安裝。', toggle('data-auto-update', state.data.settings.autoUpdateCheck !== false, '自動檢查更新'))}</div>`;
   }
   function updateModal() {
     const u = state.update || {};
@@ -131,6 +134,7 @@
     updateModal();
     window.webkit?.messageHandlers?.zookWindow?.postMessage({quit: true});
   }
+  const REMOTE_EXPIRY = [[7, '7 天'], [30, '30 天（預設）'], [90, '90 天'], [365, '1 年'], [0, '永久有效']];
   function remoteSection() {
     const r = state.remote;
     if (!r) return `<h2 class="settings-h">遠端連線</h2>${loadingBlock('正在讀取…')}`;
@@ -138,7 +142,9 @@
     const status = !r.enabled ? '已關閉' : r.connected ? '已連上中繼伺服器' : '連不上中繼伺服器';
     const when = d => d ? formatDate(d) : '尚未使用';
     const devices = r.devices.length ? r.devices.map(d => `<div class="setting-row device-row"><div class="setting-copy"><strong>${esc(d.name)}${d.online ? ' <span class="pill ok">連線中</span>' : ''}</strong><span>配對於 ${esc(formatDate(d.createdAt))} · 最後使用：${esc(when(d.lastSeenAt))}</span></div><div class="setting-control"><button class="secondary small-btn" data-action="remote-revoke" data-id="${esc(d.id)}">撤銷</button></div></div>`).join('') : '<p class="muted small">還沒有配對任何裝置。</p>';
-    return `<h2 class="settings-h">遠端連線</h2><div class="setting-list">${settingRow('讓其他裝置連到這台 Mac', '開啟後，已配對的手機可以對話和核准。內容全程加密。', toggle('data-remote-enabled', r.enabled, '遠端連線'))}${settingRow('中繼伺服器', '你自己的中繼伺服器網址，以 wss:// 開頭。', `<input class="relay-input" data-remote-relay value="${esc(r.relayUrl)}" placeholder="wss://…" aria-label="中繼伺服器網址" spellcheck="false">`)}${settingRow('狀態', r.enabled && !r.connected ? '請確認網址正確，而且這台 Mac 有連上網路。' : '', `<span class="remote-status ${r.enabled ? (r.connected ? 'ok' : 'bad') : ''}">${status}</span>`)}</div><div class="remote-devices"><div class="remote-devices-head"><strong>已配對的裝置</strong><button class="secondary small-btn" data-action="remote-pair" ${r.enabled ? '' : 'disabled'}>配對新裝置</button></div>${devices}</div><p class="muted small perm-always">手機只能對話、核准和查看。其他設定要在這台 Mac 上改。</p>`;
+    const expiry = REMOTE_EXPIRY.some(([d]) => d === state.data.settings.remoteExpiry?.days) ? state.data.settings.remoteExpiry.days : 30;
+    const expiryRow = settingRow('自動失效', expiry ? '手機多久沒使用就自動失效，之後要重新配對。改了期限從現在起算。' : '<span class="remote-expiry-note">手機不會自動失效。手機遺失時，記得到下方撤銷。</span>', dropdown('remoteExpiry', String(expiry), REMOTE_EXPIRY.map(([id, name]) => ({id: String(id), name})), 'data-remote-expiry'));
+    return `<h2 class="settings-h">遠端連線</h2><div class="setting-list">${settingRow('讓其他裝置連到這台 Mac', '開啟後，已配對的手機可以對話和核准。內容全程加密。', toggle('data-remote-enabled', r.enabled, '遠端連線'))}${settingRow('中繼伺服器', '你自己的中繼伺服器網址，以 wss:// 開頭。', `<input class="relay-input" data-remote-relay value="${esc(r.relayUrl)}" placeholder="wss://…" aria-label="中繼伺服器網址" spellcheck="false">`)}${settingRow('狀態', r.enabled && !r.connected ? '請確認網址正確，而且這台 Mac 有連上網路。' : '', `<span class="remote-status ${r.enabled ? (r.connected ? 'ok' : 'bad') : ''}">${status}</span>`)}${expiryRow}</div><div class="remote-devices"><div class="remote-devices-head"><strong>已配對的裝置</strong><button class="secondary small-btn" data-action="remote-pair" ${r.enabled ? '' : 'disabled'}>配對新裝置</button></div>${devices}</div><p class="muted small perm-always">手機只能對話、核准和查看。其他設定要在這台 Mac 上改。</p>`;
   }
   async function loadRemote(quiet) {
     try { state.remote = await api('remote'); } catch (_) { if (!quiet) state.remote = {available: false, devices: []}; }
@@ -155,13 +161,13 @@
     }, 2000);
   }
   function permissionSection(current) {
-    return `<h2 class="settings-h">Bot 行為</h2><div class="setting-list">${settingRow('主動性', 'Codex、Grok、Antigravity、Gemini 的 Bot 動作前要不要先問', dropdown('permissionMode', current, permissionOptions(), 'data-permission-mode'))}${settingRow('上網搜尋', '搜尋和讀取網頁，不逐次詢問', toggle('data-web-search', state.data.settings.webSearch, '上網搜尋'))}${settingRow('排程與觸發可用內建瀏覽器', '排程、觸發條件、本機腳本、其他 Bot 和群組討論的回合也能開網頁', toggle('data-browser-automation', state.data.settings.browserAutomation === true, '排程與觸發可用內建瀏覽器'))}</div><p class="muted small perm-always">${ALWAYS_ASK}屬高風險，任何主動性都會先問。Claude、Cursor 的 Bot 可以用整台 Mac，${BOUNDARY_TEXT}。</p>` + botDefaultsSection();
+    return `<h2 class="settings-h">Bot 行為</h2><p class="muted small settings-note">全體 Bot 的起始設定。不論怎麼選，${ALWAYS_ASK}前都會先問你。</p><div class="setting-list">${settingRow('主動性', 'Bot 動手做事前要不要先問你。用 Claude、Cursor 的 Bot 不看這一項（見下方）', dropdown('permissionMode', current, permissionOptions(), 'data-permission-mode'))}${settingRow('上網搜尋', 'Bot 可以自己上網查資料、讀網頁，不用每次問你', toggle('data-web-search', state.data.settings.webSearch, '上網搜尋'))}${settingRow('自動執行時也能開網頁', '排程、觸發條件，或其他 Bot、群組代你送出的訊息，也能用下方的「內建瀏覽器」', toggle('data-browser-automation', state.data.settings.browserAutomation === true, '自動執行時也能開網頁'))}</div><p class="muted small perm-always">用 Claude、Cursor 的 Bot 可以動整台 Mac，但刪除檔案、對外送出、碰到密碼金鑰、安裝軟體或改系統設定前會先問你。Zook 依指令內容判斷，少數繞過的寫法可能攔不到。</p>` + botDefaultsSection();
   }
 
   // What every Bot does unless its own 進階設定 says otherwise.
   function botDefaultsSection() {
     const st = state.data.settings, access = ACCESS.some(a => a.id === st.access) ? st.access : 'full';
-    return `<h2 class="settings-h">Bot 預設</h2><p class="muted small settings-note">所有 Bot 共用，停在「（預設）」的 Bot 會跟著改。個別 Bot 可在「進階設定」另外指定。</p><div class="setting-list">${settingRow('存取範圍', 'Codex、Grok、Antigravity、Gemini 可以動到哪些檔案', dropdown('defaultAccess', access, ACCESS, 'data-bot-default="access"'))}<div class="setting-row" ${access === 'folder' ? '' : 'hidden'}><div class="setting-copy"><strong>指定的資料夾</strong><span>${esc(st.accessFolder || '尚未選擇')}</span></div><div class="setting-control"><button type="button" class="secondary" data-action="default-folder">選擇資料夾…</button></div></div>${settingRow('思考強度', '', dropdown('defaultEffort', st.effort || 'standard', EFFORTS, 'data-bot-default="effort"'))}${settingRow('多代理協作', '派子代理分工，用量較多', toggle('data-bot-default="multi"', st.features?.multi === true, '多代理協作'))}${settingRow('圖片生成', '用 AI 生成圖片', toggle('data-bot-default="image"', st.features?.image === true, '圖片生成'))}${settingRow('內建瀏覽器', '開網頁閱讀、截圖、在搜尋框輸入（每次先問你）；不能登入', toggle('data-bot-default="browser"', st.features?.browser === true, '內建瀏覽器'))}</div>`;
+    return `<h2 class="settings-h">Bot 預設</h2><p class="muted small settings-note">每個 Bot 一開始都照這裡。要讓某個 Bot 不一樣：點開它的對話，按右上角「顯示詳情」→「編輯設定」→「進階設定」；在那裡選「預設」的項目會跟著這裡改。</p><div class="setting-list">${settingRow('存取範圍', 'Bot 可以讀寫哪些檔案。用 Claude、Cursor 的 Bot 一律是整台 Mac（重要動作先問你）', dropdown('defaultAccess', access, ACCESS, 'data-bot-default="access"'))}<div class="setting-row" ${access === 'folder' ? '' : 'hidden'}><div class="setting-copy"><strong>指定的資料夾</strong><span>${esc(st.accessFolder || '尚未選擇')}</span></div><div class="setting-control"><button type="button" class="secondary" data-action="default-folder">選擇資料夾…</button></div></div>${settingRow('思考強度', 'Bot 回答前想多久。想越久越仔細，但比較慢、用量也較多', dropdown('defaultEffort', st.effort || 'standard', EFFORTS, 'data-bot-default="effort"'))}${settingRow('分工給小幫手', '大工作讓 Bot 再找幾個小幫手同時做，比較快，但用量較多', toggle('data-bot-default="multi"', st.features?.multi === true, '分工給小幫手'))}${settingRow('圖片生成', '請 Bot 畫圖或做圖片', toggle('data-bot-default="image"', st.features?.image === true, '圖片生成'))}${settingRow('內建瀏覽器', '上網搜尋只能讀文字；打開這個，Bot 還能開網頁、截圖、在搜尋框打字（每次先問你，不能登入）', toggle('data-bot-default="browser"', st.features?.browser === true, '內建瀏覽器'))}</div>`;
   }
 
   const approvalReason = a => /^zook_(create|update|delete)_schedule$/.test(a.name) ? '排程會在你不在時自動執行，不論主動性都要你核准' : CATEGORY_REASON[a.category];
@@ -206,7 +212,7 @@
     if (t?.status === 'error') return ['bad', '連線失敗'];
     return ['', '尚未測試連線'];
   }
-  const SKILLS_ON = '已開啟';
+  const SKILLS_ON = '已開啟', SKILLS_OFF = '未啟用';
   // What a Skill is for, read from its name and description. The first match wins.
   const SKILL_CATEGORIES = [
     ['公司流程', /^(logi|works)[-_ ]|logitech|沃克思|posm|報價|發票|開案|展示品|贈品|駐點|月刊|活動通知/i],
@@ -224,7 +230,7 @@
     if (tab === 'skills') {
       const off = new Set(settings.disabledSkills || []);
       // A Skill that is on sits under 已開啟; the rest are sorted by what they are for. A copy already imported into Zook is not shown twice.
-      return (inv.skills || []).filter(i => !i.imported).map(i => ({id: i.id, icon: i.icon, name: i.name, description: i.description || '', group: !off.has(i.id) ? SKILLS_ON : skillCategory(i),
+      return (inv.skills || []).filter(i => !i.imported).map(i => ({id: i.id, icon: i.icon, name: i.name, description: i.description || '', group: !off.has(i.id) ? SKILLS_ON : SKILLS_OFF + (skillCategory(i) === '其他' ? '' : ' · ' + skillCategory(i)),
         meta: i.imported ? '改用 Zook 裡的那一份' : i.source === 'zook' && SOURCE_NAMES[i.origin] ? '匯入自 ' + SOURCE_NAMES[i.origin] : i.source === 'zook' && i.origin === 'pack' ? '來自設定包' : i.source === 'zook' && i.origin === 'template' ? '來自範本' : sourceName(i.plugin || i.source),
         on: !i.imported && !off.has(i.id), toggle: 'skill', toggleLabel: off.has(i.id) ? '開放給所有 Bot' : '所有 Bot 共用中',
         moved: i.imported ? '已匯入' : '', importable: i.source !== 'zook' && !i.imported, removable: !!i.removable, canUpdate: !!i.canUpdate, note: (i.notes || []).join(' ')}));
@@ -233,32 +239,46 @@
       return (inv.mcp || []).map(i => {
         const on = (settings.sharedMcp || []).includes(i.id);
         const [cls, label] = mcpStatus(i);
-        const description = i.id === 'builtin:workspace' ? '在 Bot 自己的工作區讀寫檔案。' : i.needsKey ? '匯入時沒有帶金鑰，請貼上金鑰。' : i.copied ? 'Zook 已經有自己的一份，Bot 用的是 Zook 那一份。' : i.gmail && i.needsSetup ? '搜尋、讀信、寫草稿和寄信。寄信前一定先問。' : (t => t?.status === 'error' ? '連線失敗：' + t.error : t?.status === 'ready' ? '可用工具：' + (t.tools || []).slice(0, 8).map(x => x.name.replace(/_/g, ' ')).join('、') : i.gmail ? `已連接 ${i.address}。寄信前一定先問。` : i.editable ? (i.config.command || i.config.url) : sourceName(i.plugin || i.source, 'mcp') + '。按「測試連線」確認是否可以使用。')(state.mcpTests[i.id]);
+        const test = state.mcpTests[i.id], failed = test?.status === 'error' ? '連線失敗：' + (test.error || '原因不明') : '';
+        const description = i.id === 'builtin:workspace' ? '在 Bot 自己的工作區讀寫檔案。' : i.needsKey ? '匯入時沒有帶金鑰，請貼上金鑰。' : i.copied ? 'Zook 已經有自己的一份，Bot 用的是 Zook 那一份。' : i.gmail && i.needsSetup ? '搜尋、讀信、寫草稿和寄信。寄信前一定先問。' : (t => t?.status === 'error' ? (i.editable ? connectorPlace(i.config) : '連線失敗。') : t?.status === 'ready' ? '可用工具：' + (t.tools || []).slice(0, 8).map(x => x.name.replace(/_/g, ' ')).join('、') : i.gmail ? `已連接 ${i.address}。寄信前一定先問。` : i.editable ? connectorPlace(i.config) : sourceName(i.plugin || i.source, 'mcp') + '。按「測試連線」確認是否可以使用。')(state.mcpTests[i.id]);
         return {id: i.id, icon: i.icon, name: i.id === 'builtin:workspace' ? 'Bot 工作區' : i.name, description, group: sourceName(i.plugin || i.source, 'mcp'), meta: i.copied ? '來源設定仍保留' : i.needsKey ? '等待金鑰' : on ? '所有 Bot 共用中' : '未開啟',
           on: on && !i.copied && !i.needsKey, toggle: 'mcp', toggleLabel: on ? '停用這個連接器' : '開放給所有 Bot', status: i.copied ? null : [cls, label], test: i.id !== 'builtin:workspace' && !i.needsSetup && !i.needsKey && !i.copied, editable: !!i.editable, gmail: !!i.gmail, google: !!i.google, needsSetup: !!i.needsSetup,
-          needsKey: !!i.needsKey, moved: i.copied ? '已複製' : '', copyable: !!i.copyable, canLogin: !!i.canLogin, signedIn: !!i.signedIn, needsLogin: !!i.needsLogin, accounts: i.accounts || []};
+          needsKey: !!i.needsKey, note: failed, moved: i.copied ? '已複製' : '', copyable: !!i.copyable, canLogin: !!i.canLogin, signedIn: !!i.signedIn, needsLogin: !!i.needsLogin, accounts: i.accounts || []};
       });
     }
     return (inv.plugins || []).map(pl => ({id: pl.id, icon: pl.icon, name: pl.displayName, description: pl.description || '', group: pl.sourceName,
       meta: [pl.skillCount ? pl.skillCount + ' 個 Skill' : '', pl.mcpCount ? pl.mcpCount + ' 個連接器' : '', pl.version ? 'v' + pl.version : ''].filter(Boolean).join(' · ') || '沒有 Zook 可用的內容',
       note: pl.hasHooks || pl.hasCommands ? '部分功能只在原本的工具中運作' : '', on: pl.enabled, toggle: 'plugin', toggleLabel: pl.enabled ? '已啟用' : '啟用'}));
   }
+  // A connector card names where it runs in plain words; the command or address itself is kept for 編輯.
+  function connectorPlace(c) {
+    c = c || {};
+    if (c.url) { let host = ''; try { host = new URL(c.url).hostname; } catch (_) {} return '網址連接器' + (host ? '（' + host + '）' : '') + '。'; }
+    const cmd = String(c.command || ''), app = cmd.match(/([^/"']+)\.app\//);
+    // Split like a shell would (quotes kept together), then skip launchers such as npx, uv run or python -m.
+    const words = (cmd.match(/"[^"]*"|'[^']*'|\S+/g) || []).map(w => w.replace(/^["']|["']$/g, '')).filter(w => !w.startsWith('-'));
+    while (words.length > 1 && /^(npx|uvx|bunx|pnpm|npm|yarn|node|deno|bun|python[0-9.]*|uv|pipx|run|exec|dlx|x|tool)$/.test(words[0].split('/').pop())) words.shift();
+    const base = (words[0] || '').split('/').pop().replace(/(.)@[^@/]*$/, '$1').replace(/^@/, '');
+    const name = app ? app[1] + ' App' : /^[\w .-]{1,60}$/.test(base) ? base : '';
+    return '這台 Mac 上的程式' + (name ? '（' + name + '）' : '') + '。';
+  }
   function directoryPage(tab) {
     if (!state.integrations) return '<div class="blank">正在讀取…</div>';
     const q = (state.dirQuery || '').toLowerCase(), filter = state.dirFilter || 'all';
     const items = directoryItems(tab).filter(i => (!q || (i.name + ' ' + i.description + ' ' + i.group).toLowerCase().includes(q)) && (filter === 'all' || (filter === 'on') === i.on));
-    const first = tab === 'skills' ? [SKILLS_ON, ...SKILL_CATEGORIES.map(c => c[0]), '其他'] : [SOURCE_NAMES.builtin, MCP_SOURCE_NAMES.zook];
+    const first = tab === 'skills' ? [SKILLS_ON, ...SKILL_CATEGORIES.map(c => SKILLS_OFF + ' · ' + c[0]), SKILLS_OFF] : [SOURCE_NAMES.builtin, MCP_SOURCE_NAMES.zook];
     const rank = g => first.includes(g) ? first.indexOf(g) : first.length;
     const found = tab === 'mcp' ? items.filter(i => i.group === MCP_FOUND && !i.moved) : [];
     const groups = [...new Set(items.map(i => i.group))].filter(g => g !== MCP_FOUND).sort((a, b) => rank(a) - rank(b));
     const counts = {skills: (state.integrations.skills || []).filter(i => !i.imported).length, mcp: (state.integrations.mcp || []).filter(i => !i.copied).length, plugins: (state.integrations.plugins || []).length};
     const tabs = [['skills', 'Skills'], ['mcp', '連接器'], ['plugins', '插件']];
-    const intro = {skills: '所有 Bot 共用。匯入後不受原工具影響。', mcp: '所有 Bot 共用。開得越多回覆越慢，用不到的建議關閉。', plugins: '插件會一次帶來一組 Skills 和連接器，來源是 Claude Code。'}[tab];
+    const intro = {skills: '所有 Bot 共用。匯入後不受原工具影響。', mcp: '所有 Bot 共用。開得越多回覆越慢，用不到的建議關閉。', plugins: '插件會一次帶來一組 Skills 和連接器，開啟後所有 Bot 共用。Zook 讀取的是 Claude Code 裡裝好的插件。'}[tab];
+    const noPlugins = `<div class="blank">還沒有插件。<br>插件要先在 Claude Code 裡安裝（Claude Code 的「插件」管理）。裝好後回到這一頁就會出現，開啟後所有 Bot 都能用。<br>只想加一項功能的話，可以到「Skills」加入現成的 Skill 範本，或到「連接器」從目錄加入。<div class="setting-actions" style="justify-content:center"><button class="secondary" data-action="dir-tab" data-id="skills" data-clear>看 Skill 範本</button><button class="secondary" data-action="dir-tab" data-id="mcp" data-clear>看連接器目錄</button></div></div>`;
     const card = i => {
       const expanded = state.dirExpanded?.[i.id];
       return `<article class="dir-card ${expanded ? 'expanded' : ''}">${itemIcon(i.name, i.icon)}<div class="dir-body"><div class="dir-title"><h3 title="${esc(i.name)}">${esc(i.name)}</h3>${i.needsSetup ? `<button class="primary small-btn" data-action="${i.google ? 'google-setup' : 'gmail-setup'}">${i.google ? '登入' : '設定'}</button>` : i.needsKey ? `<button class="primary small-btn" data-action="connector-edit" data-id="${esc(i.id)}">貼上金鑰</button>` : i.moved ? `<span class="dir-status">${i.moved}</span>` : toggle(`data-dir-switch data-kind="${i.toggle}" data-id="${esc(i.id)}" title="${esc(i.toggleLabel)}"`, i.on, i.toggleLabel)}</div>${(i.accounts || []).length ? `<div class="account-pick" title="所有 Bot 使用這個帳號">${dropdown('connectorAccount', i.accounts.find(a => a.active)?.id || '', i.accounts.map(a => ({id: a.id, name: a.name + (a.needsLogin ? '（需要重新登入）' : '')})), `data-connector="${esc(i.id)}"`)}</div>` : ''}<p class="dir-desc">${esc(i.description || '沒有說明。')}</p>${i.description.length > 70 ? `<button class="link dir-more" data-action="dir-expand" data-id="${esc(i.id)}">${expanded ? '收合' : '展開'}</button>` : ''}<div class="dir-meta">${i.status ? `<span class="dir-status ${i.status[0]}">${esc(i.status[1])}</span>` : ''}<span>${esc(i.meta)}</span>${i.test ? `<button class="link" data-action="test-mcp" data-id="${esc(i.id)}">測試連線</button>` : ''}${i.google && !i.needsSetup ? '<button class="link" data-action="google-add">新增帳號</button><button class="link" data-action="google-setup">重新登入</button><button class="link danger" data-action="google-remove">登出這個帳號</button>' : ''}${i.gmail && !i.needsSetup ? '<button class="link" data-action="gmail-setup">重新設定</button><button class="link danger" data-action="gmail-remove">中斷連接</button>' : ''}${i.copyable ? `<button class="link" data-action="connector-copy" data-id="${esc(i.id)}">加入</button>` : ''}${i.canUpdate ? `<button class="link" data-action="skill-update" data-id="${esc(i.id)}" title="原本的來源有更新">從原來源更新</button>` : ''}${i.removable ? `<button class="link danger" data-action="skill-remove" data-id="${esc(i.id)}" data-name="${esc(i.name)}">移除</button>` : ''}${i.canLogin ? (i.signedIn ? `<button class="link" data-action="connector-login" data-id="${esc(i.id)}" data-add="1">新增帳號</button><button class="link" data-action="connector-logout" data-id="${esc(i.id)}">登出這個帳號</button>` : `<button class="link" data-action="connector-login" data-id="${esc(i.id)}">${i.needsLogin ? '重新登入' : '登入'}</button>`) : ''}${i.editable ? `<button class="link" data-action="connector-edit" data-id="${esc(i.id)}">編輯</button><button class="link danger" data-action="connector-delete" data-id="${esc(i.id)}" data-name="${esc(i.name)}">移除</button>` : ''}</div>${i.note ? `<p class="dir-note">${esc(i.note)}</p>` : ''}</div></article>`;
     };
-    return `<div class="dir-bar"><div class="dir-tabs">${tabs.map(([id, label]) => `<button class="${tab === id ? 'active' : ''}" data-action="dir-tab" data-id="${id}">${label}<small>${counts[id]}</small></button>`).join('')}</div><div class="dir-filters">${dropdown('dirFilter', filter, [{id: 'all', name: '全部'}, {id: 'on', name: '已啟用'}, {id: 'off', name: '未啟用'}], 'data-dir-filter')}</div><input id="dir-search" class="dir-search" placeholder="搜尋" aria-label="搜尋" value="${esc(state.dirQuery || '')}"></div><p class="muted dir-intro">${intro}</p>${tab === 'mcp' ? '<div class="dir-add"><button class="secondary" data-action="connector-add">＋ 自己新增</button><span class="muted small">開啟的連接器所有模型都能用。</span></div>' : ''}${tab === 'plugins' ? '' : `<div class="dir-add"><button class="secondary" data-action="pack-export">匯出設定包</button><button class="secondary" data-action="pack-import">匯入設定包</button><span class="muted small">搬到另一台 Mac 用。不含金鑰。</span></div>`}${groups.length ? groups.map(g => { const closed = (state.data.settings.dirCollapsed || []).includes(tab + ':' + g) && !q; return `<section class="dir-section"><h2><button class="dir-fold" data-action="dir-collapse" data-id="${esc(tab + ':' + g)}" aria-expanded="${!closed}"><span>${esc(g)}</span><small>${items.filter(i => i.group === g).length}</small><span class="dir-chev" aria-hidden="true">${closed ? '⌄' : '⌃'}</span></button>${tab === 'skills' && items.some(i => i.group === g && i.importable) ? `<button class="link dir-import" data-action="skills-import" data-id="${esc(g)}">匯入到 Zook</button>` : ''}</h2>${closed ? '' : `<div class="dir-grid">${items.filter(i => i.group === g).map(card).join('')}</div>`}</section>`; }).join('') : '<div class="blank">沒有符合的項目。</div>'}${tab === 'skills' ? templateSections(q) : ''}${tab === 'mcp' ? catalogSections(q) + (found.length ? `<section class="dir-section found-section"><h2><button class="dir-fold" data-action="found-toggle" aria-expanded="${!!state.foundOpen || !!q}"><span>${MCP_FOUND}</span><small>${found.length}</small><span class="dir-chev" aria-hidden="true">${state.foundOpen || q ? '⌃' : '⌄'}</span></button></h2>${state.foundOpen || q ? `<p class="muted small">來自 Codex 或 Claude 的設定。按「加入」移到已連接。</p><div class="dir-grid">${found.map(card).join('')}</div>` : ''}</section>` : '') : ''}`;
+    return `<div class="dir-bar"><div class="dir-tabs">${tabs.map(([id, label]) => `<button class="${tab === id ? 'active' : ''}" data-action="dir-tab" data-id="${id}">${label}<small>${counts[id]}</small></button>`).join('')}</div><div class="dir-filters">${dropdown('dirFilter', filter, [{id: 'all', name: '全部'}, {id: 'on', name: '已啟用'}, {id: 'off', name: '未啟用'}], 'data-dir-filter')}</div><input id="dir-search" class="dir-search" placeholder="搜尋" aria-label="搜尋" value="${esc(state.dirQuery || '')}"></div><p class="muted dir-intro">${intro}</p>${tab === 'mcp' ? '<div class="dir-add"><button class="secondary" data-action="connector-add">＋ 自己新增</button><span class="muted small">開啟的連接器所有模型都能用。</span></div>' : ''}${tab === 'plugins' ? '' : `<div class="dir-add"><button class="secondary" data-action="pack-export">匯出設定包</button><button class="secondary" data-action="pack-import">匯入設定包</button><span class="muted small">搬到另一台 Mac 用。不含金鑰。</span></div>`}${groups.length ? groups.map(g => { const closed = (state.data.settings.dirCollapsed || []).includes(tab + ':' + g) && !q; return `<section class="dir-section"><h2><button class="dir-fold" data-action="dir-collapse" data-id="${esc(tab + ':' + g)}" aria-expanded="${!closed}"><span>${esc(g)}</span><small>${items.filter(i => i.group === g).length}</small><span class="dir-chev" aria-hidden="true">${closed ? '⌄' : '⌃'}</span></button>${tab === 'skills' && items.some(i => i.group === g && i.importable) ? `<button class="link dir-import" data-action="skills-import" data-id="${esc(g)}">匯入到 Zook</button>` : ''}</h2>${closed ? '' : `<div class="dir-grid">${items.filter(i => i.group === g).map(card).join('')}</div>`}</section>`; }).join('') : tab === 'plugins' && !counts.plugins ? noPlugins : '<div class="blank">沒有符合的項目。</div>'}${tab === 'skills' ? templateSections(q) : ''}${tab === 'mcp' ? catalogSections(q) + (found.length ? `<section class="dir-section found-section"><h2><button class="dir-fold" data-action="found-toggle" aria-expanded="${!!state.foundOpen || !!q}"><span>${MCP_FOUND}</span><small>${found.length}</small><span class="dir-chev" aria-hidden="true">${state.foundOpen || q ? '⌃' : '⌄'}</span></button></h2>${state.foundOpen || q ? `<p class="muted small">來自 Codex 或 Claude 的設定。按「加入」移到已連接。</p><div class="dir-grid">${found.map(card).join('')}</div>` : ''}</section>` : '') : ''}`;
   }
   // Built-in Gmail: an address and a Google app password. The password goes to the Keychain.
   function googleModal() {
@@ -272,7 +292,7 @@
   // A connector added in Zook itself: a command run on this Mac, or the address of a remote one.
   function connectorModal(item) {
     const c = item?.config || {}, http = item ? item.transport === 'http' : false;
-    const types = [{id: 'stdio', name: '本機指令', hint: '在這台 Mac 上執行的程式，例如用 npx 或 uvx 啟動的 MCP 伺服器'}, {id: 'http', name: '網址', hint: '遠端的 MCP 伺服器（Streamable HTTP）'}];
+    const types = [{id: 'stdio', name: '這台 Mac 上的程式', hint: '連接器的說明會寫要輸入的啟動指令'}, {id: 'http', name: '網址', hint: '連接器的說明會給一個網址'}];
     const kept = c.hasSecret ? '已儲存。留空表示不變更' : '';
     modal(item ? '編輯連接器' : '新增連接器', `<form id="connector-form" data-id="${esc(item ? item.id.split(':')[1] : '')}"><div class="modal-body"><label class="field">名稱<input name="name" required maxlength="80" placeholder="例如：GitHub" value="${esc(item?.name || '')}"></label><div class="setting-list in-form">${settingRow('類型', '連接器在哪裡執行', dropdown('transport', http ? 'http' : 'stdio', types))}</div><div data-for="stdio" ${http ? 'hidden' : ''}><label class="field">啟動指令<input name="command" spellcheck="false" placeholder="例如：npx -y @modelcontextprotocol/server-github" value="${esc(c.command || '')}"><small class="muted">和你在終端機輸入的一樣。Zook 會在需要時啟動它。</small></label><label class="field">環境變數（選填，每行一個）<textarea name="env" rows="3" spellcheck="false" placeholder="NAME=value">${esc(Object.entries(c.env || {}).map(([k, v]) => k + '=' + v).join('\n'))}</textarea></label><div class="form-grid"><label class="field">金鑰的環境變數名稱（選填）<input name="secretName" spellcheck="false" placeholder="例如：GITHUB_TOKEN" value="${esc(http ? '' : c.secretName || '')}"></label><label class="field">金鑰<input name="secretStdio" type="password" autocomplete="off" spellcheck="false" placeholder="${esc(http ? '' : kept)}"></label></div>${(c.moreSecrets || []).map(m => `<label class="field">金鑰 ${esc(m.name)}<input name="more:${esc(m.name)}" type="password" autocomplete="off" spellcheck="false" placeholder="${m.saved ? '已儲存。留空表示不變更' : '請貼上這把金鑰'}"></label>`).join('')}</div><div data-for="http" ${http ? '' : 'hidden'}><label class="field">網址<input name="url" spellcheck="false" placeholder="https://example.com/mcp" value="${esc(c.url || '')}"></label><label class="field">存取權杖（選填）<input name="secretHttp" type="password" autocomplete="off" spellcheck="false" placeholder="${esc(http ? kept : '')}"><small class="muted">會以 Bearer 權杖送給這個網址。</small></label></div><p class="muted small">金鑰只存在鑰匙圈。${c.hasSecret ? ' <label class="inline-check"><input type="checkbox" name="clearSecret"> 移除已儲存的金鑰</label>' : ''}</p></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">${item ? '儲存' : '新增'}</button></div></form>`);
   }
@@ -282,9 +302,15 @@
     modal('選擇使用「' + (id === 'builtin:workspace' ? 'Bot 工作區' : item.name) + '」的 Bot', `<form id="mcp-bots-form" data-id="${esc(id)}"><div class="modal-body"><p class="muted">選擇哪些 Bot 可以使用。</p><div class="member-pick">${state.data.bots.map(b => `<label class="ability-option"><input type="checkbox" name="bots" value="${esc(b.id)}" ${(b.enabledMcp || []).includes(id) ? 'checked' : ''}><span>${avatar(b)}<strong>${esc(b.name)}</strong><small>${esc((b.persona || b.instructions || '').slice(0, 40))}</small></span></label>`).join('')}</div></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">儲存</button></div></form>`);
   }
 
+  // The memory page is otherwise only in the 我的工作區 menu; a Bot's details say what it remembers and lead there.
+  function memoryNote(b) {
+    const mems = state.data.memories || [], own = mems.filter(m => m.botId === b.id).length, shared = mems.filter(m => !m.botId).length;
+    return `<div class="detail-title">記憶 <button class="link" data-action="page" data-id="memory">查看全部</button></div><div class="detail-empty">${own || shared ? `這個 Bot 記住 ${own} 則，另外知道所有 Bot 共用的 ${shared} 則。` : '還沒有記憶。對 Bot 說「記住…」它就會記下。'}</div>`;
+  }
+
   function detail(b) {
     let notes = state.data.knowledge.filter(n => n.botId === b.id);
-    return `${detailBackdrop()}<aside class="detail" aria-label="詳情"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatar(b,'big')}<h2>${esc(b.name)}</h2><p>${esc(b.provider === 'auto' ? '自動選擇' : b.provider||state.data.settings.provider||'')} ${esc(b.model||'')}</p><p>${esc(permText(b))}</p>${b.autoAssigned && b.autoReason ? `<p class="muted small">自動配好：${esc(b.autoReason)}</p>` : ''}<button class="secondary detail-edit" data-action="edit-bot">編輯設定</button></div><div class="tabs"><button data-action="detail" data-id="persona" class="${state.detail==='persona'?'active':''}">人格</button><button data-action="detail" data-id="activity" class="${state.detail==='activity'?'active':''}">動態</button><button data-action="detail" data-id="database" class="${state.detail==='database'?'active':''}">資料庫</button><button data-action="detail" data-id="outputs" class="${state.detail==='outputs'?'active':''}">產出</button></div>${state.detail==='persona'?personaPanel(b):state.detail==='outputs'?outputsPanel(b):state.detail==='database'?`<div class="detail-title">知識 <button class="link" data-action="new-note">＋ 新增</button></div>${notes.length?notes.map(n=>`<button class="note-row" data-action="edit-note" data-id="${esc(n.id)}"><strong>${esc(n.title)}</strong><small>${esc(n.content)}</small></button>`).join(''):'<div class="detail-empty">尚未新增知識。加入資料，讓這個 Bot 有更多背景。</div>'}`:`<div class="detail-title">最近動態</div>${toolTimeline(b.id)}${(b.messages||[]).length?`<div class="detail-empty">最近對話 ${esc(formatDate(b.messages.at(-1).createdAt))}</div>`:'<div class="detail-empty">這裡會顯示最近的對話動態。</div>'}`}${usageDock()}</aside>`
+    return `${detailBackdrop()}<aside class="detail" aria-label="詳情"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatar(b,'big')}<h2>${esc(b.name)}</h2><p>${esc(b.provider === 'auto' ? '自動選擇' : b.provider||state.data.settings.provider||'')} ${esc(b.model||'')}</p><p>${esc(permText(b))}</p>${b.autoAssigned && b.autoReason ? `<p class="muted small">自動配好：${esc(b.autoReason)}</p>` : ''}<button class="secondary detail-edit" data-action="edit-bot">編輯設定</button></div><div class="tabs"><button data-action="detail" data-id="persona" class="${state.detail==='persona'?'active':''}">人格</button><button data-action="detail" data-id="activity" class="${state.detail==='activity'?'active':''}">動態</button><button data-action="detail" data-id="database" class="${state.detail==='database'?'active':''}">資料庫</button><button data-action="detail" data-id="outputs" class="${state.detail==='outputs'?'active':''}">產出</button></div>${state.detail==='persona'?personaPanel(b):state.detail==='outputs'?outputsPanel(b):state.detail==='database'?`<div class="detail-title">知識 <button class="link" data-action="new-note">＋ 新增</button></div>${notes.length?notes.map(n=>`<button class="note-row" data-action="edit-note" data-id="${esc(n.id)}"><strong>${esc(n.title)}</strong><small>${esc(n.content)}</small></button>`).join(''):'<div class="detail-empty">尚未新增知識。加入資料，讓這個 Bot 有更多背景。</div>'}${memoryNote(b)}`:`<div class="detail-title">最近動態</div>${toolTimeline(b.id)}${(b.messages||[]).length?`<div class="detail-empty">最近對話 ${esc(formatDate(b.messages.at(-1).createdAt))}</div>`:'<div class="detail-empty">這裡會顯示最近的對話動態。</div>'}`}${usageDock()}</aside>`
   }
 
   function formatDate(d) {
@@ -299,7 +325,7 @@
   }
 
   function modelPicker(model, bare = false) {
-    return `<div class="field model-picker"><label>${bare ? '' : '模型'}<select name="modelSelect" aria-label="模型"><option value="">使用預設</option><option value="__custom__">自訂模型…</option></select></label><input type="hidden" name="model" value="${esc(model)}"><input name="modelCustom" aria-label="自訂模型" placeholder="輸入模型 ID" hidden><div class="model-tools"><span class="model-note" role="status" aria-live="polite">準備偵測模型…</span><button type="button" class="link" data-action="refresh-models" aria-label="重新偵測模型">重新偵測</button></div></div>`;
+    return `<div class="field model-picker"><label>${bare ? '' : '模型'}<select name="modelSelect" aria-label="模型"><option value="">使用預設</option><option value="__custom__">自己輸入型號…</option></select></label><input type="hidden" name="model" value="${esc(model)}"><input name="modelCustom" aria-label="自己輸入的型號" placeholder="輸入型號名稱" hidden><div class="model-tools"><span class="model-note" role="status" aria-live="polite">準備偵測模型…</span><button type="button" class="link" data-action="refresh-models" aria-label="重新偵測模型">重新偵測</button></div></div>`;
   }
 
   async function loadModels(form, force = false) {
@@ -320,7 +346,7 @@
       const models = Array.isArray(data.models) ? data.models : [];
       const st = state.data.settings, named = provider === (st.provider || 'codex') && st.model ? (models.find(m => m.id === st.model)?.name || st.model) : '';
       const pinned = named && current !== st.model ? st.model : null;  // the default model shows once, as 預設; a Bot that picked it itself keeps it as （固定）
-      select.innerHTML = `<option value="">${esc(form.id === 'bot-form' ? (named ? '預設（目前是 ' + named + '）' : '預設（這一家建議的型號）') : '各家建議的型號')}</option>` + models.filter(m => form.id !== 'bot-form' || m.id !== pinned).map(m => `<option value="${esc(m.id)}">${esc(m.name||m.id)}${m.source==='alias'?'（別名）':m.source==='cache'?'（快取）':''}${form.id === 'bot-form' && named && m.id === st.model ? '（固定）' : ''}</option>`).join('') + '<option value="__custom__">自訂模型…</option>';
+      select.innerHTML = `<option value="">${esc(form.id === 'bot-form' ? (named ? '預設（目前是 ' + named + '）' : '預設（這一家建議的型號）') : '建議的型號（由這一家決定）')}</option>` + models.filter(m => form.id !== 'bot-form' || m.id !== pinned).map(m => `<option value="${esc(m.id)}">${esc(m.name||m.id)}${m.source==='cache'?'（最近用過）':''}${form.id === 'bot-form' && named && m.id === st.model ? '（固定）' : ''}</option>`).join('') + '<option value="__custom__">自己輸入型號…</option>';
       const known = models.some(m => m.id === current);
       const custom = form.elements.modelCustom;
       if ((current && !known) || wasCustom) {
@@ -328,14 +354,16 @@
       } else {
         select.value = current || ''; custom.hidden = true;
       }
-      note.textContent = (form.dataset.providerChanged ? '換了一家，型號已改回它建議的版本，需要時可以再選。' : '') + (data.note || (models.length ? '' : '這一家沒有列出可選的型號，會用它建議的；也可以選「自訂模型」自己輸入。'));
+      note.textContent = (form.dataset.providerChanged ? '換了一家，型號已改回它建議的版本，需要時可以再選。' : '') + (data.note || (models.length ? '' : '這一家沒有列出可選的型號，會用它建議的；也可以選「自己輸入型號…」。'));
       delete form.dataset.providerChanged;
+      mirrorSelects(form);
     } catch (error) {
       if (error.name === 'AbortError' || !form.isConnected || form.modelRequest !== controller) return;
       const select = form.elements.modelSelect;
       const current = form.elements.model.value;
       if (current) { select.value = '__custom__'; form.elements.modelCustom.value = current; form.elements.modelCustom.hidden = false; }
-      note.textContent = `無法偵測模型：${error.message}。可重新偵測或自行輸入。`;
+      note.textContent = `讀不到型號清單：${error.message}。可以按「重新偵測」，或選「自己輸入型號…」。`;
+      mirrorSelects(form);
     }
   }
 
@@ -398,8 +426,10 @@
       content = `<p class="muted">Skills 由所有 Bot 共用。關閉的 Skill 不會提供給任何 Bot。目前啟用 ${a.filter(i => !off.has(i.id)).length} / ${a.length} 個。</p><input id="skill-search" class="secondary" style="width:100%;text-align:left;margin-bottom:16px" placeholder="搜尋 Skills" aria-label="搜尋 Skills" value="${esc(state.skillQuery||'')}">${shown.length ? `<div class="cards">${shown.map(i=>`<article class="card"><h3>${esc(i.name)}</h3><p>${esc(i.description||i.source||'')}</p><label class="ability-check"><input type="checkbox" data-shared-skill="${esc(i.id)}" ${off.has(i.id)?'':'checked'}> 所有 Bot 共用</label></article>`).join('')}</div>` : '<div class="blank">目前沒有偵測到項目。</div>'}`;
     } else if (state.page === 'memory') {
       const mems = [...(state.data.memories || [])].reverse();
-      const who = id => state.data.bots.find(b => b.id === id)?.name || '已刪除的 Bot';
-      content = `<p class="muted">Bot 記下的長期記憶。「共用」給所有 Bot。</p>${mems.length ? `<div class="cards">${mems.map(m => `<article class="card"><p>${esc(m.content)}</p><span class="status">${m.botId ? esc(who(m.botId)) : '共用'} · 由 ${esc(who(m.createdBy))} 記下 · ${esc(formatDate(m.createdAt))}</span><div class="actions"><button class="link" data-action="delete-memory" data-id="${esc(m.id)}" style="color:#b55">刪除</button></div></article>`).join('')}</div>` : '<div class="blank">還沒有記憶。和 Bot 聊天時說「記住…」，它就會記下來。</div>'}`;
+      const who = id => state.data.bots.find(b => b.id === id)?.name;
+      // A Bot's own memory outlives the Bot; saying who wrote it would only repeat that the Bot is gone.
+      const line = m => m.botId && !who(m.botId) ? '原 Bot 已刪除，沒有 Bot 會用到' : (m.botId ? who(m.botId) : '所有 Bot 共用') + ' · 由 ' + (who(m.createdBy) || '已刪除的 Bot') + ' 記住';
+      content = `<p class="muted">這裡是 Bot 幫你記住的習慣和偏好（例如：回覆用條列）。對 Bot 說「記住…」它就會記下。標「所有 Bot 共用」的每個 Bot 都知道；標 Bot 名稱的只有那個 Bot 知道。</p>${mems.length ? `<div class="cards">${mems.map(m => `<article class="card"><p>${esc(m.content)}</p><span class="status">${esc(line(m))} · ${esc(formatDate(m.createdAt))}</span><div class="actions"><button class="link" data-action="delete-memory" data-id="${esc(m.id)}" style="color:#b55">刪除</button></div></article>`).join('')}</div>` : '<div class="blank">還沒有記憶。和 Bot 聊天時說「記住…」，它就會記下來。</div>'}`;
     } else if (state.page === 'mcp-legacy') {
       let a = state.integrations?.[state.page] || [], b = activeBot(), key = state.page === 'skills' ? 'enabledSkills' : 'enabledMcp';
       content = `<label class="field">設定對象<select id="ability-bot"><option value="">請選擇 Bot</option>${state.data.bots.map(x=>`<option value="${esc(x.id)}" ${b?.id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></label><p class="muted">選擇要讓這個 Bot 使用的項目。</p>${a.length ? `<div class="cards">${a.map(i=>`<article class="card"><h3>${esc(i.name)}</h3><p>${esc(i.description||i.source||'')}</p>${state.page==='mcp'?`<span class="status">${esc(state.mcpTests[i.id]?.status==='ready'?'已驗證 · '+state.mcpTests[i.id].toolCount+' 個工具':state.mcpTests[i.id]?.status==='error'?'連線失敗：'+state.mcpTests[i.id].error:'已偵測設定，尚未驗證')}</span><div class="actions"><button class="link" data-action="test-mcp" data-id="${esc(i.id)}">測試連線</button></div>`:''}<label class="ability-check"><input type="checkbox" data-ability-kind="${key}" data-ability-id="${esc(i.id)}" ${b && (b[key]||[]).includes(i.id)?'checked':''} ${b?'':'disabled'}> 讓此 Bot 使用</label></article>`).join('')}</div>`:'<div class="blank">目前沒有偵測到項目。</div>'}`;
@@ -422,7 +452,7 @@
       }).join('')}</div>` : '<div class="blank">沒有偵測到插件。</div>'}`;
     } else if (state.page === 'settings') {
       let s = state.data.settings || {};
-      content = lookSection() + permissionSection(s.permissionMode || 'manual') + rulesSection() + `<h2 class="settings-h">模型</h2><form id="settings-form" class="setting-list">${settingRow('預設提供者', '', `<select name="provider" class="plain-select" aria-label="預設提供者">${providerOptions(s.provider || 'codex', false)}</select>`)}${settingRow('預設模型', '沒指定模型的 Bot 使用', modelPicker(s.model||'', true))}${[0, 1].map(i => settingRow('備用模型 ' + (i + 1), i ? '第一個備用也不能用時' : '模型不能用時改用', dropdown('fallback' + i, (s.fallbacks || [])[i] || '', [{id: '', name: '不使用'}, ...providerList()], 'data-fallback-slot'))).join('')}<div class="setting-actions"><button class="primary">儲存模型設定</button></div></form>` + chatSection() + taskSection() + noticeSection() + voiceSection() + remoteSection() + syncSection() + backupSection() + updateSection()
+      content = settingsNav() + lookSection() + permissionSection(s.permissionMode || 'manual') + rulesSection() + `<div class="setting-list">${settingRow('記憶', 'Bot 記住的偏好，點此查看', '<button type="button" class="secondary" data-action="page" data-id="memory">查看記憶</button>')}</div>` + modelSection(s) + chatSection() + taskSection() + noticeSection() + voiceSection() + remoteSection() + syncSection() + backupSection() + updateSection()
     }
     return `<main class="main"><header class="main-header"><div class="bot-pill">Zook</div></header><div class="page"><div class="page-inner"><div class="page-top"><h1>${name}</h1>${state.page==='knowledge'?'<button class="primary" data-action="new-note">＋ 新增知識</button>':state.page==='usage'?`<div class="page-top-actions">${usageAutoPick()}<button class="secondary" data-action="detect-usage" title="重新向各家讀取剩餘額度的數字，不會更新軟體" ${state.usageBusy ? 'disabled' : ''}>${state.usageBusy === 'detect' ? '偵測中…' : '偵測使用量'}</button><button class="secondary" data-action="update-all" title="把有新版的 CLI 軟體全部更新到最新版，完成後再讀一次額度" ${state.usageBusy ? 'disabled' : ''}>${state.usageBusy === 'update' ? '更新中…' : '更新全部 CLI'}</button><button class="primary" data-action="provider-add">＋ 新增模型</button></div>`:state.page==='schedules'?'<button class="primary" data-action="new-schedule">＋ 新增排程</button>':''}</div>${content}</div></div></main>`
   }
@@ -441,13 +471,14 @@
     let cursor = document.activeElement === previousInput ? [previousInput.selectionStart, previousInput.selectionEnd] : null;
     let openApprovals = [...document.querySelectorAll('[data-approval-details][open]')].map(x => x.dataset.approvalDetails);
     const railFocus = document.activeElement?.dataset?.rail;  // a reply streaming in must not take the keyboard off the rail
-    app.innerHTML = `<div class="layout">${sidebar()}${state.page==='chat'?(activeGroup()?groupChat():chat()):page()}</div>`;
+    const controlFocus = focusedControl();  // a switch or menu just changed keeps the keyboard when the page is redrawn (#188⑤)
+    app.innerHTML = `<div class="layout">${state.page === 'chat' ? '' : '<button type="button" class="skip-link" data-skip>跳到頁面內容</button>'}${sidebar()}${state.page==='chat'?(activeGroup()?groupChat():chat()):page()}</div>`;
     if ($('#chat-input')) {
       $('#chat-input').value = input;
       if (cursor !== null) { $('#chat-input').focus(); $('#chat-input').setSelectionRange(cursor[0], cursor[1]); }
     }
     updateMentionMenu();
-    if (state.page === 'chat' && state.lastRestored) { try { localStorage.setItem('zook-last-chat', JSON.stringify({bot: state.selected || '', group: state.groupId || ''})); } catch (_) {} }
+    saveLastOpen();
     if (localOpen && $('.usage-local')) $('.usage-local').open = true;
     if (pageY && $('.page')) $('.page').scrollTop = pageY;
     if (state.page === 'usage') drawOverviewChart();  // sized to its column, so it is drawn after the page is in place
@@ -463,6 +494,8 @@
       if (settingsDraft) { f.elements.provider.value = settingsDraft.provider; f.elements.model.value = settingsDraft.model; }
       loadModels(f);
     }
+    settingsAfterRender(settingsDraft);
+    restoreControlFocus(controlFocus);
   }
 
   function modal(title, body, footer = '', wide = false) {
@@ -480,6 +513,8 @@
     form.querySelectorAll('[data-account-field],.model-picker,[data-fixed-model]').forEach(el => { el.hidden = auto; });
     const gated = !auto && gatedCli(id), access = form.querySelector('[data-access-row]');  // Claude and Cursor: the whole Mac, nothing to choose
     if (access) access.hidden = gated;
+    const held = form.querySelector('[data-held-access]');  // only while it stays on the model it was held on: another model is chosen afresh
+    if (held) held.hidden = !gated || form.dataset.heldOn !== id;
     const folder = form.querySelector('[data-access-folder]');
     if (folder) folder.hidden = gated || form.elements.access?.value !== 'folder';
     const hint = form.querySelector('[data-auto-hint]');
@@ -520,10 +555,12 @@
     const defaultEffort = EFFORTS.some(x => x.id === st.effort) ? st.effort : 'standard', ownEffort = EFFORTS.some(x => x.id === b.effort) ? b.effort : '';
     const fallbackDefault = (st.fallbacks || []).length ? (st.fallbacks || []).map(providerShort).join(' → ') : '不自動換';
     const fallbackValue = !Array.isArray(b.fallbacks) ? '' : b.fallbacks.length ? b.fallbacks[0] : '__none';  // 「不自動換」 set on this Bot stays its own
+    const heldOn = b.id && b.localLimit && b.provider !== 'auto' && gatedCli(b.provider) && !b.gateFull ? b.provider || st.provider || 'codex' : '';
+    const heldRow = heldOn ? `<div data-held-access hidden>${settingRow('存取範圍', '可以動到哪些檔案', dropdown('heldAccess', 'workspace', HELD_ACCESS))}<p class="muted small held-note">${HELD_ACCESS_NOTE}</p></div>` : '';
     const autoNote = b.autoAssigned && b.autoReason ? `<small class="muted field-hint" data-auto-reason>自動配好：${esc(b.autoReason)}。改成別的模型就不再自動配。</small>` : '';
-    modal(editing ? '編輯 Bot' : '新增 Bot', `<form id="bot-form"><div class="modal-body">${editing ? '' : teamLink()}<div class="bot-preview"><button type="button" class="avatar-edit" data-action="avatar-pick" aria-label="選擇形狀和顏色" title="選擇形狀和顏色">${avatar({color:c,shape},'hero')}</button><span class="bot-names"><input name="name" required maxlength="80" placeholder="為 Bot 命名" value="${esc(b.name||'')}"><input name="jobTitle" maxlength="12" placeholder="職稱（選填，例如：行銷企劃）" aria-label="職稱" value="${esc(b.jobTitle||'')}"></span><label class="pin-toggle" title="釘選在左側最上方"><input type="checkbox" name="pinned" ${b.pinned ? 'checked' : ''} aria-label="釘選"><span aria-hidden="true">📌</span></label></div><div class="avatar-panel" hidden><div class="shapes">${Array.from({length:13},(_,i)=>`<button type="button" class="shape-btn ${shape===i?'selected':''}" data-action="shape" data-id="${i}" aria-label="形狀 ${i+1}">${avatar({color:c,shape:i})}</button>`).join('')}</div><div class="swatches">${colors.map(x=>`<button type="button" class="swatch ${c===x?'selected':''}" style="background:${x}" data-action="color" data-id="${x}" aria-label="顏色 ${x}"></button>`).join('')}</div></div><input type="hidden" name="shape" value="${shape}"><input type="hidden" name="color" value="${c}"><label class="field persona-field">人格檔案${editing ? '' : '（必填）'}<textarea name="persona" ${editing ? '' : 'required'} maxlength="20000" rows="5" placeholder="個性、語氣、擅長的事。例如：冷靜直接的資深工程師，先給結論，不確定就說不確定。">${esc(b.persona||'')}</textarea></label><label class="field">工作指示（選填）<textarea name="instructions" placeholder="負責的工作和做法。例如：審查程式碼，只列出會出錯的問題。">${esc(b.instructions||'')}</textarea></label><div class="form-grid"><label class="field">模型與帳號<select name="providerChoice">${choiceOptions(editing ? b.provider || '' : 'auto', b.account || '')}</select><input type="hidden" name="provider" value="${esc(editing ? b.provider || '' : 'auto')}"><input type="hidden" name="account" value="${esc(b.account || '')}"><small class="field-hint quota-warn" data-quota-warn hidden></small><small class="muted field-hint" data-auto-hint hidden>依人格和工作指示配好一家，之後都用它；沒有可用的模型時，每則訊息自己挑。</small>${autoNote}<small class="muted field-hint">另一個帳號要先在「各模型使用量」新增。<button type="button" class="link" data-action="accounts-from-form">新增帳號</button></small></label>${modelPicker(b.model||'')}</div><div class="setting-list in-form">${settingRow('思考強度', '', dropdown('effort', ownEffort, withDefault(EFFORTS, defaultEffort, ownEffort)))}${settingRow('分類', '', dropdown('section', b.section || sectionNames()[0] || '我的 Bots', [...new Set([...sectionNames(), b.section || '我的 Bots'])].map(x => ({id: x, name: x}))))}</div><details class="advanced"><summary>進階設定</summary><p class="muted small">預設跟著「設定」。只有這個 Bot 要不一樣時才改。</p><div class="setting-list in-form"><div data-access-row>${settingRow('存取範圍', '可以動到哪些檔案', dropdown('access', ownAccess, withDefault(ACCESS, defaultAccess, ownAccess)))}</div><div class="setting-row" data-access-folder ${ownAccess === 'folder' ? '' : 'hidden'}><div class="setting-copy"><strong>指定的資料夾</strong><span data-access-path>${esc(b.accessFolder || '尚未選擇')}</span></div><div class="setting-control"><input type="hidden" name="accessFolder" value="${esc(b.accessFolder || '')}"><button type="button" class="secondary" data-action="choose-folder">選擇資料夾…</button></div></div><div data-fixed-model>${settingRow('備用模型', '模型不能用時改用', dropdown('fallbackChoice', fallbackValue, withDefault([{id: '__none', name: '不自動換'}, ...providerList()], (st.fallbacks || []).length > 1 ? null : (st.fallbacks || [])[0] || '__none', fallbackValue, fallbackDefault)))}</div><div data-feature-row="multi">${settingRow('多代理協作', '派子代理分工，用量較多', dropdown('featureMulti', featureChoice('multi'), featureOptions('multi')))}</div><div data-feature-row="image">${settingRow('圖片生成', '用 AI 生成圖片', dropdown('featureImage', featureChoice('image'), featureOptions('image')))}</div><div data-feature-row="browser">${settingRow('內建瀏覽器', '開網頁閱讀、截圖、在搜尋框輸入（每次先問你）；不能登入。要先開啟「上網搜尋」', dropdown('featureBrowser', featureChoice('browser'), featureOptions('browser')))}</div></div></details></div><div class="modal-foot">${editing?'<button type="button" class="link" data-action="delete-bot" style="margin-right:auto;color:#b55">刪除 Bot</button>':''}<button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">${editing?'儲存':'建立 Bot'}</button></div></form>`);
+    modal(editing ? '編輯 Bot' : '新增 Bot', `<form id="bot-form" novalidate><div class="modal-body">${editing ? '' : teamLink()}<div class="bot-preview"><button type="button" class="avatar-edit" data-action="avatar-pick" aria-label="選擇形狀和顏色" title="選擇形狀和顏色">${avatar({color:c,shape},'hero')}</button><span class="bot-names"><input name="name" required data-need="請填寫 Bot 名稱。" maxlength="80" placeholder="為 Bot 命名" value="${esc(b.name||'')}"><input name="jobTitle" maxlength="12" placeholder="職稱（選填，例如：行銷企劃）" aria-label="職稱" value="${esc(b.jobTitle||'')}"></span><label class="pin-toggle" title="釘選在左側最上方"><input type="checkbox" name="pinned" ${b.pinned ? 'checked' : ''} aria-label="釘選"><span aria-hidden="true">📌</span></label></div><div class="avatar-panel" hidden><div class="shapes">${Array.from({length:13},(_,i)=>`<button type="button" class="shape-btn ${shape===i?'selected':''}" data-action="shape" data-id="${i}" aria-label="形狀 ${i+1}">${avatar({color:c,shape:i})}</button>`).join('')}</div><div class="swatches">${colors.map(x=>`<button type="button" class="swatch ${c===x?'selected':''}" style="background:${x}" data-action="color" data-id="${x}" aria-label="顏色 ${x}"></button>`).join('')}</div></div><input type="hidden" name="shape" value="${shape}"><input type="hidden" name="color" value="${c}"><label class="field persona-field">人格檔案${editing ? '' : '（必填）'}<textarea name="persona" ${editing ? '' : 'required'} data-need="請填寫人格檔案：寫下個性和語氣，一兩句就好。" maxlength="20000" rows="5" placeholder="個性、語氣、擅長的事。例如：冷靜直接的資深工程師，先給結論，不確定就說不確定。">${esc(b.persona||'')}</textarea></label><label class="field">工作指示（選填）<textarea name="instructions" placeholder="負責的工作和做法。例如：審查程式碼，只列出會出錯的問題。">${esc(b.instructions||'')}</textarea></label><div class="form-grid"><label class="field">模型與帳號<select name="providerChoice">${choiceOptions(editing ? b.provider || '' : 'auto', b.account || '')}</select><input type="hidden" name="provider" value="${esc(editing ? b.provider || '' : 'auto')}"><input type="hidden" name="account" value="${esc(b.account || '')}"><small class="field-hint quota-warn" data-quota-warn hidden></small><small class="muted field-hint" data-auto-hint hidden>依人格和工作指示配好一家，之後都用它；沒有可用的模型時，每則訊息自己挑。</small>${autoNote}<small class="muted field-hint">另一個帳號要先在「各模型使用量」新增。<button type="button" class="link" data-action="accounts-from-form">新增帳號</button></small></label>${modelPicker(b.model||'')}</div><div class="setting-list in-form">${settingRow('思考強度', '', dropdown('effort', ownEffort, withDefault(EFFORTS, defaultEffort, ownEffort)))}${settingRow('分類', '', dropdown('section', b.section || sectionNames()[0] || '我的 Bots', [...new Set([...sectionNames(), b.section || '我的 Bots'])].map(x => ({id: x, name: x}))))}</div><details class="advanced"><summary>進階設定</summary><p class="muted small">預設跟著「設定」。只有這個 Bot 要不一樣時才改。</p><div class="setting-list in-form"><div data-access-row>${settingRow('存取範圍', '可以動到哪些檔案', dropdown('access', ownAccess, withDefault(ACCESS, defaultAccess, ownAccess)))}</div>${heldRow}<div class="setting-row" data-access-folder ${ownAccess === 'folder' ? '' : 'hidden'}><div class="setting-copy"><strong>指定的資料夾</strong><span data-access-path>${esc(b.accessFolder || '尚未選擇')}</span></div><div class="setting-control"><input type="hidden" name="accessFolder" value="${esc(b.accessFolder || '')}"><button type="button" class="secondary" data-action="choose-folder">選擇資料夾…</button></div></div><div data-fixed-model>${settingRow('備用模型', '模型不能用時改用', dropdown('fallbackChoice', fallbackValue, withDefault([{id: '__none', name: '不自動換'}, ...providerList()], (st.fallbacks || []).length > 1 ? null : (st.fallbacks || [])[0] || '__none', fallbackValue, fallbackDefault)))}</div><div data-feature-row="multi">${settingRow('分工給小幫手', '大工作讓 Bot 再找幾個小幫手同時做，用量較多', dropdown('featureMulti', featureChoice('multi'), featureOptions('multi')))}</div><div data-feature-row="image">${settingRow('圖片生成', '用 AI 生成圖片', dropdown('featureImage', featureChoice('image'), featureOptions('image')))}</div><div data-feature-row="browser">${settingRow('內建瀏覽器', '開網頁閱讀、截圖、在搜尋框輸入（每次先問你）；不能登入。要先開啟「上網搜尋」', dropdown('featureBrowser', featureChoice('browser'), featureOptions('browser')))}</div></div></details></div><div class="modal-foot">${editing?'<button type="button" class="link" data-action="delete-bot" style="margin-right:auto;color:#b55">刪除 Bot</button>':''}<button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">${editing?'儲存':'建立 Bot'}</button></div></form>`);
     const form = $('#bot-form');
-    form.dataset.id = b.id || '';
+    form.dataset.id = b.id || ''; form.dataset.heldOn = heldOn;
     if (!b.id) restoreBotDraft(form);
     loadModels(form);
     syncFeatureRows(form);  // Claude and Cursor have nothing to choose about access
@@ -565,10 +602,35 @@
     if (x.repeat === 'once') return `${x.date ? dayLabel(x.date) : ''} ${x.time}`;
     return `${repeatName(x.repeat)} ${x.time}`;
   }
+  // What a schedule is called: its name, or the first words of what it does (also schedule_title in backend/zook/library.py).
+  function scheduleTitle(x) {
+    if (String(x.name || '').trim()) return String(x.name).trim();
+    const text = String(x.content || '').replace(/[*_`>#|]+/g, '').replace(/\s+/g, ' ').trim();
+    return text.length <= 18 ? text : text.slice(0, 18) + '…';
+  }
+  // When a schedule runs next, in this Mac's time; null when it is off, finished, or waits for a file or a mail. Same rules as schedule_last_due in backend/zook/library.py.
+  function scheduleNext(x, now = new Date()) {
+    if (!x.on || x.done || (x.trigger || 'time') !== 'time' || !/^\d\d:\d\d$/.test(x.time || '')) return null;
+    const [h, m] = x.time.split(':').map(Number);
+    if (x.repeat === 'hourly') { const d = new Date(now); d.setMinutes(m, 0, 0); if (d <= now) d.setHours(d.getHours() + 1); return d; }
+    if (x.repeat === 'once') { const d = new Date(`${x.date}T${x.time}:00`); return isNaN(d) || d <= now ? null : d; }
+    if (x.repeat === 'monthly') {
+      for (let i = 0; i < 3; i++) {
+        const y = now.getFullYear(), mo = now.getMonth() + i, last = new Date(y, mo + 1, 0).getDate(), d = new Date(y, mo, Math.min(Number(x.day) || 1, last), h, m);
+        if (d > now) return d;
+      }
+      return null;
+    }
+    const days = {weekdays: [1, 2, 3, 4, 5], sun: [0], mon: [1], tue: [2], wed: [3], thu: [4], fri: [5], sat: [6]}[x.repeat] || [0, 1, 2, 3, 4, 5, 6];
+    for (let i = 0; i < 8; i++) { const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i, h, m); if (d > now && days.includes(d.getDay())) return d; }
+    return null;
+  }
+  const nextLabel = d => { const two = n => String(n).padStart(2, '0'), today = new Date(), diff = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - new Date(today.getFullYear(), today.getMonth(), today.getDate())) / 864e5); return `${diff === 0 ? '今天 ' : diff === 1 ? '明天 ' : ''}${d.getMonth() + 1}/${d.getDate()}（週${WEEKDAY[d.getDay()]}）${two(d.getHours())}:${two(d.getMinutes())}`; };
+  const longText = t => String(t || '').length > 60 || String(t || '').split('\n').length > 3;
   function schedulesPage() {
     const items = state.data.schedules || [];
     const intro = '<p class="muted sched-intro">時間到，或有新檔案、新信件時，自動送出訊息。Mac 和 Zook 要開著。</p>';
     if (!items.length) return intro + '<div class="blank">還沒有排程。</div>';
     const last = x => x.done ? '已完成' : !x.lastStatus ? '尚未執行' : (x.lastStatus === 'sent' ? '上次執行：' : x.lastStatus === 'missed' ? '上次錯過：' : '上次失敗：') + formatDate(x.lastAt) + (x.lastStatus !== 'sent' && x.lastError ? '（' + x.lastError + '）' : '');
-    return intro + `<div class="cards">${items.map(x => `<article class="card sched-card"><div class="sched-head"><h3>${esc(scheduleWhen(x))}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><p>${esc(x.content)}</p>${scheduleTarget(x)}<span class="status ${x.lastStatus && x.lastStatus !== 'sent' && !x.done ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button>${(x.runs || []).length ? `<button class="link" data-action="schedule-history" data-id="${esc(x.id)}">紀錄</button>` : ''}<button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`).join('')}</div>`;
+    return intro + `<div class="cards">${items.map(x => `<article class="card sched-card"><div class="sched-head"><h3>${esc(scheduleTitle(x))}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><div class="sched-meta"><span class="sched-state ${x.on ? 'on' : ''}">${x.on ? '已啟用' : x.done ? '已完成' : '已關閉'}</span><span>${esc(scheduleWhen(x))}</span>${scheduleNext(x) ? `<span>下次執行：${esc(nextLabel(scheduleNext(x)))}</span>` : ''}</div><p class="sched-content${longText(x.content) ? ' folded' : ''}">${esc(x.content)}</p>${longText(x.content) ? '<button class="link sched-more" data-action="sched-more" aria-expanded="false">展開</button>' : ''}${scheduleTarget(x)}<span class="status ${x.lastStatus && x.lastStatus !== 'sent' && !x.done ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button>${(x.runs || []).length ? `<button class="link" data-action="schedule-history" data-id="${esc(x.id)}">紀錄</button>` : ''}<button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`).join('')}</div>`;
   }

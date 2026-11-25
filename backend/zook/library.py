@@ -416,6 +416,10 @@ def codex_rpc(binary, method, params, env=None):
         if proc.stdout: proc.stdout.close()
 
 
+# Claude's short names for its newest models, shown in plain words (#75).
+CLAUDE_ALIASES = {'opus': 'Opus（最強）', 'sonnet': 'Sonnet（均衡）', 'haiku': 'Haiku（最快）'}
+
+
 def model_list(provider):
     binary = find_cli(provider); models = []; source = 'none'
     s = P.spec(_active['data'], provider) or {}
@@ -426,7 +430,7 @@ def model_list(provider):
                 models = [dict(id=m, name=m, source='cli') for m in P.parse_grok_models(ANSI.sub('', out.decode('utf-8', 'replace'))) if clean_model(m)]
             except (OSError, subprocess.SubprocessError): pass
         source = 'cli' if models else 'none'
-        note = '由 grok models 取得。' if models else '無法取得 Grok 模型清單，請確認已安裝 Grok CLI。'
+        note = '清單來自這台 Mac 上的 Grok。' if models else '讀不到 Grok 的型號清單，請確認已安裝 Grok。'
         return dict(provider=provider, models=models, source=source, status='available' if models else 'unavailable', note=note, detectedAt=NOW())
     if s.get('kind') == 'antigravity':
         if binary:
@@ -437,22 +441,23 @@ def model_list(provider):
                     if len(parts) == 2 and clean_model(parts[0]): models.append(dict(id=parts[0], name=parts[1], source='cli'))
             except (OSError, subprocess.SubprocessError): pass
         return dict(provider=provider, models=models, source='cli' if models else 'none', status='available' if models else 'unavailable',
-                    note='由 agy models 取得。' if models else '無法取得 Antigravity 模型清單，請確認已登入。', detectedAt=NOW())
+                    note='清單來自這台 Mac 上的 Antigravity。' if models else '讀不到 Antigravity 的型號清單，請確認已登入 Antigravity。', detectedAt=NOW())
     if s.get('kind') == 'cursor':
         if binary:
             try: models = cursor_models(binary, _active['dir'])
             except (OSError, subprocess.SubprocessError): pass
         return dict(provider=provider, models=models, source='cli' if models else 'none', status='available' if models else 'unavailable',
-                    note='由 cursor-agent models 取得，可用的模型依你的 Cursor 方案。' if models else '無法取得 Cursor 模型清單，請確認已登入。', detectedAt=NOW())
+                    note='清單來自你的 Cursor，能用哪些看你的 Cursor 方案。' if models else '讀不到 Cursor 的型號清單，請確認已登入 Cursor。', detectedAt=NOW())
     if s.get('kind') == 'generic':
-        models = [dict(id=m, name=m, source='config') for m in s.get('models', []) if clean_model(m)]
-        note = '來自這個提供者的設定；也可以輸入自訂模型 ID。' if models else '沒有設定模型清單，請輸入模型 ID，或留空使用 CLI 預設。'
+        names = s.get('model_names') or {}
+        models = [dict(id=m, name=names.get(m, m), source='config') for m in s.get('models', []) if clean_model(m)]
+        note = '常用的型號；要別的可以選「自己輸入型號…」。' if models else '這一家沒有型號清單，會用它建議的；也可以自己輸入型號。'
         return dict(provider=provider, models=models, source='config' if models else 'none', status='available' if models else 'unavailable', note=note, detectedAt=NOW())
     if provider == 'codex':
         if binary:
             try: models = codex_models_cli(binary)
             except (OSError, ValueError, TimeoutError, BrokenPipeError): pass
-        if models: source = 'cli'; note = '由本機 Codex 服務取得模型清單；個別模型的使用權限尚未測試。'
+        if models: source = 'cli'; note = '清單來自這台 Mac 上的 Codex；有些型號要看你的方案能不能用。'
         else:
             try:
                 cache = pathlib.Path.home()/'.codex/models_cache.json'
@@ -460,8 +465,8 @@ def model_list(provider):
                 data = json.loads(cache.read_text(encoding='utf-8'))
                 models = normalize_models(data.get('models', []) if isinstance(data, dict) else [], 'cache')
             except (OSError, UnicodeError, ValueError): pass
-            if models: source = 'cache'; note = '使用本機快取；目前帳號可用性未確認。'
-            else: note = '無法取得模型清單，請檢查 Codex 安裝與登入。'
+            if models: source = 'cache'; note = '清單來自上次記下的資料；有些型號要看你的方案能不能用。'
+            else: note = '讀不到 Codex 的型號清單，請確認 Codex 已安裝並登入。'
     else:
         aliases = []
         if binary:
@@ -471,7 +476,8 @@ def model_list(provider):
                 example = re.search(r"an alias for the latest model.*?model's full name", help_text, re.S)
                 if example: aliases = re.findall(r"'([A-Za-z0-9_-]+)'", example.group(0))
             except (OSError, subprocess.SubprocessError): pass
-        models = [dict(id=x, name=x, source='alias') for x in dict.fromkeys(aliases) if clean_model(x)]
+        if not aliases and s.get('kind') == 'claude': aliases = list(CLAUDE_ALIASES)  # its --help wording changes between versions; these names keep working
+        models = [dict(id=x, name=CLAUDE_ALIASES.get(x, x), source='alias') for x in dict.fromkeys(aliases) if clean_model(x)]
         seen = {x['id'] for x in models}
         files = []
         for f in glob.iglob(str(pathlib.Path.home()/'.claude/projects/*/*.jsonl')):
@@ -495,7 +501,7 @@ def model_list(provider):
                 if consumed > 5*1024*1024: break
             except (OSError, UnicodeError): continue
         source = 'alias' if aliases else ('cache' if models else 'none')
-        note = '別名來自 CLI 說明，其他名稱來自本機紀錄；目前帳號可用性未確認。' if models else '無法取得 Claude 模型名稱，請檢查 CLI 安裝。'
+        note = '常用的型號，加上你最近用過的；能用哪些看你的方案。' if models else '讀不到 Claude 的型號，請確認 Claude 已安裝。'
     return dict(provider=provider, models=models, source=source, status='available' if models else 'unavailable', note=note, detectedAt=NOW())
 
 
@@ -518,6 +524,9 @@ def schedule_fields(store, body, record):
     if 'content' in body:
         if not isinstance(body['content'], str) or not body['content'].strip() or len(body['content']) > 30000: raise ValueError('請填寫要 Bot 做的事。')
         record['content'] = body['content'].strip()
+    if 'name' in body:  # may be empty: the list then shows the first words of what it does
+        if not isinstance(body['name'], str) or len(body['name'].strip()) > SCHEDULE_NAME_MAX: raise ValueError('名稱最多 %d 個字。' % SCHEDULE_NAME_MAX)
+        record['name'] = body['name'].strip()
     if 'time' in body:
         if not isinstance(body['time'], str) or not re.fullmatch(r'([01]\d|2[0-3]):[0-5]\d', body['time']): raise ValueError('時間格式無效。')
         record['time'] = body['time']
@@ -547,6 +556,15 @@ def schedule_fields(store, body, record):
 
 
 SCHEDULE_HISTORY = 20
+SCHEDULE_NAME_MAX = 60
+SCHEDULE_TITLE_WORDS = 18
+
+
+def schedule_title(item):
+    """What a schedule is called: its name, or the first words of what it does (also frontend/js/20-models.js scheduleTitle)."""
+    if (item.get('name') or '').strip(): return item['name'].strip()
+    text = re.sub(r'\s+', ' ', re.sub(r'[*_`>#|]+', '', item.get('content') or '')).strip()
+    return text if len(text) <= SCHEDULE_TITLE_WORDS else text[:SCHEDULE_TITLE_WORDS] + '…'
 MAX_SCHEDULES = 50
 SCHEDULE_TOOLS = ('zook_create_schedule', 'zook_update_schedule', 'zook_delete_schedule')
 REPEAT_NAMES = dict(daily='每天', weekdays='週一到週五', mon='每週一', tue='每週二', wed='每週三', thu='每週四', fri='每週五', sat='每週六', sun='每週日',
@@ -580,7 +598,7 @@ def schedule_tool_body(store, bot, group_id, args, creating):
         body['groupId' if groups else 'botId'] = (groups or bots)[0]['id']
     elif creating:  # by default: the conversation the request came from
         body['groupId' if group_id else 'botId'] = group_id or bot['id']
-    for key in ('content', 'repeat', 'time', 'date'):
+    for key in ('name', 'content', 'repeat', 'time', 'date'):
         if key in args: body[key] = args[key]
     if 'day' in args:
         try: body['day'] = int(str(args['day']).strip())
@@ -597,15 +615,17 @@ def describe_schedule_call(store, bot, group_id, name, args):
         if name == 'zook_create_schedule':
             body = schedule_tool_body(store, bot, group_id, args, True)
             item = dict(body, groupId=body.get('groupId', ''), botId=body.get('botId', ''))
-            return '建立排程：%s，在「%s」執行「%s」' % (schedule_when(item), schedule_target_name(store, item), str(args.get('content') or '')[:80])
+            return '建立排程%s：%s，在「%s」執行「%s」' % ('「%s」' % str(args['name']).strip()[:60] if str(args.get('name') or '').strip() else '', schedule_when(item), schedule_target_name(store, item), str(args.get('content') or '')[:80])
         item = store.find('schedules', args.get('schedule_id'))
         if not item: return '修改排程' if name == 'zook_update_schedule' else '刪除排程'
         what = '「%s」（%s）' % (item.get('content', '')[:40], schedule_when(item))
+        if (item.get('name') or '').strip(): what = '「%s」' % item['name'].strip() + what
         if name == 'zook_delete_schedule': return '刪除排程' + what
         body = schedule_tool_body(store, bot, group_id, args, False)
         after = dict(item, **{k: v for k, v in body.items() if k in ('repeat', 'time', 'date', 'day')})
         changes = []
         if schedule_when(after) != schedule_when(item): changes.append('改成' + schedule_when(after))
+        if 'name' in body: changes.append('名稱改成「%s」' % str(body['name'])[:60])
         if 'content' in body: changes.append('內容改成「%s」' % str(body['content'])[:60])
         if 'botId' in body or 'groupId' in body: changes.append('對象改成「%s」' % schedule_target_name(store, dict(groupId=body.get('groupId', ''), botId=body.get('botId', ''))))
         if 'on' in body: changes.append('啟用' if body['on'] else '停用')

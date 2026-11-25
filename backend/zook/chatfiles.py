@@ -251,9 +251,10 @@ def chats_from_backups(store, damaged):
         return ' · '.join(x for x in (str(owner.get('name') or 'Bot'), str(record.get('title') or '') if key[1] else '') if x)
     current = {key: messages for key, rel, messages, _ in chat_conversations(store.data)}
     for backup in backup_list(store) if wanted else []:
-        if backup['kind'] == 'file' or backup['size'] > MAX_BACKUP_FILE: continue
-        try: old = backup_check(backup_read(backup_dir(store) / backup['name']))
-        except (OSError, ValueError, UnicodeError, RecursionError, EOFError): continue
+        path = backup_path(store, backup['name'])
+        if backup['kind'] == 'file' or not path or backup_too_big(path): continue
+        try: old = backup_check(backup_read(path))
+        except (OSError, ValueError, UnicodeError, RecursionError, EOFError, KeyError, _zipfile.BadZipFile): continue
         for key, rel, messages, _ in chat_conversations(old):
             if key in wanted and messages and key in current:
                 current[key][:] = messages; notes.append(dict(name=name_of(key), backup=backup['name'], backupAt=backup['at'])); del wanted[key]
@@ -266,6 +267,10 @@ def chats_from_backups(store, damaged):
 def backup_read(path):
     """A backup as data. New ones are compressed; older ones are plain."""
     with open(str(path), 'rb') as f: head = f.read(2)
+    if head == b'PK':  # a backup with files: its data part (backupplus.py)
+        with _zipfile.ZipFile(str(path)) as z, z.open('data.json') as f: raw = f.read(8 * MAX_BACKUP_FILE + 1)
+        if len(raw) > 8 * MAX_BACKUP_FILE: raise ValueError('備份檔太大。')
+        return json.loads(raw.decode('utf-8'))
     if head == b'\x1f\x8b':
         with gzip.open(str(path), 'rb') as f: raw = f.read(8 * MAX_BACKUP_FILE + 1)
         if len(raw) > 8 * MAX_BACKUP_FILE: raise ValueError('備份檔太大。')

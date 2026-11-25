@@ -389,3 +389,27 @@ def claimed_missing(store, group_id, bot_id, text, given=()):
         for name in CLAIM_WORD.findall(re.sub(r'(?:file://)?/[^\s「」『』，、。；）)]+', ' ', text)):
             if not _claim_present(name, known) and name not in missing: missing.append(name)
     return missing[:10]
+
+
+# #68①: a reply that says it looked at the pages as pictures (渲染、轉成圖片、逐頁預覽). Not 「逐頁檢查」 alone: reading the text page by
+# page is a check too. Only a clause that does not say it was not done, and is not asking or suggesting it.
+RENDER_CLAIM = re.compile(r'(?:逐頁|每一?頁|各頁|全部頁面|所有頁面|整份)[^。；;\n]{0,8}?(?:渲染|轉成?圖片?|轉圖|預覽|截圖)|(?:轉成?圖片|轉圖)[^。；;，,、\n]{0,6}?(?:檢查|確認|核對|看過|檢視)|已(?:轉成?圖|逐頁預覽|逐頁渲染)')
+RENDER_NOT = re.compile(r'沒有|沒|未|無法|不能|不到|不曾|並非|尚未|還沒|請|建議|需要|要再|之後|下次|可以')  # before the claim, in its clause
+RENDER_NOT_AFTER = re.compile(r'^[^。；;，,\n]{0,12}?(?:尚未|還沒|未完成|沒做|沒有做|沒辦法|無法|失敗)')  # 「逐頁渲染檢查尚未完成」
+RENDER_REPORTS = ('codex', 'claude', 'cursor', 'grok', 'antigravity')  # the CLIs whose commands Zook reads from their output
+
+
+def claimed_unrendered(text, calls, kind, others=()):
+    """Whether a reply says it looked at its pages as pictures while none of its commands made a picture. False when the CLI does
+    not report its commands to Zook (it cannot be told), the reply says nothing of the kind, or the clause names another member."""
+    if kind not in RENDER_REPORTS: return False
+    if any(c.get('rendered') and c.get('status') in ('completed', 'running') for c in calls or []): return False
+    text = str(text or '')[:20000]
+    for n, hit in enumerate(RENDER_CLAIM.finditer(text)):
+        if n >= 20: break
+        start = max(text.rfind(x, max(0, hit.start() - 200), hit.start()) for x in '。；;\n，,、！!？?') + 1
+        clause = text[start:hit.end()]
+        if RENDER_NOT.search(clause) or RENDER_NOT_AFTER.match(text[hit.end():hit.end() + 40]): continue
+        if any(name and name in clause for name in others): continue  # what another member said it did (a host's merge), not this reply's own claim
+        return True
+    return False
