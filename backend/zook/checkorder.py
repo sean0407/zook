@@ -43,19 +43,24 @@ def split_work_steps(store, ids, fixes=None):
     return [work] + ([check_step(checkers, producers, {k: v for k, v in fixes.items() if k in checkers})] if checkers else [])
 
 
-def checked_present(store, group_id, bot_id, names, folders=()):
-    """Lock not needed. The names among these that are not there: not among the group's files, not in the member's copy of them,
-    not at the full path given, and not in a folder the work was sent to. A name that is not a file name is never counted missing."""
-    shared = [e.name for e in _plain_files(group_files_dir(store, group_id))]
-    copies = group_copy_folder(store, bot_id)
-    pool = shared + ([e.name for e in _plain_files(copies)] if copies.is_dir() else [])
+def _same_file(name, pool):
+    """The exact name, or it with the mark Zook adds to a second version (報表（專員）.xlsx, 報表 (2).xlsx)."""
+    want = _claim_key(name)
+    return any(_claim_key(have) == want or re.sub(r'\s*[（(][^（）()]{0,40}[）)](?=\.[^.]+$)', '', _claim_key(have)) == want for have in pool)
+
+
+def checked_present(store, group_id, names, folders=(), exact=()):
+    """Lock not needed. The names among these that are not there: not among the group's files (what a checker reads), not at the
+    full path given, and not in a folder the work was sent to. Names in exact (a report's own list of files) must match a shared
+    file exactly; others (words picked from a reply) may be the end of a longer name. A name that is not a file name is never counted."""
+    pool = [e.name for e in _plain_files(group_files_dir(store, group_id))]
     gone = []
     for raw in names or []:
         name = re.sub(r'[（(][^（）()]{0,30}[）)]\s*$', '', ' '.join(str(raw or '').split())).strip(' 「」『』`\'"')
         base = name.rsplit('/', 1)[-1]
-        if not re.search(r'\.[A-Za-z0-9]{1,6}$', base) or base in gone: continue
+        if not re.search(r'\.[A-Za-z0-9]{1,10}$', base) or base in gone: continue
         if name.startswith(('/', '~')) and os.path.lexists(os.path.expanduser(name)): continue
-        if _claim_present(base, pool) or any(os.path.lexists(os.path.join(f, base)) for f in folders): continue
+        if (_same_file(base, pool) if raw in exact else _claim_present(base, pool)) or any(os.path.lexists(os.path.join(f, base)) for f in folders): continue
         gone.append(base)
     return gone[:10]
 
@@ -76,14 +81,16 @@ class CheckOrder:
         with store.lock:
             group = store.find('groups', group_id)
             if not group or group.get('runId') != run_id: return False
-            start = _ask_start(group); latest = {}
-            for m in group['messages'][start:]:
-                if m.get('role') == 'assistant' and m.get('botId') in step.get('gate', []) and m.get('content') and m.get('status') == 'completed' and not m.get('checkOf'): latest[m['botId']] = m
-            said = {b: list(m.get('missingFiles') or []) for b, m in latest.items()}
+            start = _ask_start(group); last = {}
+            for m in group['messages'][start:]:  # each member's newest reply: a redo or 補存 that failed means the work was not handed in again
+                if m.get('role') == 'assistant' and m.get('botId') in step.get('gate', []) and not m.get('checkOf') and m.get('status') != 'running': last[m['botId']] = m
+            latest = {b: m for b, m in last.items() if m.get('status') == 'completed' and m.get('content')}
+            earlier = step.get('missing') if isinstance(step.get('missing'), dict) else {}  # what was missing before 補存 is looked for again, whatever the new reply says
+            said = {b: list(dict.fromkeys(list(m.get('missingFiles') or []) + list(earlier.get(b) or []))) for b, m in latest.items()}
             asked = '\n'.join(m.get('content') or '' for m in group['messages'][start:] if m.get('role') == 'user')
             checkers = _names(store, step['bots'])
         folders = named_folders(asked)
-        gone = {b: checked_present(store, group_id, b, names, folders) for b, names in said.items() if names}
+        gone = {b: checked_present(store, group_id, names, folders) for b, names in said.items() if names}
         gone = {b: names for b, names in gone.items() if names}
         with store.lock:
             group = store.find('groups', group_id)
@@ -96,7 +103,7 @@ class CheckOrder:
                 who = _names(store, list(gone))
                 note('%s 說交了 %s，但群組檔案裡找不到；先退回給 %s 補存，補好再請 %s 查核。' % (who, '、'.join(n for v in gone.values() for n in v), who, checkers))
                 store.save()
-                return [dict(role='split_resave', bots=list(gone), blind=False, fixes=fixes), dict(step, resaved=True)] + steps[1:]
+                return [dict(role='split_resave', bots=list(gone), blind=False, fixes=fixes), dict(step, resaved=True, missing=gone)] + steps[1:]
             if gone and len(gone) == len(latest):
                 note('%s 補存後還是找不到 %s，%s 這次不查核；請 %s 重新存檔後再請查核。' % (_names(store, list(gone)), '、'.join(n for v in gone.values() for n in v), checkers, _names(store, list(gone))))
                 store.save(); return steps[1:]
@@ -107,12 +114,12 @@ class CheckOrder:
     def _free_check(self, group_id, run_id, gate):
         """A discussion with a host: the 查核員 the kickoff named, once the members' independent round is over. Returns
         (turns to add, the gate still to pass, the step those turns run with); False when the run ended."""
-        step = check_step(gate['bots'], gate['gate']); step['resaved'] = gate.get('resaved', False)
+        step = check_step(gate['bots'], gate['gate']); step.update(resaved=gate.get('resaved', False), missing=gate.get('missing') or {})
         after = self._check_gate(group_id, run_id, step, [step])
         if after is False: return False
         if not after: return [], None, None
         now = {k: v for k, v in after[0].items() if k != 'waitBusy'}  # a member busy elsewhere is skipped with a line, as in any discussion
-        later = dict(gate, resaved=True) if now['role'] == 'split_resave' else None
+        later = dict(gate, resaved=True, missing=after[1].get('missing')) if now['role'] == 'split_resave' else None
         return [(x, False, now['role']) for x in now['bots']], later, now
 
     def _recheck(self, group_id, run_id, closer, fixes):
@@ -132,6 +139,6 @@ class CheckOrder:
 
 def task_files_missing(store, group_id, run, task, attempt, msg):
     """Outside the lock, with copies of what is read. The files a task's report lists, or its reply says it saved, that are not there."""
-    names = list(attempt.get('files') or []) + list(msg.get('missingFiles') or [])
+    listed = list(attempt.get('files') or [])
     folders = named_folders('\n'.join([task.get('spec') or '', run.get('goal') or '']))
-    return checked_present(store, group_id, task['assignee'], names, folders)
+    return checked_present(store, group_id, listed + list(msg.get('missingFiles') or []), folders, exact=listed)

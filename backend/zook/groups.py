@@ -475,6 +475,7 @@ class GroupRuns:
                     group['messages'].append(dict(id=ID(), role='system', content='%s 這次略過：%s' % (bot['name'], exc), createdAt=NOW()))
                     store.save(); return None
             provider, model = auto_chain[0][:2] if auto_chain else bot_model(store, bot)
+            if step.get('noSave') and provider_kind(provider) in PLAN_KINDS: readonly = True  # #170: a 查核員 really only reads where its CLI can be held to that
             if readonly and provider_kind(provider) not in PLAN_KINDS:
                 group_skip_turn(group, bot, '%s 的模型無法限制成只讀，沒辦法查核。' % bot['name'] if step.get('targetId') else ' 的模型無法限制成只讀，這次略過。', step)
                 store.save(); return None

@@ -24,12 +24,12 @@ folder = re.search(r'要給群組的產出請存到 (.+?)（只放', s)
 text = name + ' ' + role
 def save(): open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('quote')
 if name == '專員' and role in ('split_work', 'work', 'split_redo'):
-    if flag('fail'): time.sleep(0.2); sys.exit(3)
+    if flag('fail') or (role == 'split_redo' and flag('redofail')): time.sleep(0.2); sys.exit(3)
     if not flag('claim') and folder: save()
     text = '已存到群組檔案：報價單.xlsx'
 if name == '專員' and role == 'split_resave':
     if flag('resave') and folder: save()
-    text = '已存到群組檔案：報價單.xlsx'
+    text = '已存到群組檔案：報價單.xlsx' if not flag('cannot') else '這次存不了，權限不足。'
 if name == '查核員': text = '【判定】同意\n看過報價單.xlsx'
 if role == 'kickoff': text = '目標：報價\n@專員：做報價單\n@查核員：檢查報價單'
 if role in ('split_merge', 'split_remerge', 'final', 'moderate'): text = '【結論】好\n【待你決定】無\n【行動項目】無\n【未解問題】無'
@@ -39,7 +39,7 @@ if role == 'free' and name == 'solo': text = 'ok'
 shared = re.search(r'群組共用檔案在 [^：]+：(.+?)。', s)
 time.sleep(0.2)
 open(os.environ['GROUP_LOG'], 'a').write(json.dumps(dict(name=name, role=role, began=began, ended=time.time(), readonly='只能讀取' in s, fix='合計改成公式' in s,
-                                                         sees=shared.group(1) if shared else '', saves=bool(folder)), ensure_ascii=False) + '\n')
+                                                         sees=shared.group(1) if shared else '', saves=bool(folder), args=' '.join(a)), ensure_ascii=False) + '\n')
 if kind == 'claude': print(json.dumps({'type': 'result', 'result': text, 'is_error': False}))
 else: print(json.dumps({'type': 'item.completed', 'item': {'type': 'agent_message', 'text': text}})); print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 100, 'output_tokens': 50}}))
 '''
@@ -105,6 +105,22 @@ class CheckAfterDone(unittest.TestCase):
         found = self.say(self.group())
         self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('專員', 'split_work'), ('專員', 'split_resave'), ('Alpha', 'split_merge')])
         self.assertTrue(any('查核員 這次不查核' in x for x in self.said(found)), self.said(found))
+
+    def test_a_resave_that_does_not_name_the_file_is_still_looked_for(self):
+        self.flag('claim'); self.flag('cannot')
+        self.say(self.group())
+        self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('專員', 'split_work'), ('專員', 'split_resave'), ('Alpha', 'split_merge')])
+
+    def test_a_failed_redo_is_not_checked_as_the_old_version(self):
+        self.flag('sendback'); self.flag('redofail')
+        found = self.say(self.group())
+        self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('專員', 'split_work'), ('查核員', 'split_check'), ('Alpha', 'split_merge'), ('Alpha', 'split_remerge')])  # the redo failed (it logs nothing): no check of the old version
+        self.assertTrue(any('還沒交出成果' in x for x in self.said(found)), self.said(found))
+
+    def test_the_check_runs_read_only_where_the_cli_can(self):
+        self.say(self.group())
+        check = next(r for r in self.runs() if r['role'] == 'split_check'); plan = next(r for r in self.runs() if r['role'] == 'split_plan')  # both Codex
+        self.assertIn('read-only', check['args']); self.assertNotIn('read-only', plan['args'])
 
     def test_nothing_handed_in_means_no_check(self):
         self.flag('fail')
