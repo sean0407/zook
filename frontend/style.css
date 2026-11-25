@@ -1879,6 +1879,10 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .message.sending .bubble { opacity:.75; }
 .interject-note .link { margin-left:8px; font-size:11px; }
 .interject-note { font-size:11px; color:#8a8a8a; text-align:right; margin-top:3px; }
+/* A date and weekday that do not match (datecheck.py): a plain note under the user's own message */
+.date-note { align-self:flex-end; max-width:min(560px, 85%); margin-top:6px; padding:8px 12px; border-radius:10px; background:#fff6e0; border:1px solid #f0d48a; color:#6b4d00; font-size:13px; line-height:1.5; display:flex; flex-direction:column; gap:2px; text-align:left; }
+.date-note strong { font-size:12px; }
+.date-note small { font-size:11px; color:#8a6d1f; }
 
 /* 剩餘額度: one card per account, all the same size */
 .account-grid { grid-template-columns:repeat(auto-fill, minmax(250px, 1fr)); grid-auto-rows:1fr; }
