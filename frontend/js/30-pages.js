@@ -220,6 +220,7 @@
       try { last = JSON.parse(localStorage.getItem('zook-last-chat') || '{}') || {}; } catch (_) {}
       if (last.group && state.data.groups.some(g => g.id === last.group)) state.groupId = last.group;
       if (last.bot && state.data.bots.some(b => b.id === last.bot)) state.selected = last.bot;
+      if (location.hash === '#settings') { state.page = 'settings'; setTimeout(() => loadPage('settings')); }  // reloaded on the settings page (#188④)
     }
     if (state.groupId && !activeGroup()) state.groupId = null;
     for (const job of state.data.jobs || []) state.jobDetails[job.id] = job;
@@ -335,6 +336,7 @@
       closeDropdowns(dd); dd.classList.toggle('open', open); btn.setAttribute('aria-expanded', String(open));
       if (open) {
         const r = btn.getBoundingClientRect(), menu = dd.querySelector('.dd-menu');
+        setTimeout(() => { if (dd.classList.contains('open')) (dd.querySelector('.dd-opt.selected:not([hidden])') || dd.querySelector('.dd-opt:not([hidden])'))?.focus({preventScroll: true}); });  // the arrow keys start from the current choice
         menu.style.minWidth = Math.max(r.width, 220) + 'px';
         menu.style.top = (r.bottom + 6) + 'px';
         menu.style.left = Math.max(8, Math.min(r.right - Math.max(menu.offsetWidth, r.width, 220), innerWidth - menu.offsetWidth - 8)) + 'px';
@@ -347,12 +349,31 @@
       dd.querySelectorAll('.dd-opt').forEach(o => { o.classList.toggle('selected', o === opt); o.setAttribute('aria-selected', String(o === opt)); });
       dd.querySelector('.dd-label').textContent = opt.dataset.label;
       closeDropdowns();
+      dd.querySelector('.dd-btn').focus({preventScroll: true});  // the keyboard stays on this menu, not back at the top of the page (#188⑤)
       if (input.value !== opt.dataset.value) { input.value = opt.dataset.value; input.dispatchEvent(new Event('change', {bubbles: true})); }
       e.stopPropagation(); return;
     }
     if (!e.target.closest?.('.dd-menu')) closeDropdowns();
   }, true);
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.querySelector('.dd.open')) { closeDropdowns(); e.stopPropagation(); } }, true);
+  document.addEventListener('keydown', e => {
+    const openDd = document.querySelector('.dd.open');
+    if (e.key === 'Escape' && openDd) { closeDropdowns(); openDd.querySelector('.dd-btn').focus({preventScroll: true}); e.stopPropagation(); }
+  }, true);
+  // Arrow keys move through an open menu, and open a closed one from its button; Home and End go to the ends; Tab closes it (#76②, #188⑤).
+  document.addEventListener('keydown', e => {
+    const dd = e.target.closest?.('.dd');
+    if (!dd || !e.target.closest('.dd-btn, .dd-menu') || e.isComposing || e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    const opts = [...dd.querySelectorAll('.dd-opt')].filter(o => !o.hidden), open = dd.classList.contains('open');
+    if (!opts.length) return;
+    if (e.key === 'Tab') { if (open) { closeDropdowns(); if (e.target.closest('.dd-menu')) { e.preventDefault(); dd.querySelector('.dd-btn').focus(); } } return; }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+    if (!open && (e.key === 'Home' || e.key === 'End')) return;
+    e.preventDefault();
+    if (!open) { dd.querySelector('.dd-btn').click(); return; }
+    const i = opts.indexOf(document.activeElement);
+    const next = e.key === 'Home' ? opts[0] : e.key === 'End' ? opts.at(-1) : e.key === 'ArrowDown' ? opts[i < 0 ? 0 : Math.min(opts.length - 1, i + 1)] : opts[i < 0 ? opts.length - 1 : Math.max(0, i - 1)];
+    next.focus({preventScroll: true}); next.scrollIntoView({block: 'nearest'});
+  });
   document.addEventListener('scroll', e => { if (!e.target.closest?.('.dd-menu')) closeDropdowns(); }, true);
 
   // Sidebar drag and drop.

@@ -4,7 +4,7 @@
 
   function rulesSection() {
     const rules = state.data.settings.rules || '';
-    return `<h2 class="settings-h">固定規則</h2><p class="muted small settings-note">所有 Bot 每次回覆都會遵守，優先於各自的工作指示。</p><form id="rules-form" class="rules-form"><textarea name="rules" maxlength="10000" rows="5" aria-label="固定規則" placeholder="例如：一律用繁體中文回答。金額一律標示幣別。">${esc(rules)}</textarea><div class="setting-actions"><button class="primary">儲存規則</button></div></form>`;
+    return `<h2 class="settings-h">固定規則</h2><p class="muted small settings-note">所有 Bot 每次回覆都會遵守，比各自的工作指示優先。改完要按「儲存規則」才會生效。</p><form id="rules-form" class="rules-form"><textarea name="rules" maxlength="10000" rows="5" aria-label="固定規則" placeholder="例如：一律用繁體中文回答。金額一律標示幣別。">${esc(rules)}</textarea><div class="setting-actions"><button class="primary" data-save>儲存規則</button><span class="unsaved-note" data-unsaved hidden>尚未儲存</span></div></form>`;
   }
 
   // 備份與還原 (queue #232, #50, #51): settings as switches and dropdowns, a name for a backup made by hand, and what a restore changes.
@@ -288,7 +288,6 @@
     }
   }
   // The top of 設定 links here: the section is far down.
-  document.addEventListener('click', e => { if (e.target.closest?.('[data-up="jump-backup"]')) $('#settings-backup')?.scrollIntoView({block: 'start'}); });
 
   // A backup is one compressed file; older ones are plain text.
   async function backupText(file) {
@@ -329,7 +328,7 @@
   });
 
   // Conversation settings.
-  const chatSection = () => `<h2 class="settings-h">對話</h2><div class="setting-list">${settingRow('回覆逐字顯示', '回覆時文字逐步出現；關閉後等整段完成才顯示', toggle('data-stream-replies', state.data.settings.streamReplies !== false, '回覆逐字顯示'))}${settingRow('Bot 忙碌時排隊', 'Bot 還在回覆時送出的訊息會排在後面；關閉後要等它回覆完才能再傳', toggle('data-queue-busy', state.data.settings.queueWhenBusy !== false, 'Bot 忙碌時排隊'))}${settingRow('對話過長時自動整理', '對話長到模型讀不完時，把前面整理成摘要再接續；訊息本身都還在', toggle('data-auto-compact', state.data.settings.autoCompact !== false, '對話過長時自動整理'))}${settingRow('保持 CLI 開啟', '同一個對話接著問時不用重新啟動，回覆比較快；閒置十分鐘後自動關閉', toggle('data-keep-cli', state.data.settings.keepCli !== false, '保持 CLI 開啟'))}${settingRow('結束時繼續在背景跑', '結束 Zook 或更新時，正在回覆的對話繼續跑完，重開後接回來；關閉後結束 Zook 會停止回覆', toggle('data-background-runs', state.data.settings.backgroundRuns !== false, '結束時繼續在背景跑'))}${settingRow('選項按鈕', 'Bot 需要你選擇時，把選項顯示成按鈕；做到一半也可以問你問題', toggle('data-choice-buttons', state.data.settings.choiceButtons !== false, '選項按鈕'))}</div>`;
+  const chatSection = () => `<h2 class="settings-h">對話</h2><div class="setting-list">${settingRow('回覆逐字顯示', '回覆時文字逐步出現；關閉後等整段完成才顯示', toggle('data-stream-replies', state.data.settings.streamReplies !== false, '回覆逐字顯示'))}${settingRow('Bot 忙碌時排隊', 'Bot 還在回覆時送出的訊息會排在後面；關閉後要等它回覆完才能再傳', toggle('data-queue-busy', state.data.settings.queueWhenBusy !== false, 'Bot 忙碌時排隊'))}${settingRow('對話過長時自動整理', '對話長到 AI 讀不完時，把前面整理成重點再接著聊；原本的訊息都還在', toggle('data-auto-compact', state.data.settings.autoCompact !== false, '對話過長時自動整理'))}${settingRow('接著問時回得更快', '同一個對話接著問時，Zook 先不關掉這家 AI 的程式（CLI），下一次回得比較快；閒置十分鐘後自動關閉', toggle('data-keep-cli', state.data.settings.keepCli !== false, '接著問時回得更快'))}${settingRow('結束時繼續在背景跑', '結束 Zook 或更新時，正在回覆的對話繼續跑完，重開後接回來；關閉後結束 Zook 會停止回覆', toggle('data-background-runs', state.data.settings.backgroundRuns !== false, '結束時繼續在背景跑'))}${settingRow('Bot 提問時顯示按鈕', 'Bot 需要你選擇時，把選項做成按鈕讓你點；做到一半也能停下來問你', toggle('data-choice-buttons', state.data.settings.choiceButtons !== false, 'Bot 提問時顯示按鈕'))}</div>`;
   document.addEventListener('change', async e => {
     if (e.target.dataset.streamReplies === undefined) return;
     try { state.data.settings = await post('settings', {streamReplies: e.target.checked}, 'PATCH'); toast(e.target.checked ? '回覆會逐字顯示' : '回覆會整段顯示'); }
