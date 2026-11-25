@@ -901,11 +901,7 @@ class Handler(BaseHTTPRequestHandler):
                     if any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs']): return self.error(409, '此機器人已有執行中的工作。')
                     if any(item.get('botId') == bot['id'] for item in store.data['knowledge']): return self.error(409, '請先將此 Bot 的知識移至其他 Bot 或共用知識。')
                     if any(g['status'] == 'running' and bot['id'] in g['botIds'] for g in store.data['groups']): return self.error(409, '此機器人正在群組討論中。')
-                    for g in store.data['groups']:
-                        if bot['id'] in g['botIds']:
-                            was_host = group_host(store, g) == bot['id']
-                            g['botIds'].remove(bot['id'])
-                            if was_host: drop_group_host(store, g)
+                    bot_leaves_groups(store, bot)
                     store.data['schedules'][:] = [x for x in store.data['schedules'] if x.get('botId') != bot['id']]
                     trash_bot(store, bot)  # kept aside, so it can be brought back
                     store.data['bots'].remove(bot); store.save(); return self.respond(200, {'ok': True})
