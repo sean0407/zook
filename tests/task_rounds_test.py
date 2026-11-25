@@ -57,6 +57,8 @@ class TaskRounds(unittest.TestCase):
             if run.get('awaitingConfirm'):
                 shown = [t['id'] for t in run['tasks'] if t.get('confirmed') is False and t['status'] in ('pending', 'ready', 'waiting')]
                 self.req('POST', '/api/groups/%s/tasks/confirm' % self.group['id'], {'tasks': shown})
+            for t in [t for t in run.get('tasks') or [] if t['status'] == 'review']:  # all Claude here: nobody of another vendor checks, the user accepts
+                self.req('POST', '/api/groups/%s/tasks/%s/accept' % (self.group['id'], t['id']), {})
             for gate in [x for x in run.get('gates') or [] if x['status'] == 'pending' and x.get('kind') == 'checkpoint']:
                 self.assertTrue(answers, 'asked more often than expected')
                 self.assertEqual(self.req('POST', '/api/groups/%s/gates/%s' % (self.group['id'], gate['id']), {'answer': answers.pop(0)})[0], 200)
@@ -64,7 +66,7 @@ class TaskRounds(unittest.TestCase):
         self.fail('the group did not finish')
 
     def test_the_boundary_is_on_the_board(self):
-        self.rules([{'match': PLAN, 'calls': [BOUNDARY, create(1, '甲')], 'reply': '分好了'}, {'match': WAKE, 'reply': SUMMARY},
+        self.rules([{'match': PLAN, 'calls': [BOUNDARY, create(1, '甲')], 'reply': '分好了'}, {'match': WAKE, 'calls': [dict(BOUNDARY, arguments=dict(goal='隨便做', done_when='做了就好'))], 'reply': SUMMARY},
                     {'match': '=== 工作', 'calls': [done()], 'reply': '完成'}])
         group = self.run_until([])
         run = group['taskRun']
@@ -76,6 +78,8 @@ class TaskRounds(unittest.TestCase):
         self.assertIn('zook_task_boundary', plan['prompt'])
         wake = next(r for r in self.runs() if r['match'] == WAKE)
         self.assertIn('完成條件：三家都比較過', wake['prompt']); self.assertIn('不要寫總結', wake['prompt'])
+        self.assertTrue(wake['answers'][0]['error']); self.assertIn('不能改', wake['answers'][0]['text'])  # written once, at the start
+        self.assertEqual(run['boundary']['goal'], '比較三家報價')
 
     def test_no_boundary_written_shows_the_users_goal(self):
         self.rules([{'match': PLAN, 'calls': [create(1, '甲')], 'reply': '分好了'}, {'match': WAKE, 'reply': SUMMARY}, {'match': '=== 工作', 'calls': [done()]}])

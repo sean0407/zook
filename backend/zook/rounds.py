@@ -12,7 +12,8 @@ try: GROUP_REPLY_CAP = max(0, int(os.environ.get('ZOOK_GROUP_REPLY_CAP') or 0)) 
 except ValueError: GROUP_REPLY_CAP = 0
 try: TASK_CHECK_EVERY = max(1, int(os.environ.get('ZOOK_TASK_CHECK_EVERY') or 10))
 except ValueError: TASK_CHECK_EVERY = 10
-TASK_MAX_ALL = TASK_MAX * 4  # tasks one run can ever hold: TASK_MAX more each time the user says 繼續, three times at most
+TASK_CONTINUES = 9
+TASK_MAX_ALL = TASK_MAX * (1 + TASK_CONTINUES)  # tasks one run can ever hold: TASK_MAX more each time the user says 繼續
 TASK_GO_ON, TASK_ENOUGH = '繼續', '到此為止'
 _GO_ON_WORDS = ('繼續', '继续', '繼續做', '继续做', '繼續吧', '继续吧', 'continue', 'go on')
 _ENOUGH_WORDS = ('到此為止', '到此为止', '停止', '不用繼續', '不用继续', 'stop')
@@ -39,14 +40,14 @@ def group_asked(group):
 
 def group_round_budget(store, group, targets, broadcast, mode, resume=None):
     """Lock held. The replies this run may still use, as {ask, rounds, responders, used}; None for a run outside any ask (整理結論,
-    查核). 插話 answered after the round belongs to the same ask: it pays from what is left, and a member it names counts too."""
+    查核). 插話 answered after the round belongs to the same ask: it pays from what is left, and never makes the total bigger."""
     if (resume or {}).get('own'): return None
     rounds, asked = group_limit(store, group), group_asked(group).get('id') or ''
     budget = group.get('roundBudget') if isinstance(group.get('roundBudget'), dict) else {}
     used = budget.get('used') if type(budget.get('used')) is int and budget.get('used') >= 0 else 0
     sized = budget.get('responders') if type(budget.get('responders')) is int and 0 < budget.get('responders') <= GROUP_MAX_BOTS else 0
     if budget.get('ask') != asked or not sized: budget = dict(ask=asked, used=0, responders=group_responders(store, group, targets, broadcast, mode))
-    else: budget = dict(ask=asked, used=used, responders=sized if resume else max(sized, group_responders(store, group, targets, broadcast, mode)))
+    else: budget = dict(ask=asked, used=used, responders=sized)
     budget['rounds'] = rounds
     group['roundBudget'] = budget
     return dict(budget)
@@ -89,11 +90,11 @@ def task_rounds(run):
 
 def task_round_cap(run):
     cap = run.get('roundCap')
-    return cap if type(cap) is int and cap > 0 else TASK_CHECK_EVERY
+    return min(cap, task_rounds(run) + TASK_CHECK_EVERY) if type(cap) is int and cap > 0 else TASK_CHECK_EVERY  # never more than one stretch ahead
 
 
 def task_max(run):
-    return min(TASK_MAX_ALL, TASK_MAX * (1 + min(3, int(run.get('continued') or 0))))
+    return min(TASK_MAX_ALL, TASK_MAX * (1 + min(TASK_CONTINUES, int(run.get('continued') or 0))))
 
 
 def task_checkpoint_waiting(run):
@@ -153,6 +154,7 @@ def task_boundary_tool(app, store, group_id, locate, acted, schema, S, text):
         goal, done_when = text(args.get('goal'), 'goal', 2, 200), text(args.get('done_when'), 'done_when', 2, 600)
         with store.lock:
             group, run = locate()
+            if run.get('boundary'): raise RuntimeError('這次的邊界已經寫好了（%s），不能改；照它繼續，做不到就在總結寫明缺什麼。' % run['boundary'].get('goal', ''))
             run['boundary'] = dict(goal=goal, doneWhen=done_when, at=NOW())
             run['log'].append(dict(at=NOW(), what='boundary')); acted()
             task_board_update(store, group); store.save()
@@ -188,12 +190,18 @@ def task_checkpoint_answer(store, group, run, item, answer):
     task_board_update(store, group)
 
 
+def task_checkpoint_close(run):
+    """Lock held. The run ends or stops: a check still summing up or waiting for the user is over, its card with it."""
+    if not task_checkpoint_waiting(run): return
+    for g in run.get('gates') or []:
+        if g.get('kind') == 'checkpoint' and g.get('status') == 'pending': g['status'] = 'cancelled'
+    run['checkpoint'] = dict(state='stopped'); run.pop('goOn', None)
+
+
 def task_checkpoint_reset(run):
     """Lock held. A run started again by 重試 after it stopped: a check it stopped at (or ended with) no longer waits, and it has
     another TASK_CHECK_EVERY rounds from here."""
-    if not run.get('checkpoint'): return
-    for g in run.get('gates') or []:
-        if g.get('kind') == 'checkpoint' and g.get('status') == 'pending': g['status'] = 'cancelled'
+    task_checkpoint_close(run)
     run.pop('checkpoint', None); run.pop('goOn', None); run['roundCap'] = task_rounds(run) + TASK_CHECK_EVERY
 
 
@@ -211,6 +219,7 @@ def task_checkpoint_typed(store, group, run, content):
 def task_round_ok(run):
     """The fields this file adds to a run, as task_run_ok() checks a file put back."""
     if any(k in run and (type(run[k]) is not int or run[k] < 0) for k in ('roundCap', 'continued')): return False
+    if type(run.get('wakes', 0)) is not int or run.get('roundCap', 0) > task_rounds(run) + TASK_CHECK_EVERY: return False  # never further off than one stretch
     if 'goOn' in run and not isinstance(run['goOn'], bool): return False
     if 'boundary' in run and (not isinstance(run['boundary'], dict) or any(k in run['boundary'] and not (isinstance(run['boundary'][k], str) and len(run['boundary'][k]) <= 600) for k in ('goal', 'doneWhen', 'at'))): return False
     if 'checkpoint' in run and run['checkpoint'] is not None and (not isinstance(run['checkpoint'], dict) or any(k in run['checkpoint'] and not (isinstance(run['checkpoint'][k], str) and len(run['checkpoint'][k]) <= 64) for k in ('state', 'gate'))): return False

@@ -236,6 +236,7 @@ def task_stop(store, group):
         if t.get('status') == 'review': t['status'] = 'stuck'  # its result can still be accepted
         if t.get('status') not in TASK_SETTLED: t['status'] = 'cancelled'
         t.pop('staged', None)
+    task_checkpoint_close(run)
     task_board_update(store, group)
 
 
@@ -260,6 +261,7 @@ def task_recover(group, store=None):
             if a.get('state') in ('running', 'starting'): a['state'] = 'unknown'  # a try cut off before its reply began, too
     for g in run.get('gates') or []:
         if g.get('status') == 'pending': g['status'] = 'cancelled'; g['before'] = 'pending'
+    task_checkpoint_close(run)
     group.setdefault('messages', []).append(dict(id=ID(), role='system', content='Zook 重新啟動時任務還在進行。', createdAt=NOW()))  # resume.py says what happens next
     if store is not None: task_board_update(store, group)
 

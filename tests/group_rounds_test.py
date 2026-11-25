@@ -142,6 +142,18 @@ class Budget(unittest.TestCase):
         self.m.round_continue(self.group)
         self.assertEqual(self.m.group_round_budget(self.store, self.group, ['b'], False, 'free')['used'], 0)
 
+    def test_late_interjection_never_makes_the_total_bigger(self):
+        b = self.m.group_round_budget(self.store, self.group, ['b'], False, 'free'); self.m.round_spend(self.group, b, 2)
+        self.group['messages'].append(dict(id='u2', role='user', content='@所有人 也看看', interjected=True))
+        b = self.m.group_round_budget(self.store, self.group, ['a', 'b', 'c'], True, 'free')
+        self.assertEqual((b['used'], b['responders']), (2, 1))
+
+    def test_books_from_a_file_cannot_put_the_check_far_off(self):
+        run = dict(id='r', status='done', origin='user', hostId='h', tasks=[], wakes=3)
+        self.assertTrue(self.m.task_run_ok(dict(run, roundCap=4 + self.m.TASK_CHECK_EVERY, boundary=dict(goal='g', doneWhen='d'), checkpoint=dict(state='asked', gate='x'))))
+        for bad in (dict(run, roundCap=10 ** 6), dict(run, boundary='x'), dict(run, checkpoint=dict(state=5)), dict(run, goOn='yes'), dict(run, continued=-1)):
+            self.assertFalse(self.m.task_run_ok(bad), bad)
+
     def test_a_new_message_and_own_runs(self):
         b = self.m.group_round_budget(self.store, self.group, ['b'], False, 'free'); self.m.round_spend(self.group, b, 4)
         self.group['messages'].append(dict(id='u3', role='user', content='新的問題'))

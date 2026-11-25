@@ -68,6 +68,7 @@ class TaskRuns:
                         if t.get('parent') and t.get('staged'): task_handoff_abort(run, t['parent'])
                     for t in run['tasks']:
                         if t['status'] not in TASK_SETTLED: t['status'] = 'cancelled'
+                    task_checkpoint_close(run)  # a check nobody can answer any more is not left waiting
                     left = task_user_added(group, run) if group.get('runId') == run_id else []  # a stop by the user has already cleared the run
                     if left: group.setdefault('interjectQueued', []).extend(m['id'] for m in left)  # 插話 that came as the run ended: answered right after it
                     run.pop('userAdded', None)
@@ -250,8 +251,12 @@ class TaskRuns:
                 run['userAdded'] = [x for x in run.get('userAdded') or [] if x not in heard]
             if run.get('id') == run_ref:
                 for t in run.get('tasks') or []:
-                    if not t.get('parent'): t.pop('staged', None)
-                if kind == 'converge': task_checkpoint_ask(self, store, group, run)  # summed up (or tried to): now the user decides  # the host's turn is over: what it planned may start (or be confirmed); a helper waits for its member's turn
+                    if not t.get('parent'): t.pop('staged', None)  # the host's turn is over: what it planned may start (or be confirmed); a helper waits for its member's turn
+                if kind == 'converge':  # summed up: now the user decides. Not summed up: tried again (the reports are news again); two misses stop the run
+                    if turn and turn['job']['status'] == 'completed' and group.get('runId') == run_id and run.get('status') == 'running': task_checkpoint_ask(self, store, group, run)
+                    elif (run.get('checkpoint') or {}).get('state') == 'converging':
+                        run.pop('checkpoint', None); run['wakes'] = max(0, run.get('wakes', 1) - 1); told = set(run.get('wakeFor') or [])
+                        run['delivered'] = [k for k in run.get('delivered') or [] if k.split(':')[0] not in told]
             if run.get('id') == run_ref and (not turn or turn['job']['status'] != 'completed') and kind == 'user':
                 # 插話 the host could not answer: tried once more, then left with a line in the chat; the run itself goes on
                 run['userMissed'] = run.get('userMissed', 0) + 1

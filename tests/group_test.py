@@ -109,7 +109,7 @@ class GroupTest(unittest.TestCase):
         group = self.group('Alpha', 'Beta')
         self.req('POST', '/api/groups/%s/messages' % group['id'], {'content': '@Alpha LOOP'})
         spoken = self.speakers(self.wait_idle(group['id'], 40))
-        self.assertEqual(len([s for s in spoken if s[0] != 'system']), 8)
+        self.assertEqual(len([s for s in spoken if s[0] != 'system']), 4)  # #174: one member named × 4 rounds (the default); handing back and forth is paid from it
         self.assertEqual(spoken[-1][0], 'system')
 
     def test_stop_and_busy_guards(self):
