@@ -360,7 +360,8 @@ def task_host_prompt(store, group, run, bot, kind):
                  '需要分工時：' + TASK_HOST_TOOLS,
                  '每項工作說明要自足：成員看不到這段對話，只看得到你寫的說明。寫清楚目標、要做什麼、限制、可以動哪些檔案、要交回什麼；使用者指定的存放位置要原樣寫進去。',
                  '「怎樣算完成」要寫成可以檢查的條件，例如「列出 3 個景點，每個附一句理由」。',
-                 '交給最適合的成員，一項工作一位；不要交給你自己，也不要自己做成員的工作。互不相關的工作會同時進行。',
+                 '交給最適合的成員，一項工作一位；不要自己做成員的工作。互不相關的工作會同時進行。',
+                 '你自己也可以接其中一項（assignee 寫你自己的名稱「%s」）：先把成員的工作建立好，主持人最多接一項，不要把工作都留給自己。成員正在忙也照樣派給他，Zook 會等他有空再開始。' % bot['name'],
                  '要等別的工作做完才能開始的，在 after 填那些工作的編號；Zook 會把它們的回報交給這項工作。只在真的需要前面的結果時才填，其餘讓它們同時進行。',
                  'Zook 會依成員的額度覆核你的指派；額度不夠時會改派，並告訴你改了什麼。',
                  'changes 寫這項工作會動到什麼：none（只讀、只查資料）、files（會建立或修改檔案）、external（會對外動作，例如寄信）。寫 none 的工作會在只能讀的狀態下進行。',
@@ -392,7 +393,8 @@ def task_upstream_line(store, t):
 
 def task_worker_prompt(store, group, run, task, bot, writable):
     host = task_member_name(store, run['hostId'])
-    rules = ['這是群組「%s」的主持人 %s 派給你的一項工作。主持人看不到你的過程，只會收到你用工具交回的回報。' % (group['name'], host),
+    rules = ['這是群組「%s」的主持人 %s 派給你的一項工作。主持人看不到你的過程，只會收到你用工具交回的回報。' % (group['name'], host) if bot['id'] != run['hostId'] else
+             '這是群組「%s」裡你分給自己的一項工作（你是主持人）。只做這一項，成員的工作由他們完成；這一輪看不到群組對話，照工作說明做，用工具回報。' % group['name'],
              '只做這一項工作；不要 @ 任何人，也不要派出子代理。' + ('你是助手，自己完成，不能再派助手。' if (task.get('depth') or 1) >= TASK_DEPTH else
                                                        '工作很長、其中一部分適合交給別的成員時，可以用 zook_task_delegate 派一位助手（最多 %d 位），派完就結束這一輪，Zook 會帶著助手的回報再派你接著做。' % TASK_HELPERS),
              '做完時呼叫 zook_task_done，只呼叫一次：outcome 寫 succeeded（完成）或 failed（沒有完成）；summary 用三句話寫做了什麼、發現什麼、還剩什麼；有產出檔案就列在 files。'
@@ -472,7 +474,10 @@ def task_tools(app, job_id, runtime):
                 name = ' '.join(str(args.get('assignee') or '').split()).lstrip('@').lower()
                 bot = next((b for b in (store.find('bots', x) for x in group['botIds']) if b and b['name'].strip().lower() == name), None)
                 if not bot: raise RuntimeError('找不到成員「%s」。成員：%s' % (args.get('assignee'), '、'.join(task_member_name(store, x) for x in group['botIds'] if x != run['hostId'])))
-                if bot['id'] == run['hostId']: raise RuntimeError('不能把工作交給你自己，交給其他成員。')
+                if bot['id'] == run['hostId']:  # #71 (decisions #5, #6): the host may take one task, after the members have theirs
+                    mine = next((t for t in run['tasks'] if t['assignee'] == run['hostId']), None)
+                    if mine: raise RuntimeError('你已經接了工作 %d；主持人最多接一項，其他工作交給成員。' % mine['n'])
+                    if not any(t['assignee'] != run['hostId'] for t in run['tasks']): raise RuntimeError('先把成員的工作建立好，再建你自己那一項；主持人最多接一項，不能全部自己做。')
                 why = task_member_ok(store, bot)
                 if why: raise RuntimeError('%s 不能接工作：%s' % (bot['name'], why))
                 after = args.get('after') or []
@@ -497,7 +502,7 @@ def task_tools(app, job_id, runtime):
                 reason = ' '.join(''.join(' ' if unicodedata.category(ch) == 'Cc' else '' if unicodedata.category(ch)[0] == 'C' else ch for ch in str(args.get('reason') or '')).split())[:100]
                 label = '主持人：' + reason if reason else '主持人指定'
                 basis = '依剩餘額度改派' if bot is not suggested else label
-                if bot is suggested and task_learn_on(store): bot, basis = task_pick_by_record(store, group, run, bot, kind, label, changes)
+                if bot is suggested and task_learn_on(store) and bot['id'] != run['hostId']: bot, basis = task_pick_by_record(store, group, run, bot, kind, label, changes)  # #71: the host's own share stays its own
                 # New work waits for the user's 「照這個做」, unless 設定 lets work that changes nothing start by itself.
                 confirmed = task_execution(store) == 'lowrisk' and changes == 'none' and not any(t['status'] == 'stuck' for t in run['tasks'])
                 task = dict(id=ID(), n=len(run['tasks']) + 1, title=title, spec=spec, doneWhen=done_when, assignee=bot['id'], suggested=suggested['name'], deps=deps,
