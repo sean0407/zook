@@ -206,6 +206,73 @@ def sync_group_files_in(store, group_id, bot_id, skip=()):
     return seen
 
 
+def _open_copy_folder(store, bot_id):
+    """The Bot's group-files copy folder, held open without following a link anywhere on the way and without making anything. None when there is none."""
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', str(bot_id)): return None
+    try: fd = os.open(str(store.dir / 'workspaces' / bot_id), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError: return None
+    try:
+        for name in ('attachments', GROUP_FILES_FOLDER):
+            nxt = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd); os.close(fd); fd = nxt
+        return fd
+    except OSError: os.close(fd); return None
+
+
+def _same_copy(folder_fd, name, size, digest):
+    """Whether this entry is a plain file of its own with exactly this content: Zook's copy, not something the Bot made."""
+    try: fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=folder_fd)
+    except OSError: return False
+    with os.fdopen(fd, 'rb') as f:
+        info = os.fstat(f.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != size: return False
+        found = hashlib.sha256()
+        for chunk in iter(lambda: f.read(1 << 20), b''): found.update(chunk)
+        return found.hexdigest() == digest
+
+
+def drop_group_files(store, server, group):
+    """Lock held. A deleted group's files go, and so do the copies of them Zook put in its members' workspaces (#213). Only a copy
+    still exactly as Zook placed it (same name, same content) is removed; anything else there stays. A Bot kept aside in 已刪除的
+    Bot is not a member any more and its workspace is left alone until it is gone for good (forget_trashed_copies). A member in
+    another group's turn right now is skipped: that turn has already replaced its copy folder with the other group's files."""
+    folder = group_files_dir(store, group['id'])
+    wanted = {}
+    for entry in _plain_files(folder):
+        try: wanted[entry.name] = (entry.stat(follow_symlinks=False).st_size, _file_hash(entry.path))
+        except OSError: pass
+    locks = getattr(server, '__dict__', {}).setdefault('group_copy_locks', {}) if server is not None else {}
+    alive = {b.get('id') for b in store.data.get('bots') or []}
+    for bot_id in dict.fromkeys(group.get('botIds') or []):
+        if bot_id not in alive or not wanted: continue
+        lock = locks.setdefault(bot_id, threading.Lock())
+        if not lock.acquire(blocking=False): continue
+        try:
+            fd = _open_copy_folder(store, bot_id)
+            if fd is None: continue
+            try:
+                for name, (size, digest) in wanted.items():
+                    if _same_copy(fd, name, size, digest):
+                        try: os.unlink(name, dir_fd=fd)
+                        except OSError: pass
+            finally: os.close(fd)
+        finally: lock.release()
+    shutil.rmtree(str(folder), ignore_errors=True)
+
+
+def forget_trashed_copies(store, gone):
+    """Lock held. Bots that have left 已刪除的 Bot for good (#213): the group-files copy folder in each one's workspace is emptied.
+    Zook empties and refills that folder at every group turn, so all of it is Zook's copy; the rest of the workspace stays."""
+    alive = {b.get('id') for b in (store.data.get('bots') or []) + (store.data.get('deletedBots') or []) if isinstance(b, dict)}
+    for bot in gone:
+        bot_id = bot.get('id') if isinstance(bot, dict) else None
+        if not bot_id or bot_id in alive: continue
+        fd = _open_copy_folder(store, bot_id)
+        if fd is None: continue
+        try: clear_folder(fd)
+        except OSError: pass
+        finally: os.close(fd)
+
+
 def _read_bot_file(folder_fd, name, target):
     """Copy one regular file out of the Bot's folder, refusing links. Returns (size, hash), or None when it is not a plain file."""
     try: source = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=folder_fd)

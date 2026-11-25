@@ -791,7 +791,7 @@ class Handler(BaseHTTPRequestHandler):
                     if len(parts) == 3 and self.command == 'DELETE':
                         if group['status'] == 'running': return self.error(409, '群組討論進行中，請先停止。')
                         store.data['groups'].remove(group)
-                        shutil.rmtree(str(group_files_dir(store, group['id'])), ignore_errors=True)
+                        drop_group_files(store, self.server, group)  # with Zook's copies in the members' workspaces (#213)
                         store.data['schedules'] = [x for x in store.data['schedules'] if x.get('groupId') != group['id']]
                         store.save(); return self.respond(200, {'ok': True})
                     if len(parts) == 4 and parts[3] == 'messages' and self.command == 'POST':
