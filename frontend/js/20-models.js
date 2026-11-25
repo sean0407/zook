@@ -131,6 +131,7 @@
     updateModal();
     window.webkit?.messageHandlers?.zookWindow?.postMessage({quit: true});
   }
+  const REMOTE_EXPIRY = [[7, '7 天'], [30, '30 天（預設）'], [90, '90 天'], [365, '1 年'], [0, '永久有效']];
   function remoteSection() {
     const r = state.remote;
     if (!r) return `<h2 class="settings-h">遠端連線</h2>${loadingBlock('正在讀取…')}`;
@@ -138,7 +139,9 @@
     const status = !r.enabled ? '已關閉' : r.connected ? '已連上中繼伺服器' : '連不上中繼伺服器';
     const when = d => d ? formatDate(d) : '尚未使用';
     const devices = r.devices.length ? r.devices.map(d => `<div class="setting-row device-row"><div class="setting-copy"><strong>${esc(d.name)}${d.online ? ' <span class="pill ok">連線中</span>' : ''}</strong><span>配對於 ${esc(formatDate(d.createdAt))} · 最後使用：${esc(when(d.lastSeenAt))}</span></div><div class="setting-control"><button class="secondary small-btn" data-action="remote-revoke" data-id="${esc(d.id)}">撤銷</button></div></div>`).join('') : '<p class="muted small">還沒有配對任何裝置。</p>';
-    return `<h2 class="settings-h">遠端連線</h2><div class="setting-list">${settingRow('讓其他裝置連到這台 Mac', '開啟後，已配對的手機可以對話和核准。內容全程加密。', toggle('data-remote-enabled', r.enabled, '遠端連線'))}${settingRow('中繼伺服器', '你自己的中繼伺服器網址，以 wss:// 開頭。', `<input class="relay-input" data-remote-relay value="${esc(r.relayUrl)}" placeholder="wss://…" aria-label="中繼伺服器網址" spellcheck="false">`)}${settingRow('狀態', r.enabled && !r.connected ? '請確認網址正確，而且這台 Mac 有連上網路。' : '', `<span class="remote-status ${r.enabled ? (r.connected ? 'ok' : 'bad') : ''}">${status}</span>`)}</div><div class="remote-devices"><div class="remote-devices-head"><strong>已配對的裝置</strong><button class="secondary small-btn" data-action="remote-pair" ${r.enabled ? '' : 'disabled'}>配對新裝置</button></div>${devices}</div><p class="muted small perm-always">手機只能對話、核准和查看。其他設定要在這台 Mac 上改。</p>`;
+    const expiry = REMOTE_EXPIRY.some(([d]) => d === state.data.settings.remoteExpiry?.days) ? state.data.settings.remoteExpiry.days : 30;
+    const expiryRow = settingRow('自動失效', expiry ? '手機多久沒使用就自動失效，之後要重新配對。改了期限從現在起算。' : '<span class="remote-expiry-note">手機不會自動失效。手機遺失時，記得到下方撤銷。</span>', dropdown('remoteExpiry', String(expiry), REMOTE_EXPIRY.map(([id, name]) => ({id: String(id), name})), 'data-remote-expiry'));
+    return `<h2 class="settings-h">遠端連線</h2><div class="setting-list">${settingRow('讓其他裝置連到這台 Mac', '開啟後，已配對的手機可以對話和核准。內容全程加密。', toggle('data-remote-enabled', r.enabled, '遠端連線'))}${settingRow('中繼伺服器', '你自己的中繼伺服器網址，以 wss:// 開頭。', `<input class="relay-input" data-remote-relay value="${esc(r.relayUrl)}" placeholder="wss://…" aria-label="中繼伺服器網址" spellcheck="false">`)}${settingRow('狀態', r.enabled && !r.connected ? '請確認網址正確，而且這台 Mac 有連上網路。' : '', `<span class="remote-status ${r.enabled ? (r.connected ? 'ok' : 'bad') : ''}">${status}</span>`)}${expiryRow}</div><div class="remote-devices"><div class="remote-devices-head"><strong>已配對的裝置</strong><button class="secondary small-btn" data-action="remote-pair" ${r.enabled ? '' : 'disabled'}>配對新裝置</button></div>${devices}</div><p class="muted small perm-always">手機只能對話、核准和查看。其他設定要在這台 Mac 上改。</p>`;
   }
   async function loadRemote(quiet) {
     try { state.remote = await api('remote'); } catch (_) { if (!quiet) state.remote = {available: false, devices: []}; }

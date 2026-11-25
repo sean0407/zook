@@ -54,3 +54,62 @@ def mobile_photo_allowed(app, device_id):
     recent = [t for t in sent.get(device_id, []) if now - t < 3600]
     if len(recent) >= MOBILE_PHOTOS_PER_HOUR: sent[device_id] = recent; return False
     sent[device_id] = recent + [now]; return True
+
+
+# ---- How long a paired phone stays valid without being used (設定 > 遠端連線 > 自動失效)
+REMOTE_EXPIRY_CHOICES = (7, 30, 90, 365, 0)  # days; 0 = never (the phone must then be revoked by hand if lost)
+REMOTE_EXPIRY_DEFAULT = 30
+
+
+def remote_expiry(settings):
+    """The chosen period and when it was chosen. A new period counts from then, so choosing a shorter one never cuts a phone off at once."""
+    value = settings.get('remoteExpiry') if isinstance(settings.get('remoteExpiry'), dict) else {}
+    days = value.get('days')
+    return (days if type(days) is int and days in REMOTE_EXPIRY_CHOICES else REMOTE_EXPIRY_DEFAULT), value.get('since')
+
+
+def remote_expiry_set(settings, days):
+    """For PATCH /api/settings {remoteExpiryDays}: the new value of settings['remoteExpiry']."""
+    if type(days) is not int or days not in REMOTE_EXPIRY_CHOICES: raise ValueError('自動失效期限無效。')
+    current, since = remote_expiry(settings)
+    return dict(days=days, since=since if days == current and since else NOW())
+
+
+def remote_expiry_repair(settings):
+    """At load: a missing or damaged setting starts counting now, so no phone paired before it existed is cut off at once."""
+    days, since = remote_expiry(settings)
+    if not isinstance(settings.get('remoteExpiry'), dict) or settings['remoteExpiry'].get('days') != days or _remote_stamp(since) is None:
+        settings['remoteExpiry'] = dict(days=days, since=NOW())
+
+
+def _remote_stamp(text):
+    try: at = datetime.datetime.fromisoformat(str(text).replace('Z', '+00:00'))
+    except ValueError: return None
+    return (at if at.tzinfo else at.replace(tzinfo=datetime.timezone.utc)).timestamp()
+
+
+def remote_expired(settings, device, now=None):
+    days, since = remote_expiry(settings)
+    if not days: return False
+    marks = [x for x in (_remote_stamp(device.get('lastSeenAt')), _remote_stamp(device.get('createdAt')), _remote_stamp(since)) if x is not None]
+    return not marks or (now or time.time()) - max(marks) > days * 86400  # no readable time at all: fail closed
+
+
+def remote_prune(store):
+    """Drop paired devices left unused longer than 設定 allows; the relay connection then closes theirs. Lock held."""
+    devices = store.data.get('remoteDevices') or []
+    gone = [d for d in devices if remote_expired(store.data['settings'], d)]
+    if not gone: return
+    store.data['remoteDevices'] = [d for d in devices if d not in gone]
+    store.save()
+    days = remote_expiry(store.data['settings'])[0]
+    for d in gone: log_activity(store, 'device', '「%s」超過 %d 天沒有使用，已自動失效' % (d.get('name') or '裝置', days), by='Zook')
+
+
+def remote_device(store, device_id):
+    """The paired device making a request through the relay, or None when unknown, revoked or expired. Lock held.
+    Checked on every request, so a revoked device stops at once."""
+    remote_prune(store)
+    device = next((d for d in store.data.get('remoteDevices', []) if d['id'] == device_id), None)
+    if device: device['lastSeenAt'] = NOW()
+    return device

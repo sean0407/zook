@@ -82,6 +82,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
     def remote_view(self):
         """What the 設定 page shows about remote access."""
         with self.store.lock:
+            remote_prune(self.store)
             remote = self.store.data['settings'].get('remote') or {}
             running = self.remote_proc is not None and self.remote_proc.poll() is None
             online = set(self.remote_status.get('online') or []) if running else set()
@@ -119,6 +120,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
         """Requests from Zook's own relay connection (never from a device directly)."""
         store = self.store
         with store.lock:
+            remote_prune(store)  # an expired phone is left out of the lists below, so its open connection closes too
             pairing = self.pairing if self.pairing and self.pairing['expiresAt'] > time.time() else None
             if path == '/api/remote/bridge/pairing' and method == 'GET':
                 if not pairing: return handler.error(404, '目前沒有進行中的配對。')

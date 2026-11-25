@@ -295,10 +295,8 @@ class Handler(BaseHTTPRequestHandler):
                 if device_id is None:
                     if path.startswith('/api/remote/bridge/'): return self.server.bridge_request(self, self.command, path)
                     return self.error(403, '禁止存取。')
-                # A paired device, reached through the relay. Checked on every request, so a revoked device stops at once.
-                with store.lock:
-                    self.device = next((d for d in store.data.get('remoteDevices', []) if d['id'] == device_id), None)
-                    if self.device: self.device['lastSeenAt'] = NOW()
+                # A paired device, reached through the relay. Checked on every request, so a revoked or expired device stops at once.
+                with store.lock: self.device = remote_device(store, device_id)
                 if not self.device: return self.error(401, '這台裝置尚未配對或已被撤銷。')
                 if not device_may(self.command, path): return self.error(403, '這個動作只能在 Mac 上進行。')
                 if path == '/api/remote/me': return self.respond(200, {'id': self.device['id'], 'name': self.device['name']})

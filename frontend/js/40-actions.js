@@ -219,7 +219,7 @@
           break;
         case 'remote-revoke': {
           const d = state.remote?.devices.find(x => x.id === id);
-          if (!d || !(await ask({title: `撤銷「${d.name}」？`, lines: ['這台裝置會立刻無法連線，要再使用必須重新配對。'], ok: '撤銷'}))) break;
+          if (!d || !(await ask({title: `撤銷「${d.name}」？`, lines: ['這台裝置會立刻失效，正在連線的也會中斷。要再使用必須重新配對。'], ok: '撤銷'}))) break;
           state.remote = await api('remote/devices/' + encodeURIComponent(id), {method: 'DELETE'});
           render(true); toast('已撤銷「' + d.name + '」');
           break;

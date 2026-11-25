@@ -192,6 +192,7 @@ class StoreBase:
         self.data['settings'].setdefault('disabledPlugins', [])
         self.data['settings'].setdefault('fallbacks', [])
         self.data['settings'].setdefault('remote', dict(enabled=False, relayUrl=''))
+        remote_expiry_repair(self.data['settings'])  # mobile.py
         self.data.setdefault('remoteDevices', [])
         drop_removed_providers(self)  # OpenCode, GitHub Copilot and Kimi are no longer supported
         plain_old_records(self)  # activity saved by earlier versions or a restored backup, in today's words (actwords.py)
