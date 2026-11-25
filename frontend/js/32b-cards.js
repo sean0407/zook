@@ -48,13 +48,20 @@
   function accountLevel(provider, account) {
     const q = quotaFor(provider, account || undefined), s = q?.quota;
     if (!s || q.apiBilling || q.noQuotaApi) return {level: ''};
-    const wins = (s.windows || []).map(w => ({left: windowLeft(w), resetsAt: w.resetsAt})), empty = wins.filter(w => w.left <= 0);
+    const wins = (s.windows || []).map(w => ({left: windowLeft(w), resetsAt: w.resetsAt, group: String(w.label || '').includes(' · ') ? String(w.label).split(' · ')[0] : ''})), empty = wins.filter(w => w.left <= 0);
     if (limitNow(s) || empty.length) {
       const last = empty.some(w => isNaN(resetTime(w.resetsAt))) ? null : empty.sort((a, b) => resetTime(b.resetsAt) - resetTime(a.resetsAt))[0];  // one without a time: nobody knows when
-      return {level: 'out', reset: last ? fmtReset(last.resetsAt) : '', clock: last ? resetClock(last.resetsAt) : '', why: limitNow(s) ? limitWords(s.limitReached) : ''};
+      return {level: 'out', reset: last ? fmtReset(last.resetsAt) : '', clock: last ? resetClock(last.resetsAt) : '', why: limitNow(s) ? limitWords(s.limitReached) : '', ...groupsOf(wins, empty[0]?.group)};
     }
     const low = wins.filter(w => w.left < 20).sort((a, b) => a.left - b.left)[0];
-    return low ? {level: 'low', left: Math.round(low.left), reset: fmtReset(low.resetsAt)} : {level: ''};
+    return low ? {level: 'low', left: Math.round(low.left), reset: fmtReset(low.resetsAt), ...groupsOf(wins, low.group)} : {level: ''};
+  }
+  // An account with limits per kind of model (Antigravity: 「Claude 與 GPT 模型」, 「Gemini 模型」): which kind the figure is about,
+  // and what each other kind still has, so 6% is not read as the whole account (#43④).
+  function groupsOf(wins, group) {
+    if (!group) return {};
+    const rest = [...new Set(wins.map(w => w.group).filter(g => g && g !== group))].map(g => g + '還剩 ' + Math.round(Math.min(...wins.filter(w => w.group === g).map(w => w.left))) + '%');
+    return {group, rest: rest.join('、')};
   }
   const levelMark = l => l.level === 'out' ? '・已用完' : l.level === 'low' ? '・剩不到 20%' : '';
   // The line under 模型與帳號 in the Bot form when the chosen account is used up or nearly so. It only tells; nothing is blocked.
@@ -62,8 +69,9 @@
     const [p, a] = String(choice || '').split('::');
     if (p === 'auto') return '';
     const l = accountLevel(p || state.data.settings.provider || 'codex', a || '');
-    if (l.level === 'out') return '這個帳號的額度已用完，現在傳訊息會失敗' + (l.reset ? '，' + l.reset : '；等額度重置或換一個帳號') + '。';
-    if (l.level === 'low') return `這個帳號只剩 ${l.left}% 額度，可能很快用完` + (l.reset ? '，' + l.reset : '') + '。';
+    const which = l.group ? `的「${l.group}」` : '', rest = l.rest ? `（${l.rest}）` : '';
+    if (l.level === 'out') return `這個帳號${which}額度已用完${rest}，${l.group ? '用這類模型' : '現在'}傳訊息會失敗` + (l.reset ? '，' + l.reset : '；等額度重置或換一個帳號') + '。';
+    if (l.level === 'low') return `這個帳號${which}只剩 ${l.left}% 額度${rest}，可能很快用完` + (l.reset ? '，' + l.reset : '') + '。';
     return '';
   }
   function loginButtons(p, a) {

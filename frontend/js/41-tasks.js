@@ -20,7 +20,7 @@
         Array.isArray(t.deps) && t.deps.length && ['pending', 'ready'].includes(t.status) ? '等工作 ' + t.deps.join('、') + ' 完成' : '',
         t.verify?.verdict ? `${name(t.verify.bot)} 驗收${t.verify.verdict === 'pass' ? '通過' : '沒有通過：' + (t.verify.reasons || '')}` : t.status === 'verifying' && t.verify?.bot ? `${name(t.verify.bot)} 驗收中` : '',
         t.failures ? `已經 ${t.failures} 次沒完成` : '', t.confirmed === false && ['pending', 'ready'].includes(t.status) ? '等你確認' : '', Array.isArray(last.files) && last.files.length ? '產出：' + last.files.join('、') : '', attempts.length > 1 ? `第 ${attempts.length} 次` : ''].filter(x => typeof x === 'string' && x);
-      const canAccept = ['review', 'stuck', 'unknown'].includes(t.status) && last.state === 'reported' && last.outcome === 'succeeded';
+      const canAccept = ['review', 'stuck', 'unknown'].includes(t.status) && last.state === 'reported' && last.outcome === 'succeeded' || ['stuck', 'unknown'].includes(t.status) && t.cut === true;  // cut by a restart: the user retries it or accepts what is there
       const retry = !taskEngineOn() ? '' : (!t.aborted && (TASK_RETRY.includes(t.status) && g.status !== 'running' || ['stuck', 'unknown'].includes(t.status)) ? `<button type="button" class="link" data-task-retry="${esc(t.id)}">重試</button>` : '') + (canAccept ? `<button type="button" class="link" data-task-accept="${esc(t.id)}">接受結果</button>` : '');
       return `<li class="task-row"><span class="pill ${['stuck', 'unknown'].includes(t.status) && taskHandedIn(t) ? 'warn' : TASK_TONE[t.status] || ''}">${esc(['stuck', 'unknown'].includes(t.status) && taskHandedIn(t) ? '已交出，等你決定' : TASK_STATE[t.status] || t.status)}</span><span class="task-title"><strong>${esc(String(t.n))}. ${esc(String(t.title))}</strong> <span class="muted">${esc(name(t.assignee))}</span>${detail.length ? `<span class="task-detail">${esc(detail.join(' · '))}</span>` : ''}</span>${retry}</li>`;
     }).join('');
@@ -49,16 +49,18 @@
 
   const TASK_COUNTS = n => Array.from({length: n}, (_, i) => ({id: String(i + 1), name: (i + 1) + ' 項'}));
   function taskSection() {
-    const s = state.data.settings, rows = [settingRow('任務引擎', '群組多一種討論方式「自動（主持人決定）」：主持人拆工作、派給成員同時進行，成員回報後再整理結果', toggle('data-task-engine', taskEngineOn(), '任務引擎'))];
+    const s = state.data.settings, rows = [settingRow('開啟自動分工', '群組的討論方式會多一種「自動（主持人決定）」：主持人把工作拆開、派給成員同時做，大家做完回報，主持人再整理結果', toggle('data-task-engine', taskEngineOn(), '開啟自動分工'))];
     if (taskEngineOn()) {
-      rows.push(settingRow('結論後的執行方式', '主持人排好工作後', dropdown('taskExecution', s.taskExecution === 'lowrisk' ? 'lowrisk' : 'ask', [{id: 'ask', name: '先問我', hint: '每次都等你按「照這個做」'}, {id: 'lowrisk', name: '低風險直接做', hint: '不改檔案、不對外動作的工作直接開始，其他仍先問'}], 'data-task-execution')));
-      rows.push(settingRow('依驗收紀錄派工', '某家模型在某類工作的驗收通過率明顯偏低時，改派給表現較好的成員；原因寫在任務板上', toggle('data-task-learn', s.taskLearn !== false, '依驗收紀錄派工')));
-      rows.push(settingRow('同時進行的工作', '一個群組同時最多幾項', dropdown('taskMax', String(s.taskMax || 4), TASK_COUNTS(6), 'data-task-max')));
+      rows.push(settingRow('排好工作後', '主持人分好工作之後，要不要等你點頭才開始', dropdown('taskExecution', s.taskExecution === 'lowrisk' ? 'lowrisk' : 'ask', [{id: 'ask', name: '先問我', hint: '每次都等你按「照這個做」'}, {id: 'lowrisk', name: '低風險直接做', hint: '不改檔案、不對外動作的工作直接開始，其他仍先問'}], 'data-task-execution')));
+      rows.push(settingRow('照過去表現派工', '每項工作做完會由另一家 AI 檢查。某家 AI 在某類工作常沒通過檢查時，改派給表現較好的成員；原因會寫在任務板上', toggle('data-task-learn', s.taskLearn !== false, '照過去表現派工')));
+      rows.push(settingRow('同時進行的工作', '一個群組同時最多做幾項；下面可以再限制每一家 AI', dropdown('taskMax', String(s.taskMax || 4), TASK_COUNTS(6), 'data-task-max')));
       for (const p of (state.providers || []).filter(p => p.installed && p.tools)) {
-        rows.push(settingRow(esc(p.name), '這個 CLI 同時最多幾項（每個帳號各自計算）', dropdown('taskCli-' + p.id, String((s.taskCliLimits || {})[p.id] || 3), TASK_COUNTS(4), `data-task-cli="${esc(p.id)}"`)));
+        rows.push(settingRow(esc(p.name), '這一家 AI 同時最多做幾項（同一家有幾個帳號就各自算）', dropdown('taskCli-' + p.id, String((s.taskCliLimits || {})[p.id] || 3), TASK_COUNTS(4), `data-task-cli="${esc(p.id)}"`)));
       }
     }
-    return `<h2 class="settings-h">任務引擎</h2><div class="setting-list">${rows.join('')}</div>`;
+    // A CLI that cannot use Zook's tools cannot report a task (tasks.py), so it is not listed; say so instead of leaving it out silently (#75③).
+    const left = taskEngineOn() ? (state.providers || []).filter(p => p.installed && !p.tools && p.id !== 'auto').map(p => providerShort(p.id)) : [];
+    return `<h2 class="settings-h">群組自動分工（任務引擎）</h2><div class="setting-list">${rows.join('')}</div>${left.length ? `<p class="muted small settings-note">${esc(left.join('、'))} 不能接分派的工作（它用不了 Zook 回報進度的工具），所以沒有列出。</p>` : ''}`;
   }
 
   // The board stays open or closed as the reader left it, while the page redraws it.
