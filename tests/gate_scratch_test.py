@@ -81,16 +81,18 @@ class MovesIntoScratch(Base):
         self.asked('mv %s/r.docx %s/' % (fake, self.scratch))
 
     def test_other_moves_are_not(self):
-        p = self.fresh()
+        p = self.fresh(); s = self.scratch
         for command in ('mv %s %s.old' % (p, p), 'mv ~/a.txt ~/b.txt', 'mv a.txt b.txt', 'cd ~/proj && mv a.txt b.txt', 'mv /tmp/a /tmp/b',
-                        'mv ~/a /tmp/', 'rsync -at ~/a ~/b', 'zip /tmp/a.zip ~/r.docx', 'mv -- -a b', 'git mv a b'):
+                        'mv ~/a /tmp/', 'rsync -at ~/a ~/b', 'zip /tmp/a.zip ~/r.docx', 'mv -- -a b', 'git mv a b', 'mv %s/a.py %s/b.py' % (s, s)):
             self.assertNotIn('delete', self.kinds(command), command)
 
     def test_tools_that_remove_their_sources_are_asked_wherever_they_go(self):
         for command in ('tar --remove-files -cf /tmp/x.tar ~/x', 'gtar --remove-files -cf x.tar ~/a', 'rsync -a --delete ~/e/ ~/dir/',
                         'rsync -a --remove-source-files ~/Documents/ ~/Backup/', 'zip -m ~/a.zip ~/r.docx', 'zip -9m ~/a.zip ~/r'):
             self.asked(command)
-        for command in ('node -e "require(\'fs\').renameSync(\'a\', \'b\')"', 'swift -e "try FileManager.default.moveItem(atPath: p, toPath: t)"'):
+        for command in ('node -e "require(\'fs\').renameSync(\'a\', \'b\')"', 'swift -e "try FileManager.default.moveItem(atPath: p, toPath: t)"',
+                        'python3 -c "import pathlib; pathlib.Path(\'a\').rename(\'b\')"', "perl -e 'rename(\"a\", \"b\")'",
+                        'node -e "require(\'fs\').promises.rename(a, b)"', "php -r 'rename(\"a\", \"b\");'"):
             self.assertIn('unclear', self.kinds(command), command)
 
 
@@ -111,7 +113,7 @@ class CleanTool(Base):
     def setUp(self):
         super().setUp(); self.logged = []; self.ns = scratch_module(self.logged)
 
-    def clean(self, names): return self.ns['clean_scratch'](self.scratch, self.ident, names)
+    def clean(self, names): return self.ns['clean_scratch'](self.scratch, self.ident, names, time.time() - 2)
 
     def test_deletes_plain_files_of_the_folder(self):
         a, b = self.fresh(name='a.py'), self.fresh(name='報告 草稿.json')
@@ -134,6 +136,13 @@ class CleanTool(Base):
         self.assertEqual(deleted, []); self.assertEqual(len(kept), 4)
         for p in ('link.txt', 'dirlink', 'sub/inner.txt', 'hard.txt'): self.assertTrue(os.path.lexists(os.path.join(self.scratch, p)), p)
         self.assertTrue(os.path.exists(user) and os.path.exists(other))
+
+    def test_files_not_made_during_this_reply_are_kept(self):
+        """A file of the user's moved in by any way the gate may miss (a link made on the same line, a nested shell, inline code)."""
+        user = self.fresh(self.ws, 'report.docx'); old = time.time() - 3600; os.utime(user, (old, old))
+        os.rename(user, os.path.join(self.scratch, 'report.docx'))
+        self.assertEqual(self.clean(['report.docx']), ([], ['report.docx（不是這次回覆建立的，沒有刪）']))
+        self.assertTrue(os.path.exists(os.path.join(self.scratch, 'report.docx')))
 
     def test_a_replaced_folder_is_refused(self):
         p = self.fresh(name='a.txt')
@@ -167,7 +176,7 @@ class ZookMakesTheFolder(unittest.TestCase):
         self.base = Path(os.path.realpath(tempfile.mkdtemp(prefix='zk261-')))
         self.addCleanup(shutil.rmtree, str(self.base), True)
         (self.base / 'workspaces' / 'bot1').mkdir(parents=True)
-        self.ns = scratch_module([]); self.store = types.SimpleNamespace(dir=self.base)
+        self.logged = []; self.ns = scratch_module(self.logged); self.store = types.SimpleNamespace(dir=self.base)
         self.folder = str(self.base / 'workspaces/bot1/.zook-scratch')
 
     def make(self, env=None):
@@ -193,7 +202,7 @@ class ZookMakesTheFolder(unittest.TestCase):
         self.assertTrue(os.path.isdir(self.folder) and not os.path.islink(self.folder)); self.assertTrue((docs / 'keep.txt').exists())
         self.assertEqual(len(list((self.base / 'workspaces/bot1').glob('.zook-scratch-old-*'))), 1)
         Path(self.folder, 'n.txt').write_text('x')
-        self.assertEqual(self.ns['clean_scratch'](self.folder, again[1], ['n.txt']), (['n.txt'], []))
+        self.assertEqual(self.ns['clean_scratch'](self.folder, again[1], ['n.txt'], time.time() - 2), (['n.txt'], []))
 
     def test_the_identity_is_the_folder_put_in_place(self):
         """The identity comes from the folder Zook opened; one swapped in at the path before it is put there is never recorded."""
@@ -218,6 +227,7 @@ class ZookMakesTheFolder(unittest.TestCase):
             self.assertIsNone(again); self.assertEqual(env, {})
             self.assertTrue(Path(self.folder, 'a.txt').exists())
             self.assertEqual(os.lstat(self.folder).st_ino, int(made[1].split(':')[1]))
+        self.assertEqual(len(self.logged), 2)  # the user can see why there is no tool
 
 
 if __name__ == '__main__': unittest.main()

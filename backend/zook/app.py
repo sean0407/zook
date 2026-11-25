@@ -477,6 +477,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             account = find_account(bot.get('account'), provider)  # an extra account only applies to the provider it belongs to
             env = provider_env(provider, account)
             env['ZOOK_DATA_DIR'] = str(store.dir)  # zook_gate.py asks before a Bot changes Zook's own data
+            for key in ('ZOOK_SCRATCH', 'ZOOK_SCRATCH_ID'): env.pop(key, None)  # never one inherited from elsewhere
             scratch = scratch_env(store, bot['id'], env) if native and selected and scope != 'folder' else None  # its own scratch files, cleaned by zook_clean_scratch
             features = active_features(bot, kind, native, planning, scope)
             with store.lock: job.update(features=features, nativeAccess=[scope, str(root), permission_mode(store, bot, kind), bool(native)], runKind=kind)

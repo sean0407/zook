@@ -1,10 +1,12 @@
 # Each Bot's own scratch folder (queue #261, decisions #28). Loaded by backend/server.py into one shared namespace.
 # Zook makes <data>/workspaces/<Bot>/.zook-scratch once, keeps its device:inode in Zook's data (outside the workspace), and gives
 # the Bot the tool zook_clean_scratch: it deletes plain files right in that very folder by name, through the folder opened once and
-# checked to be the one Zook made, without asking. A shell rm is never let through without asking (zook_gate.py), because what it
+# checked to be the one Zook made, without asking; only files made during this reply (their birth time), so a file of the user's moved
+# in there (by any means: a link, a nested shell, inline code) is not deleted. A shell rm is never let through without asking (zook_gate.py), because what it
 # really deletes cannot be known for sure from the command line; /tmp and the Mac's temporary folder are asked as before.
 SCRATCH_NOTE = ('\n暫存檔：中間產物、一次性腳本、轉檔過程的檔案一律放在「%s」，不要放 /tmp 或系統暫存資料夾。用完呼叫 zook_clean_scratch，'
-                '把要刪的檔名（只有檔名，不含路徑）列給它，Zook 會直接清掉，不用等使用者核准。不要用 rm 刪暫存檔：用 rm 一律會先問使用者。')
+                '把要刪的檔名（只有檔名，不含路徑）列給它，Zook 會直接清掉這次回覆建立的檔案，不用等使用者核准；在同一次回覆裡清理。'
+                '不要用 rm 刪暫存檔：用 rm 一律會先問使用者。')
 SCRATCH_MOST = 50
 _SCRATCH_LOCK = threading.Lock()
 
@@ -47,7 +49,7 @@ def scratch_env(store, bot_id, env):
             record.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             try: known = record.read_text(encoding='utf-8').strip()
             except FileNotFoundError: known = ''
-            if known and not re.fullmatch(r'\d+:\d+', known): return None  # damaged: touch nothing, no tool this time
+            if known and not re.fullmatch(r'\d+:\d+', known): raise ValueError('damaged')
             try: info = os.lstat(folder)
             except FileNotFoundError: info = None
             if info is not None and stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and _scratch_id(info) == known: ident = known
@@ -55,7 +57,10 @@ def scratch_env(store, bot_id, env):
                 if info is not None: os.rename(folder, '%s-old-%d' % (folder, int(time.time() * 1000)))
                 ident = _make_scratch(workspace, folder)
                 new = record.with_name(record.name + '.new'); new.write_text(ident, encoding='utf-8'); os.replace(str(new), str(record))
-        except (OSError, UnicodeDecodeError): return None
+        except (OSError, UnicodeDecodeError, ValueError) as error:  # damaged or unreadable: touch nothing, no tool this time
+            if not isinstance(error, OSError):
+                log_activity(store, 'tool', 'Bot 暫存資料夾的紀錄損壞（%s），這次不提供清理工具；刪掉這個紀錄檔就會重建。' % record, by='Zook')
+            return None
     env['ZOOK_SCRATCH'], env['ZOOK_SCRATCH_ID'] = folder, ident
     return folder, ident
 
@@ -70,9 +75,10 @@ def scratch_file_name(name):
             and all(c.isprintable() for c in name) and name == name.strip())
 
 
-def clean_scratch(folder, ident, names):
+def clean_scratch(folder, ident, names, since):
     """Delete these plain files of the scratch folder. The folder is opened once (never through a link) and must still be the one Zook
-    made; each name is looked at in that open folder and deleted there only when it is a plain file with one name, of this user."""
+    made; each name is looked at in that open folder and deleted there only when it is a plain file with one name, of this user, made
+    at or after `since` (a move keeps a file's birth time; setting a file's times only moves it earlier, a later one takes setattrlist / SetFile)."""
     if not isinstance(names, list) or not 0 < len(names) <= SCRATCH_MOST: raise RuntimeError('names 要是 1–%d 個檔名。' % SCRATCH_MOST)
     bad = [n for n in names if not scratch_file_name(n)]
     if bad: raise RuntimeError('只能給暫存資料夾裡的檔名，不能有路徑、/、..，也不能是隱藏檔：%s。沒有刪除任何檔案。' % '、'.join(str(n)[:40] for n in bad[:5]))
@@ -89,6 +95,8 @@ def clean_scratch(folder, ident, names):
             except OSError: kept.append('%s（讀不到）' % name); continue
             if not stat.S_ISREG(own.st_mode) or own.st_nlink != 1 or own.st_uid != os.getuid():
                 kept.append('%s（不是一般檔案，沒有刪）' % name); continue  # a link, a folder, a hard link to a file elsewhere
+            if getattr(own, 'st_birthtime', 0) < since:
+                kept.append('%s（不是這次回覆建立的，沒有刪）' % name); continue
             try: os.unlink(name, dir_fd=fd)
             except OSError: kept.append('%s（刪不掉）' % name); continue
             deleted.append(name)
@@ -97,14 +105,16 @@ def clean_scratch(folder, ident, names):
 
 
 def scratch_tools(store, bot, runtime, scratch):
-    """zook_clean_scratch, for a Bot whose scratch folder Zook set up for this reply. Never asked; each use is in the activity record."""
+    """zook_clean_scratch, for a Bot whose scratch folder Zook set up for this reply. Never asked (False: Zook's runtime treats it like
+    a read, so no mode asks; a reply that may only read never has it, see plan_safe); each use is in the activity record."""
     if not scratch: return []
     folder, ident = scratch
+    since = time.time() - 2  # made before the CLI starts; a little slack for the file system's clock
     def clean(args):
-        deleted, kept = clean_scratch(folder, ident, args.get('names'))
+        deleted, kept = clean_scratch(folder, ident, args.get('names'), since)
         if deleted: log_activity(store, 'tool', '「%s」清理暫存資料夾，刪除 %d 個檔案：%s' % (bot.get('name', 'Bot'), len(deleted), '、'.join(deleted)), by='Zook')
         return dict({'deleted': deleted}, **({'notDeleted': kept} if kept else {}))
     return [(runtime._schema('zook_clean_scratch', 'Delete your own scratch files: plain files right in your scratch folder (%s), by file name only (no path, '
-                             'no /, no .., no hidden files). Runs without asking the user. Use this instead of rm for scratch files.' % folder,
+                             'no /, no .., no hidden files), made during this reply. Runs without asking the user. Use this instead of rm for scratch files.' % folder,
                              {'names': {'type': 'array', 'items': {'type': 'string'}, 'description': 'File names in the scratch folder, 1–%d' % SCRATCH_MOST}},
                              ['names'], False), clean, False)]
