@@ -329,7 +329,7 @@
     const account = b.account ? ((state.providers || []).find(x => x.id === p)?.accounts || []).find(a => a.id === b.account)?.name || b.account : '';
     const last = (state.data.jobs || []).filter(j => j.botId === b.id && j.usage?.model && (p === 'auto' || !j.usage.provider || j.usage.provider === p)).slice(-1)[0]?.usage.model;
     const fixed = b.model || (p === (st.provider || 'codex') && st.model) || '';
-    const model = fixed ? modelWords(fixed, p) || fixed : (last ? `預設型號（最近一次是 ${modelWords(last, p) || last}）` : '預設型號');  // #154②: readable model names
+    const model = b.model ? modelWords(b.model, p) || b.model : fixed ? modelWords(fixed, p) || fixed : (last ? `預設型號（最近一次是 ${last}）` : '預設型號');  // the set model in words, as #154② (live_outputs_test)
     const effort = '思考強度：' + (EFFORTS.find(x => x.id === (b.effort || st.effort))?.name || '標準');
     return [providerShort(p) + (account ? '（' + account + '）' : ''), model, withEffort ? effort : ''].filter(Boolean).join(' · ');
   }

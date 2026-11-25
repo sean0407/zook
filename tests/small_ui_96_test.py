@@ -90,13 +90,14 @@ class GroupFilesTab(unittest.TestCase):
 class ModelLine(unittest.TestCase):
     def line(self, bot, jobs=(), settings=None):
         stub = 'const esc = s => s; const state = %s;\nconst EFFORTS = [{id: "standard", name: "標準"}, {id: "fast", name: "快速"}, {id: "medium", name: "中"}, {id: "deep", name: "深入"}];\n' % json.dumps({
-            'data': {'settings': settings or {'provider': 'codex'}, 'jobs': list(jobs)},
+            'data': {'settings': settings or {'provider': 'codex'}, 'jobs': list(jobs)}, 'modelNames': {},
             'providers': [{'id': 'codex', 'name': 'Codex', 'accounts': [{'id': 'w', 'name': 'Waifdance'}]}, {'id': 'claude', 'name': 'Claude'}]}, ensure_ascii=False)
         stub += 'const providerList = () => state.providers; const providerShort = id => id === "auto" ? "自動選擇" : providerList().find(p => p.id === id)?.name || id;\n'
+        stub += block('20-models.js', '  function modelWords', '\n  }\n') + '\n  }\n'
         return run(stub + block('20-models.js', '  function botModelLine', '\n  }\n') + '\n  }\nconsole.log(JSON.stringify(botModelLine(%s)));' % json.dumps(bot, ensure_ascii=False))
 
     def test_account_model_and_effort(self):
-        self.assertEqual(self.line({'id': 'b', 'provider': 'codex', 'account': 'w', 'model': 'gpt-6-luna', 'effort': 'deep'}), 'Codex（Waifdance） · gpt-6-luna · 思考強度：深入')
+        self.assertEqual(self.line({'id': 'b', 'provider': 'codex', 'account': 'w', 'model': 'gpt-6-luna', 'effort': 'deep'}), 'Codex（Waifdance） · GPT 6 Luna · 思考強度：深入')  # the set model in words (#154②)
         # no model set: the one its last reply really ran on
         self.assertEqual(self.line({'id': 'b', 'provider': 'claude'}, [{'botId': 'b', 'usage': {'provider': 'claude', 'model': 'claude-opus-5-5'}}]), 'Claude · 預設型號（最近一次是 claude-opus-5-5） · 思考強度：標準')
         self.assertEqual(self.line({'id': 'b', 'provider': ''}), 'Codex · 預設型號 · 思考強度：標準')
