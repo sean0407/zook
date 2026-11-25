@@ -185,6 +185,7 @@ def _short(text, most=60):
 
 def _where(path):
     """Where a file is, whole, so two files of the same name are told apart: ~/… inside the home folder. A web address: its site only."""
+    if '$' in str(path) or '`' in str(path): return '「%s」指向的位置' % _short(str(path).strip('"\''), 40)  # a variable: where it points is not known here
     if str(path).lower().startswith('file://'): path = _file_url(str(path))
     elif '://' in str(path): return _host(path) or '網址'
     full = os.path.normpath(_abs(path))
@@ -272,6 +273,7 @@ def _inner(command):
 def _split(command):
     """(simple commands, whether the quoting could be read). A simple command is a list of words; redirections stay in it."""
     clear = True
+    command = re.sub(r'(^|[\s;&|(])\d+(?=[<>])', r'\1', command)  # the 2 of 2>/dev/null is which output, not a file: only when written right before it
     try:
         lex = shlex.shlex(command.replace('\n', ' ; '), posix=True, punctuation_chars=';&|()<>')
         lex.whitespace_split = True; lex.commenters = ''
