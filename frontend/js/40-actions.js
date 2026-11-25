@@ -409,7 +409,7 @@
         }
         case 'choose-folder': {
           const picked = (await post('choose-folder')).path, form = $('#bot-form');
-          if (picked && form) { form.elements.accessFolder.value = picked; form.querySelector('[data-access-path]').textContent = picked; saveBotDraft(form); }
+          if (picked && form) { form.elements.accessFolder.value = picked; form.querySelector('[data-access-path]').textContent = picked; saveBotDraft(form); recheckForm(form); }
           break;
         }
         case 'close-modal':
