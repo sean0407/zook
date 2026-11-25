@@ -15,6 +15,14 @@
     const ids = new FormData(form).getAll('botIds'), slot = form.querySelector('[data-host-field]'), now = form.elements.hostId.value;
     slot.innerHTML = settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', ids.includes(now) ? now : '', hostOptions(ids)));
   }
+  // #96③: with many Bots the member list has a search box; the list itself does not scroll inside the window.
+  function filterGroupMembers(input) {
+    const q = input.value.trim().toLowerCase(), box = input.closest('form').querySelector('.member-pick');
+    let shown = 0;
+    box.querySelectorAll('.member-switch').forEach(row => { row.hidden = !!q && !row.dataset.find.includes(q); shown += !row.hidden; });
+    box.querySelector('[data-member-none]').hidden = shown > 0;
+  }
+  document.addEventListener('keydown', e => { if (e.key === 'Enter' && 'memberSearch' in (e.target.dataset || {})) e.preventDefault(); });  // Enter does not create the group
   // What the form shows under the settings: why 自動 cannot be saved yet, and a hint when every member is the same vendor (#218).
   const botFamily = b => { const p = b.provider || state.data.settings.provider || ''; return p === 'auto' ? '' : (state.providers || []).find(x => x.id === p)?.kind || p; };
   function groupFormNote(form) {
@@ -104,9 +112,13 @@
   }
   // A check that is still running is read again every few seconds until it finishes or fails, even if the discussion's own
   // polling stopped early (a dropped request, a reply that arrived while an older full refresh was still on its way).
+  // #215②: a check still marked 「正在查核」 after the Mac said the run is over (left behind) is not asked about again and again;
+  // only when the discussion changes after that.
+  if (!state.groupQuiet) state.groupQuiet = {};
+  const groupNeedsPoll = g => g.status === 'running' || (groupMsgs(g).some(x => x.checkOf && x.status === 'running') && state.groupQuiet[g.id] !== groupFileMark(g));
   setInterval(() => {
     const g = state.data && state.page === 'chat' && state.groupId ? activeGroup() : null;
-    if (g && !state.groupPollers[g.id] && (g.status === 'running' || groupMsgs(g).some(x => x.checkOf && x.status === 'running'))) pollGroup(g.id);
+    if (g && !state.groupPollers[g.id] && groupNeedsPoll(g)) pollGroup(g.id);
   }, 2500);
 
   // 檔案 tab of the group's detail panel.
