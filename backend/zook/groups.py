@@ -96,7 +96,7 @@ def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, 
     for m in group['messages'][(at + 1 if at is not None else 0):][-GROUP_KEEP:]:
         if not m.get('content') or m.get('role') == 'system' or m['id'] in hidden or m.get('waiting'): continue
         speaker = '使用者' if m['role'] == 'user' else names.get(m.get('botId'), '已刪除的 Bot')
-        transcript.append(speaker + '：' + (local(m['content'][:3000], m.get('botId') or '') if m['role'] == 'assistant' and m.get('botId') != bot['id'] else m['content'][:3000]))
+        transcript.append(speaker + '：' + (local(m['content'][:3000], m.get('botId') or '') if m['role'] == 'assistant' and m.get('botId') != bot['id'] else m['content'][:3000]) + ('\n（Zook 檢查：這則回覆說交了 %s，但實際上沒有存成。）' % '、'.join(m['missingFiles']) if m.get('missingFiles') else ''))
         if m.get('attachments'):  # the files were copied into every member's workspace when the message was sent
             folder = store.dir / 'workspaces' / bot['id'] / 'attachments'
             transcript.append('（附上的檔案，在你的工作資料夾：%s）' % '、'.join(str(folder / ('%s-%s' % (a['id'][:8], a['name']))) for a in m['attachments']))
@@ -430,8 +430,17 @@ class GroupRuns:
             if skipped: turn['published'] = False
             turn['saved'] = saved
         with store.lock:
+            said = (store.find('jobs', turn['job']['id']) or {}).get('content') or ''
+            given = {a.get(k) for m in (store.find('groups', group_id) or {}).get('messages') or [] for a in m.get('attachments') or [] for k in ('name', 'origName')}
+        try: missing = claimed_missing(store, group_id, bot['id'], said, given)
+        except OSError: missing = []
+        with store.lock:
             group = store.find('groups', group_id)
             if not group: return
+            if missing:  # 謊報存檔: the user sees it, and so do the others in their next turn (system lines are not shown to them)
+                group['messages'].append(dict(id=ID(), role='system', content='%s 說交了 %s，但群組檔案裡沒有、說的位置也找不到，可能沒有存成功。可以請它重新存一次。' % (bot['name'], '、'.join(missing)), createdAt=NOW()))
+                said_msg = find_message(group, turn['msg']['id'])
+                if said_msg: said_msg['missingFiles'] = missing
             for name in saved: group.setdefault('fileInfo', {})[name] = dict(by=bot['name'], **{k: v for k, v in (group.get('fileInfo', {}).get(name) or {}).items() if k == 'origName'})  # the uploaded name stays known
             if saved: group['messages'].append(dict(id=ID(), role='system', content='%s 存了共用檔案：%s' % (bot['name'], '、'.join(saved)), createdAt=NOW()))
             if skipped: group['messages'].append(dict(id=ID(), role='system', content='%s 的檔案太大沒有存進群組：%s' % (bot['name'], '、'.join(skipped)), createdAt=NOW()))

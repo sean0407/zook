@@ -261,3 +261,46 @@ def group_file_tool(store, group_id, runtime):
         try: return {'name': args['name'], 'content': found.read_text(encoding='utf-8')}
         except UnicodeDecodeError: raise RuntimeError('這個檔案不是文字檔。謹慎模式讀不到，請把這個 Bot 的主動性改成自動後再試。')
     return (runtime._schema('zook_group_file_read', "Read a text file from this group's shared files by its exact name.", {'name': {'type': 'string', 'description': 'Exact file name'}}, ['name']), read, lambda args: 'always' if runtime.secret_name(args.get('name'), group_original(store, group_id, args.get('name'))) else False)  # keys and sign-ins, by the uploaded name too
+
+
+# 謊報存檔 (#109): a member says it handed over a file that is neither among the group's files nor anywhere it named. Only what it
+# named is checked; nothing is searched for.
+import unicodedata
+
+CLAIM_KINDS = ('xlsx', 'xls', 'csv', 'docx', 'doc', 'pptx', 'ppt', 'pdf', 'png', 'jpg', 'jpeg', 'md', 'txt', 'zip', 'json', 'html')
+CLAIM_WORD = re.compile(r'[^\s/\\「」『』【】\[\]，、。：:；！？()（）*`\'"<>|]{1,120}\.(?:%s)(?![A-Za-z0-9])' % '|'.join(CLAIM_KINDS), re.I)
+CLAIM_SAID = ('群組檔案', '共用檔案', '已存', '存到', '存在', '存好', '存成', '已完成', '交付', '產出')  # it says it made or saved something
+
+
+def _claim_key(name):
+    return unicodedata.normalize('NFC', str(name or '')).casefold()
+
+
+def _claim_present(name, pool):
+    """Whether a name a reply used is one of these files: the same, a longer name ending with it (「Q3 報表.xlsx」 read as 「報表.xlsx」),
+    or the same with the mark Zook adds to a second version (報表（專員）.xlsx, 報表 (2).xlsx)."""
+    want = _claim_key(name)
+    for have in pool:
+        key = _claim_key(have)
+        if key.endswith(want) or re.sub(r'\s*[（(][^（）()]{0,40}[）)](?=\.[^.]+$)', '', key).endswith(want): return True
+    return False
+
+
+def claimed_missing(store, group_id, bot_id, text, given=()):
+    """Lock not needed. Files the reply says it made that are not there: a full path that does not exist (and is not among the group's
+    files by its name), or a bare name it said is in the group's files that is not there. Only when the reply says it saved or
+    handed something over; a name is never searched for elsewhere."""
+    text = str(text or '')[:20000]
+    if not any(w in text for w in CLAIM_SAID): return []
+    shared = [e.name for e in _plain_files(group_files_dir(store, group_id))]
+    copies = group_copy_folder(store, bot_id)
+    pool = shared + ([e.name for e in _plain_files(copies)] if copies.is_dir() else [])
+    known = pool + [g for g in given if g]
+    missing = []
+    for path in named_paths(text):
+        base = path.rsplit('/', 1)[-1]
+        if not os.path.lexists(path) and not _claim_present(base, known) and base not in missing: missing.append(base)
+    if '群組檔案' in text or '共用檔案' in text:
+        for name in CLAIM_WORD.findall(re.sub(r'(?:file://)?/[^\s「」『』，、。；）)]+', ' ', text)):
+            if not _claim_present(name, known) and name not in missing: missing.append(name)
+    return missing[:10]
