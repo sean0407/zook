@@ -236,6 +236,7 @@ def task_stop(store, group):
 
 
 TASK_CUT_NOTE = 'Zook 重新啟動時這項工作還在做，可能已經做了一部分，請確認做到哪裡後，按「重試」或「接受結果」。'
+TASK_CUT_RETRY = 'Zook 重新啟動時這項工作還在做，它已經回報沒有完成，請確認做到哪裡後再按「重試」。'
 TASK_CUT_ACCEPTED = 'Zook 重新啟動時這項工作被中斷，沒有回報完成；你確認做到哪裡後，在中斷後手動接受了結果。'
 
 
@@ -253,7 +254,7 @@ def task_recover(group, store=None):
             t['status'] = 'unknown'
             last = (t.get('attempts') or [{}])[-1]
             if last.get('state') == 'reported' and last.get('outcome') == 'succeeded': t['note'] = '工作本身已經回報完成，重試只會重新驗收。'
-            else: t.update(cut=True, note=TASK_CUT_NOTE)  # #285: it may have done part of it; the user retries it or accepts what is there
+            elif last.get('state') != 'reported': t.update(cut=True, note=TASK_CUT_NOTE)  # #285: it may have done part of it; the user retries it or accepts what is there
         elif t.get('status') == 'review': t['status'] = 'stuck'  # its result can still be accepted
         elif t.get('status') not in TASK_SETTLED: t['status'] = 'cancelled'
         t.pop('staged', None)

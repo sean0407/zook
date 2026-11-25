@@ -265,8 +265,9 @@ def task_route(handler, store, group, parts):
         while changed:  # A → B → C: retrying A reopens B and C
             changed = False
             for t in run['tasks']:
-                if t['n'] not in reopened and set(t.get('deps') or []) & reopened and t['status'] == 'failed' and t.get('note', '').startswith('前面的工作'):
-                    t['status'] = 'pending'; t.pop('note', None); reopened.add(t['n']); changed = True
+                if t['n'] not in reopened and set(t.get('deps') or []) & reopened and (t['status'] == 'failed' and t.get('note', '').startswith('前面的工作') or
+                        t['status'] == 'cancelled' and t.get('before') in ('pending', 'ready')):  # stopped only by a restart too late to go on (task_recover)
+                    t['status'] = 'pending'; t.pop('note', None); t.pop('before', None); reopened.add(t['n']); changed = True
         group['messages'].append(dict(id=ID(), role='system', content='你%s工作 %d「%s」。' % (('在中斷後手動接受了' if cut else '接受了') if accept else '要求重試', task['n'], task['title']), createdAt=NOW()))
         if group['status'] != 'running': app.task_resume(group)
         else: app.task_poke(group['id'])

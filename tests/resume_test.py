@@ -236,6 +236,21 @@ class TaskPickupTest(unittest.TestCase):
         b = group['taskRun']['tasks'][0]
         self.assertEqual(b['status'], 'unknown'); self.assertIn('「重試」或「接受結果」', group['messages'][-1]['content'])
         self.assertEqual(self.press(m, store, group, 'accept')[0], 202); self.assertEqual(b['status'], 'done')
+        self.assertEqual(group['taskRun']['tasks'][1]['status'], 'pending')  # stopped only by the restart: what waited for it goes on
+        m.task_resolve_deps(group['taskRun']); self.assertEqual(group['taskRun']['tasks'][1]['status'], 'ready')
+
+    def test_a_task_that_reported_failure_just_before_a_restart_can_only_be_retried(self):
+        m = load()
+        g = m.task_route.__globals__; self.addCleanup(g.__setitem__, 'task_recover', g['task_recover'])
+        real = g['task_recover']
+        def recover(group, store=None):  # its zook_task_done(failed) came in, the turn had not ended yet
+            group['taskRun']['tasks'][0]['attempts'][-1].update(state='reported', outcome='failed'); real(group, store)
+        g['task_recover'] = recover; m.task_recover = recover
+        for fresh in (True, False):
+            store, group = self.cut_run(m, fresh)
+            b = group['taskRun']['tasks'][0]
+            self.assertNotIn('cut', b); self.assertNotIn('接受結果', b.get('note', ''))
+            self.assertEqual(self.press(m, store, group, 'accept')[0], 409)
 
     def test_a_retried_cut_task_is_no_longer_acceptable_without_a_report(self):
         m = load()

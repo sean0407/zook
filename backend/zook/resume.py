@@ -332,12 +332,14 @@ class Resuming:
             if before == 'verifying' or (before == 'running' and last.get('state') == 'reported' and last.get('outcome') == 'succeeded'):
                 t.update(status='verifying', verify=dict(state='waiting')); t.pop('note', None)  # the work reported done: only its check runs, nothing is done again
             elif before == 'running':  # #285: commands it ran are not known until its turn ends, so it is never done again by itself
-                t.update(status='stuck', resumed=True, cut=True, note=TASK_CUT_NOTE)  # a 重試 is told it was cut off (task_worker_prompt)
+                failed = last.get('state') == 'reported'  # it said itself it did not finish: only 重試, nothing to accept
+                t.update(status='stuck', resumed=True, note=TASK_CUT_RETRY if failed else TASK_CUT_NOTE)  # a 重試 is told it was cut off (task_worker_prompt)
+                if not failed: t['cut'] = True
             elif before == 'review': t['status'] = 'review'
             else: t['status'] = before; t.pop('note', None)
         for g in run.get('gates') or []:
             if g.pop('before', None) == 'pending' and g.get('status') == 'cancelled': g.update(status='pending', since=time.time())
-        cut = [t for t in run['tasks'] if t.get('note') == TASK_CUT_NOTE and t.get('status') == 'stuck']
+        cut = [t for t in run['tasks'] if t.get('note') in (TASK_CUT_NOTE, TASK_CUT_RETRY) and t.get('status') == 'stuck']
         group['messages'].append(dict(id=ID(), role='system', content='Zook 重新啟動，任務從中斷的地方接著做：已完成的工作不重做' + (
             '；中斷時還在做的%s停下來等你確認：確認做到哪裡後，在任務看板上按「重試」或「接受結果」。' % ('、'.join('工作 %s' % t.get('n') for t in cut)) if cut else '。'), createdAt=NOW()))
         task_board_update(self.store, group)
