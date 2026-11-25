@@ -182,6 +182,7 @@ print(json.dumps({'result':'personal response'}))
             time.sleep(.02)
         self.assertEqual(job['status'], 'failed')
         self.assertEqual(self.request('GET', '/api/state')[1]['bots'][0]['messages'][-1]['status'], 'failed')
+        self.request('PATCH', '/api/settings', {'backgroundRuns': False})  # on (since 0.25.0), a reply started before closing goes on and is picked up again: background_test.py
         reply = self.request('POST', '/api/chat', {'botId':bot['id'], 'content':'WAIT_FOR_CANCEL'})[1]
         self.assertEqual(self.request('DELETE', '/api/bots/'+bot['id'])[0], 409)
         self.proc.terminate(); self.proc.wait(timeout=8); self.proc.stdout.close(); self.proc.stderr.close()
