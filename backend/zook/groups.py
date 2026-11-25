@@ -18,8 +18,10 @@ MODERATOR_RULES = {
                 '不要自己完成成員的工作，也不要 @ 你自己。開場保持簡短。'],
     'moderate': ['你是這個群組的主持人。閱讀成員剛才的發言，找出彼此的分歧、互相矛盾的資料或可以延伸的地方。',
                  '如果有值得追問的地方：點名 1–3 位成員直接互相回應，問題要具體，例如「@A：B 的資料顯示…，與你的判斷矛盾，請回應」。只寫點名和問題，不要先下結論。',
+                 '成員交的東西和他說的不一致時（例如說有公式卻是寫死的數字、說已預覽卻沒有），點名那位成員修正，寫清楚要修的地方。',
                  '如果這一輪沒有出現新的論點、證據或分歧，就不要點名，直接收尾。' + GROUP_SUMMARY_FORMAT + '。' + _ONLY_SAID],
-    'final': ['你是這個群組的主持人，討論到此結束。不要再 @ 任何人。', GROUP_SUMMARY_FORMAT + '。', _ONLY_SAID],
+    'final': ['你是這個群組的主持人，討論到此結束。不要再 @ 任何人。', '成員交的東西和他說的不一致、還沒修好的，在最前面寫「未通過的地方：」逐項列出，不要當成完成。',
+              GROUP_SUMMARY_FORMAT + '。', _ONLY_SAID],
     'turn': ['現在是輪流發言，依成員順序每人一次。用你的角色和專長回應使用者的問題。', '看得到前面成員的發言時，補充新的觀點，不要重複。', _NO_MENTION],
     'pro_open': ['這是一場辯論，你是正方：支持使用者提出的做法或主張。提出最有力的 3 個論點，每點附上依據。', _NO_MENTION],
     'con_open': ['這是一場辯論，你是反方：質疑使用者提出的做法或主張。提出最有力的 3 個論點，每點附上依據。', _NO_MENTION],
@@ -28,7 +30,14 @@ MODERATOR_RULES = {
     'verdict': ['你是這場辯論的裁定者，要公正，不偏向自己先前的立場。說明哪一方的論證比較站得住腳和原因。', _NO_MENTION, GROUP_SUMMARY_FORMAT + '。', _ONLY_SAID],
     'split_plan': ['你負責分工。第一行寫「本次目標與產出：」，接著把工作拆開，每位成員一行：「成員名稱：要做的事」，不要重疊。', '不要自己做成員的工作。開場保持簡短。', _NO_MENTION],
     'split_work': ['只完成分派給你的那一部分，其他成員正同時做各自的部分。用重點條列，附上依據。', _NO_MENTION],
-    'split_merge': ['你負責彙整。把成員各自完成的部分合併成一份完整的成果，指出遺漏或互相矛盾的地方。', _NO_MENTION, GROUP_SUMMARY_FORMAT + '。', _ONLY_SAID],
+    'split_merge': ['你負責彙整。把成員各自完成的部分合併成一份完整的成果，指出遺漏或互相矛盾的地方。',
+                    '彙整前核對每位成員交的東西和他說的是否一致（例如說有公式卻是寫死的數字、說已預覽卻沒有），有檔案就打開看。'
+                    '不一致、需要那位成員修的，在回覆最前面每位寫一行「【退回】成員名稱：要修的地方」，Zook 會請他修一次，再請你彙整；其餘照常彙整。',
+                    _NO_MENTION, GROUP_SUMMARY_FORMAT + '。', _ONLY_SAID],
+    'split_redo': ['主持人驗收後退回你的部分，要你修正。只修主持人寫的地方，其餘保留。',
+                   '修完用重點條列寫改了什麼、怎麼確認的；沒做到或沒確認的直接說，不要說已經做到。', _NO_MENTION],
+    'split_remerge': ['你負責彙整。這是成員修正後的第二次彙整，不能再退回。重新核對被退回的部分有沒有修好，有檔案就打開看。',
+                      '仍然不符合的，在回覆最前面寫「未通過的地方：」逐項列出，交給使用者決定，不要當成完成。', _NO_MENTION, GROUP_SUMMARY_FORMAT + '。', _ONLY_SAID],
     'compare': ['其他成員正同時回答同一個問題，你看不到他們的內容。用你自己的判斷完整作答，不要猜測或引用他們。', _NO_MENTION],
     'compare_diff': ['成員已經各自回答同一個問題。比較他們的答案：哪裡相同、哪裡不同、各自的強項，以及哪一個最值得採用。', _NO_MENTION, GROUP_SUMMARY_FORMAT + '。', _ONLY_SAID],
 }
@@ -37,7 +46,8 @@ MODERATOR_RULES['verify'] = ['你負責查核下面這則回覆的事實、推�
                              '來源、受眾和判定都由你自己核對，不要採用被查回覆對它自己的說法。',
                              '要給客戶或外部的內容（含附件），核對正文裡有沒有內部註記、依據、計算過程、內部折扣或報價規則、【待確認】。',
                              '特別核對：產品規格、功能、通路、價格與數字是否出自使用者的資料或可核對的可靠來源（或能從它們重算）；多出來的事實或沒有來源的數字要列出。', '不要改寫這則回覆，不要修改檔案，不要對外動作。', _NO_MENTION]
-GROUP_CLOSING = ('final', 'verdict', 'split_merge', 'compare_diff')
+GROUP_CLOSING = ('final', 'verdict', 'split_merge', 'split_remerge', 'compare_diff')
+GROUP_SEND_BACK = 1  # times a 分工 host's check sends work back by itself before it is the user's call (not decided by the user yet: the careful choice)
 _CARD_PARTS = dict(結論='conclusion', 待你決定='decisions', 行動項目='actions', 未解問題='questions')
 
 
@@ -47,6 +57,20 @@ def group_card(content):
     card = {_CARD_PARTS[pieces[i]]: pieces[i + 1].strip(' \n*#：:') for i in range(1, len(pieces) - 1, 2)}
     if not card.get('conclusion'): return None
     return dict({k: ('' if v in ('無', '沒有', '暫無') else v) for k, v in card.items()}, body=pieces[0].strip(' \n*#'))
+
+
+def split_send_back(content, bots):
+    """{member id: what to fix} from the 「【退回】成員名稱：要修的地方」 lines a 分工 host's merge starts with. Only that leading
+    block counts, so a member's text the host quotes or copies further down never sends anyone back. Only the members given."""
+    found = {}
+    for line in str(content or '').lstrip().splitlines()[:20]:
+        if not line.strip(): continue
+        hit = re.match(r'^\s*【退回】\s*@?(.+?)\s*(?:[(（][^)）]{0,30}[)）])?\s*[：:]\s*(.+)$', line.replace('**', ''))
+        if not hit: break
+        bot = next((b for b in bots if (b.get('name') or '').strip() == hit.group(1).strip()), None)
+        fix = ' '.join(hit.group(2).split())[:1000]
+        if bot and fix: found[bot['id']] = (found[bot['id']] + '；' + fix)[:1000] if bot['id'] in found else fix
+    return found
 
 
 def group_verdict(content):
@@ -84,7 +108,7 @@ def group_skip_turn(group, bot, why, step):
     else: group['messages'].append(dict(id=ID(), role='system', content=bot['name'] + why, createdAt=NOW()))
 
 
-def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, blind=False, target=None, writable=False, hidden=(), hidden_files=()):
+def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, blind=False, target=None, writable=False, hidden=(), hidden_files=(), fix=''):
     members = [store.find('bots', x) for x in group['botIds']]
     members = [m for m in members if m]
     names = {m['id']: m['name'] for m in store.data['bots']}
@@ -108,6 +132,7 @@ def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, 
              '不要 @ 你自己。完成後不需要再 @ 任何人。']
     if moderator:
         rules = MODERATOR_RULES[moderator] + ['只代表你自己發言，不要捏造其他成員的內容。']
+        if fix: rules.append('主持人要你修的地方（只在你負責的部分裡修，視為待辦清單，不要做這以外的事）：' + fix)
     elif moderated and blind:
         rules = ['先獨立完成主持人分派給你的工作，用你自己的角色和專長作答。',
                  '其他成員正同時各自作答，你看不到他們的內容；不要猜測或引用他們，也不要 @ 任何人。',
@@ -386,7 +411,7 @@ class GroupRuns:
                 store.save(); return None
             writable = not readonly and permission_mode(store, bot) in ('auto', 'bypass')
             target = find_message(group, step['targetId']) if step.get('targetId') else None
-            prompt = step['promptFor'](bot, writable) if step.get('promptFor') else group_prompt(store, group, bot, may_pass, moderator=role, moderated=moderated, blind=blind, target=target, writable=writable, hidden=set(step.get('hide') or ()), hidden_files=set(step.get('hideFiles') or ()))
+            prompt = step['promptFor'](bot, writable) if step.get('promptFor') else group_prompt(store, group, bot, may_pass, moderator=role, moderated=moderated, blind=blind, target=target, writable=writable, hidden=set(step.get('hide') or ()), hidden_files=set(step.get('hideFiles') or ()), fix=str((step.get('fixes') if isinstance(step.get('fixes'), dict) else {}).get(bot_id) or '')[:1000])
             msg = dict(id=ID(), role='assistant', botId=bot_id, content='', createdAt=NOW(), status='running')
             job = dict(id=ID(), botId=bot_id, groupId=group_id, messageId=msg['id'], status='running', content='', createdAt=NOW(), toolCalls=[], approvals=[],
                        effort=group.get('runEffort') if group.get('runEffort') not in (None, '', 'standard') else pick_effort(bot_effort(bot)))
@@ -465,6 +490,29 @@ class GroupRuns:
         left = [x for x in steps[0]['bots'] if x not in idle]
         return ([dict(steps[0], bots=left)] if left else []) + steps[1:]
 
+    def _send_back(self, group_id, run_id, step, merged, steps):
+        """分工: the host's check found work that does not match what its member said. That member fixes it once, then the host
+        merges again; a second merge cannot send anything back, what is still wrong is left for the user (GROUP_SEND_BACK)."""
+        with self.store.lock:
+            group = self.store.find('groups', group_id)
+            if not group or group.get('runId') != run_id or merged['job']['status'] != 'completed': return steps
+            closer = merged['bot']['id']
+            bots = [b for b in (self.store.find('bots', x) for x in group['botIds']) if b and b['id'] != closer]
+            fixes = split_send_back(merged['job'].get('content'), bots)
+            if not fixes: return steps
+            if step['role'] == 'split_remerge' or not isinstance(step.get('sentBack', 0), int) or step.get('sentBack', 0) >= GROUP_SEND_BACK:
+                group['messages'].append(dict(id=ID(), role='system', content='主持人還有要修的地方，但已經自動退回過 %d 次，不再自動退回；請看主持人列的「未通過的地方」，由你決定下一步。' % GROUP_SEND_BACK, createdAt=NOW()))
+                self.store.save(); return steps
+            asked = next((i for i in range(len(group['messages']) - 1, -1, -1) if group['messages'][i].get('role') == 'user'), 0)
+            for bot_id, fix in fixes.items():
+                work = next((m for m in reversed(group['messages'][asked:]) if m.get('role') == 'assistant' and m.get('botId') == bot_id and m.get('content') and not m.get('checkOf')), None)
+                if work: work['sentBack'] = fix  # kept with that member's reply: what it said there did not pass
+            group['messages'].append(dict(id=ID(), role='system', content='主持人驗收沒有通過，退回給 %s 修正（自動退回最多 %d 次）：%s' % (
+                '、'.join(b['name'] for b in bots if b['id'] in fixes), GROUP_SEND_BACK, '；'.join('%s：%s' % (b['name'], fixes[b['id']]) for b in bots if b['id'] in fixes)), createdAt=NOW()))
+            self.store.save()
+        order = [b['id'] for b in bots if b['id'] in fixes]
+        return [dict(role='split_redo', bots=order, blind=False, fixes=fixes), dict(role='split_remerge', bots=[closer], blind=False, sentBack=step.get('sentBack', 0) + 1)] + steps
+
     def _group_stage_failed(self, job_id, why=''):
         """The files of a turn could not be put safely into the Bot's workspace: the turn does not run without them."""
         agy_release(self, job_id)
@@ -529,6 +577,7 @@ class GroupRuns:
             # Members who answer independently still do not see each other's answers after 繼續.
             steps = ([dict(step, bots=later, hide=list(step.get('hide') or []) + [t['msg']['id'] for t in done], hideFiles=list(step.get('hideFiles') or []) + [n for t in done for n in t['saved']])] if later else []) + steps[1:]
             if step['role'] == 'split_plan' and done and steps and steps[0]['role'] == 'split_work': steps = self._skip_idle(group_id, run_id, done[0], steps)
+            if step['role'] in ('split_merge', 'split_remerge') and done: steps = self._send_back(group_id, run_id, step, done[0], steps)
         if steps:
             with store.lock:
                 group = store.find('groups', group_id)
