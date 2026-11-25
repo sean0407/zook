@@ -32,8 +32,15 @@
     const families = members.map(botFamily), one = members.length >= 2 && families.every(f => f && f === families[0]);
     const el = form.querySelector('[data-group-problem]'), hint = form.querySelector('[data-group-hint]');
     if (el) { el.textContent = problem; el.hidden = !problem; }
-    if (hint) { hint.textContent = one ? `成員都是 ${providerShort(families[0])}，沒有跨家驗收：結果要你自己看，或加一位別家的 Bot。` : ''; hint.hidden = !one; }
+    const kept = groupKeepsAuto(form) ? '這個群組設定為「自動」，但任務引擎已關閉，所以暫時用「自由」討論；儲存不會改掉，到「設定」打開任務引擎就會恢復。' : '';
+    const words = [kept, one ? `成員都是 ${providerShort(families[0])}，沒有跨家驗收：結果要你自己看，或加一位別家的 Bot。` : ''].filter(Boolean).join(' ');
+    if (hint) { hint.textContent = words; hint.hidden = !words; }
     return !problem;
+  }
+  // #223②: a group saved as 自動 while the task engine is off shows 自由; left on 自由 (and still with a host and two members), saving keeps 自動.
+  function groupKeepsAuto(form) {
+    const g = form.dataset.id && (state.data.groups || []).find(x => x.id === form.dataset.id), d = new FormData(form);
+    return !!g && g.mode === 'auto' && !taskEngineOn() && (d.get('mode') || 'free') === 'free' && !!d.get('hostId') && d.getAll('botIds').filter(id => state.data.bots.some(b => b.id === id)).length >= 2;
   }
   const groupModeControl = g => `<div class="effort-pick group-mode" title="討論方式">${dropdown('groupMode', currentGroupMode(g), groupModeOptions().filter(o => o.id !== 'auto' || autoReady(g)))}</div>`;
 
