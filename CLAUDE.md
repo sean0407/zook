@@ -129,9 +129,9 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 4. 實作。
 5. 三層驗證。
 6. 用 Codex 審查（和開發者不同家的模型）：使用共用的 `codex-review` Skill（`~/.claude/skills/codex-review`，帳號輪流、20% 下限、不用付費點數、自動取最新模型都在它的 SKILL.md）。在 repo 根目錄執行：
-   `python3 scripts/codex_review.py --family luna|sol|astra --brief <審查說明> --out <結果檔>`（這個檔案只是轉給共用 Skill，參數相同）。Zook 自己的規定：
-   - 每一版的例行審查用 luna（medium，`--family luna`；2026-11-25 使用者決定，省 Codex 額度）：找錯誤、漏掉的測試、和這份規則衝突的地方。
-   - 交辦標「找獨立審查」的版本，以及改到核准、權限、沙盒、金鑰的版本，用 astra（high）：冒名回報、繞過核准、派工失控、權限與金鑰這類安全問題。
+   `python3 scripts/codex_review.py --family luna --effort medium|xhigh --brief <審查說明> --out <結果檔>`（這個檔案只是轉給共用 Skill，參數相同）。Zook 自己的規定：
+   - 審查一律用 luna（2026-11-25 使用者決定）。每一版的例行審查用中度（`--effort medium`）：找錯誤、漏掉的測試、和這份規則衝突的地方。
+   - 比較複雜的版本、交辦標「找獨立審查」的版本，以及改到核准、權限、沙盒、金鑰的版本，用超高（`--effort xhigh`）：冒名回報、繞過核准、派工失控、權限與金鑰這類安全問題。
    - 審查範圍只限這一版的改動（diff）；只改文字或文件的小版本，併到下一版一起審。
    - 結果檔放在 repo 外面；進度檔記下它印出的帳號、模型和 token，以及每個發現怎麼處理。
    - 另外請 Claude 子代理審查時，兩邊互相看不到結果；兩邊都找到的先修，只有一邊找到的先重現再決定，理由寫進進度檔，報告分開列出。
