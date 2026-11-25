@@ -102,6 +102,8 @@ class Checks(unittest.TestCase):
         sound = [cell('A1', 3), cell('B1', 1200), cell('C1', 0.1), cell('D1', 360, 'A1*B1*C1'), cell('E1', 'x', 'IF(A2="","",A2)', 'str'),
                  cell('F1', 1, 'IF(A1>0,1,0)'), cell('G1', 'ok', 'IF(H1="是","含稅","未稅")', 'str'), cell('H2', 5, 'SUM(A1,2)'), cell('I1', -5, '-5')]
         self.assertEqual(self.issues(sound), [])
+        shared = ['<c r="E%d"><f t="shared" si="0"%s>%s</f><v>0</v></c>' % (r, ' ref="E1:E3"' if r == 1 else '', 'IF(A1="X100",C1*0.1,0)' if r == 1 else '') for r in (1, 2, 3)]
+        self.assertIn('有 3 格公式把數字或品號直接寫在公式裡', ' '.join(self.issues(shared)))  # every cell of a shared formula counts
 
     def test_sheets_are_named_from_the_workbook(self):
         found = ' '.join(self.issues(None, sheets=[('明細', [cell('A1', 1)]), ('彙總', [cell('A1', 5, 'SUM(B1:B2)'), cell('B1', 1), cell('B2', 2)])]))

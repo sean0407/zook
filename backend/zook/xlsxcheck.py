@@ -114,7 +114,7 @@ def _xsheets(z, deadline, budget):
 
 def _xread_sheet(z, part, deadline, budget):
     """{(row, col): (number or None, is a SUM formula, is a formula)}, {pos: [ranges of its SUM]} and [(pos, bare formula, saved number, saved text, type)]."""
-    cells, sums, formulas, shared = {}, {}, [], {}
+    cells, sums, formulas, shared, shared_fixed = {}, {}, [], {}, {}
     for n, (_, el) in enumerate(_xparse(z, part, deadline, budget)):
         if n % 2000 == 0 and time.monotonic() > deadline: raise _XSlow()
         if el.tag == _XM + 'row': el.clear(); continue  # the cells read so far are let go
@@ -128,8 +128,9 @@ def _xread_sheet(z, part, deadline, budget):
         if f is not None:
             raw = (f.text or '').strip(); text = _xbare(raw); si = f.get('si')
             is_sum = bool(_XSUM.search(text)) if text else shared.get(si, False)
-            if f.get('t') == 'shared' and text and si is not None: shared[si] = is_sum
-            formulas.append((pos, text, number, saved, kind, _xfixed(raw, text)))
+            fixed = _xfixed(raw, text) if text else shared_fixed.get(si, False)  # a shared formula's other cells carry only its index
+            if f.get('t') == 'shared' and text and si is not None: shared[si] = is_sum; shared_fixed[si] = fixed
+            formulas.append((pos, text, number, saved, kind, fixed))
             if pos:
                 cells[pos] = (number, is_sum, True)
                 if text and is_sum: sums[pos] = [r for args in _xsum_args(text) for r in _xrefs(args)]
