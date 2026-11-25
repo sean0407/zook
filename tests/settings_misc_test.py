@@ -126,7 +126,8 @@ class SearchRootsFromASafeFolder(unittest.TestCase):
         self.gate._CWD[0] = os.path.expanduser('~')  # these search the current folder: from home it holds keys
         for line in ('rg -- --files', 'rg -- --regexp=KEY', 'grep -r -- --regexp=KEY', 'rg --maxdepth 1 TOKEN', 'ggrep -d recurse TOKEN',
                      'ggrep --directories recurse TOKEN', 'ggrep -D skip -r TOKEN', 'grep -drecurse TOKEN',
-                     'rg --hidden --no-ignore --max-depth 2 TOKEN', "rg --hidden --no-ignore -G '*.txt' TOKEN", 'rg --glob-not x TOKEN', 'rg --max-bytes 10 TOKEN'):
+                     'rg --hidden --no-ignore --max-depth 2 TOKEN', "rg --hidden --no-ignore -G '*.txt' TOKEN", 'rg --glob-not x TOKEN', 'rg --max-bytes 10 TOKEN',
+                     'ugrep -r --hidden --exclude-from /tmp/excludes needle', 'ugrep -r --include-from /tmp/inc needle', 'ugrep -r -D skip needle'):
             self.assertIn('secret', self.kinds(line), line)
 
     def test_other_tools_keep_their_folders(self):
