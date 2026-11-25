@@ -164,41 +164,6 @@ def claude_gate_after(store, env, gate, used_tools):
     return ran
 
 
-# Each Bot's own scratch folder (queue #261, decisions #28). zook_gate.py deletes the plain files right in it without asking, but only
-# while it is still the very folder Zook made: its device:inode is kept in Zook's data, outside the workspace, and given to the gate.
-SCRATCH_NOTE = ('\n暫存檔：中間產物、一次性腳本、轉檔過程的檔案一律放在「%s」，不要放 /tmp 或系統暫存資料夾。這個資料夾裡的檔案用完，'
-                '用單獨一行 rm 加完整路徑刪除（例如 rm -f "%s/a.py"），不用等使用者核准；同一行接了其他指令、萬用字元、變數或 cd，'
-                '或刪的是資料夾、其他位置的檔案，仍會先問使用者。')
-_SCRATCH_LOCK = threading.Lock()
-
-
-def scratch_env(store, bot_id, env):
-    """Make (or keep) this Bot's scratch folder and give the gate its path and identity (ZOOK_SCRATCH, ZOOK_SCRATCH_ID). A folder there
-    that Zook did not make (a link, a file, another folder put in its place) is renamed aside, never deleted, and a new one made.
-    Returns the folder's path, or None when it could not be set up (then nothing is deleted without asking)."""
-    folder = os.path.normpath(os.path.abspath(str(store.dir / 'workspaces' / bot_id / '.zook-scratch')))
-    record = store.dir / 'tools' / 'scratch' / re.sub(r'[^A-Za-z0-9_-]', '_', str(bot_id))
-    with _SCRATCH_LOCK:  # two replies of one Bot starting together make one folder
-        try:
-            record.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            try: known = record.read_text(encoding='utf-8').strip()
-            except OSError: known = ''
-            try: info = os.lstat(folder)
-            except FileNotFoundError: info = None
-            if info is not None and not (stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and '%d:%d' % (info.st_dev, info.st_ino) == known):
-                os.rename(folder, '%s-old-%d' % (folder, int(time.time() * 1000))); info = None
-            if info is None:
-                os.mkdir(folder, 0o700); info = os.lstat(folder)
-                new = record.with_name(record.name + '.new'); new.write_text('%d:%d' % (info.st_dev, info.st_ino), encoding='utf-8'); os.replace(str(new), str(record))
-        except OSError: return None
-    env['ZOOK_SCRATCH'], env['ZOOK_SCRATCH_ID'] = folder, '%d:%d' % (info.st_dev, info.st_ino)
-    return folder
-
-
-def scratch_note(folder):
-    return SCRATCH_NOTE % (folder, folder) if folder else ''
-
-
 def gate_access_note(note, kind):
     """For Claude and Cursor, which ask through the gate: the boundaries instead of 「ask before deleting」, so the card is the one question."""
     if kind not in GATED_KINDS: return note
