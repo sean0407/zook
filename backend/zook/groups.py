@@ -46,7 +46,11 @@ MODERATOR_RULES['verify'] = ['你負責查核下面這則回覆的事實、推�
                              '來源、受眾和判定都由你自己核對，不要採用被查回覆對它自己的說法。',
                              '要給客戶或外部的內容（含附件），核對正文裡有沒有內部註記、依據、計算過程、內部折扣或報價規則、【待確認】。',
                              '特別核對：產品規格、功能、通路、價格與數字是否出自使用者的資料或可核對的可靠來源（或能從它們重算）；多出來的事實或沒有來源的數字要列出。', '不要改寫這則回覆，不要修改檔案，不要對外動作。', _NO_MENTION]
-GROUP_CLOSING = ('final', 'verdict', 'split_merge', 'split_remerge', 'compare_diff')
+MODERATOR_RULES['check_final'] = ['你是這個群組的主持人。上面成員的回覆已經由另一位成員查核已通過，現在由你替使用者收尾，討論到這裡結束。不要再 @ 任何人。',
+                                  '第一行寫【結論】，接著只用一段話寫最終結論：使用者要的東西做好了什麼、重點是什麼。不要再分其他小標。',
+                                  '最後一行寫「檔案位置：」，逐一列出這次交出的檔案完整檔名，位置寫「群組檔案」；使用者另外指定、成員也說存好的位置，照成員說的寫上。沒有檔案就寫「檔案位置：這次沒有檔案」。',
+                                  _ONLY_SAID]
+GROUP_CLOSING = ('final', 'verdict', 'split_merge', 'split_remerge', 'compare_diff', 'check_final')
 GROUP_SEND_BACK = 1  # times a 分工 host's check sends work back by itself before it is the user's call (not decided by the user yet: the careful choice)
 _CARD_PARTS = dict(結論='conclusion', 待你決定='decisions', 行動項目='actions', 未解問題='questions')
 
@@ -548,6 +552,19 @@ class GroupRuns:
         order = [b['id'] for b in bots if b['id'] in fixes]
         return [dict(role='split_redo', bots=order, blind=False, fixes=fixes), dict(role='split_remerge', bots=[closer], blind=False, sentBack=step.get('sentBack', 0) + 1)] + steps
 
+    def _after_check(self, group_id, run_id, check, steps):
+        """#222 (decided by the user): a 請其他成員查核 that passes (同意) is wrapped up by the host at once, one more reply: a
+        paragraph of conclusion and where the files are. 有疑慮／有錯誤 stay the user's call; a group without a host keeps its
+        整理結論 button; a round that already has its conclusion (a host's or a 任務's closing card) is not concluded twice."""
+        with self.store.lock:
+            group = self.store.find('groups', group_id)
+            if not group or group.get('runId') != run_id or check['job']['status'] != 'completed' or check['msg'].get('verdict') != '同意': return steps
+            host = group_host(self.store, group)
+            if not host or not self.store.find('bots', host): return steps
+            asked = next((i for i in range(len(group['messages']) - 1, -1, -1) if group['messages'][i].get('role') == 'user'), 0)
+            if any(m.get('card') for m in group['messages'][asked:] if m.get('role') == 'assistant' and not m.get('checkOf')): return steps
+        return steps + [dict(role='check_final', bots=[host], readonly=True, msg=dict(afterCheck=True))]
+
     def _group_stage_failed(self, job_id, why=''):
         """The files of a turn could not be put safely into the Bot's workspace: the turn does not run without them."""
         agy_release(self, job_id)
@@ -618,6 +635,7 @@ class GroupRuns:
             # Members who answer independently still do not see each other's answers after 繼續.
             steps = ([dict(step, bots=later, hide=list(step.get('hide') or []) + [t['msg']['id'] for t in done], hideFiles=list(step.get('hideFiles') or []) + [n for t in done for n in t['saved']])] if later else []) + steps[1:]
             if step['role'] == 'split_plan' and done and steps and steps[0]['role'] == 'split_work': steps = self._skip_idle(group_id, run_id, done[0], steps)
+            if step['role'] == 'verify' and done: steps = self._after_check(group_id, run_id, done[0], steps)
             if step['role'] in GROUP_CLOSING and done:
                 before = steps
                 if step['role'] in ('split_merge', 'split_remerge'): steps = self._send_back(group_id, run_id, step, done[0], steps)

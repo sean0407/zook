@@ -12,13 +12,13 @@ if a[:2] == ['auth', 'status']: print(json.dumps({'loggedIn': True, 'authMethod'
 if 'app-server' in a or '--help' in a or '--version' in a: sys.exit(0)
 s = sys.stdin.read() if '--prompt-file' not in a else ''
 name = re.search(r'現在輪到你（(.+?)）回覆', s); name = name.group(1) if name else 'solo'
-role = next((r for r, mark in (('verdict', '裁定者'), ('pro_open', '你是正方：'), ('con_open', '你是反方：'), ('pro_rebut', '第二回合，你是正方'), ('con_rebut', '第二回合，你是反方'), ('split_plan', '你負責分工'), ('split_redo', '主持人驗收後退回你的部分'), ('split_work', '只完成分派給你'), ('split_remerge', '第二次彙整'), ('split_merge', '你負責彙整'), ('compare_diff', '比較他們的答案'), ('compare', '你看不到他們的內容'), ('turn', '現在是輪流發言'), ('verify', '你負責查核'), ('final', '討論到此結束'), ('kickoff', '本次目標與產出')) if mark in s), 'free')
+role = next((r for r, mark in (('check_final', '查核已通過'), ('verdict', '裁定者'), ('pro_open', '你是正方：'), ('con_open', '你是反方：'), ('pro_rebut', '第二回合，你是正方'), ('con_rebut', '第二回合，你是反方'), ('split_plan', '你負責分工'), ('split_redo', '主持人驗收後退回你的部分'), ('split_work', '只完成分派給你'), ('split_remerge', '第二次彙整'), ('split_merge', '你負責彙整'), ('compare_diff', '比較他們的答案'), ('compare', '你看不到他們的內容'), ('turn', '現在是輪流發言'), ('verify', '你負責查核'), ('final', '討論到此結束'), ('kickoff', '本次目標與產出')) if mark in s), 'free')
 open(os.environ['GROUP_LOG'], 'a').write(json.dumps(dict(name=name, role=role, kind=kind, readonly='只能讀取' in s, fix='申報欄改成公式' in s, args=a)) + '\n')
 text = name + ' ' + role
-if role in ('verdict', 'split_merge', 'compare_diff', 'final'): text = '【結論】採用甲案\n【待你決定】無\n【行動項目】Alpha：寫計畫\n【未解問題】缺成本資料'
+if role in ('verdict', 'split_merge', 'compare_diff', 'final', 'check_final'): text = '【結論】採用甲案\n【待你決定】無\n【行動項目】Alpha：寫計畫\n【未解問題】缺成本資料'
 if role in ('split_merge', 'split_remerge') and os.path.exists(os.environ['GROUP_LOG'] + '.sendback'): text = '【退回】Beta：申報欄改成公式\n' + text
 if role in ('split_merge', 'final') and os.path.exists(os.environ['GROUP_LOG'] + '.mention'): text += '\n@Beta 請修正申報欄'
-if role == 'verify': text = '【判定】有疑慮\n數字沒有來源'
+if role == 'verify': text = '【判定】同意\n數字都對得上' if os.path.exists(os.environ['GROUP_LOG'] + '.pass') else '【判定】有疑慮\n數字沒有來源'
 if role == 'verify' and os.path.exists(os.environ['GROUP_LOG'] + '.fail'): sys.stderr.write('boom\n'); sys.exit(3)
 if name == 'solo' and os.path.exists(os.environ['GROUP_LOG'] + '.slow'): import time; time.sleep(4)
 found = re.search(r'要給群組的產出請存到 (.+?)（只放', s)
@@ -215,6 +215,29 @@ class GroupModes(unittest.TestCase):
         status, body = self.req('POST', path, {}); self.assertEqual(status, 409, body); self.assertIn('Beta 正在其他對話中工作', body['error'])
         self.assertFalse([r for r in self.runs() if r['role'] == 'verify'])
         self.assertFalse([m for m in self.req('GET', '/api/groups/' + g['id'])[1]['group']['messages'] if m.get('checkOf')])
+
+    def check_alpha(self, group, ask='@Alpha 做一份報表', **fields):
+        found = self.say(group, ask, **fields); target = next(m for m in found['messages'] if m.get('botId') == self.bots['Alpha']['id'])
+        self.assertEqual(self.req('POST', '/api/groups/%s/messages/%s/verify' % (group['id'], target['id']), {})[0], 202); return self.settle(group)
+
+    def test_passed_check_gets_the_hosts_conclusion(self):
+        """#222: a check that passes is wrapped up by the host at once (one more reply), marked as such, read-only, as a card."""
+        Path(str(self.log) + '.pass').write_text('1')
+        found = self.check_alpha(self.group(hostId=self.bots['Gamma']['id']))
+        self.assertEqual(self.order()[-2:], [('Beta', 'verify'), ('Gamma', 'check_final')]); self.assertTrue(self.runs()[-1]['readonly'])
+        last = found['messages'][-1]
+        self.assertEqual((last['botId'], last.get('afterCheck'), last['card']['conclusion']), (self.bots['Gamma']['id'], True, '採用甲案'))
+        self.assertFalse(last.get('checkOf'))
+
+    def test_no_conclusion_after_a_doubt_without_a_host_or_when_one_exists(self):
+        self.check_alpha(self.group(hostId=self.bots['Gamma']['id']))  # 有疑慮: the user decides
+        self.assertEqual(self.order()[-1], ('Beta', 'verify'))
+        Path(str(self.log) + '.pass').write_text('1'); self.log.unlink()
+        found = self.check_alpha(self.group(hostId=''))  # no host: the 整理結論 button stays
+        self.assertEqual(self.order()[-1], ('Beta', 'verify')); self.assertFalse(any(m.get('afterCheck') for m in found['messages']))
+        self.log.unlink(); g = self.group(hostId=self.bots['Gamma']['id'])
+        found = self.check_alpha(g, '討論這件事', mode='turns')  # the host already closed this round with a conclusion: not a second one
+        self.assertEqual([r for _, r in self.order()].count('final'), 1); self.assertEqual(self.order()[-1], ('Beta', 'verify'))
 
     def upload(self, group, name, data=b'hello'):
         return self.req('POST', '/api/groups/%s/files' % group['id'], raw=data, headers={'X-File-Name': quote(name), 'Content-Type': 'application/octet-stream'})
