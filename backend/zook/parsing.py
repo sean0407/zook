@@ -24,12 +24,19 @@ def hide_command_secrets(text):
     return text
 
 
+# A command that turns a file's pages into pictures, run as a program (not a name some other command only reads or prints).
+RENDER_COMMAND = re.compile(r"""(?:^|[;&|(]\s*|\s)(?<!which )(?<!-v )(?<!type )(?<!install )(?:\S*/)?(?:qlmanage\s+(?:-\S+\s+)*-t\b|pdftoppm\s+-|pdftocairo\s+-|sips\s+[^;&|\n]*-s\s+format\s+(?:png|jpe?g)|soffice\s+[^;&|\n]*--convert-to\s+(?:png|jpe?g))|(?:^|[;&|(]\s*|\s)(?:(?:\S*/)?python3?(?:\.\d+)?\s+(?:-\S+\s+)*(?:"[^"\n]*|'[^'\n]*|\S*)|\./)pagepics\.py\b""")
+
+
 def native_action(kind, value):
     """Activity entry for something a CLI's built-in tool did (a file it changed or a command it ran)."""
     value = str(value or '').strip()
     if kind == 'command':  # what it did and where, as on an approval card: never the command itself, which may hold a password
         match = re.match(r"^/bin/(?:zsh|bash|sh) -lc (['\"]?)(.*)\1$", value, re.S)
-        return dict(name='native_command', category='code', arguments={'summary': command_summary(match.group(2) if match else value)})
+        command = match.group(2) if match else value
+        out = dict(name='native_command', category='code', arguments={'summary': command_summary(command)})
+        if RENDER_COMMAND.search(command): out['rendered'] = True  # #68: it turned pages into pictures (kept as a mark: the command itself is never kept)
+        return out
     return dict(name='native_write', category='internal', arguments={'path': value[:300]})
 
 

@@ -1,5 +1,5 @@
 # Group discussions: who hosts, how a discussion runs, and when it stops. Loaded by backend/server.py into one shared namespace.
-GROUP_MODES = dict(free='自由', turns='輪流', debate='辯論', split='分工', compare='比較', auto='自動（主持人決定）')  # auto: 任務引擎 (taskrun.py), only while it is on
+GROUP_MODES = dict(free='自由', turns='輪流', debate='辯論', split='主持人分工', compare='比較', auto='自動（主持人決定）')  # auto: 任務引擎 (taskrun.py), only while it is on
 GROUP_LIMITS = (4, 8, 12, 16)
 GROUP_KEEP = 20  # the most recent messages every member is given word for word
 try: GROUP_COMPACT_AT = max(GROUP_KEEP + 2, int(os.environ.get('ZOOK_GROUP_COMPACT_AT') or 40))  # past this many since the last summary, the older part is summarised
@@ -123,7 +123,8 @@ def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, 
     for m in group['messages'][(at + 1 if at is not None else 0):][-GROUP_KEEP:]:
         if not m.get('content') or m.get('role') == 'system' or m['id'] in hidden or m.get('waiting'): continue
         speaker = '使用者' if m['role'] == 'user' else names.get(m.get('botId'), '已刪除的 Bot')
-        transcript.append(speaker + '：' + (local(m['content'][:3000], m.get('botId') or '') if m['role'] == 'assistant' and m.get('botId') != bot['id'] else m['content'][:3000]) + ('\n（Zook 檢查：這則回覆說交了 %s，但實際上沒有存成。）' % '、'.join(m['missingFiles']) if m.get('missingFiles') else ''))
+        transcript.append(speaker + '：' + (local(m['content'][:3000], m.get('botId') or '') if m['role'] == 'assistant' and m.get('botId') != bot['id'] else m['content'][:3000]) + ('\n（Zook 檢查：這則回覆說交了 %s，但實際上沒有存成。）' % '、'.join(m['missingFiles']) if m.get('missingFiles') else '')
+                          + ('\n（Zook 檢查：這則回覆說逐頁看過版面，但這次沒有執行任何轉成圖片的指令，版面其實沒看過。）' if m.get('unrenderedClaim') else ''))
         if m.get('attachments'):  # the files were copied into every member's workspace when the message was sent
             folder = store.dir / 'workspaces' / bot['id'] / 'attachments'
             transcript.append('（附上的檔案，在你的工作資料夾：%s）' % '、'.join(str(folder / ('%s-%s' % (a['id'][:8], a['name']))) for a in m['attachments']))
@@ -235,16 +236,28 @@ def split_idle(plan, bots):
     return idle
 
 
+def closing_mention_note(store, group, turn, started=()):
+    """Lock held. #68④: an @ in a closing reply (結論、彙整、裁定) never starts anyone, in every 討論方式; the user is told so, with
+    how to ask that member, instead of being left to guess whether it will run. A member the host's check sent back is started."""
+    if turn['role'] not in GROUP_CLOSING or turn['job']['status'] != 'completed': return
+    members = [b for b in (store.find('bots', x) for x in group['botIds']) if b]
+    named = [b['name'] for b in members if b['id'] in group_mentions(turn['job'].get('content') or '', members) and b['id'] != turn['bot']['id'] and b['id'] not in started]
+    if named: group['messages'].append(dict(id=ID(), role='system', createdAt=NOW(), content='%s 在收尾的回覆裡點名了 %s；收尾後 Zook 不會自動請他們回覆。要他們修改，請送出「%s 請修正…」。' % (
+        turn['bot']['name'], '、'.join(named), ' '.join('@' + n for n in named))))
+
+
 def group_estimate(store, group, content, mode):
     """How many replies a message would start, and roughly how many tokens they use. Costs no model request."""
     members = [b for b in (store.find('bots', x) for x in group['botIds']) if b]
     targets = group_mentions(content or '', members)
     everyone = not targets or group_everyone(content, members)
-    limit = group_limit(store, group); open_ended = False
+    limit = group_limit(store, group); open_ended = False; more = 0
     if mode == 'auto' and not task_on(store): mode = 'free'  # 任務引擎 is off: it runs as 自由
     if not everyone: count = len(targets)
     elif mode == 'auto' and len(members) > 1: count, open_ended = len(members) + 1, True  # the host plans, each member works, the host sums up
-    elif mode != 'free' and len(members) > 1: count = sum(len(s['bots']) for s in group_steps(store, group, mode))
+    elif mode != 'free' and len(members) > 1:
+        steps = group_steps(store, group, mode); count = sum(len(s['bots']) for s in steps)
+        if mode == 'split': more = GROUP_SEND_BACK * (len(steps[1]['bots']) + 1)  # #68⑦: the host's check sends work back: each member fixes, the host merges again
     elif group_host(store, group) and len(members) > 1: count, open_ended = limit, True
     else: count = len(members)
     count = min(count, limit) if mode != 'auto' else count
@@ -254,7 +267,9 @@ def group_estimate(store, group, content, mode):
         if usage and job.get('botId') in group['botIds'] and len(used.setdefault(job['botId'], [])) < 20:
             used[job['botId']].append(int(usage.get('input') or 0) + int(usage.get('output') or 0))
     averages = [sum(v) / len(v) for v in used.values() if v]
-    return dict(replies=count, upTo=open_ended, limit=limit, tokens=int(sum(averages) / len(averages) * count) if averages else None)
+    out = dict(replies=count, upTo=open_ended, limit=limit, tokens=int(sum(averages) / len(averages) * count) if averages else None)
+    if more and min(count + more, limit) > count: out['most'] = min(count + more, limit)
+    return out
 
 
 def current_paused(store, group, paused):
@@ -461,8 +476,11 @@ class GroupRuns:
             if skipped: turn['published'] = False
             turn['saved'] = saved
         with store.lock:
-            said = (store.find('jobs', turn['job']['id']) or {}).get('content') or ''
+            done = store.find('jobs', turn['job']['id']) or {}; said = done.get('content') or ''
             given = {a.get(k) for m in (store.find('groups', group_id) or {}).get('messages') or [] for a in m.get('attachments') or [] for k in ('name', 'origName')}
+            calls, kind = list(done.get('toolCalls') or []), provider_kind(task_job_cli(store, done, bot) or turn['provider'])
+            others = [b['name'] for b in (store.find('bots', x) for x in (store.find('groups', group_id) or {}).get('botIds') or []) if b and b['id'] != bot['id']]
+        unrendered = claimed_unrendered(said, calls, kind, others)
         try: missing = claimed_missing(store, group_id, bot['id'], said, given)
         except OSError: missing = []
         with store.lock:
@@ -472,6 +490,10 @@ class GroupRuns:
                 group['messages'].append(dict(id=ID(), role='system', content='%s 說交了 %s，但群組檔案裡沒有、說的位置也找不到，可能沒有存成功。可以請它重新存一次。' % (bot['name'], '、'.join(missing)), createdAt=NOW()))
                 said_msg = find_message(group, turn['msg']['id'])
                 if said_msg: said_msg['missingFiles'] = missing
+            if unrendered:  # 假完成: it says it looked at the pages as pictures, but it never made one (#68)
+                group['messages'].append(dict(id=ID(), role='system', content='%s 說逐頁看過版面，但這次回覆沒有把任何一頁轉成圖片，版面其實還沒看過。可以請它把每一頁轉成圖片再檢查一次。' % bot['name'], createdAt=NOW()))
+                said_msg = find_message(group, turn['msg']['id'])
+                if said_msg: said_msg['unrenderedClaim'] = True
             for name in saved: group.setdefault('fileInfo', {})[name] = dict(by=bot['name'], **{k: v for k, v in (group.get('fileInfo', {}).get(name) or {}).items() if k == 'origName'})  # the uploaded name stays known
             if saved: group['messages'].append(dict(id=ID(), role='system', content='%s 存了共用檔案：%s' % (bot['name'], '、'.join(saved)), createdAt=NOW()))
             if skipped: group['messages'].append(dict(id=ID(), role='system', content='%s 的檔案太大沒有存進群組：%s' % (bot['name'], '、'.join(skipped)), createdAt=NOW()))
@@ -577,7 +599,14 @@ class GroupRuns:
             # Members who answer independently still do not see each other's answers after 繼續.
             steps = ([dict(step, bots=later, hide=list(step.get('hide') or []) + [t['msg']['id'] for t in done], hideFiles=list(step.get('hideFiles') or []) + [n for t in done for n in t['saved']])] if later else []) + steps[1:]
             if step['role'] == 'split_plan' and done and steps and steps[0]['role'] == 'split_work': steps = self._skip_idle(group_id, run_id, done[0], steps)
-            if step['role'] in ('split_merge', 'split_remerge') and done: steps = self._send_back(group_id, run_id, step, done[0], steps)
+            if step['role'] in GROUP_CLOSING and done:
+                before = steps
+                if step['role'] in ('split_merge', 'split_remerge'): steps = self._send_back(group_id, run_id, step, done[0], steps)
+                with store.lock:
+                    group = store.find('groups', group_id)
+                    if group and group.get('runId') == run_id:
+                        for t in done: closing_mention_note(store, group, t, steps[0]['bots'] if steps is not before and steps and steps[0]['role'] == 'split_redo' else ())
+                        store.save()
         if steps:
             with store.lock:
                 group = store.find('groups', group_id)
@@ -695,7 +724,7 @@ class GroupRuns:
                             group['messages'] = [m for m in group['messages'] if m['id'] != msg['id']]; continue
                         spoke = True
                         mentioned = [] if still_blind else [x for x in group_mentions(content, members) if x != bot_id]  # the rest of this independent round is still to come
-                        if role == 'final': rounds = GROUP_MODERATION_ROUNDS + 1; pending.clear()
+                        if role == 'final': rounds = GROUP_MODERATION_ROUNDS + 1; pending.clear(); closing_mention_note(store, group, t)
                         elif role in ('kickoff', 'moderate'):
                             if role == 'kickoff':
                                 mentioned = mentioned or [b['id'] for b in members if b['id'] != bot_id]; blind_next = True
