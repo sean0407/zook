@@ -689,7 +689,7 @@ FILE_DELIVERY_NOTE = ('要交出檔案（Excel、Word、簡報、PDF、圖片）
 CLIENT_COPY_NOTE = ('要給客戶或外部的內容（信件、回覆、報價、公告）和它的附件只放對方該看的：內部註記、依據、計算過程、內部折扣或報價規則、【待確認】都不要寫進去；'
                     '參考出處只保留收件人需要的公開引用。這些內部資訊和還沒確認的事寫在給使用者的說明裡（草稿與附件之外），標明「內部備註（不要寄出）」。')
 # Which shared Skill fits: what it is for, not the file type it makes (#28). Also sent when a CLI conversation is continued.
-SKILL_PICK_NOTE = '任務明確是某個 Skill 寫的用途時，才用 zook_read_skill 讀取完整指示再照做；只是輸出格式相同不算，例如一般報表不用海報或藝術設計的 Skill'
+SKILL_PICK_NOTE = '任務明確是某個 Skill 寫的用途時，才用 zook_read_skill 讀取完整指示再照做；只是輸出格式相同不算，例如一般報表不用海報或藝術設計的 Skill；Skill 寫明給某個品牌或公司用、而這次的品牌或公司不同時，不要套它的品牌樣式、配色與範本（#164③）'
 # Facts about the user's own company are not made up (巡檢 C01 twice: 「全系列通過嚴格檢驗」 that no one had said).
 FACTS_NOTE = ('公司事實（政策、檢驗、保固、價格、承諾）只寫使用者給的或你從適用的可靠來源確認過的；缺了又必要的寫成【待確認：…】讓使用者補，不必要的就不寫。'
               '行銷文案和提案也一樣：產品規格、功能、材質、通路範圍、活動、場地與外部報價，只寫資料裡有的；形容詞可以，但不能變成新的事實（資料只說「不漏」，就不能寫成「旋轉不滲漏」）。'
