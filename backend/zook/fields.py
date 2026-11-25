@@ -31,6 +31,18 @@ def set_group_fields(store, group, body, creating=False):
         group['name'] = '、'.join(store.find('bots', x)['name'] for x in group['botIds'])[:100]
 
 
+# What a field is called on screen, for a refusal in plain words (#156): 「名稱不能是空白。」「工作指示最多 10,000 字。」
+FIELD_WORDS = {'name': '名稱', 'color': '顏色', 'shape': '形狀', 'instructions': '工作指示', 'persona': '人格檔案', 'provider': '模型與帳號', 'model': '模型',
+               'section': '分類', 'jobTitle': '職稱', 'title': '標題', 'content': '內容', 'botId': 'Bot'}
+
+
+def field_words(key, value, limit):
+    word = FIELD_WORDS.get(key, key)
+    if not isinstance(value, str): return '%s的內容不對，請重新填寫。' % word
+    if key == 'name' and not value.strip(): return '名稱不能是空白。'
+    return '%s最多 %s 字，目前是 %s 字。' % (word, format(limit, ','), format(len(value), ','))
+
+
 def update(target, body, kind):
     fields = {'bot': {'name': 100, 'color': 30, 'shape': 30, 'instructions': 10000, 'persona': 20000, 'provider': 20, 'model': 100, 'section': 100, 'jobTitle': 12},
               'settings': {'provider': 20, 'model': 100}, 'knowledge': {'title': 300, 'content': 100000, 'botId': 100}}[kind]
@@ -38,7 +50,7 @@ def update(target, body, kind):
     for key, limit in fields.items():
         if key in body:
             value = body[key]
-            if not isinstance(value, str) or len(value) > limit or (key == 'name' and not value.strip()): raise ValueError('欄位 %s 無效。' % key)
+            if not isinstance(value, str) or len(value) > limit or (key == 'name' and not value.strip()): raise ValueError(field_words(key, value, limit))
             if key == 'provider' and not ((kind == 'bot' and value in ('', AUTO)) or P.spec(_active['data'], value)): raise ValueError('供應商無效。')
             changes[key] = value.strip() if key == 'jobTitle' else value
     if kind == 'settings' and 'autoModels' in body:

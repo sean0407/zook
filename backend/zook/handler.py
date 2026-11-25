@@ -645,10 +645,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/team' and self.command == 'POST' and not self.device:
                 body = self.body()
                 with store.lock: return self.respond(201, self.server.create_team(body))
+            if parts[:2] == ['api', 'backups'] and backup_unlocked(self, store, parts): return  # the folder chooser waits on the user: never under the lock
             if path == '/api/privacy-settings' and self.command == 'POST': return privacy_route(self)  # macOS's own privacy page, for a failed reply (errors.py)
+            if path == '/api/chat' and self.command == 'POST': return chat_intake(self, self.body())  # answered at once, taken in beside it (intake.py, #289)
             inventory = None
-            if (path in ('/api/chat', '/api/chat/redo', '/api/chat/resume') and self.command == 'POST') or (parts[:2] == ['api', 'bots'] and self.command in ('POST', 'PATCH')) or (len(parts) == 4 and parts[:2] == ['api', 'schedules']):
-                inventory = inventory_for(store, tokens=path not in ('/api/chat', '/api/chat/redo', '/api/chat/resume'))  # a message only checks its Bot's choices; the reply signs in to connectors itself
+            if (path in ('/api/chat/redo', '/api/chat/resume') and self.command == 'POST') or (parts[:2] == ['api', 'bots'] and self.command in ('POST', 'PATCH')) or (len(parts) == 4 and parts[:2] == ['api', 'schedules']):
+                inventory = inventory_for(store, tokens=path not in ('/api/chat/redo', '/api/chat/resume'))  # a message only checks its Bot's choices; the reply signs in to connectors itself
             with store.lock:
                 if self.command == 'GET' and path == '/api/state':
                     for b in store.data['bots']: ensure_chats(b)  # Bots added by an import, too
@@ -689,37 +691,6 @@ class Handler(BaseHTTPRequestHandler):
                     if not job: return self.error(404, '找不到工作。')
                     self.server.cancel_job(job, progress_asks_force(self))
                     return self.respond(200, job_view(job))
-                if path == '/api/chat' and self.command == 'POST':
-                    body = self.body(); bot = store.find('bots', body.get('botId'))
-                    if not bot: return self.error(404, '找不到機器人。')
-                    if self.device and isinstance(body.get('attachments'), list) and len(body['attachments']) > MOBILE_PHOTOS: return self.error(400, '手機每則訊息最多 %d 張照片。' % MOBILE_PHOTOS)
-                    once = send_key('bot:' + bot['id'], body); sent = send_seen(self.server, once)
-                    if sent: return self.respond(202, dict(sent, duplicate=True))  # the same message again: its answer was lost on the way
-                    notice = ''
-                    busy = any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs'])
-                    if busy and interject_wanted(body.get('content')):  # a correction or addition: into the reply that is running, when its CLI can take it
-                        joined, why = interject_send(self.server, bot, body, by=('手機：' + str(self.device.get('name') or '已配對裝置')) if self.device else '')
-                        if joined:
-                            sent = {'jobId': joined['id'], 'interjected': True}; send_remember(self.server, once, sent)
-                            return self.respond(202, sent)
-                        if why:
-                            if not queue_on(store): return self.error(409, why + '，請等它回覆完再傳。')
-                            notice = why + '，已改成排在後面。'
-                    if queue_on(store) and (bot.get('queue') or notice):  # others are already waiting: this one goes behind them, even in the moment between two replies
-                        waiting = {'queued': True, 'queueId': queue_add(store, bot, body)['id']}
-                        if notice: waiting['notice'] = notice
-                        send_remember(self.server, once, waiting)
-                        threading.Thread(target=self.server.queue_drain, args=(bot['id'],), daemon=True).start()
-                        return self.respond(202, waiting)
-                    try: job = self.server.send_to_bot(bot, body.get('content'), inventory, attachments=attachments_for(store, body.get('attachments')), effort=body.get('effort'),
-                                                         plan=body.get('plan', False), long=body.get('long', False))
-                    except Busy as exc:
-                        if not queue_on(store): return self.error(409, str(exc))
-                        waiting = {'queued': True, 'queueId': queue_add(store, bot, body)['id']}  # it waits in line and is sent when the Bot is free
-                        send_remember(self.server, once, waiting)
-                        return self.respond(202, waiting)
-                    send_remember(self.server, once, {'jobId': job['id']})
-                    return self.respond(202, {'jobId': job['id']})
                 if path == '/api/chat/resume' and self.command == 'POST': return resume_request(self, store, inventory)  # 接著做 (resume.py)
                 if path == '/api/chat/redo' and self.command == 'POST':
                     # Answer the last question again, send an edited version of it, or answer it with another model.
@@ -793,7 +764,7 @@ class Handler(BaseHTTPRequestHandler):
                     if len(parts) == 3 and self.command == 'DELETE':
                         if group['status'] == 'running': return self.error(409, '群組討論進行中，請先停止。')
                         store.data['groups'].remove(group)
-                        shutil.rmtree(str(group_files_dir(store, group['id'])), ignore_errors=True)
+                        drop_group_files(store, self.server, group)  # with Zook's copies in the members' workspaces (#213)
                         store.data['schedules'] = [x for x in store.data['schedules'] if x.get('groupId') != group['id']]
                         store.save(); return self.respond(200, {'ok': True})
                     if len(parts) == 4 and parts[3] == 'messages' and self.command == 'POST':

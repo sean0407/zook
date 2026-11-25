@@ -117,14 +117,35 @@
     const files = state.groupFiles[g.id];
     if (!files) { setTimeout(() => loadGroupFiles(g), 0); return '<div class="detail-empty">正在讀取檔案…</div>'; }
     const base = '/api/groups/' + encodeURIComponent(g.id) + '/files/';
-    return `<div class="group-files"><button type="button" class="secondary" data-action="group-file-pick">＋ 上傳檔案</button><input type="file" id="group-file-input" multiple hidden>${files.length ? files.map(f => `<div class="group-file"><a href="${base}${encodeURIComponent(f.name)}" download="${esc(f.name)}" title="下載"><strong>${esc(f.name)}</strong><small>${esc([fileSize(f.size), f.by].filter(Boolean).join(' · '))}</small></a><button type="button" class="link danger" data-action="group-file-delete" data-id="${esc(f.name)}">刪除</button></div>`).join('') : '<div class="detail-empty">還沒有檔案。成員都能讀取和存入。</div>'}<small class="muted">單檔 20 MB，每個群組 200 MB。</small></div>`;
+    const note = state.groupFileNote?.[g.id];
+    return `<div class="group-files"><button type="button" class="secondary" data-action="group-file-pick">＋ 上傳檔案</button><input type="file" id="group-file-input" multiple hidden>${note ? `<div class="group-file-note${note.failed.length ? ' has-failed' : ''}" role="status"><span>${esc(note.failed.length ? `${note.ok ? `已上傳 ${note.ok} 個；` : ''}${note.failed.length} 個沒有上傳：` : fileSummary(note.ok, []))}</span>${note.failed.length ? `<ul>${note.failed.map(x => `<li><strong title="${esc(x.name)}">${esc(midName(x.name))}</strong>：${esc(x.reason)}</li>`).join('')}</ul>` : ''}</div>` : ''}${files.length ? files.map(f => `<div class="group-file"><a href="${base}${encodeURIComponent(f.name)}" download="${esc(f.name)}" title="下載 ${esc(f.name)}"><strong title="${esc(f.name)}">${esc(f.name)}</strong><small>${esc([fileSize(f.size), f.by].filter(Boolean).join(' · '))}</small></a><button type="button" class="link danger" data-action="group-file-delete" data-id="${esc(f.name)}">刪除</button></div>`).join('') : '<div class="detail-empty">還沒有檔案。成員都能讀取和存入。</div>'}<small class="muted">單檔 20 MB，每個群組 200 MB。</small></div>`;
   }
+  // Several files at once (#150): each one is tried, a bad one is skipped, and the end says which went in and which did not, and why.
   async function uploadGroupFiles(g, list) {
+    const ok = [], failed = [];
+    state.groupFileNote = state.groupFileNote || {};
     for (const f of list) {
-      const res = await fetch('/api/groups/' + encodeURIComponent(g.id) + '/files', {method: 'POST', headers: {'X-File-Name': encodeURIComponent(f.name), 'Content-Type': 'application/octet-stream'}, body: f});
-      if (!res.ok) { toast((await res.json().catch(() => ({}))).error || '上傳失敗'); break; }
+      try {
+        const res = await fetch('/api/groups/' + encodeURIComponent(g.id) + '/files', {method: 'POST', headers: {'X-File-Name': encodeURIComponent(f.name), 'Content-Type': 'application/octet-stream'}, body: f});
+        if (res.ok) { ok.push(f.name); continue; }
+        failed.push({name: f.name, reason: (await res.json().catch(() => ({}))).error || '上傳失敗'});
+      } catch (e) { failed.push({name: f.name, reason: '連不上 Zook，沒有上傳'}); }
     }
+    state.groupFileNote[g.id] = {ok: ok.length, failed};
+    toast(fileSummary(ok.length, failed));
     await loadGroupFiles(g);
+  }
+  // One summary for several files, used by the group's files and the message box alike: 「已上傳 2 個；1 個沒有上傳：空檔.txt（檔案是空的）」.
+  function fileSummary(ok, failed, verb = '上傳') {
+    const done = ok ? `已${verb} ${ok} 個` : `沒有${verb}任何檔案`;
+    if (!failed.length) return done;
+    return `${done}；${failed.length} 個沒有${verb}：` + failed.map(x => `${midName(x.name)}（${String(x.reason).replace(/[。.]+$/, '')}）`).join('、');
+  }
+  // A long file name shortened in the middle, so its end and extension still show (報告⋯⋯第三季.xlsx).
+  function midName(name, max = 32) {
+    const s = String(name || ''); if ([...s].length <= max) return s;
+    const chars = [...s], dot = s.lastIndexOf('.'), ext = dot > 0 && s.length - dot <= 10 ? [...s.slice(dot)].length : 0, tail = Math.min(ext + 6, max - 6);
+    return chars.slice(0, max - tail - 1).join('') + '…' + chars.slice(-tail).join('');
   }
 
   // A member's own window on a group discussion: for each time it spoke, what it looked up and which Skills it used on the way,
