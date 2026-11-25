@@ -324,6 +324,14 @@
     }
   }
   // Dropdown: open/close, pick an option, close on outside click or Escape.
+  // Where a dropdown's menu opens and how tall it may be: whole when the window has room below or above the button (so the
+  // last choice and its hint are never cut off, #96④/#53③), otherwise on the roomier side, scrolling, inside the window.
+  function menuPlace(top, bottom, natural, height) {
+    const below = height - bottom - 14, above = top - 14, want = Math.min(natural, 520);
+    if (want <= below) return {top: bottom + 6, maxHeight: want};
+    if (want <= above) return {top: top - 6 - want, maxHeight: want};
+    return below >= above ? {top: bottom + 6, maxHeight: Math.max(below, 0)} : {top: 8, maxHeight: Math.max(above, 0)};
+  }
   const closeDropdowns = except => document.querySelectorAll('.dd.open').forEach(d => { if (d !== except) { d.classList.remove('open'); d.querySelector('.dd-btn').setAttribute('aria-expanded', 'false'); } });
   // The launcher menu closes when anything outside it is clicked, or Escape is pressed.
   // Listened for on the way down, so a click that another handler stops (a dropdown) still closes it.
@@ -349,9 +357,10 @@
         const r = btn.getBoundingClientRect(), menu = dd.querySelector('.dd-menu');
         setTimeout(() => { if (dd.classList.contains('open')) (dd.querySelector('.dd-opt.selected:not([hidden])') || dd.querySelector('.dd-opt:not([hidden])'))?.focus({preventScroll: true}); });  // the arrow keys start from the current choice
         menu.style.minWidth = Math.max(r.width, 220) + 'px';
-        menu.style.top = (r.bottom + 6) + 'px';
+        menu.style.maxHeight = '';
+        const at = menuPlace(r.top, r.bottom, menu.scrollHeight + menu.offsetHeight - menu.clientHeight, innerHeight);  // with its border
+        Object.assign(menu.style, {top: at.top + 'px', maxHeight: at.maxHeight + 'px'});
         menu.style.left = Math.max(8, Math.min(r.right - Math.max(menu.offsetWidth, r.width, 220), innerWidth - menu.offsetWidth - 8)) + 'px';
-        if (r.bottom + 6 + menu.offsetHeight > innerHeight - 8) menu.style.top = Math.max(8, r.top - 6 - menu.offsetHeight) + 'px';
       }
       e.stopPropagation(); return;
     }
