@@ -144,7 +144,8 @@
           render(true);
           break;
         case 'dir-tab':
-          state.page = id; render();
+          if (el.dataset.clear !== undefined) state.dirQuery = '';
+          await loadPage(id); render();  // reads the list again: a plugin installed meanwhile shows up
           break;
         case 'dir-filter':
           state.dirFilter = id; render(true);

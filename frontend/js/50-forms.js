@@ -152,7 +152,8 @@
       try {
         state.data.settings = await post('settings', {[key]: [...set]}, 'PATCH');
         if (kind === 'plugin') state.integrations = await api('integrations');
-        render(true); toast(turnOn ? '已開啟' : '已關閉');
+        const what = {skill: '這個 Skill', mcp: '這個連接器', plugin: '這個插件'}[kind] || '';
+        render(true); toast(turnOn ? `已開放${what}給所有 Bot` : `已停用${what}，所有 Bot 都不會再用它`);
       } catch (err) { e.target.checked = !turnOn; e.target.disabled = false; toast(err.message); }
       return;
     }

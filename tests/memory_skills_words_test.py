@@ -51,12 +51,13 @@ class SkillsAndConnectors(unittest.TestCase):
 
     def test_an_empty_plugins_tab_says_what_to_do(self):
         self.assertIn('還沒有插件', self.models)
-        self.assertIn('/plugin', self.models)
+        self.assertIn('Claude Code 的「插件」管理', self.models)
+        self.assertIn("await loadPage(id); render();", self.actions)
         self.assertIn('data-action="dir-tab" data-id="skills"', self.models)
 
     def test_switched_off_skills_say_so(self):
         self.assertIn("SKILLS_OFF = '未啟用'", self.models)
-        self.assertIn('所有 Bot 都不會再用它', self.actions)
+        self.assertIn('所有 Bot 都不會再用它', JS('50-forms.js'))  # the card switch is a change event
 
     def test_import_names_the_skills(self):
         self.assertIn("r.imported.join('、')", self.actions)

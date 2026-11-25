@@ -12,7 +12,7 @@
     state.catalog.filter(i => !i.added && (!q || (i.name + i.about + i.category).toLowerCase().includes(q))).forEach(i => (groups[i.category] = groups[i.category] || []).push(i));
     const card = i => {
       const [label, hint] = CATALOG_AUTH[i.auth], busy = state.catalogBusy;
-      const action = i.auth === 'manual' ? `<button class="link" data-action="catalog-why" data-id="${esc(i.id)}">為什麼不行？</button>` : `<button class="${i.auth === 'key' ? 'secondary' : 'primary'} small-btn" data-action="catalog-add" data-id="${esc(i.id)}" aria-label="${esc(label + '「' + i.name + '」')}" ${busy ? 'disabled' : ''}>${busy === i.id ? '處理中…' : label}</button>`;
+      const action = i.auth === 'manual' ? `<button class="link" data-action="catalog-why" data-id="${esc(i.id)}" aria-label="${esc(i.name + ' 為什麼不行？')}">為什麼不行？</button>` : `<button class="${i.auth === 'key' ? 'secondary' : 'primary'} small-btn" data-action="catalog-add" data-id="${esc(i.id)}" aria-label="${esc(label + '「' + i.name + '」')}" ${busy ? 'disabled' : ''}>${busy === i.id ? '處理中…' : label}</button>`;
       const failed = state.catalogErrors?.[i.id];
       return `<article class="dir-card catalog-card ${i.auth === 'manual' ? 'off' : ''}">${itemIcon(i.name, i.icon)}<div class="dir-body"><div class="dir-title"><h3 title="${esc(i.name)}">${esc(i.name)}</h3>${action}</div><p class="dir-desc">${esc(i.about.replace(/。$/, ''))}</p><div class="dir-meta"><span>由 ${esc(i.vendor || i.name)} 提供 · ${esc(hint)}</span></div>${failed ? `<p class="dir-note error-text">沒有連上：${esc(failed)}</p>` : ''}</div></article>`;
     };
