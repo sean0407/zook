@@ -298,7 +298,7 @@ def describe_request(method, parts, body, hint, result):
         if n == 4 and parts[3] == 'run': return 'schedule', '手動執行排程' + named
         return None
     if area == 'knowledge':
-        if method == 'POST': return 'data', '新增知識「%s」' % str(body.get('title') or '')[:60]
+        if method == 'POST': return 'data', '新增知識「%s」' % str(body.get('title') or result.get('title') or '')[:60]
         return 'data', ('刪除知識' if method == 'DELETE' else '修改知識') + named
     if area == 'memories' and method == 'DELETE': return 'data', '刪除一則記憶'
     if area == 'connector-catalog' and method == 'POST': return 'connector', '加入連接器「%s」' % (result.get('name') or parts[-1])
@@ -539,6 +539,7 @@ def state_view(store, whole=False):
     if not whole: view['bots'] = [page_bot(b) for b in store.data['bots']]  # the newest part of each open conversation; older parts are asked for
     if not whole: view['groups'] = [page_group(g) for g in store.data['groups']]
     view.pop('usageArchive', None); view.pop('usageDaily', None); view['rings'] = usage_rings(store)
+    view['knowledge'] = knowledge_view(store)  # a file's text only as a preview (knowledge.py)
     view['deletedBots'] = [{k: b.get(k) for k in ('id', 'name', 'color', 'shape', 'deletedAt')} for b in store.data.get('deletedBots') or []]  # their conversations stay on disk
     return view
 

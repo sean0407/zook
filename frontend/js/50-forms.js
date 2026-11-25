@@ -446,19 +446,7 @@
         const next = scheduleNext(saved || {});
         toast(next ? `已儲存排程，下次執行：${nextLabel(next)}` : '已儲存排程');
       } else if (form.id === 'note-form') {
-        let d = new FormData(form),
-          id = form.dataset.id;
-        let data = {
-          title: d.get('title').trim(),
-          content: d.get('content'),
-          tags: d.get('tags').split(',').map(x => x.trim()).filter(Boolean),
-          botId: d.get('botId') || ''
-        };
-        if (!id) data.clientId = onceId(form);
-        await post(id ? 'knowledge/' + encodeURIComponent(id) : 'knowledge', data, id ? 'PATCH' : 'POST');
-        closeModal();
-        await refresh();
-        toast('已儲存知識')
+        await saveNote(form, form.dataset.id ? '' : onceId(form));  // 36c-knowledge.js; a typed one is made once however often 儲存 is pressed
       } else if (form.id === 'settings-form') {
         let d = new FormData(form);
         await post('settings', {

@@ -73,7 +73,8 @@ def sync_items(store):
             items['chats:%s:%s' % (bot['id'], chat['id'])] = dict(title=chat.get('title') or '', kind=chat.get('kind') or '', createdAt=chat.get('createdAt') or '', updatedAt=chat.get('updatedAt') or '',
                                                                  messages=[m for m in messages if m.get('status') != 'running'])
     for note in store.data['knowledge']:
-        items['knowledge:' + note['id']] = {k: note.get(k) for k in ('title', 'content', 'botId', 'tags', 'createdAt', 'updatedAt') if note.get(k) is not None}
+        if not knowledge_usable(note): continue  # a file still being read (or one that failed) goes once its text is there; the file itself stays here
+        items['knowledge:' + note['id']] = {k: note.get(k) for k in ('title', 'content', 'botId', 'tags', 'source', 'createdAt', 'updatedAt') if note.get(k) is not None}
     for memory in store.data.get('memories') or []:
         items['memories:' + memory['id']] = {k: memory.get(k) for k in ('content', 'botId', 'createdBy', 'createdAt') if memory.get(k) is not None}
     settings = store.data['settings']
@@ -126,8 +127,10 @@ def sync_clean(key, value):
     if parts[0] == 'knowledge' and len(parts) == 2:
         tags = value.get('tags', [])
         if not _text(value.get('title'), 300) or not _text(value.get('content'), 100000) or not _text(value.get('botId', ''), 100): return None
-        if not isinstance(tags, list) or len(tags) > 30 or any(not _text(t, 100) for t in tags): return None
-        return dict(title=value['title'], content=value['content'], botId=value.get('botId', ''), tags=tags, createdAt=str(value.get('createdAt') or '')[:40], updatedAt=str(value.get('updatedAt') or '')[:40])
+        if not isinstance(tags, list) or len(tags) > 30 or any(not _text(t, 100) for t in tags) or not _text(value.get('source', ''), 300): return None
+        out = dict(title=value['title'], content=value['content'], botId=value.get('botId', ''), tags=tags, createdAt=str(value.get('createdAt') or '')[:40], updatedAt=str(value.get('updatedAt') or '')[:40])
+        if value.get('source'): out['source'] = value['source']  # only the name of the file it was read from, shown on its card
+        return out
     if parts[0] == 'memories' and len(parts) == 2:
         if not _text(value.get('content'), 5000) or not _text(value.get('botId', ''), 100) or not _text(value.get('createdBy', ''), 100): return None
         return dict(content=value['content'], botId=value.get('botId', ''), createdBy=value.get('createdBy', ''), createdAt=str(value.get('createdAt') or '')[:40])

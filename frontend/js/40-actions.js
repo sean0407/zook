@@ -385,12 +385,14 @@
         case 'edit-note':
           noteModal(state.data.knowledge.find(n => n.id === id));
           break;
-        case 'delete-note':
-          if (await ask({title: '刪除這則知識？', lines: ['刪除後無法復原，Bot 之後不會再參考它。'], run: () => api('knowledge/' + encodeURIComponent(id), {method: 'DELETE'})})) {
+        case 'delete-note': {
+          const note = state.data.knowledge.find(n => n.id === id);
+          if (await ask({title: '刪除「' + (note?.title || '這則知識') + '」？', lines: [note?.source ? '會一併刪除上傳的檔案「' + note.source + '」。' : '', '刪除後無法復原，Bot 之後不會再參考它。'], run: () => api('knowledge/' + encodeURIComponent(id), {method: 'DELETE'})})) {
             await refresh();
             toast('已刪除知識')
           }
           break;
+        }
         case 'delete-bot': {
           const botId = $('#bot-form').dataset.id, name = state.data.bots.find(b => b.id === botId)?.name || '這個 Bot';
           const inGroups = (state.data.groups || []).filter(g => (g.botIds || []).includes(botId));
