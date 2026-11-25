@@ -279,6 +279,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             if item is None:
                 item = {'id': event.get('id', ID()), 'createdAt': NOW()}; calls.append(item)
             if job_id in self.__dict__.get('job_activity', {}): self.job_activity[job_id] = time.monotonic()  # using a tool is a sign of work
+            progress_touch(job_id)
             if event.get('autoApproved') and not item.get('autoApproved') and event.get('category', item.get('category')) in ('external_write', 'danger', 'code'):  # a program run without asking is noted too
                 log_activity(self.store, 'tool', '未詢問即執行：%s（%s）' % (describe_call(dict(item, **event)), self.target_name('bot', job['botId'])), by='Zook')
             for key in ('name', 'source', 'status', 'arguments', 'resultSummary', 'error', 'label', 'sourceLabel', 'category', 'autoApproved'):
@@ -608,12 +609,13 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 args += effort_args('claude', effort)
                 if keep_session: args.remove('--no-session-persistence')
                 if resume: args += ['--resume', resume]
-            feed = resume_feed(store, job_id, kind, keep_session, resume, partial_feeder(kind, job_id) if streaming else None, (provider, model, account, cli_cwd))  # resume.py
+            feed = resume_feed(store, job_id, kind, keep_session, resume, progress_feeder(kind, job_id, partial_feeder(kind, job_id) if streaming else None), (provider, model, account, cli_cwd))  # resume.py
             with store.lock:
                 job = store.find('jobs', job_id)
                 if not job or job['status'] != 'running': return
                 started_at = time.time()
                 if streaming: partial_start(job)
+                progress_start(job_id)  # progress.py
                 # A conversation's CLI may be kept open between messages (live.py); otherwise it is started for this one reply.
                 kept = live_turn(self, job, provider, kind, args, cli_cwd, env, resume, prompt, feed)
                 proc = kept or bg_popen(self, job, args, cli_cwd, env, stdin_prompt, kind)  # under a runner when it may go on while Zook is closed (background.py)
@@ -637,6 +639,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                     if asking: deadline += now - began; active[job_id] = now; continue  # time spent waiting for the user does not count
                     if now - max(pipes.last, active.get(job_id, 0)) >= quiet_limit: stopped_for = quiet_reason(kind, quiet_limit)
                     elif now >= deadline: stopped_for = '已超過時間上限。'
+                    if job_id in FORCED: stopped_for = '已強制停止。'  # 強制停止: its output is not waited for any longer (progress.py)
                     if stopped_for: raise subprocess.TimeoutExpired(args, quiet_limit)
                 output, stderr = pipes.result()
                 ended_by = getattr(getattr(getattr(proc, 'cli', None), 'proc', None) or proc, 'stopped', '')  # its runner ended it (background.py)
@@ -729,7 +732,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
         finally:
             partial_end(job_id)  # only now: the words stay on screen until the reply is marked finished, or another model starts
             with store.lock:
-                self.processes.pop(job_id, None)
+                self.processes.pop(job_id, None); progress_end(job_id)
                 self.expire_job(job_id); store.save()
             if session: session.close()
             with store.lock: busy = any(j['botId'] == bot['id'] and j['id'] != job_id and j['status'] == 'running' for j in store.data['jobs'])
@@ -905,12 +908,13 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
         with self.store.lock:
             self.store.data.setdefault('quota', {})[provider + ('@' + account_id if account_id else '')] = snap; self.store.save()
 
-    def cancel_job(self, job):
-        # Caller holds the store lock.
-        if job['status'] != 'running': return
-        job.update(status='cancelled', finishedAt=NOW()); self.store.finish_message(job, '', 'cancelled'); self.store.save()
-        worker = self.expire_job(job['id']); self.store.save()
-        if worker: threading.Thread(target=worker['session'].close, daemon=True).start()
-        proc = self.processes.get(job['id'])
-        if proc: terminate_tree(proc)
-        elif job.get('reattach'): bg_stop(self, job)  # taken up after a restart, not reached yet (background.py)
+    def cancel_job(self, job, force=False):
+        # Caller holds the store lock. force (強制停止, progress.py): a stopped reply whose CLI has not ended yet is killed now.
+        if job['status'] == 'running':
+            job.update(status='cancelled', finishedAt=NOW()); self.store.finish_message(job, '', 'cancelled'); self.store.save()
+            worker = self.expire_job(job['id']); self.store.save()
+            if worker: threading.Thread(target=worker['session'].close, daemon=True).start()
+            proc = self.processes.get(job['id'])
+            if proc: progress_stop(job['id'], proc); terminate_tree(proc)
+            elif job.get('reattach'): bg_stop(self, job)  # taken up after a restart, not reached yet (background.py)
+        if force: progress_force(self, job['id'])

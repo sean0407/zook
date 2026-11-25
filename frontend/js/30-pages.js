@@ -292,7 +292,8 @@
       const changed = JSON.stringify(state.jobDetails[jobId]) !== JSON.stringify(j);
       state.jobDetails[jobId] = j;
       if (changed) render(true);
-      if (j.status === 'running' || j.status === 'queued') {
+      if (j.status === 'running' || j.status === 'queued' || j.stopping) {  // stopped, its CLI still ending: watched until it is gone (37b-progress.js)
+        if (state.pollers[jobId]) state.pollers[jobId].stopping = j.status !== 'running' && j.status !== 'queued';
         setTimeout(() => poll(jobId, botId), 1200);
         return
       }

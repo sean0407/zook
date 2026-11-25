@@ -185,7 +185,7 @@
         case 'stop-group':
           await post('groups/' + encodeURIComponent(id) + '/stop');
           toast('已停止討論');
-          await refresh();
+          await refresh(); pollGroup(id);  // a member whose CLI is still ending shows 正在停止 (37b-progress.js)
           break;
         case 'mention': {
           const input = $('#chat-input');
@@ -564,8 +564,13 @@
           render(true);
           break;
         case 'cancel-job':
+          stopAsked(id);
           await post('jobs/' + encodeURIComponent(id) + '/cancel');
           toast('正在停止回覆');
+          break;
+        case 'force-stop':
+          el.disabled = true;
+          await forceStop(id);
           break;
         case 'share': {
           const g = activeGroup();

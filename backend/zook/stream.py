@@ -35,6 +35,7 @@ def job_view(job):
     """A job as the window and the phone get it: while it runs, with what has been written so far."""
     text = partial_text(job['id']) if job.get('status') == 'running' else ''
     view = {k: v for k, v in job.items() if k not in ('thinking', 'cliSession', 'cliPid', 'runner')}  # a CLI's thinking is fetched with a member's work only; its conversation id stays on the Mac
+    view.update(progress_view(job))  # what it has done so far, and whether a stopped one is still ending (progress.py)
     return dict(view, partial=text) if text else view
 
 
