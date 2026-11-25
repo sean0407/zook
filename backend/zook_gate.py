@@ -70,13 +70,14 @@ GIT_VALUED = {'-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-pr
 GIT_FLAGS = {'-p', '--paginate', '-P', '--no-pager', '--bare', '--no-replace-objects', '--literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs',
              '--icase-pathspecs', '--no-optional-locks', '--html-path', '--man-path', '--info-path', '--version', '--help', '-v', '-h', '--no-lazy-fetch', '--no-advice'}
 GREP_VALUED = {'-e', '-f', '-m', '-A', '-B', '-C', '--regexp', '--file', '--max-count', '--include', '--exclude', '--exclude-dir', '--context', '--after-context',
-               '--before-context', '--label', '-g', '--glob', '-t', '--type', '-T', '--type-not', '-M', '--max-columns', '--max-depth', '-j', '--threads', '--iglob'}
+               '--before-context', '--label', '-g', '--glob', '-t', '--type', '-T', '--type-not', '-M', '--max-columns', '--max-depth', '-j', '--threads', '--iglob',
+               '-d', '--directories', '-D', '--devices', '--exclude-from', '--binary-files'}
 # ripgrep's own options that take a value: without them its value (rg --pre /bin/cat -e KEY) was read as the folder searched,
 # so the current folder went unchecked. Not for grep, where -E, -r and -d mean something else.
 RG_VALUED = GREP_VALUED | {'--pre', '--pre-glob', '--sort', '--sortr', '-d', '-E', '--encoding', '--ignore-file', '--type-add', '--type-clear',
                            '--path-separator', '-r', '--replace', '--max-filesize', '--dfa-size-limit', '--regex-size-limit', '--colors', '--color',
                            '--context-separator', '--field-context-separator', '--field-match-separator', '--engine', '--hostname-bin',
-                           '--hyperlink-format', '--generate'}
+                           '--hyperlink-format', '--generate', '--maxdepth'}
 # Inline code (python -c, node -e, a here-document) that may delete, send, run commands or touch keys: it cannot be read reliably.
 CODE_HINTS = re.compile(r'\b(?:os\.(?:remove|unlink|rmdir|removedirs|system|popen|exec\w*|spawn\w*|rename|replace)|shutil\.(?:rmtree|move)|subprocess|send2trash|'
                         r'unlink(?:Sync)?|rmSync|rename\w*\s*\(|File::Copy|fs\.promises|renameSync|moveItem|removeItem|File\.rename|FileUtils|rmdirSync|rm_rf|child_process|execSync|spawnSync|requests\.|httpx|urlopen|urllib|http\.client|smtplib|ftplib|'
@@ -541,13 +542,18 @@ def _rg_list_only(args, whole, depth=0):
             and not any(w.startswith('-') for w in words[2:]))
 
 
+def _options(args):
+    """The words before a bare --: only they can be options."""
+    return list(args[:args.index('--')]) if '--' in args else list(args)
+
+
 def _past_pattern(plain, args, given):
     """The words after the search pattern. given: the pattern was set by its own option (-e KEY, --regexp=KEY), so every word is a path.
     A pattern may also be fixed to its option (-eKEY, -ie KEY), which cannot be told apart from another short option with a value that
     holds an e or f (-gfoo): then every word counts, and the current folder too while at most one word is left, so a folder is never
     missed either way."""
     if given: return plain
-    if any(re.match(r'-(?!-)[A-Za-z]*[ef]', a) for a in args if a != '-'): return plain + (['.'] if len(plain) <= 1 else [])
+    if any(re.match(r'-(?!-)[A-Za-z]*[ef]', a) for a in _options(args) if a != '-'): return plain + (['.'] if len(plain) <= 1 else [])
     return plain[1:]
 
 
@@ -560,15 +566,17 @@ def _search_roots(name, args, whole='', depth=0):
             starts.append(a)
         return starts or ['.'], any(a in ('-exec', '-execdir', '-ok', '-okdir') for a in args)
     if name in ('grep', 'egrep', 'fgrep', 'ggrep'):
-        recursive = any(a in ('-r', '-R', '--recursive', '--dereference-recursive') or re.fullmatch(r'-[a-zA-Z]*[rR][a-zA-Z]*', a) or a.startswith('--directories=recurse') for a in args)
+        opts = _options(args)
+        recursive = any(a in ('-r', '-R', '--recursive', '--dereference-recursive') or re.fullmatch(r'-[a-zA-Z]*[rR][a-zA-Z]*', a) or a in ('--directories=recurse', '-drecurse')
+                        or a in ('-d', '--directories') and opts[i + 1:i + 2] == ['recurse'] for i, a in enumerate(opts))
         plain = _positional(args, GREP_VALUED)
-        plain = _past_pattern(plain, args, any(a in ('-e', '-f', '--regexp', '--file') or a.startswith(('--regexp=', '--file=')) for a in args))  # the first is the pattern
+        plain = _past_pattern(plain, args, any(a in ('-e', '-f', '--regexp', '--file') or a.startswith(('--regexp=', '--file=')) for a in opts))  # the first is the pattern
         return (plain or (['.'] if recursive else [])), recursive
     if name in ('rg', 'ag', 'ack', 'ugrep', 'ripgrep', 'pt', 'fd', 'fdfind', 'tree', 'zip', 'tar', 'cp', 'ditto'):
         if name in ('cp',) and not any(re.fullmatch(r'-[a-zA-Z]*[rRa][a-zA-Z]*', a) for a in args): return None
         if name == 'zip' and not any(re.fullmatch(r'-[a-zA-Z]*r[a-zA-Z]*', a) for a in args): return None
         plain = _positional(args, (RG_VALUED if name in ('rg', 'ripgrep') else GREP_VALUED) | {'-f', '--file', '-C', '--directory'})
-        if name in ('rg', 'ag', 'ack', 'ugrep', 'ripgrep', 'pt'): plain = _past_pattern(plain, args, any(a in ('-e', '-f', '--regexp', '--file', '--files') or a.startswith(('--regexp=', '--file=')) for a in args))
+        if name in ('rg', 'ag', 'ack', 'ugrep', 'ripgrep', 'pt'): plain = _past_pattern(plain, args, any(a in ('-e', '-f', '--regexp', '--file', '--files') or a.startswith(('--regexp=', '--file=')) for a in _options(args)))
         if name in ('tar', 'zip', 'cp', 'ditto'): plain = plain[1:] if name in ('tar', 'zip') else plain[:-1]
         listing = name in ('rg', 'ripgrep') and _rg_list_only(args, whole, depth)  # names only (#138)
         return (plain or ['.']), name not in ('fd', 'fdfind', 'tree') and not listing

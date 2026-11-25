@@ -60,9 +60,11 @@ class ListingFilesIsNotKeys(unittest.TestCase):
     @classmethod
     def setUpClass(cls): cls.m = load()
 
-    def setUp(self): self.cwd = os.getcwd(); os.chdir(os.path.expanduser('~'))
+    def setUp(self):
+        self.cwd = os.getcwd(); os.chdir(os.path.expanduser('~'))
+        self.gate = self.m._gate(); self.was = self.gate._CWD[0]; self.gate._CWD[0] = os.path.expanduser('~')  # commands run in the home folder
 
-    def tearDown(self): os.chdir(self.cwd)
+    def tearDown(self): os.chdir(self.cwd); self.gate._CWD[0] = self.was
 
     def test_rg_files_only_lists_names(self):
         gate = self.m._gate()
@@ -109,9 +111,10 @@ class SearchRootsFromASafeFolder(unittest.TestCase):
     @classmethod
     def setUpClass(cls): cls.m = load()
 
-    def setUp(self): self.cwd = os.getcwd(); self.temp = tempfile.TemporaryDirectory(); os.chdir(self.temp.name)
+    def setUp(self):
+        self.gate = self.m._gate(); self.was = self.gate._CWD[0]; self.temp = tempfile.TemporaryDirectory(); self.gate._CWD[0] = self.temp.name  # the folder commands run in
 
-    def tearDown(self): os.chdir(self.cwd); self.temp.cleanup()
+    def tearDown(self): self.gate._CWD[0] = self.was; self.temp.cleanup()
 
     def kinds(self, line): return [k for k, _ in self.m._gate().command_boundaries(line)]
 
@@ -119,6 +122,10 @@ class SearchRootsFromASafeFolder(unittest.TestCase):
         for line in ('rg --hidden --no-ignore -e KEY -- --pre ~',  # after --, --pre is a path, not an option taking ~
                      'rg --hidden --no-ignore --pre /bin/cat -e TOKEN ~', 'rg --hidden --no-ignore --regexp=KEY ~', 'rg --hidden --no-ignore -eKEY ~',
                      'rg -gfoo KEY ~', 'rg KEY ~', 'grep -r --regexp=KEY ~', 'grep -reKEY ~', 'grep -r -- KEY ~', 'rg --sort path KEY ~'):
+            self.assertIn('secret', self.kinds(line), line)
+        self.gate._CWD[0] = os.path.expanduser('~')  # these search the current folder: from home it holds keys
+        for line in ('rg -- --files', 'rg -- --regexp=KEY', 'grep -r -- --regexp=KEY', 'rg --maxdepth 1 TOKEN', 'ggrep -d recurse TOKEN',
+                     'ggrep --directories recurse TOKEN', 'ggrep -D skip -r TOKEN', 'grep -drecurse TOKEN'):
             self.assertIn('secret', self.kinds(line), line)
 
     def test_safe_folder_alone_is_fine(self):
