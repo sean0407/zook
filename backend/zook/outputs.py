@@ -167,3 +167,16 @@ def output_response(item):
     if item['kind'] == 'pdf': return data, 'application/pdf'
     if item['kind'] in ('text', 'markdown'): return data, 'text/plain; charset=utf-8'
     return data, 'application/octet-stream'
+
+
+# 這段對話的資料夾 (#241): where a conversation's files go when the user names no place, instead of the real Desktop. Inside the
+# Bot's own workspace, so every access setting may write there and 產出 lists it.
+CHAT_FILES = 'chat-files'
+CHAT_FOLDER_NOTE = '使用者沒指定存放位置時，交出的檔案存到這段對話的資料夾：%s（不要存到桌面、下載或家目錄）。使用者指定了位置就照指定的存。'
+
+
+def chat_folder(store, bot_id, chat_id, make=True):
+    name = re.sub(r'[^A-Za-z0-9_-]', '', str(chat_id or ''))[:64] or 'default'
+    folder = store.dir / 'workspaces' / re.sub(r'[^A-Za-z0-9_-]', '', str(bot_id)) / CHAT_FILES / name
+    if make: folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return folder
