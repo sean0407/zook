@@ -608,6 +608,7 @@ class Handler(BaseHTTPRequestHandler):
                 meta = dict(id=upload_id, name=name, origName=upload_original(unquote(self.headers.get('X-File-Name', ''))), size=size, kind='image' if pathlib.Path(name).suffix.lower() in IMAGE_TYPES else 'file', createdAt=NOW())
                 (folder / 'meta.json').write_text(json.dumps(meta, ensure_ascii=False), encoding='utf-8')
                 return self.respond(201, meta)
+            if path == '/api/knowledge/file' and self.command == 'POST' and not self.device: return knowledge_upload(self, store)  # read in the background (knowledge.py)
             if len(parts) == 4 and parts[:2] == ['api', 'groups'] and parts[3] == 'files' and self.command == 'POST' and not self.device:
                 try: size = int(self.headers.get('Content-Length', '0'))
                 except ValueError: size = 0
@@ -872,7 +873,7 @@ class Handler(BaseHTTPRequestHandler):
                     bot = store.find('bots', parts[2])
                     if not bot: return self.error(404, '找不到機器人。')
                     if any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs']): return self.error(409, '此機器人已有執行中的工作。')
-                    if any(item.get('botId') == bot['id'] for item in store.data['knowledge']): return self.error(409, '請先將此 Bot 的知識移至其他 Bot 或共用知識。')
+                    if any(item.get('botId') == bot['id'] for item in store.data['knowledge']): return self.error(409, '這個 Bot 還有只給它用的知識庫項目，請先把「給誰用」改成所有 Bot 或其他 Bot。')
                     if any(g['status'] == 'running' and bot['id'] in g['botIds'] for g in store.data['groups']): return self.error(409, '此機器人正在群組討論中。')
                     bot_leaves_groups(store, bot)
                     store.data['schedules'][:] = [x for x in store.data['schedules'] if x.get('botId') != bot['id']]
@@ -883,15 +884,7 @@ class Handler(BaseHTTPRequestHandler):
                     if 'remote' in body: threading.Thread(target=self.server.sync_remote, daemon=True).start()
                     if 'permissionMode' in body: self.server.release_approvals()
                     return self.respond(200, store.data['settings'])
-                if path == '/api/knowledge' and self.command == 'POST':
-                    item = dict(id=ID(), title='', content='', tags=[], botId='', createdAt=NOW(), updatedAt=NOW()); body = self.body()
-                    if (again := create_seen(self, 'knowledge', body)): return self.respond(200, dict(again, duplicate=True))
-                    update(item, body, 'knowledge'); store.data['knowledge'].append(item); store.save(); return self.respond(201, item)
-                if len(parts) == 3 and parts[:2] == ['api', 'knowledge']:
-                    item = store.find('knowledge', parts[2])
-                    if not item: return self.error(404, '找不到知識項目。')
-                    if self.command == 'DELETE': store.data['knowledge'].remove(item); store.save(); return self.respond(200, {'ok': True})
-                    if self.command == 'PATCH': update(item, self.body(), 'knowledge'); item['updatedAt'] = NOW(); store.save(); return self.respond(200, item)
+                if path == '/api/knowledge' or (len(parts) == 3 and parts[:2] == ['api', 'knowledge']): return knowledge_route(self, store, parts, path)  # 知識庫 (knowledge.py)
             if self.command == 'GET' and not path.startswith('/api/'):
                 relative = unquote(path).lstrip('/') or 'index.html'; target = (self.server.assets / relative).resolve()
                 parts_dir = self.server.assets / 'js'
@@ -927,6 +920,7 @@ def main():
     app.auto_refreshed = time.time()
     live_learn(app); local_migrate(app.store)  # this Mac's own settings for Bots from before (gate.py)
     threading.Thread(target=auto_migrate, args=(app.store,), daemon=True).start()  # Bots on 自動選擇 from before get their model once (routing.py)
+    knowledge_start(app.store)  # files whose reading was cut short (knowledge.py)
     try: app.serve_forever()
     except KeyboardInterrupt: pass
     finally:
