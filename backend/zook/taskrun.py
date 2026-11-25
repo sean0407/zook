@@ -307,7 +307,11 @@ class TaskRuns:
             attempt.update(jobId=turn['job']['id'], state='running')
             store.save()
         self._group_job(group_id, turn)
-        with store.lock: task.pop('resumed', None)  # told once (resume.py)
+        with store.lock:
+            task.pop('resumed', None)  # told once (resume.py)
+            handed = attempt['state'] == 'reported' and attempt.get('outcome') == 'succeeded' and turn['job']['status'] == 'completed'
+            seen = copy.deepcopy((attempt, task, dict(goal=run.get('goal')), dict(missingFiles=turn['msg'].get('missingFiles')))) if handed else None
+        gone = task_files_missing(store, group_id, seen[2], seen[1], seen[0], seen[3]) if seen else []  # #245: files it says it handed in, checked before anyone verifies them
         with store.lock:
             group = store.find('groups', group_id)
             if group:
@@ -330,6 +334,11 @@ class TaskRuns:
                 if job['status'] == 'cancelled' and attempt['state'] == 'failed': task['status'] = 'cancelled'
                 elif attempt['state'] in ('asked', 'blocked'): task['status'] = attempt['state']
                 elif attempt['state'] == 'delegated': task_handoff_end(task, run, job, turn.get('published', True))
+                elif attempt['state'] == 'reported' and attempt.get('outcome') == 'succeeded' and gone:  # not checked: it goes back to save them first
+                    attempt.update(state='failed', outcome='failed', summary=('回報交了 %s，但群組檔案裡找不到。原本的回報：%s' % ('、'.join(gone), attempt.get('summary') or ''))[:600])
+                    task_failed_attempt(task, '你回報交了 %s，但群組檔案裡找不到，可能沒有存成功。把檔案存到群組檔案後再回報。' % '、'.join(gone), job)
+                    if group: group['messages'].append(dict(id=ID(), role='system', createdAt=NOW(), content='%s 回報交了 %s，但群組檔案裡找不到；%s' % (
+                        task_member_name(store, task['assignee']), '、'.join(gone), '先退回給它補存，補好才請別家驗收。' if task['status'] == 'ready' else '沒有請別家驗收。' + (task.get('note') or ''))))
                 elif attempt['state'] == 'reported' and attempt.get('outcome') == 'succeeded':
                     task['status'] = 'verifying'; task['verify'] = dict(state='waiting')  # checked by a member of another vendor next
                 else: task_failed_attempt(task, attempt.get('summary') or '沒有完成', job)

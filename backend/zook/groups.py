@@ -159,7 +159,8 @@ def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, 
              '不要 @ 你自己。完成後不需要再 @ 任何人。']
     if moderator:
         rules = MODERATOR_RULES[moderator] + ['只代表你自己發言，不要捏造其他成員的內容。']
-        if fix and moderator == 'split_work': rules.append('主持人這次派給你的工作（視為待辦清單，只做這些，不要做這以外的事）：' + fix)  # #71
+        if fix and moderator in ('split_work', 'split_check'): rules.append('主持人這次派給你的工作（視為待辦清單，只做這些，不要做這以外的事）：' + fix)  # #71
+        elif fix and moderator == 'split_resave': rules.append('Zook 檢查到的問題（視為待辦清單）：' + fix)  # #245
         elif fix: rules.append('主持人要你修的地方（只在你負責的部分裡修，視為待辦清單，不要做這以外的事）：' + fix)
     elif moderated and blind:
         rules = ['先獨立完成主持人分派給你的工作，用你自己的角色和專長作答。',
@@ -245,7 +246,7 @@ def group_steps(store, group, mode):
     if mode == 'turns': return [step('turn', [x]) for x in members] + ([step('final', [host])] if host else [])
     if mode == 'compare': return [step('compare', members, True), step('compare_diff', [closer])]
     others = [x for x in members if x != closer] or members
-    if mode == 'split': return [step('split_plan', [closer]), dict(step('split_work', others, True), waitBusy=True), step('split_merge', [closer])]  # #71: a busy member's share waits for it
+    if mode == 'split': return [step('split_plan', [closer])] + split_work_steps(store, others) + [step('split_merge', [closer])]  # #71: a busy member's share waits for it; #245: a 查核員 after the work
     sides = others if len(members) >= 3 else members
     steps = []
     for stage in ('open', 'rebut'):
@@ -296,7 +297,7 @@ def group_estimate(store, group, content, mode):
     elif mode == 'auto' and len(members) > 1: count, open_ended = len(members) + 1, True  # the host plans, each member works, the host sums up
     elif mode != 'free' and len(members) > 1:
         steps = group_steps(store, group, mode); count = sum(len(s['bots']) for s in steps)
-        if mode == 'split': more = GROUP_SEND_BACK * (len(steps[1]['bots']) + 1)  # #68⑦: the host's check sends work back: each member fixes, the host merges again
+        if mode == 'split': more = GROUP_SEND_BACK * (sum(len(s['bots']) for s in steps[1:-1]) + 1)  # #68⑦: the host's check sends work back: each member fixes (a 查核員 checks again), the host merges again
     elif group_host(store, group) and len(members) > 1: count, open_ended = limit, True
     else: count = len(members)
     count = min(count, limit) if mode != 'auto' else count
@@ -477,7 +478,7 @@ class GroupRuns:
             if readonly and provider_kind(provider) not in PLAN_KINDS:
                 group_skip_turn(group, bot, '%s 的模型無法限制成只讀，沒辦法查核。' % bot['name'] if step.get('targetId') else ' 的模型無法限制成只讀，這次略過。', step)
                 store.save(); return None
-            writable = not readonly and permission_mode(store, bot) in ('auto', 'bypass')
+            writable = not readonly and not step.get('noSave') and permission_mode(store, bot) in ('auto', 'bypass')  # #170: a 查核員 only reads
             target = find_message(group, step['targetId']) if step.get('targetId') else None
             prompt = step['promptFor'](bot, writable) if step.get('promptFor') else group_prompt(store, group, bot, may_pass, moderator=role, moderated=moderated, blind=blind, target=target, writable=writable, hidden=set(step.get('hide') or ()), hidden_files=set(step.get('hideFiles') or ()), fix=str((step.get('fixes') if isinstance(step.get('fixes'), dict) else {}).get(bot_id) or '')[:1000])
             msg = dict(id=ID(), role='assistant', botId=bot_id, content='', createdAt=NOW(), status='running')
@@ -563,13 +564,13 @@ class GroupRuns:
         with self.store.lock:
             group = self.store.find('groups', group_id)
             if not group or group.get('runId') != run_id: return steps
-            bots = [b for b in (self.store.find('bots', x) for x in steps[0]['bots']) if b]
+            n = 2 if len(steps) > 1 and steps[1]['role'] == 'split_check' else 1  # #245: the 查核員 waiting after the work too
+            bots = [b for b in (self.store.find('bots', x) for s in steps[:n] for x in s['bots']) if b]
             idle = split_idle(plan['job'].get('content') or '', bots)
             if not idle: return steps
             group['messages'].append(dict(id=ID(), role='system', content='主持人沒有分工作給 %s，這次不用回覆。' % '、'.join(b['name'] for b in bots if b['id'] in idle), createdAt=NOW()))
             self.store.save()
-        left = [x for x in steps[0]['bots'] if x not in idle]
-        return ([dict(steps[0], bots=left)] if left else []) + steps[1:]
+        return [dict(s, bots=[x for x in s['bots'] if x not in idle]) for s in steps[:n] if [x for x in s['bots'] if x not in idle]] + steps[n:]
 
     def _send_back(self, group_id, run_id, step, merged, steps):
         """分工: the host's check found work that does not match what its member said. That member fixes it once, then the host
@@ -591,8 +592,8 @@ class GroupRuns:
             group['messages'].append(dict(id=ID(), role='system', content='主持人驗收沒有通過，退回給 %s 修正（自動退回最多 %d 次）：%s' % (
                 '、'.join(b['name'] for b in bots if b['id'] in fixes), GROUP_SEND_BACK, '；'.join('%s：%s' % (b['name'], fixes[b['id']]) for b in bots if b['id'] in fixes)), createdAt=NOW()))
             self.store.save()
-        order = [b['id'] for b in bots if b['id'] in fixes]
-        return [dict(role='split_redo', bots=order, blind=False, fixes=fixes), dict(role='split_remerge', bots=[closer], blind=False, sentBack=step.get('sentBack', 0) + 1)] + steps
+            redo, again = self._recheck(group_id, run_id, closer, fixes)  # #245: a 查核員 checks the new version before the second merge
+        return [x for x in (redo, again) if x] + [dict(role='split_remerge', bots=[closer], blind=False, sentBack=step.get('sentBack', 0) + 1)] + steps
 
     def _hand_out(self, group_id, run_id, turn, steps):
         """#71 主持人分工, a later message naming only the host: the work its reply hands out (「【派工】成員名稱：要做的事」) goes to
@@ -606,8 +607,7 @@ class GroupRuns:
             if not work: return steps
             group['messages'].append(dict(id=ID(), role='system', content='主持人照分工派給 %s，做完再由主持人彙整。' % '、'.join(b['name'] for b in bots if b['id'] in work), createdAt=NOW()))
             self.store.save()
-        order = [b['id'] for b in bots if b['id'] in work]
-        return [dict(role='split_work', bots=order, blind=True, waitBusy=True, fixes=work), dict(role='split_merge', bots=[host], blind=False)] + steps
+        return split_work_steps(self.store, [b['id'] for b in bots if b['id'] in work], work) + [dict(role='split_merge', bots=[host], blind=False)] + steps
 
     def _wait_free(self, group_id, run_id, step):
         """#71 (decisions #5): a 分工 member that was busy in another conversation does its share once it is free. Returns the
@@ -710,6 +710,11 @@ class GroupRuns:
                 if free is False: return
                 if not free: steps = steps[1:]; continue
                 step = dict(step, bots=free + [x for x in step['bots'] if x not in free])
+            if step['role'] == 'split_check' and not step.get('gated'):  # #245: only once the work is handed in and its files are there
+                after = self._check_gate(group_id, run_id, step, steps)
+                if after is False: return
+                if after is not steps: steps = after; continue
+                step = dict(step, gated=True); steps = [step] + steps[1:]
             now, later, busy = step['bots'][:room], step['bots'][room:], []
             done = self._group_batch(group_id, run_id, [(x, False, step['role']) for x in now], True, step.get('blind'), step, busy)
             if done is False: return
@@ -739,7 +744,7 @@ class GroupRuns:
                 with store.lock:
                     group = store.find('groups', group_id)
                     if group and group.get('runId') == run_id:
-                        for t in done: closing_mention_note(store, group, t, steps[0]['bots'] if steps is not before and steps and steps[0]['role'] == 'split_redo' else ())
+                        for t in done: closing_mention_note(store, group, t, [x for s in steps[:2] if s['role'] in ('split_redo', 'split_check') for x in s['bots']] if steps is not before else ())
                         store.save()
         if steps:
             with store.lock:
@@ -828,6 +833,7 @@ class GroupRuns:
         else: pending = [(t, broadcast, None) for t in targets]
         spent = dict(n=turns); began = turns
         rounds = (resume or {}).get('rounds', 0); blind_next = (resume or {}).get('blind', False); hidden = list((resume or {}).get('hide') or []); hidden_files = list((resume or {}).get('hideFiles') or [])
+        gate, gate_step = (resume or {}).get('checkAfter'), (resume or {}).get('checkStep')  # #245: the 查核員 the kickoff named, after the work
         try:
             if engine or planned is not None:
                 result = self.run_task_engine(group_id, run_id) if engine else self._run_steps(group_id, run_id, planned, limit, spent)
@@ -838,6 +844,10 @@ class GroupRuns:
                     if group.get('runId') != run_id: return
                     first = [] if blind_next else [x for x in group.pop('interjectNext', None) or [] if x in group.get('botIds', [])]  # @-mentioned mid-discussion; after an independent round
                 if first: pending[:] = [(x, False, None) for x in first] + [p for p in pending if p[0] not in first]
+                if not pending and gate and not blind_next:
+                    found = self._free_check(group_id, run_id, gate)
+                    if found is False: return
+                    pending[:], gate, gate_step = found
                 if not pending:
                     if not moderated or rounds > GROUP_MODERATION_ROUNDS: break
                     rounds += 1
@@ -846,7 +856,7 @@ class GroupRuns:
                 batch = pending[:limit - turns] if blind_next else pending[:1]
                 del pending[:len(batch)]
                 still_blind = blind_next and bool(pending)  # the turn limit cut this independent round short
-                turns_here = self._group_batch(group_id, run_id, batch, moderated, blind_next, dict(hide=hidden, hideFiles=hidden_files) if blind_next else None)
+                turns_here = self._group_batch(group_id, run_id, batch, moderated, blind_next, gate_step if gate_step and batch[0][2] == gate_step['role'] else dict(hide=hidden, hideFiles=hidden_files) if blind_next else None)
                 if turns_here is False: return
                 hidden = hidden + [t['msg']['id'] for t in turns_here] if still_blind else []
                 hidden_files = hidden_files + [n for t in turns_here for n in t['saved']] if still_blind else []
@@ -869,6 +879,8 @@ class GroupRuns:
                         elif role in ('kickoff', 'moderate'):
                             if role == 'kickoff':
                                 mentioned = mentioned or [b['id'] for b in members if b['id'] != bot_id]; blind_next = True
+                                mentioned, checkers = split_checkers(store, mentioned)
+                                if checkers: gate = dict(bots=checkers, gate=mentioned)
                             if role == 'moderate' and not mentioned: rounds = GROUP_MODERATION_ROUNDS + 1  # host already wrapped up
                             for target in mentioned:
                                 if target not in [x[0] for x in pending]: pending.append((target, False, None))
@@ -880,7 +892,7 @@ class GroupRuns:
                 group = store.find('groups', group_id)
                 unfinished = pending or (moderated and rounds <= GROUP_MODERATION_ROUNDS)
                 if group and group.get('runId') == run_id and turns >= limit and unfinished:
-                    self._pause_group(group, limit, dict(kind='free', pending=pending, rounds=rounds, moderated=moderated, blind=blind_next, hide=hidden, hideFiles=hidden_files, broadcast=broadcast))
+                    self._pause_group(group, limit, dict(kind='free', pending=pending, rounds=rounds, moderated=moderated, blind=blind_next, hide=hidden, hideFiles=hidden_files, broadcast=broadcast, checkAfter=gate, checkStep=gate_step))
                 elif group and group.get('runId') == run_id and turns > began and not spoke and broadcast:
                     group['messages'].append(dict(id=ID(), role='system', content='沒有成員認為需要回覆。可以用 @ 指定由誰回答。', createdAt=NOW()))
             ended = True

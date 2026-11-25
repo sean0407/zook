@@ -314,7 +314,7 @@ def sync_group_files_out(store, group_id, bot_name, bot_id, seen):
             try: folder_fd = os.open(GROUP_FILES_FOLDER, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=attachments)
             finally: os.close(attachments)
     except OSError: return [], []
-    saved, skipped = [], []
+    saved, skipped, same = [], [], None
     try:
         for entry_name in sorted(os.listdir(folder_fd)):
             if scratch_name(entry_name): continue  # e.g. PowerPoint's ~$ lock file is not a shared file
@@ -330,6 +330,10 @@ def sync_group_files_out(store, group_id, bot_name, bot_id, seen):
                     if now is not None and now != seen.get(entry_name):
                         if now == digest: continue  # someone saved the very same file meanwhile: no second copy named after this Bot (#176)
                         name = free_group_file_name(shared, name, bot_name)
+                    if now is None or name != _short_name(entry_name):  # a new file: one with the very same content already shared is not kept twice (#170)
+                        if same is None: same = {_file_hash(e.path) for e in _plain_files(shared)}
+                        if digest in same: continue
+                    if same is not None: same.add(digest)
                     if size > MAX_UPLOAD or group_files_size(store, group_id, name) + size > GROUP_FILES_TOTAL: skipped.append(name); continue
                     os.replace(str(temp), str(shared / name)); saved.append(name)
             finally:
