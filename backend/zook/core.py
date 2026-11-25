@@ -192,6 +192,7 @@ class StoreBase:
         self.data['settings'].setdefault('disabledPlugins', [])
         self.data['settings'].setdefault('fallbacks', [])
         self.data['settings'].setdefault('remote', dict(enabled=False, relayUrl=''))
+        remote_expiry_repair(self.data['settings'])  # mobile.py
         self.data.setdefault('remoteDevices', [])
         drop_removed_providers(self)  # OpenCode, GitHub Copilot and Kimi are no longer supported
         plain_old_records(self)  # activity saved by earlier versions or a restored backup, in today's words (actwords.py)
@@ -576,7 +577,12 @@ def local_choice(before, after, body, local=True):
     if any(k in body and (body[k] or '') != (before.get(k) or '') for k in ('provider', 'account')): after.pop('syncedModel', None)  # picked here
     if 'provider' in body and (body['provider'] or '') != (before.get('provider') or ''):
         set_gate_full(after); after.pop('localLimit', None)
-    elif any(k in body and (body[k] or '') != (before.get(k) or '') for k in ('access', 'accessFolder', 'permissionMode')): after.pop('localLimit', None)
+    elif any(k in body and (body[k] or '') != (before.get(k) or '') for k in ('access', 'accessFolder', 'permissionMode')):
+        if provider_kind(_bot_provider(after)) not in GATED_KINDS or after.get('provider') == 'auto' or after.get('gateFull'): after.pop('localLimit', None)
+        elif body.get('access') == 'full':  # #284: 「整台 Mac」 for a held Claude or Cursor Bot is the gate, as picking its model here again
+            for k in ('access', 'accessFolder', 'permissionMode'): after.pop(k, None); after.update({k: before[k]} if k in before else {})
+            set_gate_full(after); after.pop('localLimit', None)
+        else: hold_scope(after)  # its own 存取範圍 and 主動性 are not used on Claude or Cursor: nothing else lifts it
 
 
 def held_backups(bot, provider, chain):
@@ -965,6 +971,7 @@ def provider_chain(store, bot, provider, model):
 
 def fallback_reason(error):
     error = error or ''
+    if 'macOS' in error: return 'macOS 權限擋住'
     if '額度' in error or '上限' in error: return '額度已用完'
     if '尚未登入' in error or '重新登入' in error: return '尚未登入'
     if '找不到' in error or '安裝' in error: return '尚未安裝'

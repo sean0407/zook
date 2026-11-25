@@ -150,15 +150,21 @@ def _redirect_steps(text):
     return steps
 
 
+def shell_inner(command):
+    """The command itself, without the shell around it: how Codex reports a command (/bin/zsh -lc '<command>')."""
+    if re.match(r'^/bin/(?:zsh|bash|sh) -l?c ', command):
+        try: words = shlex.split(command)
+        except ValueError: words = []
+        if len(words) == 3: return words[2]
+    return command
+
+
 def plain_command_summary(command):
     """One plain line for a command the activity list keeps: its safety lines as on an approval card (without the 看不懂 ones), then
     what it did. Never the command, never code, never a word from a here-document."""
     if not isinstance(command, str) or not command.strip(): return '執行指令'
     gate = _gate()
-    if re.match(r'^/bin/(?:zsh|bash|sh) -l?c ', command):  # how Codex reports a command: the shell around it, quoted
-        try: words = shlex.split(command)
-        except ValueError: words = []
-        if len(words) == 3: command = words[2]
+    command = shell_inner(command)
     try:
         kinds = [k for k, _ in gate.command_boundaries(_heredocs(command)[0]) if k != 'unclear']  # a here-document's text is data, not commands
         steps, _ = _describe(command)

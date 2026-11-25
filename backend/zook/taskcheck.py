@@ -30,13 +30,41 @@ def task_failed_attempt(task, why, job=None):
     task['failures'] = task.get('failures', 0) + 1
     task['feedback'] = str(why or '')[:600]
     if job and task_acted_outward(job):
-        task['status'] = 'stuck'; task['note'] = '這次嘗試可能已經對外做了一部分（例如寄出或改了連接的服務），自動重試可能重複，停下來等你決定。'
+        task['status'] = 'stuck'; task['note'] = task_outward_note(job) + '自動重試可能重複，停下來等你決定。'
     elif task['failures'] < TASK_FAILS: task['status'] = 'ready'
     else: task['status'] = 'stuck'; task['note'] = '連續 %d 次沒有完成，停下來等你決定。' % TASK_FAILS
 
 
+# Careful guesses from the kind of step, never a record that it did (#179): a step meant to reach outside, or a command, which Zook cannot read.
+TASK_OUTWARD_NOTE = '這次嘗試可能已經對外做了一部分（例如寄出或改了連接的服務），'
+TASK_COMMAND_NOTE = '這次用了指令，Zook 無法確認有沒有對外，'
+TASK_OUTWARD_NOTES = (TASK_OUTWARD_NOTE, TASK_COMMAND_NOTE)
+
+
+def task_outward_kind(job):
+    """'tool' when a reply started a step meant to reach outside this Mac (an approved send, a change to a connected service),
+    'command' when it only ran commands (any command may have: Zook cannot tell), None when it did neither. A step counts once it
+    started, whatever came of it: one that failed may still have reached out. A step Zook itself refused or still asks about does not.
+    A command the CLI ran counts whatever its result said (words like "permission denied" can come from a command that ran), unless
+    it was refused on its approval card or its record says plainly it stayed here (outward False); a missing or empty mark is a may.
+    The approval card for a command is the command, not a step of its own."""
+    kind = None
+    for c in job.get('toolCalls') or []:
+        if c.get('name') == 'native_command' and c.get('category') == 'code':
+            if not c.get('refused') and c.get('outward') is not False: kind = kind or 'command'
+            continue
+        if c.get('status') in ('denied', 'waiting_approval'): continue
+        if c.get('name') == 'zook_native_gate': kind = kind or 'command'
+        elif c.get('category') in ('external_write', 'danger', 'code'): return 'tool'
+    return kind
+
+
 def task_acted_outward(job):
-    return any(c.get('category') in ('external_write', 'danger', 'code') and c.get('status') in ('completed', 'running') for c in job.get('toolCalls') or [])
+    return task_outward_kind(job) is not None
+
+
+def task_outward_note(job):
+    return TASK_COMMAND_NOTE if task_outward_kind(job) == 'command' else TASK_OUTWARD_NOTE
 
 
 def task_job_cli(store, job, bot):
@@ -47,6 +75,10 @@ def task_job_cli(store, job, bot):
 def task_worker_kind(store, task):
     """The vendor (CLI kind) the last try of a task really ran on, as recorded when it ran. None when it is not known."""
     attempt = next((a for a in reversed(task.get('attempts') or []) if a.get('state') == 'reported'), {})
+    if not attempt.get('cli') and attempt.get('jobId') and store:  # cut off before its turn wrote it (a restart): the reply's own record
+        job = store.find('jobs', attempt['jobId'])
+        ran = task_job_cli(store, job, None) if job else ''
+        if ran: attempt['cli'] = ran
     if not attempt.get('cli'): return None
     return provider_kind(attempt['cli']) or (attempt['cli'] if attempt['cli'] in REMOVED_PROVIDERS else None)  # a removed CLI is still its own vendor for choosing who checks
 
@@ -166,6 +198,10 @@ def task_redo_tool(app, store, group_id, locate, acted, schema, S, text):
                 raise RuntimeError('工作 %d 已經退回過 %d 次，不能再自動退回。在總結最上面寫「未通過的地方」，交給使用者決定。' % (task['n'], task['sentBack']))
             if run['attempts'] >= task_limit(run, 'attempts'): raise RuntimeError('這個目標的嘗試次數已到上限，不能再退回。在總結最上面寫「未通過的地方」，交給使用者決定。')
             if task.get('changes') == 'external': raise RuntimeError('工作 %d 會對外動作，重做可能重複寄出或修改，不能自動退回。在總結最上面寫「未通過的地方」，交給使用者決定。' % task['n'])
+            done_by = store.find('jobs', (task['attempts'][-1] if task.get('attempts') else {}).get('jobId') or '')
+            if done_by and task_acted_outward(done_by):  # what the try really did, not only what was planned
+                raise RuntimeError('工作 %d 這次%s重做可能重複，不能自動退回。在總結最上面寫「未通過的地方」，交給使用者決定（這是 Zook 的保守提醒，不是事實）。' % (
+                    task['n'], '用了指令，Zook 無法確認有沒有對外，' if task_outward_kind(done_by) == 'command' else '可能已經對外做了一部分，'))
             used = [t['n'] for t in run['tasks'] if task['n'] in (t.get('deps') or []) and t['status'] not in ('pending', 'ready', 'waiting')]
             if used: raise RuntimeError('工作 %s 已經用了它的結果，不能退回。在總結最上面寫「未通過的地方」，交給使用者決定。' % '、'.join(map(str, used)))
             for t in run['tasks']:
@@ -203,7 +239,7 @@ def task_route(handler, store, group, parts):
         task = next((t for t in run['tasks'] if t['id'] == parts[4]), None)
         if not task: return handler.error(404, '找不到這項工作。')
         accept = parts[5] == 'accept'
-        if task['status'] not in (('stuck', 'review') if accept else ('stuck', 'unknown', 'failed', 'cancelled')): return handler.error(409, '這項工作現在不能%s。' % ('接受' if accept else '重試'))
+        if task['status'] not in (('stuck', 'review', 'unknown') if accept else ('stuck', 'unknown', 'failed', 'cancelled')): return handler.error(409, '這項工作現在不能%s。' % ('接受' if accept else '重試'))
         if task.get('aborted'): return handler.error(409, '派這個助手的那一輪沒有完成，請重試原本的工作 %d。' % task['parent'])
         if group['status'] == 'running' and group.get('runId') != run.get('groupRunId'): return handler.error(409, '群組正在進行其他討論，等它結束再重試。')
         if run['status'] != 'running' and group['status'] == 'running': return handler.error(409, '這個任務正在結束，等幾秒再重試。')

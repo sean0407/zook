@@ -103,6 +103,18 @@ class BackupSettingsTest(Harness, unittest.TestCase):
         (self.data / 'swarmr.json').write_text('broken'); self.start()
         self.assertEqual(self.req('GET', '/api/state')[1]['settings']['recovered']['backup'], newest)
 
+    def test_restore_keeps_this_macs_phone_and_backup_settings(self):
+        old = self.req('POST', '/api/backups', {})[1]['name']  # made with the defaults
+        self.assertEqual(self.req('PATCH', '/api/settings', {'backup': {'auto': False, 'every': 'weekly', 'keep': 7, 'withFiles': False}, 'remoteExpiryDays': 90})[0], 200)
+        self.stop()
+        data = json.loads((self.data / 'swarmr.json').read_text()); data['settings']['remote'] = {'enabled': False, 'relayUrl': 'https://relay.example.test'}
+        (self.data / 'swarmr.json').write_text(json.dumps(data)); self.start()
+        before = {k: self.req('GET', '/api/state')[1]['settings'][k] for k in ('remote', 'remoteExpiry', 'backup')}
+        self.assertEqual(before['remoteExpiry']['days'], 90); self.assertEqual(before['backup']['every'], 'weekly')
+        self.assertEqual(self.req('POST', '/api/backups/%s/restore' % old, {})[0], 200)
+        after = self.req('GET', '/api/state')[1]['settings']
+        self.assertEqual({k: after[k] for k in ('remote', 'remoteExpiry', 'backup')}, before)
+
     def test_files_are_included_when_switched_on_without_secrets(self):
         ws = self.data / 'workspaces' / self.bot['id']; ws.mkdir(parents=True, exist_ok=True)
         (ws / '報告.txt').write_text('產出'); (ws / '.env').write_text('KEY=1'); (ws / 'server.pem').write_text('x')
