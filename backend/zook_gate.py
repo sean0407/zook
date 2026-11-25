@@ -28,63 +28,15 @@ KINDS = tuple(LABELS)
 MAX_ACTIONS = 10   # what one card shows in full; more than this, or a line too long to show whole, is refused: the Bot does them one at a time
 MAX_TITLE = 200
 
-# ---- what counts as a boundary
-DELETE_COMMANDS = {'rm', 'rmdir', 'unlink', 'trash', 'srm', 'shred'}
-MAIL_COMMANDS = {'mail', 'mailx', 'sendmail', 'msmtp', 'mutt'}
-COPY_OUT = {'scp', 'sftp', 'rsync', 'ftp'}
-CONNECT = {'ssh', 'nc', 'ncat', 'netcat', 'socat', 'telnet'}
-SYSTEM_COMMANDS = {'sudo', 'su', 'doas', 'launchctl', 'systemsetup', 'networksetup', 'pmset', 'nvram', 'csrutil', 'spctl', 'softwareupdate',
-                   'installer', 'kextload', 'kextunload', 'scutil', 'dscl', 'chsh', 'crontab', 'diskutil', 'tmutil', 'fdesetup', 'profiles'}
-INSTALLERS = {'brew': {'install', 'uninstall', 'remove', 'rm', 'reinstall', 'upgrade', 'tap', 'untap', 'link', 'unlink', 'services', 'autoremove', 'cleanup', 'update', 'pin', 'unpin'},
-              'port': {'install', 'uninstall', 'upgrade', 'selfupdate'}, 'mas': {'install', 'uninstall', 'upgrade'},
-              'gem': {'install', 'uninstall', 'update'}, 'cargo': {'install', 'uninstall'}, 'pipx': {'install', 'uninstall', 'upgrade', 'reinstall', 'inject'},
-              'pip': {'install', 'uninstall', 'download'}, 'pip3': {'install', 'uninstall', 'download'}, 'conda': {'install', 'remove', 'update', 'create'},
-              'go': {'install'}}
-NODE_INSTALLERS = {'npm', 'pnpm', 'yarn', 'bun'}
-SECRET_DIRS = [os.path.join(HOME, p) for p in ('.ssh', '.aws', '.config/gh', '.gnupg', 'Library/Keychains', '.docker', '.kube', '.netrc', '.config/gcloud', '.git-credentials', '.npmrc', '.pypirc')] + ['/Library/Keychains']
-# The sign-ins of the CLIs Zook runs (providers.py) and Zook's own extra accounts: reading them is reading a password.
-CREDENTIALS = [os.path.join(HOME, p) for p in ('.codex/auth.json', '.gemini/oauth_creds.json', '.gemini/google_accounts.json', '.claude/.credentials.json',
-                                               '.grok', '.config/cursor', '.cursor/cli-config.json', '.cursor/auth.json', '.config/anthropic', '.antigravity/auth')]
-CREDENTIAL_NAMES = re.compile(r'(?i)^(?:\.env(?:\..*)?|\.netrc|\.npmrc|\.pypirc|\.git-credentials|id_(?:rsa|dsa|ecdsa|ed25519)(?:\.pub)?|.*\.(?:pem|p12|pfx|key|keychain|keychain-db)|'
-                              r'credentials(?:\.json)?|\.credentials\.json|oauth_creds\.json|auth\.json|client_secret.*\.json|service[-_]account.*\.json)$')
-SYSTEM_DIRS = ('/System', '/Library', '/usr', '/bin', '/sbin', '/etc', '/private', '/Applications', '/opt', '/var', os.path.join(HOME, 'Library/LaunchAgents'))
-TEMP_DIRS = ['/tmp', '/private/tmp', '/var/folders', '/private/var/folders']
-# The folders a CLI loads hooks, settings, Skills and plugins from, wherever they are (the home folder or a Bot's workspace).
-CLI_FOLDERS = {'.claude', '.cursor', '.codex', '.grok', '.gemini', '.antigravity', 'cursor-config'}
-WRAPPERS = {'env', 'nohup', 'time', 'command', 'builtin', 'exec', 'nice', 'caffeinate', 'timeout', 'xargs', 'stdbuf', 'arch', 'noglob', 'nocorrect', 'busybox', 'parallel'}
-WRAPPER_VALUED = {'env': {'-u', '-P', '-C'}, 'nice': {'-n'}, 'timeout': {'-s', '-k', '--signal', '--kill-after'}, 'caffeinate': {'-t', '-w'},
-                  'xargs': {'-I', '-J', '-L', '-n', '-P', '-R', '-S', '-s', '-E', '-d', '-a'}, 'stdbuf': {'-i', '-o', '-e'}, 'time': {'-o', '-f'}, 'exec': {'-a'},
-                  'parallel': {'-j', '--jobs', '-S', '--sshlogin', '-a', '--arg-file', '--colsep', '-d', '--delimiter', '-n', '-N', '--timeout'}}
-SHELL_WORDS = {'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until', '!', '{', '}', 'coproc'}  # what runs after them is a command too
-SHELLS = {'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish'}
-INTERPRETERS = {'python', 'python3', 'python2', 'node', 'nodejs', 'perl', 'ruby', 'php', 'deno', 'bun', 'osascript', 'lua', 'Rscript', 'swift'}
-INLINE_FLAGS = {'-c', '-e', '-E', '--eval', '-p', '--print', '-r'}
-CURL_SEND = {'-d', '--data', '--data-raw', '--data-binary', '--data-urlencode', '--data-ascii', '-F', '--form', '--form-string', '-T', '--upload-file', '--json',
-             '-K', '--config', '--mail-rcpt', '--mail-from'}
-WGET_SEND = ('--post-data', '--post-file', '--method', '--body-data', '--body-file')
-GH_ACTIONS = {'create', 'merge', 'comment', 'review', 'close', 'reopen', 'delete', 'edit', 'upload', 'publish', 'fork', 'transfer', 'archive', 'lock', 'ready', 'set', 'sync', 'deploy', 'run', 'cancel', 'rerun'}
-GH_VALUED = {'-R', '--repo', '--hostname', '-b', '--body', '-t', '--title', '-F', '--body-file', '-B', '--base', '-H', '--head', '-a', '--assignee', '-l', '--label',
-             '-m', '--milestone', '-p', '--project', '-r', '--reviewer', '-X', '--method', '-f', '--raw-field', '--field', '--input', '-q', '--jq', '--template',
-             '--json', '-L', '--limit', '-s', '--state', '-A', '--author', '-S', '--search', '-o', '--output', '-e', '--env', '-n', '--notes', '-c'}
-GIT_VALUED = {'-C', '-c', '--git-dir', '--work-tree', '--namespace', '--super-prefix', '--config-env', '--exec-path', '--list-cmds', '--attr-source'}
-GIT_FLAGS = {'-p', '--paginate', '-P', '--no-pager', '--bare', '--no-replace-objects', '--literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs',
-             '--icase-pathspecs', '--no-optional-locks', '--html-path', '--man-path', '--info-path', '--version', '--help', '-v', '-h', '--no-lazy-fetch', '--no-advice'}
-GREP_VALUED = {'-e', '-f', '-m', '-A', '-B', '-C', '--regexp', '--file', '--max-count', '--include', '--exclude', '--exclude-dir', '--context', '--after-context',
-               '--before-context', '--label', '-g', '--glob', '-t', '--type', '-T', '--type-not', '-M', '--max-columns', '--max-depth', '-j', '--threads', '--iglob'}
-# grep's own options that take a value (-d recurse searches the folder below): only for grep, where tree -d or tar -d mean something else.
-GREP_ONLY_VALUED = GREP_VALUED | {'-d', '--directories', '-D', '--devices', '--exclude-from', '--binary-files'}
-UGREP_VALUED = GREP_ONLY_VALUED | {'--include-from'}  # ugrep takes grep's options, and a file of globs to include
-# ripgrep's own options that take a value: without them its value (rg --pre /bin/cat -e KEY) was read as the folder searched,
-# so the current folder went unchecked. Not for grep, where -E, -r and -d mean something else.
-RG_VALUED = GREP_VALUED | {'--pre', '--pre-glob', '--sort', '--sortr', '-d', '-E', '--encoding', '--ignore-file', '--type-add', '--type-clear',
-                           '--path-separator', '-r', '--replace', '--max-filesize', '--dfa-size-limit', '--regex-size-limit', '--colors', '--color',
-                           '--context-separator', '--field-context-separator', '--field-match-separator', '--engine', '--hostname-bin',
-                           '--hyperlink-format', '--generate', '--maxdepth', '--max-depth', '-G', '--glob-not', '--max-bytes', '--in', '--in0'}
-# Inline code (python -c, node -e, a here-document) that may delete, send, run commands or touch keys: it cannot be read reliably.
-CODE_HINTS = re.compile(r'\b(?:os\.(?:remove|unlink|rmdir|removedirs|system|popen|exec\w*|spawn\w*|rename|replace)|shutil\.(?:rmtree|move)|subprocess|send2trash|'
-                        r'unlink(?:Sync)?|rmSync|rename\w*\s*\(|File::Copy|fs\.promises|renameSync|moveItem|removeItem|File\.rename|FileUtils|rmdirSync|rm_rf|child_process|execSync|spawnSync|requests\.|httpx|urlopen|urllib|http\.client|smtplib|ftplib|'
-                        r'paramiko|socket|fetch\s*\(|XMLHttpRequest|keyring|Keychain|system\s*\(|exec\s*\(|eval\s*\(|IO\.popen|File\.delete|Net::|LWP|'
-                        r'do shell script|delete\b|trash\b)|\.ssh\b|\.aws\b|\.env\b|id_rsa|id_ed25519|password|passwd|`', re.I)
+# ---- what counts as a boundary: the lists of programs, options and paths (zook_gate_words.py, next to this file)
+def _words():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('zook_gate_words', os.path.join(HERE, 'zook_gate_words.py'))
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    return {k: v for k, v in vars(module).items() if k.isupper() and k != 'HOME'}
+
+
+globals().update(_words())
 
 
 # ---- the Bot's own scratch folder (queue #261): its files are deleted by Zook's zook_clean_scratch tool (scratch.py), never by a
@@ -160,10 +112,18 @@ def _folders():
     return list(dict.fromkeys(found))
 
 
-def _secret_any(path):
-    """Where a key or sign-in is named, also from wherever a cd of this line may have led (a relative path); '' when none is."""
-    p = _expand(path); folders = [] if not p or os.path.isabs(p) else _folders() or []
-    return next((x for x in [path] + [os.path.join(f, p) for f in folders] if _secret_path(x)), '')
+def _resolved(path):
+    """The path, and where it is from each folder a cd of this line may have led to (a relative path); None when one cannot be known."""
+    p = _expand(path); folders = [] if not p or os.path.isabs(p) else _folders()
+    return None if folders is None else [path] + [os.path.join(f, p) for f in folders]
+
+
+def _secret_any(path, unsure=True):
+    """Where a key or sign-in is named, after the cds of this line; '' when none is. unsure: a path in a folder that cannot be known
+    (cd "$VAR") counts too, as $PWD/…"""
+    found = _resolved(path)
+    if found is None: return _secret_path(path) and path or ('$PWD/' + _expand(path) if unsure else '')
+    return next((x for x in found if _secret_path(x)), '')
 
 
 def _rooted(starts):
@@ -236,6 +196,7 @@ def _expand(path):
 
 
 _CWD = [os.getcwd()]
+GLUED, TARS = '_glued_', ('tar', 'gtar', 'gnutar', 'bsdtar')  # GLUED: where $( … ) was, inside a word
 _LINES = []  # the command line being read, and the ones around it (bash -c, $( … ), <( … )): a cd in any of them leads what follows
 
 
@@ -368,12 +329,6 @@ def _host(arg):
     return m.group(1) if m else ''
 
 
-CURL_VALUED = CURL_SEND | {'-H', '--header', '-o', '--output', '-u', '--user', '-A', '--user-agent', '-e', '--referer', '-X', '--request', '-b', '--cookie',
-                           '-c', '--cookie-jar', '-w', '--write-out', '-x', '--proxy', '-m', '--max-time', '--connect-timeout', '-r', '--range', '-E', '--cert',
-                           '--key', '--cacert', '-U', '--proxy-user', '--retry', '--limit-rate', '-z', '--time-cond', '--resolve', '--connect-to', '-D',
-                           '--dump-header', '-C', '--continue-at', '-Y', '-y', '--speed-limit', '--speed-time', '--max-redirs', '--interface', '--oauth2-bearer'}
-
-
 def _file_url(arg):
     try: return urllib.parse.unquote(urllib.parse.urlsplit(arg).path) or '/'
     except ValueError: return arg
@@ -410,8 +365,8 @@ def _hit(kind, what):
 
 # ---- reading a shell command
 def _opens(text):
-    """(where each $( … ), <( … ), >( … ) (process substitution) or zsh's =( … ) starts, whether it is inside quotes). One that never
-    ends is let be only in quotes read for sure (no backslash, $, backtick, comment or second line): text a shell would not run."""
+    """(where each $( … ), <( … ), >( … ) (process substitution) or zsh's =( … ) starts, whether it is inside quotes). Only in quotes
+    read for sure (no backslash, $, backtick, comment or second line) is one let be, as text a shell would not run."""
     quote, sure = '', not set(text) & set('#\\\n`$')
     for j, c in enumerate(text[:-1]):
         if c in '\'"' and quote in ('', c) and text[j - 1:j] != '\\': quote = '' if quote else c
@@ -430,7 +385,7 @@ def _inner(command):
     found = re.findall(r'`([^`]*)`', command)
     for start, quoted in _opens(command):
         j, ended = _closing(command, start)
-        if ended or not quoted: found.append(command[start + 2:j - 1] if ended else None)
+        if not quoted: found.append(command[start + 2:j - 1] if ended else None)
     return found
 
 
@@ -507,9 +462,11 @@ def command_boundaries(command, depth=0):
         for inner in _inner(command): found += [_hit('unclear', '（括號沒有成對）')] if inner is None else command_boundaries(inner, depth + 1)
         parts, clear = _split(_without_inner(command))  # what runs inside $( … ) was read above, and is counted once
         if not clear: found.append(_hit('unclear', '（引號沒有成對）'))
-        for argv in parts:
+        for n, argv in enumerate(parts):
             words, read, written = _redirects(argv)
-            stripped = _strip(words)
+            stripped = _strip(words); prog = os.path.basename(stripped[0]) if stripped else ''
+            if (prog in SHELLS | INTERPRETERS or prog.startswith('python')) and all(a.startswith('-') for a in stripped[1:]) and (read or n and '|' in command):
+                found.append(_hit('unclear', '（要執行的程式來自另一個指令的輸出）'))  # … | bash, bash < file: the program is what comes in
             found += _redirect_hits(read, written, empty=not stripped or os.path.basename(stripped[0]) in (':', 'true') and len(stripped) == 1 and not read or stripped[:2] == ['cat', '/dev/null'])
             listed = [w for w in map(_secret_any, _arg_files(words)) if w]  # xargs -a FILE, parallel --arg-file FILE or :::: FILE: read too
             found += [_hit('secret', '讀取 ' + _names(listed))] if listed else []
@@ -520,12 +477,12 @@ def command_boundaries(command, depth=0):
 
 def _without_inner(command):
     """The line without what runs inside each $( … ) and `…` (read on its own): at the start of a word or a value it becomes $_, as
-    the program to run a variable; inside a word it splits the word as before (~/.aws$(…) still reads as ~/.aws)."""
-    def instead(text, start):
-        return '$_' if start == 0 or text[start - 1] in ' \t\n;&|(=\'"' else ' _ '
+    the program to run a variable; inside a word it splits the word as before (~/.aws$(…) still reads as ~/.aws), marked."""
+    def instead(text, start):  # process substitution: the file name a shell puts there; glued to a word: GLUED, so a name built so is seen
+        return '/dev/fd/63' if text[start] in '<>=' else '$_' if start == 0 or text[start - 1] in ' \t\n;&|(=\'"' else ' %s ' % GLUED
     out, i = re.sub(r'`[^`]*`', lambda m: instead(command, m.start()), command), 0
     while True:
-        start = next((k for k, quoted in _opens(out) if k >= i and (_closing(out, k)[1] or not quoted)), -1)
+        start = next((k for k, quoted in _opens(out) if k >= i and not quoted), -1)
         if start < 0: return out
         out = out[:start] + instead(out, start) + out[_closing(out, start)[0]:]; i = start
 
@@ -546,7 +503,8 @@ def command_boundary(command, depth=0):
 def _redirect_hits(read, written, empty=False):
     out = []
     if empty and any(_nonempty(t) for t in written): out.append(_hit('delete', '清空 %s 的內容' % _names([t for t in written if _nonempty(t)])))
-    if any(_secret_path(t) for t in read + written): out.append(_hit('secret', _names([t for t in read + written if _secret_path(t)])))
+    if any(map(_secret_any, read + written)): out.append(_hit('secret', _names(map(_secret_any, read + written))))
+    written = [x for t in written for x in _resolved(t) or [t]]  # a relative file, from wherever the line's cds led
     if any(_guard_path(t) for t in written): out.append(_hit('guard', '寫入 ' + _names([t for t in written if _guard_path(t)])))
     elif any(_system_path(t) for t in written): out.append(_hit('system', '寫入 ' + _names([t for t in written if _system_path(t)])))
     return out
@@ -647,14 +605,16 @@ def _search_roots(name, args, whole='', depth=0):
         plain = _positional(args, GREP_ONLY_VALUED)
         plain = _past_pattern(plain, args, any(a in ('-e', '-f', '--regexp', '--file') or a.startswith(('--regexp=', '--file=')) for a in opts))  # the first is the pattern
         return (plain or (['.'] if recursive else [])), recursive
-    if name in ('rg', 'ag', 'ack', 'ugrep', 'ripgrep', 'pt', 'fd', 'fdfind', 'tree', 'zip', 'tar', 'cp', 'ditto'):
+    if name in ('rg', 'ag', 'ack', 'ugrep', 'ripgrep', 'pt', 'fd', 'fdfind', 'tree', 'zip', 'cp', 'ditto') + TARS:
         if name in ('cp',) and not any(re.fullmatch(r'-[a-zA-Z]*[rRa][a-zA-Z]*', a) for a in args): return None
         if name == 'zip' and not any(re.fullmatch(r'-[a-zA-Z]*r[a-zA-Z]*', a) for a in args): return None
         plain = _positional(args, (RG_VALUED if name in ('rg', 'ripgrep') else UGREP_VALUED if name == 'ugrep' else GREP_VALUED) | {'-f', '--file', '-C', '--directory'})
         if name in ('rg', 'ag', 'ack', 'ugrep', 'ripgrep', 'pt'): plain = _past_pattern(plain, args, any(a in ('-e', '-f', '--regexp', '--file', '--files') or a.startswith(('--regexp=', '--file=')) for a in _options(args)))
-        if name in ('tar', 'zip', 'cp', 'ditto'): plain = plain[1:] if name in ('tar', 'zip') else plain[:-1]
-        if name == 'tar':  # tar -C folder: the names after it are in that folder
-            moved = [v for i, a in enumerate(args) for v in [a[12:] if a.startswith('--directory=') else ''.join(args[i + 1:i + 2]) if a == '--directory' else _short_value(args, i, {'-f', '-b', '-T', '-X', '-s'}, 'C')] if v is not None]
+        if name in ('zip', 'cp', 'ditto') + TARS: plain = plain[1:] if name in ('zip',) + TARS else plain[:-1]
+        if name in TARS:  # tar -C folder: the names after it are there; each -C from the one before it, so any of them counts
+            moved = []
+            for v in [v for i, a in enumerate(args) for v in [a[12:] if a.startswith('--directory=') else ''.join(args[i + 1:i + 2]) if a == '--directory' else _short_value(args, i, {'-f', '-b', '-T', '-X', '-s'}, 'C')] if v is not None]:
+                moved += [v] + ([] if os.path.isabs(_expand(v)) or set(v) & set('$`') else [os.path.join(d, v) for d in moved])
             plain = plain + [os.path.join(d, s) for d in moved for s in (plain or ['.']) if not os.path.isabs(_expand(s))]
         listing = name in ('rg', 'ripgrep') and _rg_list_only(args, whole, depth)  # names only (#138)
         if name in ('rg', 'ripgrep') and any(a in ('--in', '--in0') or a.startswith(('--in=', '--in0=')) for a in _options(args)): plain = plain + ['/']  # the paths come from a list Zook does not read: any of them
@@ -665,7 +625,9 @@ def _search_roots(name, args, whole='', depth=0):
 def _argv_boundaries(argv, whole, depth):
     if not argv: return []
     word = argv[0]; name = os.path.basename(word); args = argv[1:]
-    if '$' in word and word != '$' or '`' in word: return [_hit('unclear', '（要執行的程式是變數）')]
+    if '$' in word and word != '$' or '`' in word or GLUED in argv[:2]: return [_hit('unclear', '（要執行的程式是變數）')]
+    if (name in SHELLS | INTERPRETERS | {'source', '.', 'eval'} or name.startswith('python')) and '/dev/fd/63' in args:
+        return [_hit('unclear', '（要執行的程式來自另一個指令的輸出）')]  # bash <( … ): what it runs is that command's output
     if word == '$': return []
     plain = [a for a in args if not a.startswith('-')]
     found = []
@@ -778,8 +740,9 @@ def _argv_boundaries(argv, whole, depth):
         valued, opts = RG_VALUED if name in ('rg', 'ripgrep') else UGREP_VALUED if name == 'ugrep' else GREP_ONLY_VALUED, _options(args)
         touched += [a.split('=', 1)[1] if '=' in a else args[i + 1] if i + 1 < len(args) else '' for i, a in enumerate(opts) if a.split('=', 1)[0] in ('--file', '--exclude-from', '--include-from', '--ignore-file')]
         touched += [v for v in (_short_value(args, i, valued, 'f') for i in range(len(opts))) if v]
-    if _folders() != [_CWD[0]]: touched += plain  # after a cd, a bare name may be in a folder of keys
-    if not any(k == 'secret' for k, _ in found) and any(map(_secret_any, touched)): found.append(_hit('secret', _names(map(_secret_any, touched))))
+    bare = plain if roots is None and _folders() != [_CWD[0]] else []  # after a cd, a bare name may be in a folder of keys (not a search's words)
+    hits = [x for x in list(map(_secret_any, touched)) + [_secret_any(a, False) for a in bare] if x]
+    if not any(k == 'secret' for k, _ in found) and hits: found.append(_hit('secret', _names(hits)))
     return found
 
 
