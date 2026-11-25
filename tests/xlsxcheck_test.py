@@ -92,6 +92,19 @@ class Checks(unittest.TestCase):
         found = ' '.join(self.issues([cell('C4', 1), cell('C5', 2), cell('C6', '', 'SUM(C4:C5)'), cell('C7', '', 'SUM(C4:C6)'), cell('B1', '#REF!', 'X', 'e')]))
         self.assertIn('重複加總', found); self.assertIn('沒有算好的值', found); self.assertIn('算出錯誤', found); self.assertIn('#REF!', found)
 
+    def test_numbers_or_item_codes_written_into_formulas(self):
+        """#227: a discount written as IF(A8="X100",…) or a total typed as =1200*3 does not follow when the quantity or item changes."""
+        found = ' '.join(self.issues([cell('A8', 'X100', kind='str'), cell('B8', 3), cell('C8', 1200), cell('E8', 360, 'IF(A8="X100",C8*B8*0.1,0)'),
+                                      cell('F8', 3600, '1200*3')]))
+        self.assertIn('有 2 格公式把數字或品號直接寫在公式裡', found); self.assertIn('E8', found); self.assertIn('F8', found)
+        said = ' '.join(self.m.xlsx_render(self.m.xlsx_scan(str(self.root / '報表.xlsx')), for_bot=True))
+        self.assertIn('引用', said); self.assertIn('第 1 張工作表!E8', said)
+        sound = [cell('A1', 3), cell('B1', 1200), cell('C1', 0.1), cell('D1', 360, 'A1*B1*C1'), cell('E1', 'x', 'IF(A2="","",A2)', 'str'),
+                 cell('F1', 1, 'IF(A1>0,1,0)'), cell('G1', 'ok', 'IF(H1="是","含稅","未稅")', 'str'), cell('H2', 5, 'SUM(A1,2)'), cell('I1', -5, '-5')]
+        self.assertEqual(self.issues(sound), [])
+        shared = ['<c r="E%d"><f t="shared" si="0"%s>%s</f><v>0</v></c>' % (r, ' ref="E1:E3"' if r == 1 else '', 'IF(A1="X100",C1*0.1,0)' if r == 1 else '') for r in (1, 2, 3)]
+        self.assertIn('有 3 格公式把數字或品號直接寫在公式裡', ' '.join(self.issues(shared)))  # every cell of a shared formula counts
+
     def test_sheets_are_named_from_the_workbook(self):
         found = ' '.join(self.issues(None, sheets=[('明細', [cell('A1', 1)]), ('彙總', [cell('A1', 5, 'SUM(B1:B2)'), cell('B1', 1), cell('B2', 2)])]))
         self.assertIn('彙總!A1', found)

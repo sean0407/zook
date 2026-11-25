@@ -672,6 +672,8 @@ FILE_DELIVERY_NOTE = ('要交出檔案（Excel、Word、簡報、PDF、圖片）
                       '萬一開了，用完關掉並刪掉留下的 ~$ 鎖檔。逐頁檢查文字和背景對比看得清楚、沒有被切掉或重疊、頁面比例符合（簡報 16:9，除非使用者另有要求）。'
                       '只能讀不能寫的時候就讀內容，並說明哪些版面沒有看到。'
                       'Excel 要保留公式（使用者改明細才會跟著變），並同時存入算好的值（例如 xlsxwriter 的 write_formula 帶入 value），不然預覽和手機會顯示 0。'
+                      # #227 a quote with no header row and a discount written into its formula; #72 a PDF's numbered points squeezed into one paragraph
+                      '明細上方要有表頭列（例如品號、數量、單價、小計）；單價、折扣率這些數字放在儲存格，公式引用那一格，不要把數字或品號寫死在公式裡（例如 IF(A8="X100",…)）。PDF 的條列、編號項目和摘要（例如上限、合計、剩餘）每一項各自一段（reportlab 每項一個 Paragraph，或用 ListFlowable），編號和它的說明在同一行開始；轉圖時也看有沒有擠成一段。'
                       '簡報的字級、粗細、顏色和字型要直接設在每段文字上（python-pptx 用 run.font，中文字型另寫 a:ea），不要只設在段落預設（paragraph.font）：'
                       'PowerPoint 可能不採用段落預設，整份變回預設字級和顏色。'
                       '暫存程式和預覽圖只在需要時做，放在你新建的暫存資料夾（例如 mktemp -d；只能用指定資料夾或工作資料夾時，就在裡面另建子資料夾、寫完整路徑，不用 mktemp），不要放在交付位置或群組檔案裡；'
