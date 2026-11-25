@@ -38,6 +38,43 @@ def queue_cancel(store, bot, entry_id):
     return True
 
 
+# Two messages sent in quick succession travel as two requests and can reach the Mac in either order (#142). The app says which
+# of its own messages, still on its way, this one comes after ('after': that message's clientId); this one then waits, briefly,
+# until that one has been taken in, so they are answered in the order they were sent.
+SEND_ORDER_WAIT = 3.0    # for the one before it to reach the Mac at all (it may never come: lost on the way, or refused)
+SEND_ORDER_ARRIVED = 30.0  # once it has reached the Mac, for it to be taken in (it may be held up behind other work)
+SEND_ORDER_KEEP = 600
+
+
+def send_order_wait(app, body):
+    """Not under the store lock. Notes that this message has reached the Mac, then returns once the message it follows has been
+    taken in: waiting SEND_ORDER_WAIT seconds for that one to arrive, and up to SEND_ORDER_ARRIVED once it has."""
+    taken, ready = app.__dict__.setdefault('send_taken', {}), app.__dict__.setdefault('send_order', threading.Condition())
+    arrived = app.__dict__.setdefault('send_arrived', {})
+    client, after = body.get('clientId'), body.get('after')
+    with ready:
+        now = time.monotonic()
+        for old in [k for k, at in arrived.items() if at < now - SEND_ORDER_KEEP]: arrived.pop(old)
+        if isinstance(client, str) and SEND_ID.fullmatch(client): arrived[client] = now; ready.notify_all()
+        if not isinstance(after, str) or not SEND_ID.fullmatch(after) or after == client: return
+        start = time.monotonic()
+        while after not in taken:
+            end = start + (SEND_ORDER_ARRIVED if after in arrived else SEND_ORDER_WAIT)
+            if time.monotonic() >= end: return
+            ready.wait(end - time.monotonic())
+
+
+def send_order_taken(app, body):
+    """Store lock held. This message has been taken in (sent, put in line, joined the reply, or refused): the one after it may go."""
+    client = body.get('clientId') if isinstance(body, dict) else None
+    if not isinstance(client, str) or not SEND_ID.fullmatch(client): return
+    taken, ready = app.__dict__.setdefault('send_taken', {}), app.__dict__.setdefault('send_order', threading.Condition())
+    with ready:
+        now = time.monotonic()
+        for old in [k for k, at in taken.items() if at < now - SEND_ORDER_KEEP]: taken.pop(old)
+        taken[client] = now; ready.notify_all()
+
+
 def queue_forget_chat(bot, chat_id):
     """Lock held. A deleted conversation takes its waiting messages with it."""
     if bot.get('queue'): bot['queue'] = [e for e in bot['queue'] if e.get('chatId') != chat_id]

@@ -79,7 +79,13 @@
   state.sending = state.sending || [];
   const newId = () => crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2, 12);
   // where: 'bot/chat' or the group's id. path and body are the request, sent again unchanged by 重新傳送.
-  window.sendingAdd = (where, path, body, group) => { const s = {id: newId(), where, path, body: {...body, clientId: newId()}, group, at: Date.now()}; state.sending.push(s); return s; };
+  // A message sent while the one before it to the same Bot is still on its way says so ('after'): two requests can reach the Mac
+  // in either order, and the Mac then takes them in the order they were sent (#142).
+  window.sendingAdd = (where, path, body, group) => {
+    const before = path === 'chat' ? state.sending.filter(x => x.path === 'chat' && x.body.botId === body.botId && !x.done && !x.error).pop() : null;
+    const s = {id: newId(), where, path, body: {...body, clientId: newId(), ...(before ? {after: before.body.clientId} : {})}, group, at: Date.now()};
+    state.sending.push(s); return s;
+  };
   const forget = s => { state.sending = state.sending.filter(x => x !== s); };
   // Drawn until the conversation itself has it, so it never blinks out between the answer and the refresh, and never shows twice.
   const arrived = (s, messages, waiting) => [...messages.filter(m => m.role === 'user'), ...waiting].some(m => m.content === s.body.content && Date.parse(m.createdAt) >= s.at - 2000);

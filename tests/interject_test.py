@@ -129,8 +129,8 @@ class Base(unittest.TestCase):
 class Interject(Base):
     def test_changes_the_reply_that_is_running(self):
         self.wait(self.send('first')[1]['jobId'])  # the conversation's CLI is open from here on
-        job_id = self.send('HOLD do the long job')[1]['jobId']; self.running(job_id)
-        status, sent = self.send('make it shorter')
+        job_id = self.send('HOLD do the long job', clientId='msg-hold-0001')[1]['jobId']; self.running(job_id)
+        status, sent = self.send('make it shorter', clientId='msg-hold-0002', after='msg-hold-0001')  # sent in order after it (#142): still joins it
         self.assertEqual((status, sent.get('interjected'), sent.get('jobId')), (202, True, job_id))
         job = self.wait(job_id)
         self.assertEqual((job['status'], job['content']), ('completed', 'changed course: make it shorter'))
