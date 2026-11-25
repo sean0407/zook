@@ -83,6 +83,25 @@ def read_group_file(path):
         return f.read()
 
 
+def group_local_paths(store, group, bot_id, text, shared, author=''):
+    """Lock held. Paths another member named for a file that is also among the group's files, rewritten to where this Bot reads
+    that file: each member has its own workspace, so 「存在 workspaces/<別人>/簡報.pptx」 is a path the reader cannot open."""
+    text = str(text or '')
+    if not shared or not author or '/' not in text: return text
+    pairs = [((info or {}).get('origName'), name) for name, info in (group.get('fileInfo') or {}).items() if (info or {}).get('origName') and name in shared]
+    counts = {}
+    for orig, _ in pairs: counts[orig] = counts.get(orig, 0) + 1
+    originals = {orig: name for orig, name in pairs if counts[orig] == 1}  # two files uploaded under one name: which is meant is not known
+    theirs = str(store.dir / 'workspaces' / author) + '/'  # only the author's own workspace: a same-named file elsewhere is another file
+    mine = group_copy_folder(store, bot_id)
+    for path in sorted(named_paths(text), key=len, reverse=True):  # a longer path first, so a shorter one inside it is not half-replaced
+        if not path.startswith(theirs): continue
+        base = path.rsplit('/', 1)[-1]
+        name = base if base in shared else originals.get(base) or (upload_name(base) if upload_name(base) in shared else '')
+        if name and path != str(mine / name): text = text.replace(path, str(mine / name))
+    return text
+
+
 NAMED_CHECK_MAX = 5  # PDFs named in a checked reply that are copied for the checker
 NAMED_CHECK_KEEP = 50  # copies remembered per group, so the same file is not uploaded again at every check
 
