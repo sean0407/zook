@@ -25,7 +25,7 @@ def set_group_fields(store, group, body, creating=False):
         group['turnLimit'] = body['turnLimit']
     if 'name' in body:
         name = body['name']
-        if not isinstance(name, str) or len(name) > 100: raise ValueError('名稱無效。')
+        if not isinstance(name, str) or len(name) > 100: raise ValueError(field_words('name', name, 100))  # 「名稱最多 100 字，目前是 120 字。」 (#223⑤)
         group['name'] = name.strip()
     if not group.get('name'):
         group['name'] = '、'.join(store.find('bots', x)['name'] for x in group['botIds'])[:100]

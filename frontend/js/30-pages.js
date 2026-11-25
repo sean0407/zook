@@ -1,5 +1,32 @@
   // ---- Attachments: each file is uploaded as soon as it is added, then sent with the message.
-  if (!state.pendingBy) state.pendingBy = {};  // files waiting to be sent, per Bot or group
+  // #153①: the files already uploaded are kept in this window's sessionStorage, so reloading the page does not drop them silently.
+  const PENDING_STORE = 'zook-pending-files';
+  function keepPending() {
+    const kept = {};
+    for (const [key, list] of Object.entries(state.pendingBy || {})) {
+      const done = (list || []).filter(f => f.id && !f.uploading).map(f => ({key: f.key, id: f.id, name: f.name, size: f.size, kind: f.kind || '', fromPath: f.fromPath || ''}));
+      if (done.length) kept[key] = done;
+    }
+    try { Object.keys(kept).length ? sessionStorage.setItem(PENDING_STORE, JSON.stringify(kept)) : sessionStorage.removeItem(PENDING_STORE); } catch (_) {}
+  }
+  function restorePending() {
+    let saved = {};
+    try { saved = JSON.parse(sessionStorage.getItem(PENDING_STORE) || '{}') || {}; } catch (_) {}
+    const out = {};
+    for (const [key, list] of Object.entries(saved)) {
+      if (!Array.isArray(list)) continue;
+      out[key] = list.filter(f => f && /^[0-9a-f]{32}$/.test(String(f.id))).slice(0, 10).map(f => ({key: String(f.key || Math.random().toString(36).slice(2)), id: f.id, name: String(f.name || '檔案'), size: Number(f.size) || 0, kind: f.kind === 'image' ? 'image' : 'file', fromPath: String(f.fromPath || ''), uploading: false, url: f.kind === 'image' ? '/api/uploads/' + f.id : ''}));
+    }
+    return out;
+  }
+  // × in the message box: the file is taken out, and Zook deletes its upload (it keeps one that a sent message uses).
+  function dropPending(key) {
+    const list = pendingList(), at = list.findIndex(f => f.key === key);
+    if (at < 0) return;
+    const [f] = list.splice(at, 1); keepPending();
+    if (f.id) api('uploads/' + encodeURIComponent(f.id), {method: 'DELETE'}).catch(() => {});
+  }
+  if (!state.pendingBy) state.pendingBy = restorePending();  // files waiting to be sent, per Bot or group
   const pendingKey = () => activeGroup() ? effortKey() : effortKey() + ':' + ((state.data?.bots || []).find(b => b.id === state.selected)?.chatId || '');  // each conversation has its own
   const pendingList = () => state.pendingBy[pendingKey()] || (state.pendingBy[pendingKey()] = []);
   const kb = n => n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1024 / 1024).toFixed(1) + ' MB';
@@ -30,7 +57,7 @@
       : `<a class="att-file" href="/api/uploads/${esc(a.id)}" download="${esc(a.name)}">${fileIcon(a.name)} ${esc(a.name)}</a>`).join('')}</div>`;
   }
   async function addFiles(files) {
-    const list = pendingList(), failed = [], odd = []; let ok = 0;
+    const list = pendingList(), failed = [], renamed = [], odd = []; let ok = 0;
     for (const f of files) {
       if (list.length >= 10) { failed.push({name: f.name, reason: '每則訊息最多 10 個檔案'}); continue; }
       if (f.name && f.name !== 'image.png' && list.some(x => x.name === f.name && x.size === f.size && !x.fromPath)) { failed.push({name: f.name, reason: '已經附上同一個檔案'}); continue; }
@@ -45,11 +72,14 @@
         const meta = await res.json();
         if (!res.ok) throw new Error(meta.error || '上傳失敗');
         Object.assign(item, {id: meta.id, kind: meta.kind, uploading: false}); ok++;
+        if (meta.name && meta.name !== name) { item.name = meta.name; renamed.push(`「${midName(name)}」已改名為「${midName(meta.name)}」`); }  // #153③: a name the Mac cannot keep as it is
+        if (!list.includes(item)) api('uploads/' + encodeURIComponent(meta.id), {method: 'DELETE'}).catch(() => {});  // × pressed while it was uploading
         if (UNREADABLE.test(name)) odd.push(name);
       } catch (e) { if (list.includes(item)) list.splice(list.indexOf(item), 1); failed.push({name, reason: e.message || '上傳失敗'}); }
       render(true);
     }
-    if (failed.length || odd.length) toast([failed.length ? fileSummary(ok, failed, '附上') : '', unreadableNote(odd)].filter(Boolean).join('。'));  // one summary at the end (#150), not one note per file that the next one covers
+    keepPending();
+    if (failed.length || renamed.length || odd.length) toast([failed.length ? fileSummary(ok, failed, '附上') : '', renamed.length ? renamed.join('、') + '（檔名裡有不能用的字元或太長）' : '', unreadableNote(odd)].filter(Boolean).join('；'));  // one summary at the end (#150), not one note per file that the next one covers
   }
   // A file path typed or pasted into the message box: offer to attach that file. Nothing is read until the user clicks 附上.
   state.pathSkip = state.pathSkip || new Set();
@@ -86,8 +116,9 @@
     try {
       const meta = await post('uploads/path', {path});
       Object.assign(item, {id: meta.id, name: meta.name, size: meta.size, kind: meta.kind, uploading: false, url: meta.kind === 'image' ? '/api/uploads/' + meta.id : ''});
+      if (!list.includes(item)) api('uploads/' + encodeURIComponent(meta.id), {method: 'DELETE'}).catch(() => {});  // × pressed while it was copied
     } catch (err) { if (list.includes(item)) list.splice(list.indexOf(item), 1); toast(err.message || '附上失敗'); }  // removed already if the user pressed ×
-    render(true); showPathOffers();
+    keepPending(); render(true); showPathOffers();
   });
   document.addEventListener('paste', e => {
     const files = [...(e.clipboardData?.files || [])];
@@ -342,6 +373,14 @@
     }
   }
   // Dropdown: open/close, pick an option, close on outside click or Escape.
+  // Where a dropdown's menu opens and how tall it may be: whole when the window has room below or above the button (so the
+  // last choice and its hint are never cut off, #96④/#53③), otherwise on the roomier side, scrolling, inside the window.
+  function menuPlace(top, bottom, natural, height) {
+    const below = height - bottom - 14, above = top - 14, want = Math.min(natural, 520);
+    if (want <= below) return {top: bottom + 6, maxHeight: want};
+    if (want <= above) return {top: top - 6 - want, maxHeight: want};
+    return below >= above ? {top: bottom + 6, maxHeight: Math.max(below, 0)} : {top: 8, maxHeight: Math.max(above, 0)};
+  }
   const closeDropdowns = except => document.querySelectorAll('.dd.open').forEach(d => { if (d !== except) { d.classList.remove('open'); d.querySelector('.dd-btn').setAttribute('aria-expanded', 'false'); } });
   // The launcher menu closes when anything outside it is clicked, or Escape is pressed.
   // Listened for on the way down, so a click that another handler stops (a dropdown) still closes it.
@@ -367,9 +406,10 @@
         const r = btn.getBoundingClientRect(), menu = dd.querySelector('.dd-menu');
         setTimeout(() => { if (dd.classList.contains('open')) (dd.querySelector('.dd-opt.selected:not([hidden])') || dd.querySelector('.dd-opt:not([hidden])'))?.focus({preventScroll: true}); });  // the arrow keys start from the current choice
         menu.style.minWidth = Math.max(r.width, 220) + 'px';
-        menu.style.top = (r.bottom + 6) + 'px';
+        menu.style.maxHeight = '';
+        const at = menuPlace(r.top, r.bottom, menu.scrollHeight + menu.offsetHeight - menu.clientHeight, innerHeight);  // with its border
+        Object.assign(menu.style, {top: at.top + 'px', maxHeight: at.maxHeight + 'px'});
         menu.style.left = Math.max(8, Math.min(r.right - Math.max(menu.offsetWidth, r.width, 220), innerWidth - menu.offsetWidth - 8)) + 'px';
-        if (r.bottom + 6 + menu.offsetHeight > innerHeight - 8) menu.style.top = Math.max(8, r.top - 6 - menu.offsetHeight) + 'px';
       }
       e.stopPropagation(); return;
     }

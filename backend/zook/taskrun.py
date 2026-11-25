@@ -49,7 +49,7 @@ class TaskRuns:
                     plan = self._task_next(store, group, run, 'host' in threads)
                     if plan['finish']: break
                     if plan['stop']:
-                        ended = 'stopped'; group['messages'].append(dict(id=ID(), role='system', content=plan['stop'], createdAt=NOW()))
+                        ended = 'stopped'; run['stopWhy'] = plan['stop']; group['messages'].append(dict(id=ID(), role='system', content=plan['stop'], createdAt=NOW()))  # kept for the board (#130)
                         for job in [j for j in (store.find('jobs', x) for x in group.get('activeJobIds') or []) if j]: self.cancel_job(job)
                         break
                     if json.dumps(run, sort_keys=True, default=str) != before: store.save()
@@ -266,7 +266,10 @@ class TaskRuns:
                 if kind == 'wake':  # the host did not get the reports: they are news again
                     told = set(run.get('wakeFor') or [])
                     run['delivered'] = [k for k in run.get('delivered') or [] if k.split(':')[0] not in told]
-                group['messages'].append(dict(id=ID(), role='system', content='主持人%s沒有完成這一輪。' % ('' if turn else '這次不能回覆，'), createdAt=NOW()))
+                job = turn['job'] if turn else {}  # #130: why, and what happens next (two misses in a row stop the run, _task_next)
+                why = '這次不能回覆' if not turn else '回覆被停止' if job['status'] == 'cancelled' else ' '.join(str(job.get('error') or '').split())[:150].rstrip('。. ') or '回覆沒有完成'
+                after = '' if run.get('status') != 'running' or run['hostMissed'] >= 2 else '在下方再送一次訊息就會重新開始。' if not run.get('tasks') else 'Zook 會再請他一次；再沒完成，任務會先停下。'  # no plan: the run ends here
+                group['messages'].append(dict(id=ID(), role='system', content='主持人沒有完成這一輪：%s。%s' % (why, after), createdAt=NOW()))
             elif turn and turn['job']['status'] == 'completed': run['hostMissed'] = 0; run.pop('userMissed', None)
             if not turn: store.save(); self.task_poke(group_id); return
             group['activeJobIds'] = [x for x in group.get('activeJobIds') or [] if x != turn['job']['id']]; group['activeJobId'] = (group['activeJobIds'] or [None])[0]

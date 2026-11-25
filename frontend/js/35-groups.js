@@ -15,6 +15,14 @@
     const ids = new FormData(form).getAll('botIds'), slot = form.querySelector('[data-host-field]'), now = form.elements.hostId.value;
     slot.innerHTML = settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', ids.includes(now) ? now : '', hostOptions(ids)));
   }
+  // #96③: with many Bots the member list has a search box; the list itself does not scroll inside the window.
+  function filterGroupMembers(input) {
+    const q = input.value.trim().toLowerCase(), box = input.closest('form').querySelector('.member-pick');
+    let shown = 0;
+    box.querySelectorAll('.member-switch').forEach(row => { row.hidden = !!q && !row.dataset.find.includes(q); shown += !row.hidden; });
+    box.querySelector('[data-member-none]').hidden = shown > 0;
+  }
+  document.addEventListener('keydown', e => { if (e.key === 'Enter' && 'memberSearch' in (e.target.dataset || {})) e.preventDefault(); });  // Enter does not create the group
   // What the form shows under the settings: why 自動 cannot be saved yet, and a hint when every member is the same vendor (#218).
   const botFamily = b => { const p = b.provider || state.data.settings.provider || ''; return p === 'auto' ? '' : (state.providers || []).find(x => x.id === p)?.kind || p; };
   function groupFormNote(form) {
@@ -24,8 +32,15 @@
     const families = members.map(botFamily), one = members.length >= 2 && families.every(f => f && f === families[0]);
     const el = form.querySelector('[data-group-problem]'), hint = form.querySelector('[data-group-hint]');
     if (el) { el.textContent = problem; el.hidden = !problem; }
-    if (hint) { hint.textContent = one ? `成員都是 ${providerShort(families[0])}，沒有跨家驗收：結果要你自己看，或加一位別家的 Bot。` : ''; hint.hidden = !one; }
+    const kept = groupKeepsAuto(form) ? '這個群組設定為「自動」，但任務引擎已關閉，所以暫時用「自由」討論；儲存不會改掉，到「設定」打開任務引擎就會恢復。' : '';
+    const words = [kept, one ? `成員都是 ${providerShort(families[0])}，沒有跨家驗收：結果要你自己看，或加一位別家的 Bot。` : ''].filter(Boolean).join(' ');
+    if (hint) { hint.textContent = words; hint.hidden = !words; }
     return !problem;
+  }
+  // #223②: a group saved as 自動 while the task engine is off shows 自由; left on 自由 (and still with a host and two members), saving keeps 自動.
+  function groupKeepsAuto(form) {
+    const g = form.dataset.id && (state.data.groups || []).find(x => x.id === form.dataset.id), d = new FormData(form);
+    return !!g && g.mode === 'auto' && !taskEngineOn() && (d.get('mode') || 'free') === 'free' && !!d.get('hostId') && d.getAll('botIds').filter(id => state.data.bots.some(b => b.id === id)).length >= 2;
   }
   const groupModeControl = g => `<div class="effort-pick group-mode" title="討論方式">${dropdown('groupMode', currentGroupMode(g), groupModeOptions().filter(o => o.id !== 'auto' || autoReady(g)))}</div>`;
 
@@ -116,9 +131,13 @@
   }
   // A check that is still running is read again every few seconds until it finishes or fails, even if the discussion's own
   // polling stopped early (a dropped request, a reply that arrived while an older full refresh was still on its way).
+  // #215②: a check still marked 「正在查核」 after the Mac said the run is over (left behind) is not asked about again and again;
+  // only when the discussion changes after that.
+  if (!state.groupQuiet) state.groupQuiet = {};
+  const groupNeedsPoll = g => g.status === 'running' || (groupMsgs(g).some(x => x.checkOf && x.status === 'running') && state.groupQuiet[g.id] !== groupFileMark(g));
   setInterval(() => {
     const g = state.data && state.page === 'chat' && state.groupId ? activeGroup() : null;
-    if (g && !state.groupPollers[g.id] && (g.status === 'running' || groupMsgs(g).some(x => x.checkOf && x.status === 'running'))) pollGroup(g.id);
+    if (g && !state.groupPollers[g.id] && groupNeedsPoll(g)) pollGroup(g.id);
   }, 2500);
 
   // 檔案 tab of the group's detail panel.

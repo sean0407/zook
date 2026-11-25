@@ -187,6 +187,22 @@ class BackupSettingsTest(Harness, unittest.TestCase):
         while time.time() < end and self.req('GET', '/api/backups/%s/preview' % made)[1]['busy']: time.sleep(0.2)
         self.assertEqual(self.req('POST', '/api/backups/%s/restore' % made, {})[0], 200)
 
+    def test_stop_then_restore_also_stops_what_waits_in_line(self):
+        # 停止後還原 (#50③): stopped and restored in one step, so a message waiting behind the stopped reply cannot start in between.
+        made = self.req('POST', '/api/backups', {})[1]['name']
+        self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': 'slow one'})
+        end = time.time() + 10
+        while time.time() < end and not self.req('GET', '/api/backups/%s/preview' % made)[1]['busy']: time.sleep(0.2)
+        status, queued = self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': 'slow two'})
+        self.assertLess(status, 300, queued)
+        status, done = self.req('POST', '/api/backups/%s/restore' % made, {'stop': True})
+        self.assertEqual(status, 200, done)
+        self.assertEqual([(x['type'], x['name']) for x in done['stopped']], [('bot', '小幫手')])
+        time.sleep(1.5)
+        self.assertEqual(self.req('GET', '/api/backups/%s/preview' % made)[1]['busy'], [])
+        js = (ROOT / 'frontend/js/39-upkeep.js').read_text()
+        self.assertIn('stop: true', js); self.assertNotIn('backupStopAll', js)  # the page asks for it in the same request, never stops and waits itself
+
     def test_backup_section_says_what_is_in_it(self):
         js = (ROOT / 'frontend/js/39-upkeep.js').read_text()
         self.assertIn('記憶', js.split('function backupSection')[1].split('const BUDGET_OVER')[0])

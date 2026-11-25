@@ -199,6 +199,13 @@ def group_stopped(store, group):
     group_settle_interjections(group); task_stop(store, group)
 
 
+def group_stop_now(app, store, group):
+    """Lock held. 停止 a group's discussion and the replies it is waiting on (the 停止 button, and 停止後還原 in backupplus.py)."""
+    ids = group.get('activeJobIds') or ([group['activeJobId']] if group.get('activeJobId') else [])
+    group.update(status='idle', runId=None, activeJobId=None, activeJobIds=[]); group_stopped(store, group)
+    for job in [j for j in (store.find('jobs', x) for x in ids) if j]: app.cancel_job(job)
+
+
 def group_everyone(content, members):
     """@所有人, but not a member whose name merely starts with those words."""
     text = str(content or '')

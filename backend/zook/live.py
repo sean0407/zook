@@ -110,7 +110,10 @@ class LiveCli:
         self.send(live_line(self.kind, prompt), turn)
         return turn
 
-    def send(self, data, turn): self.writes.put((data, turn))
+    def send(self, data, turn):
+        expect = getattr(self.proc.stdin, 'expect', None)
+        if expect: expect()  # not written yet: Zook closing waits for it (background.py bg_starting)
+        self.writes.put((data, turn))
 
     def end(self, turn):
         with self.lock:
@@ -410,6 +413,7 @@ def live_interject(app, job, text):
     turn = app.processes.get(job['id'])
     if not isinstance(turn, LiveTurn) or turn.cli.kind not in INTERJECT_KINDS: return '這個模型無法在回覆途中接收訊息'
     if isinstance(turn.cli, AdoptedCli): return '這則回覆是 Zook 重開後接回的'  # its input stayed with the Zook that closed (background.py)
+    if app.__dict__.get('no_starts'): return 'Zook 正在關閉'  # past the point where closing waits for what is written to it (bg_starting)
     if (job.get('origin') or 'user') != 'user': return '這則回覆不是你發起的'
     return turn.add(text)
 
