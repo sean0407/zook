@@ -1826,6 +1826,9 @@ body[data-voice="on"] [data-action="voice"] { color: #c0564f; background: #fdece
 .team-names input[name="jobTitle"] { font-size:12px; color:#555; }
 .team-card p { margin:0; font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
 .team-card p span { display:inline-block; min-width:5.5em; color:var(--muted); font-size:12px; }
+.team-model { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.team-model label { display:flex; flex-direction:column; gap:3px; min-width:0; font-size:12px; color:var(--muted); }
+.team-model .dd, .team-model .dd-btn { width:100%; }
 
 /* The workspace name at the bottom of the sidebar opens the menu */
 .side-footer .launcher { flex:1; min-width:0; }
