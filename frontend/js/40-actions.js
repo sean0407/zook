@@ -144,7 +144,8 @@
           render(true);
           break;
         case 'dir-tab':
-          state.page = id; render();
+          if (el.dataset.clear !== undefined) state.dirQuery = '';
+          await loadPage(id); render();  // reads the list again: a plugin installed meanwhile shows up
           break;
         case 'dir-filter':
           state.dirFilter = id; render(true);
@@ -158,18 +159,23 @@
           const key = kind === 'skill' ? 'disabledSkills' : kind === 'mcp' ? 'sharedMcp' : 'disabledPlugins', off = new Set(state.data.settings[key] || []);
           off.has(id) ? off.delete(id) : off.add(id);
           state.data.settings = await post('settings', {[key]: [...off]}, 'PATCH');
-          if (kind === 'mcp') { render(true); toast(off.has(id) ? '已開放給所有 Bot' : '已停用這個連接器'); break; }
+          if (kind === 'mcp') { render(true); toast(off.has(id) ? '已開放給所有 Bot' : '已停用這個連接器，所有 Bot 都不會再用它'); break; }
           if (kind === 'plugin') state.integrations = await api('integrations');
           render(true);
-          toast(kind === 'skill' ? (off.has(id) ? '已停用這個 Skill' : '已開放給所有 Bot') : (off.has(id) ? '已停用插件' : '已啟用插件'));
+          toast(kind === 'skill' ? (off.has(id) ? '已停用這個 Skill，所有 Bot 都不會再用它' : '已開放給所有 Bot') : (off.has(id) ? '已停用插件，所有 Bot 都不會再用它' : '已啟用插件，所有 Bot 都能用'));
           break;
         }
-        case 'delete-memory':
-          if (await ask({title: '刪除這則記憶？', lines: ['刪除後無法復原，Bot 之後不會再參考它。'], run: () => api('memories/' + encodeURIComponent(id), {method: 'DELETE'})})) {
+        case 'delete-memory': {
+          const m = (state.data.memories || []).find(x => x.id === id);
+          if (!m) break;
+          const owner = m.botId && state.data.bots.find(b => b.id === m.botId)?.name;
+          const after = !m.botId ? '所有 Bot 之後都不會再記得這件事。' : owner ? `「${owner}」之後不會再記得這件事。` : '';
+          if (await ask({title: '刪除這則記憶？', lines: [`「${m.content}」`, '刪除後無法復原。' + after], run: () => api('memories/' + encodeURIComponent(id), {method: 'DELETE'})})) {
             await refresh();
             toast('已刪除記憶')
           }
           break;
+        }
         case 'group-continue': { const g = activeGroup(); await post('groups/' + encodeURIComponent(g.id) + '/continue'); await refresh(); pollGroup(g.id); break; }
         case 'group-discard': { const g = activeGroup(); await post('groups/' + encodeURIComponent(g.id) + '/continue', {discard: true}); await refresh(); break; }
         case 'group-summarize': { const g = activeGroup(); await post('groups/' + encodeURIComponent(g.id) + '/summarize'); await refresh(); pollGroup(g.id); break; }
@@ -472,7 +478,7 @@
           el.disabled = true; el.textContent = '匯入中…';
           const r = await post('skills/import', {ids});
           state.integrations = await api('integrations'); await refresh();
-          toast([r.imported.length ? `已匯入 ${r.imported.length} 個 Skill` : '沒有新的 Skill 可以匯入', r.skipped.length ? `${r.skipped.length} 個同名的只保留一份` : '', r.failed.length ? `${r.failed.length} 個匯入失敗：${r.failed[0].error}` : ''].filter(Boolean).join('，'));
+          toast([r.imported.length ? `已匯入 ${r.imported.length} 個 Skill：${r.imported.join('、')}` : '沒有新的 Skill 可以匯入', r.skipped.length ? `${r.skipped.length} 個同名的只保留一份` : '', r.failed.length ? `${r.failed.length} 個匯入失敗：${r.failed[0].error}` : ''].filter(Boolean).join('，'));
           break;
         }
         case 'skill-update':
@@ -569,17 +575,12 @@
           el.disabled = true;
           try { await forceStop(id); } finally { el.disabled = false; }  // a failed try can be tried again
           break;
-        case 'share': {
-          const g = activeGroup();
-          if (g) {
-            const name = id => state.data.bots.find(b => b.id === id)?.name || 'Bot';
-            const all = (await api('groups/' + encodeURIComponent(g.id) + '/messages?all=1')).messages;  // the whole discussion, not only the part on the page
-            download(`# ${g.name}\n\n${all.filter(m=>m.content).map(m=>m.role==='system'?`> ${m.content}`:`## ${m.role==='user'?'我':name(m.botId)}\n\n${m.content}`).join('\n\n')}`, `${g.name.replace(/[\\/:*?"<>|]/g,'_')}-群組對話.md`, 'text/markdown;charset=utf-8');
-            break
-          }
-          let b = activeBot();
-          const whole = (await api(`bots/${encodeURIComponent(b.id)}/messages?chat=${encodeURIComponent(b.chatId)}&all=1`)).messages;  // not only the part on the page
-          download(`# ${b.name}\n\n${whole.map(m=>`## ${m.role==='user'?'我':b.name}\n\n${m.content}`).join('\n\n')}`, `${b.name.replace(/[\\/:*?"<>|]/g,'_')}-對話.md`, 'text/markdown;charset=utf-8');
+        case 'share': {  // the open conversation as Markdown (chatexport.py)
+          const g = activeGroup(), b = g ? null : activeBot();
+          const out = await api(g ? 'groups/' + encodeURIComponent(g.id) + '/export' : `bots/${encodeURIComponent(b.id)}/export?chat=${encodeURIComponent(b.chatId)}`);
+          if (out.empty) { toast('這段對話還沒有內容'); break; }
+          download(out.markdown, out.name, 'text/markdown;charset=utf-8');
+          toast(`已送出下載：${out.name}`);
           break
         }
         case 'export': {

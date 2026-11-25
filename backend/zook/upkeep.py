@@ -87,6 +87,7 @@ def backup_check(data):
     if data.get('layout') is not None: raise ValueError('這個檔案是 Zook 的主檔，裡面沒有對話內容，不能當成備份。請改用「備份與還原」建立的備份檔。')
     for key, rel, messages, _ in chat_conversations(data):
         if any(not isinstance(m, dict) or any(not isinstance(m.get(k), (str, type(None))) for k in ('id', 'role', 'status', 'content', 'note')) for m in messages): raise ValueError('備份檔的內容不完整。')
+        date_check_restored(messages)
     return data
 
 
