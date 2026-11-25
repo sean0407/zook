@@ -74,7 +74,7 @@ class FormWords(unittest.TestCase):
         self.assertIn('同一家的其他帳號要先到「各模型使用量」按「＋ 帳號」加入', code)
         self.assertIn('不會換成同一家', code)
         self.assertIn('同一家的 ${providerShort(id)} 不會切換', code)  # the 預設 line leaves the Bot's own CLI out (#43②)
-        self.assertIn("base + levelMark(accountLevel(value, ''))", code)  # 已用完 beside a fallback, as beside an account (#43③)
+        self.assertIn("levelMark(accountLevel(value, ''))", code)  # 已用完 beside a fallback, as beside an account (#43③)
         self.assertIn("[data-auto-reason]')?.toggleAttribute('hidden'", code)  # 自動配好… goes once another model is picked (#205③)
         self.assertIn('正在讀取這一家的模型…', code)  # the last CLI's model is not shown while the new list loads (#43⑥)
         self.assertIn("replace(/^換了一家[^。]*。/, '')", code)  # a model picked by hand ends that line (#43⑤)

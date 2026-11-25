@@ -1,0 +1,136 @@
+# -*- coding: utf-8 -*-
+"""#80 #158 #166② #168③ #138 #69①: a Bot whose model cannot answer says so (sidebar, chat, details, Bot form, schedules) and what
+its backup then does; the sidebar ring agrees with the usage page about a used-up Grok; each page keeps its address on reload;
+listing file names with rg --files is not called touching keys; the Bot usage table scrolls in a narrow window."""
+import datetime, importlib.util, os, sys, tempfile, time, unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SERVER = ROOT / 'backend/server.py'
+
+
+def load():
+    spec = importlib.util.spec_from_file_location('zook_server_for_settings_misc', SERVER)
+    module = importlib.util.module_from_spec(spec); sys.path.insert(0, str(SERVER.parent)); spec.loader.exec_module(module)
+    return module
+
+
+def js(): return ''.join(p.read_text(encoding='utf-8') for p in sorted((ROOT / 'frontend/js').glob('*.js')))
+
+
+def ago(hours): return (datetime.datetime.now().astimezone() - datetime.timedelta(hours=hours)).isoformat()
+
+
+class RingsAgree(unittest.TestCase):
+    def setUp(self):
+        self.m = load(); self.temp = tempfile.TemporaryDirectory(); self.store = self.m.Store(Path(self.temp.name) / 'data')
+        self.store.data['settings']['addedProviders'] = ['codex', 'claude', 'grok', 'gemini']
+
+    def tearDown(self): self.temp.cleanup()
+
+    def rings(self): return {r['id']: r for r in self.m.usage_rings(self.store)}
+
+    def test_grok_used_up_without_a_reset_time_stays_used_up(self):
+        # #158④: the ring said 每週剩餘 100% six hours after Grok reported 100% used, while the menu said 已用完.
+        self.store.data['quota'] = {'grok': {'windows': [{'label': '每週', 'usedPercent': 100, 'resetsAt': None}], 'updatedAt': ago(6)}}
+        ring = self.rings()['grok']
+        self.assertEqual((ring['week'], ring['left']), (0, 0))
+
+    def test_a_limit_with_a_passed_reset_is_still_full_again(self):
+        self.store.data['quota'] = {'codex': {'windows': [{'label': '每週', 'usedPercent': 100, 'resetsAt': time.time() - 60}], 'updatedAt': ago(1)}}
+        self.assertEqual(self.rings()['codex']['left'], 100)
+
+    def test_a_reported_reached_limit_is_used_up(self):
+        self.store.data['quota'] = {'codex': {'windows': [{'label': '每週', 'usedPercent': 40, 'resetsAt': time.time() + 3600}], 'limitReached': 'usage_limit_reached', 'updatedAt': ago(0)}}
+        self.assertEqual(self.rings()['codex']['left'], 0)
+
+    def test_sign_in_and_problem_come_with_the_rings(self):
+        self.store.data['autoStatus'] = {'claude': dict(signedIn=False, billed=False), 'codex': dict(signedIn=True, billed=False)}
+        self.store.data['providerIssues'] = {'codex': dict(issue='工作區的點數用完了')}
+        rings = self.rings()
+        self.assertIs(rings['claude']['signedIn'], False); self.assertIs(rings['codex']['signedIn'], True); self.assertIsNone(rings['gemini']['signedIn'])
+        self.assertEqual(rings['codex']['issue'], '工作區的點數用完了'); self.assertEqual(rings['claude']['issue'], '')
+
+    def test_quota_answer_carries_the_sign_in_problem(self):
+        self.assertIn("issue=((store.data.get('providerIssues') or {}).get(provider) or {}).get('issue', '') if account['status'] == 'logged_in' else ''", (ROOT / 'backend/zook/handler.py').read_text(encoding='utf-8'))
+
+
+class ListingFilesIsNotKeys(unittest.TestCase):
+    """#138: Codex listed files with `rg --files` from the home folder to find an upload; the activity said 動到金鑰或密碼."""
+    @classmethod
+    def setUpClass(cls): cls.m = load()
+
+    def setUp(self): self.cwd = os.getcwd(); os.chdir(os.path.expanduser('~'))
+
+    def tearDown(self): os.chdir(self.cwd)
+
+    def test_rg_files_only_lists_names(self):
+        gate = self.m._gate()
+        self.assertNotIn('secret', [k for k, _ in gate.command_boundaries('rg --files')])
+        self.assertNotIn('secret', [k for k, _ in gate.command_boundaries('rg --files Documents')])
+        self.assertEqual(self.m.command_summary('rg --files'), '尋找檔案')
+
+    def test_searching_contents_from_home_still_counts(self):
+        gate = self.m._gate()
+        self.assertIn('secret', [k for k, _ in gate.command_boundaries('rg -n 退貨')])
+        self.assertIn('secret', [k for k, _ in gate.command_boundaries('grep -rn 退貨 .')])
+        self.assertIn('secret', [k for k, _ in gate.command_boundaries('rg --files ~/.ssh')])  # a key folder named outright
+        for line in ('rg --hidden -e --files .', 'rg --files --files-with-matches --hidden -e . .', 'rg --files --hidden | xargs -n1 cat',
+                     'rg --files -z', 'rg -g --files', 'rg --files -- .', 'rg --files | rg 客訴', 'rg --files --hidden --no-ignore > /tmp/p; xargs cat < /tmp/p', 'rg --files; cat x', 'RIPGREP_CONFIG_PATH=/tmp/rg.conf rg --files', './rg --files', 'env rg --files'):  # a search after all, or names handed on (review)
+            self.assertIn('secret', [k for k, _ in gate.command_boundaries(line)], line)
+        self.assertNotEqual(self.m.command_summary('rg --hidden -e --files .'), '尋找檔案')
+        self.assertNotIn('尋找檔案', self.m.command_summary('rg --files | xargs cat'))
+
+    def test_listing_with_plain_options(self):
+        gate = self.m._gate()
+        self.assertNotIn('secret', [k for k, _ in gate.command_boundaries('rg --files --hidden -g "*.txt" Downloads')])
+        self.assertNotIn('secret', [k for k, _ in gate.command_boundaries('rg --files --hidden -g "*.txt"')])
+
+
+class TroubleInTheInterface(unittest.TestCase):
+    def setUp(self): self.code = js()
+
+    def test_sidebar_chat_and_details_show_it(self):
+        self.assertIn("${troubleBadge(b)}</span><span class=\"side-preview\">", self.code)  # sidebar card
+        self.assertIn('</header>${troubleBanner(b)}', self.code)  # the chat
+        self.assertIn(".join(' · '))}${troubleBadge(b)}</p>", self.code)  # 詳情
+
+    def test_words_follow_the_backup(self):
+        self.assertIn('傳訊息時會自動改用 ${providerShort(backup)} 回覆，回覆裡會註明。', self.code)
+        self.assertIn('現在傳訊息會失敗。可以在「備用模型」選一家', self.code)
+        self.assertIn("said = warn ? formTroubleText(form, choice) || quotaWarnText(choice) : ''", self.code)
+        self.assertIn("['providerChoice', 'fallbackChoice'].includes(e.target.name)", self.code)  # a backup picked in the form changes the line
+
+    def test_backup_menus_are_marked(self):
+        self.assertIn("base + (troubleMark(modelTrouble(value, '')) || levelMark(accountLevel(value, '')))", self.code)  # Bot form
+        self.assertIn("name: p.name + troubleMark(modelTrouble(p.id, ''))", self.code)  # 設定
+        self.assertIn('依序改用備用 AI 1、2，回覆裡會註明改用哪一家', self.code)
+
+    def test_antigravity_is_never_called_used_up_as_a_whole(self):
+        self.assertEqual(self.code.count("provider !== 'antigravity'"), 2)
+
+    def test_signed_out_only_from_a_check(self):
+        self.assertIn("if (r.signedIn === false) return {kind: 'login', tag: '尚未登入'}", self.code)
+
+    def test_schedule_target_warns(self):
+        self.assertIn('data-target-warn hidden', self.code)
+        self.assertIn("if (e.target.name === 'target' && e.target.closest('#schedule-form')) scheduleTargetWarn(", self.code)
+        self.assertIn("scheduleTargetWarn($('#schedule-form'))", self.code)
+        self.assertIn("${x.botId && x.on ? scheduleTroubleLine(x) : ''}", self.code)
+
+
+class PagesKeepTheirAddress(unittest.TestCase):
+    def test_schedules_page_has_an_address(self):
+        code = js()
+        self.assertRegex(code, r"PAGE_HASHES = \[[^\]]*'schedules'")
+        self.assertIn('const page = location.hash.slice(1); if (PAGE_HASHES.includes(page))', code)
+
+
+class NarrowUsageTable(unittest.TestCase):
+    def test_scrolls_sideways(self):
+        css = (ROOT / 'frontend/style.css').read_text(encoding='utf-8')
+        self.assertIn('.bot-usage { overflow-x: auto; }', css)
+        self.assertIn('.bot-usage-row { min-width: 680px; }', css)
+
+
+if __name__ == '__main__': unittest.main()

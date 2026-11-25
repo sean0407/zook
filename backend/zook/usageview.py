@@ -4,16 +4,19 @@ RING_ORDER = ('codex', 'claude', 'grok', 'antigravity', 'cursor', 'gemini')
 
 
 def _left(window, snap, now):
-    """Percent left in one limit. A limit whose reset time has passed is full again."""
+    """Percent left in one limit. A limit whose reset time has passed is full again; one without a reset time (Grok) stays as last
+    read, as the usage page and the Bot form show it (#158④)."""
     used = window.get('usedPercent')
     if not isinstance(used, (int, float)) or isinstance(used, bool): return None
-    return 100.0 if not _window_open(window, snap, now) else round(max(0.0, min(100.0, 100 - used)), 1)
+    return 100.0 if window.get('resetsAt') not in (None, '') and not _window_open(window, snap, now) else round(max(0.0, min(100.0, 100 - used)), 1)
 
 
 def usage_rings(store):
     """Lock held. One entry per model Zook knows, in the order of the usage page: what is left of its five-hour and weekly limits.
-    None means there is no figure: the model reports none (Grok, API keys), or it is not signed in yet (known is False)."""
-    data = store.data; quota = data.get('quota') or {}; status = data.get('autoStatus') or {}; now = time.time()
+    None means there is no figure: the model reports none (Grok, API keys), or it is not signed in yet (known is False).
+    signedIn is what the last sign-in check said (None: not checked), issue why a signed-in CLI still cannot be used: with
+    left at 0 for a limit reported reached, the sidebar and the chat say a Bot's model cannot answer now (#80④ #158)."""
+    data = store.data; quota = data.get('quota') or {}; status = data.get('autoStatus') or {}; now = time.time(); issues = data.get('providerIssues') or {}
     used = {(j.get('usage') or {}).get('provider') for j in data['jobs'] if isinstance(j.get('usage'), dict)}
     out = []
     for provider in P.active_ids(data):
@@ -25,7 +28,9 @@ def usage_rings(store):
         short = [r['left'] for r in main if '小時' in r['label']]; long = [r['left'] for r in main if '週' in r['label']]
         out.append(dict(id=provider, name=provider_label(provider).split('（')[0], fiveHour=min(short) if short else None, week=min(long) if long else None,
                         left=min(r['left'] for r in main) if main else None, windows=rows, updatedAt=snap.get('updatedAt'),
-                        known=bool(rows) or (status.get(provider) or {}).get('signedIn') is True or provider in used))
+                        known=bool(rows) or (status.get(provider) or {}).get('signedIn') is True or provider in used,
+                        signedIn=(status.get(provider) or {}).get('signedIn'), issue=str((issues.get(provider) or {}).get('issue') or '')[:300]))
+        if provider != 'antigravity' and limit_reached_now(snap): out[-1].update(left=0.0)  # the CLI said it is used up (Antigravity: one kind of model only)
     return out
 
 
