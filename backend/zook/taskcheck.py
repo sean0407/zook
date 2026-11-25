@@ -194,6 +194,7 @@ def task_redo_tool(app, store, group_id, locate, acted, schema, S, text):
             task = task_find(run, args.get('number'))
             if not task: raise RuntimeError('沒有這個工作編號。')
             if task['status'] != 'done': raise RuntimeError('工作 %d 還沒有完成，不能退回。' % task['n'])
+            if task_checkpoint_waiting(run): raise RuntimeError('使用者正在決定要不要繼續，先不要退回工作。')
             if task.get('sentBack', 0) >= TASK_SEND_BACK:
                 raise RuntimeError('工作 %d 已經退回過 %d 次，不能再自動退回。在總結最上面寫「未通過的地方」，交給使用者決定。' % (task['n'], task['sentBack']))
             if run['attempts'] >= task_limit(run, 'attempts'): raise RuntimeError('這個目標的嘗試次數已到上限，不能再退回。在總結最上面寫「未通過的地方」，交給使用者決定。')
@@ -280,6 +281,9 @@ def task_route(handler, store, group, parts):
         answer = handler.body().get('answer')
         if not isinstance(answer, str) or answer.strip() not in item['options']: return handler.error(400, '請從卡片上的選項選一個。')
         answer = answer.strip()
+        if item.get('kind') == 'checkpoint':  # every TASK_CHECK_EVERY rounds: go on or end here (#174)
+            task_checkpoint_answer(store, group, run, item, answer); store.save(); app.task_poke(group['id'])
+            return handler.respond(200, {'ok': True})
         item.update(status='answered', answer=answer, answeredAt=NOW())
         for t in run['tasks']:
             if t.get('gate') == item['id'] and t['status'] == 'waiting':
@@ -295,8 +299,9 @@ class TaskChecks:
     def task_resume(self, group):
         """Lock held. Start a run's loop again after it ended (the user asked to retry one of its tasks)."""
         run_id = ID(); run = group['taskRun']
-        group.update(status='running', runId=run_id, activeJobId=None, activeJobIds=[], runKind='steps')  # 插話 waits for the end of a task run
+        group.update(status='running', runId=run_id, activeJobId=None, activeJobIds=[], runKind='steps')  # 插話 goes to the host while it runs (#94)
         run.update(status='running', groupRunId=run_id, hostMissed=0)  # the counts stay as they are; the retry route gave its own room
+        task_checkpoint_reset(run)  # pressing 重試 after the run stopped is going on: a check it stopped at is not asked again
         threading.Thread(target=self._task_resumed, args=(group['id'], run_id), daemon=True).start()
 
     def _task_resumed(self, group_id, run_id):

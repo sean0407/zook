@@ -35,8 +35,16 @@
   }
   // A file path typed or pasted into the message box: offer to attach that file. Nothing is read until the user clicks 附上.
   state.pathSkip = state.pathSkip || new Set();
-  const typedPaths = text => [...new Set(String(text || '').slice(0, 20000).split(/[\s`'"<>()（）\[\]「」『』，、。：；！？*|]+/)
-    .map(w => w.replace(/[。，.,:：;]+$/, '')).filter(w => /^\/(?!\/)/.test(w) && w.length < 300 && /\/[^/]+\.[A-Za-z0-9]{1,8}$/.test(w)))].slice(0, 3);
+  // #176: a folder or file name with spaces (Finder's 「Claude code」, or Terminal's 「Claude\ code」) is found too. Its words are
+  // joined by single spaces, and a word that looks like a file name ends the path, so 「/tmp/a.txt 和 b/c.txt」 stays apart.
+  const PATH_WORD = '[^\\s/`\'"<>()（）\\[\\]「」『』，、。：；！？*|]+';
+  const SPACED_PATH = new RegExp('(?:^|[\\s`\'"<>()（）\\[\\]「」『』，、。：；！？*|])(\\/(?:(?:(?![^\\s/]*\\.[A-Za-z0-9]{1,8} )' + PATH_WORD + ' )*' + PATH_WORD + '\\/)+(?:' + PATH_WORD + ' )*?[^\\s/`\'"<>()（）\\[\\]「」『』，、。：；！？*|]*\\.[A-Za-z0-9]{1,8})(?=$|[\\s`\'"<>()（）\\[\\]「」『』，、。：；！？*|])', 'g');
+  const typedPaths = text => {
+    text = String(text || '').slice(0, 20000);
+    const plain = text.split(/[\s`'"<>()（）\[\]「」『』，、。：；！？*|]+/).map(w => w.replace(/[。，.,:：;]+$/, ''));
+    const spaced = [...text.replace(/\\ /g, ' ').matchAll(SPACED_PATH)].map(m => m[1]).filter(p => p.includes(' '));
+    return [...new Set([...spaced, ...plain].filter(w => /^\/(?!\/)/.test(w) && w.length < 300 && /\/[^/]+\.[A-Za-z0-9]{1,8}$/.test(w)))].slice(0, 3);
+  };
   function showPathOffers() {
     const input = $('#chat-input'), form = $('#chat-form');
     let bar = $('#path-offers');

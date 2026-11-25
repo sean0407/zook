@@ -659,7 +659,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.command == 'GET' and path == '/api/notifications':
                     try: after = int((parse_qs(urlsplit(self.path).query).get('after') or ['0'])[0])
                     except ValueError: after = 0
-                    return self.respond(200, dict(seq=self.server.notice_seq, items=[n for n in self.server.notices if n['seq'] > after]))
+                    return self.respond(200, notices_for(self.server, after, device=bool(self.device)))  # a phone gets only its four kinds (phonenotice.py)
                 if self.command == 'GET' and path == '/api/diagnostics': return self.respond(200, dict(providers=provider_info(), python=__import__('platform').python_version(), system=__import__('platform').system()))
                 if self.command == 'GET' and path == '/api/usage': return self.respond(200, usage())
                 if self.command == 'POST' and path == '/api/export': return self.respond(200, store.data)

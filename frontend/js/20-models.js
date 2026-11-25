@@ -106,7 +106,11 @@
   const withDefault = (options, current, own = '', label = '') => { const d = options.find(o => o.id === current), name = label || (d || options[0]).name; return [{id: '', name: '預設（目前是 ' + name + '）', hint: (d?.hint ? d.hint + '。' : '') + '跟著「設定」改'}, ...options.filter(o => !d || o.id !== d.id || o.id === own).map(o => d && o.id === d.id ? {...o, name: o.name + '（固定）', hint: '不跟著「設定」的預設改'} : o)]; };
   // Remote access: off unless turned on here. Pairing and revoking can only be done on this Mac.
   // App updates: checked automatically unless turned off; installing is always the user's decision.
-  const noticeSection = () => `<h2 class="settings-h">通知</h2><div class="setting-list">${settingRow('排程通知', '排程做完、失敗或要你核准時，在 Mac 右上角跳出通知', toggle('data-schedule-notify', state.data.settings.scheduleNotify !== false, '排程通知'))}</div>`;
+  // Phone notifications (#243): only these four reach a paired phone; everything else stays on the Mac and in 活動紀錄.
+  const PHONE_NOTICES = [['done', '手機：回覆完成', 'Bot 回覆完成或群組討論結束時通知手機'], ['failed', '手機：失敗', '回覆或群組討論沒有完成時通知手機'],
+    ['approval', '手機：等你核准', '有動作要你核准時通知手機'], ['question', '手機：等你回答', 'Bot 問你問題、等你回答時通知手機']];
+  const phoneOn = key => (state.data.settings.phoneNotify || {})[key] !== false;
+  const noticeSection = () => `<h2 class="settings-h">通知</h2><div class="setting-list">${settingRow('排程通知', '排程做完、失敗或要你核准時，在 Mac 右上角跳出通知', toggle('data-schedule-notify', state.data.settings.scheduleNotify !== false, '排程通知'))}${PHONE_NOTICES.map(([key, title, desc]) => settingRow(title, desc + '。通知只寫 Bot 或群組名稱，不含對話內容', toggle(`data-phone-notify="${key}"`, phoneOn(key), title))).join('')}</div>`;
   function updateSection() {
     const u = state.update || {};
     const status = u.state === 'checking' ? '正在檢查…' : u.available ? `有新版 ${esc(u.latest)}` : u.error ? esc(u.error) : u.latest ? '已是最新版' : '尚未檢查';
@@ -310,7 +314,7 @@
 
   function detail(b) {
     let notes = state.data.knowledge.filter(n => n.botId === b.id);
-    return `${detailBackdrop()}<aside class="detail" aria-label="詳情"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatar(b,'big')}<h2>${esc(b.name)}</h2><p>${esc(b.provider === 'auto' ? '自動選擇' : b.provider||state.data.settings.provider||'')} ${esc(b.model||'')}</p><p>${esc(permText(b))}</p>${b.autoAssigned && b.autoReason ? `<p class="muted small">自動配好：${esc(b.autoReason)}</p>` : ''}<button class="secondary detail-edit" data-action="edit-bot">編輯設定</button></div><div class="tabs"><button data-action="detail" data-id="persona" class="${state.detail==='persona'?'active':''}">人格</button><button data-action="detail" data-id="activity" class="${state.detail==='activity'?'active':''}">動態</button><button data-action="detail" data-id="database" class="${state.detail==='database'?'active':''}">資料庫</button><button data-action="detail" data-id="outputs" class="${state.detail==='outputs'?'active':''}">產出</button></div>${state.detail==='persona'?personaPanel(b):state.detail==='outputs'?outputsPanel(b):state.detail==='database'?`<div class="detail-title">知識 <button class="link" data-action="new-note">＋ 新增</button></div>${notes.length?notes.map(n=>`<button class="note-row" data-action="edit-note" data-id="${esc(n.id)}"><strong>${esc(n.title)}</strong><small>${esc(n.content)}</small></button>`).join(''):'<div class="detail-empty">尚未新增知識。加入資料，讓這個 Bot 有更多背景。</div>'}${memoryNote(b)}`:`<div class="detail-title">最近動態</div>${toolTimeline(b.id)}${(b.messages||[]).length?`<div class="detail-empty">最近對話 ${esc(formatDate(b.messages.at(-1).createdAt))}</div>`:'<div class="detail-empty">這裡會顯示最近的對話動態。</div>'}`}${usageDock()}</aside>`
+    return `${detailBackdrop()}<aside class="detail" aria-label="詳情"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatar(b,'big')}<h2>${esc(b.name)}</h2><p>${esc([providerShort(b.provider || state.data.settings.provider || 'codex'), b.model, '思考強度：' + (EFFORTS.find(x => x.id === (b.effort || state.data.settings.effort))?.name || '標準')].filter(Boolean).join(' · '))}</p><p>${esc(permText(b))}</p>${b.autoAssigned && b.autoReason ? `<p class="muted small">自動配好：${esc(b.autoReason)}</p>` : ''}<button class="secondary detail-edit" data-action="edit-bot">編輯設定</button></div><div class="tabs"><button data-action="detail" data-id="persona" class="${state.detail==='persona'?'active':''}">人格</button><button data-action="detail" data-id="activity" class="${state.detail==='activity'?'active':''}">動態</button><button data-action="detail" data-id="database" class="${state.detail==='database'?'active':''}">資料庫</button><button data-action="detail" data-id="outputs" class="${state.detail==='outputs'?'active':''}">產出</button></div>${state.detail==='persona'?personaPanel(b):state.detail==='outputs'?outputsPanel(b):state.detail==='database'?`<div class="detail-title">知識 <button class="link" data-action="new-note">＋ 新增</button></div>${notes.length?notes.map(n=>`<button class="note-row" data-action="edit-note" data-id="${esc(n.id)}"><strong>${esc(n.title)}</strong><small>${esc(n.content)}</small></button>`).join(''):'<div class="detail-empty">尚未新增知識。加入資料，讓這個 Bot 有更多背景。</div>'}${memoryNote(b)}`:`<div class="detail-title">最近動態</div>${toolTimeline(b.id)}${(b.messages||[]).length?`<div class="detail-empty">最近對話 ${esc(formatDate(b.messages.at(-1).createdAt))}</div>`:'<div class="detail-empty">這裡會顯示最近的對話動態。</div>'}`}${usageDock()}</aside>`
   }
 
   function formatDate(d) {
@@ -429,7 +433,7 @@
       const who = id => state.data.bots.find(b => b.id === id)?.name;
       // A Bot's own memory outlives the Bot; saying who wrote it would only repeat that the Bot is gone.
       const line = m => m.botId && !who(m.botId) ? '原 Bot 已刪除，沒有 Bot 會用到' : (m.botId ? who(m.botId) : '所有 Bot 共用') + ' · 由 ' + (who(m.createdBy) || '已刪除的 Bot') + ' 記住';
-      content = `<p class="muted">這裡是 Bot 幫你記住的習慣和偏好（例如：回覆用條列）。對 Bot 說「記住…」它就會記下。標「所有 Bot 共用」的每個 Bot 都知道；標 Bot 名稱的只有那個 Bot 知道。</p>${mems.length ? `<div class="cards">${mems.map(m => `<article class="card"><p>${esc(m.content)}</p><span class="status">${esc(line(m))} · ${esc(formatDate(m.createdAt))}</span><div class="actions"><button class="link" data-action="delete-memory" data-id="${esc(m.id)}" style="color:#b55">刪除</button></div></article>`).join('')}</div>` : '<div class="blank">還沒有記憶。和 Bot 聊天時說「記住…」，它就會記下來。</div>'}`;
+      content = `<p class="muted">這裡是 Bot 幫你記住的習慣和偏好（例如：回覆用條列）。對 Bot 說「記住…」它就會記下。標「所有 Bot 共用」的每個 Bot 都知道；標 Bot 名稱的只有那個 Bot 知道。</p><p class="muted">每次回覆時，Bot 會帶入「所有 Bot 共用」和它自己的記憶，取最近 40 則。共用記憶不論哪一家的 Bot（Claude、Codex、Grok、Gemini…）都讀得到。</p>${mems.length ? `<div class="cards">${mems.map(m => `<article class="card"><p>${esc(m.content)}</p><span class="status">${esc(line(m))} · ${esc(formatDate(m.createdAt))}</span><div class="actions"><button class="link" data-action="delete-memory" data-id="${esc(m.id)}" style="color:#b55">刪除</button></div></article>`).join('')}</div>` : '<div class="blank">還沒有記憶。和 Bot 聊天時說「記住…」，它就會記下來。</div>'}`;
     } else if (state.page === 'mcp-legacy') {
       let a = state.integrations?.[state.page] || [], b = activeBot(), key = state.page === 'skills' ? 'enabledSkills' : 'enabledMcp';
       content = `<label class="field">設定對象<select id="ability-bot"><option value="">請選擇 Bot</option>${state.data.bots.map(x=>`<option value="${esc(x.id)}" ${b?.id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></label><p class="muted">選擇要讓這個 Bot 使用的項目。</p>${a.length ? `<div class="cards">${a.map(i=>`<article class="card"><h3>${esc(i.name)}</h3><p>${esc(i.description||i.source||'')}</p>${state.page==='mcp'?`<span class="status">${esc(state.mcpTests[i.id]?.status==='ready'?'已驗證 · '+state.mcpTests[i.id].toolCount+' 個工具':state.mcpTests[i.id]?.status==='error'?'連線失敗：'+state.mcpTests[i.id].error:'已偵測設定，尚未驗證')}</span><div class="actions"><button class="link" data-action="test-mcp" data-id="${esc(i.id)}">測試連線</button></div>`:''}<label class="ability-check"><input type="checkbox" data-ability-kind="${key}" data-ability-id="${esc(i.id)}" ${b && (b[key]||[]).includes(i.id)?'checked':''} ${b?'':'disabled'}> 讓此 Bot 使用</label></article>`).join('')}</div>`:'<div class="blank">目前沒有偵測到項目。</div>'}`;
@@ -502,6 +506,7 @@
     state.modal = document.activeElement;
     modalRoot.innerHTML = `<div class="modal-overlay" data-action="overlay"><section class="modal ${wide?'wide':''}" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="modal-head"><h2 id="modal-title">${esc(title)}</h2><button class="icon-btn" data-action="close-modal" aria-label="關閉">×</button></div>${body}${footer}</section></div>`;
     setTimeout(() => $('.modal input,.modal textarea,.modal select,.modal button')?.focus(), 0);
+    modalRoot.querySelectorAll('form').forEach(f => { f.noValidate = true; });  // an empty field is said in words; the browser's bubble may not show (#209)
     if ($('#bot-form')) syncFeatureRows($('#bot-form'));
   }
   // 特色功能 only appear for the CLI that can really do them.
@@ -524,13 +529,14 @@
     sameFallback(form, auto ? '' : id);
   }
   // 備用模型 never switches to the Bot's own CLI, so that choice is left out; a Bot that already has it sees why it does nothing.
+  // The 預設 line names the order without that CLI, and each other CLI says when its account is used up, as 模型與帳號 does (#43).
   function sameFallback(form, id) {
     const dd = form.querySelector('input[name="fallbackChoice"]')?.closest('.dd');
     if (!dd) return;
     dd.querySelectorAll('.dd-opt').forEach(o => {
-      const base = o.dataset.base || (o.dataset.base = o.dataset.label), same = !!id && o.dataset.value === id, chosen = o.classList.contains('selected');
+      const base = o.dataset.base || (o.dataset.base = o.dataset.label), value = o.dataset.value, same = !!id && value === id, chosen = o.classList.contains('selected');
       o.hidden = same && !chosen;
-      o.dataset.label = same ? base + '（同一家，不會切換）' : base;
+      o.dataset.label = value === '' ? fallbackDefaultLabel(id) : same ? base + '（同一家，不會切換）' : value === '__none' ? base : base + levelMark(accountLevel(value, ''));
       o.querySelector('strong').textContent = o.dataset.label;
       if (chosen) dd.querySelector('.dd-label').textContent = o.dataset.label;
     });
@@ -564,6 +570,7 @@
     if (!b.id) restoreBotDraft(form);
     loadModels(form);
     syncFeatureRows(form);  // Claude and Cursor have nothing to choose about access
+    polishBotForm(form, b);  // limits, a name already in use, what 帳號 and 備用模型 do
     if (!state.quota) api('quota').then(q => {  // 已用完／剩不到 20% beside each account
       state.quota = q;
       if (!form.isConnected) return;

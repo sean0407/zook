@@ -1,19 +1,33 @@
   // Group discussions: host, discussion mode, turn limit, conclusion cards, cross-checks and shared files.
-  const GROUP_MODE_OPTIONS = [{id: 'free', name: '自由', hint: '相關成員回覆，可以互相 @'}, {id: 'turns', name: '輪流', hint: '依序各發言一次'}, {id: 'debate', name: '辯論', hint: '正反交鋒，最後裁定'}, {id: 'split', name: '主持人分工', hint: '主持人拆開工作，驗收後彙整'}, {id: 'compare', name: '比較', hint: '各自獨立回答，列出異同'}];
+  // #106: what each way does, in plain words; 主持人分工 (one pass, in the conversation) and 自動 (a task board, several rounds) say how they differ.
+  const GROUP_MODE_OPTIONS = [{id: 'free', name: '自由', hint: '跟問題有關的成員回覆，彼此可以 @ 接話；有主持人時由他帶討論和收尾'}, {id: 'turns', name: '輪流', hint: '每位成員依序各講一次，後面的人看得到前面說的'}, {id: 'debate', name: '辯論', hint: '成員分正反兩方，各講兩輪互相反駁，最後裁定哪邊站得住'}, {id: 'split', name: '主持人分工', hint: '一輪做完：主持人在對話裡分好工，成員同時各做一部分，主持人核對後合成一份答案'}, {id: 'compare', name: '比較', hint: '每位成員各自回答同一題、互相看不到，最後列出異同和最值得採用的'}];
   if (!state.groupMode) state.groupMode = {};
   if (!state.groupFiles) state.groupFiles = {};
-  const currentGroupMode = g => { const mode = state.groupMode[g.id] || g.mode || 'free'; return mode === 'auto' && !taskEngineOn() ? 'free' : mode; };
   const groupHostId = g => 'hostId' in g ? g.hostId : (groupMembers(g).find(b => b.isAdmin)?.id || '');
+  const autoReady = g => !!groupHostId(g) && groupMembers(g).length >= 2;  // 自動 needs a host and two members (#218)
+  const currentGroupMode = g => { const mode = state.groupMode[g.id] || g.mode || 'free'; return mode === 'auto' && (!taskEngineOn() || !autoReady(g)) ? 'free' : mode; };
   const hostOptions = ids => [{id: '', name: '不設主持人'}, ...ids.map(id => state.data.bots.find(b => b.id === id)).filter(Boolean).map(b => ({id: b.id, name: b.name}))];
   function groupSettingRows(g, chosen) {
-    const host = g.id ? groupHostId(g) : '', limit = g.turnLimit || (host ? 16 : 8);
-    return `<div class="setting-list in-form"><div data-host-field>${settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', host, hostOptions([...chosen])))}</div>${settingRow('討論方式', '送出時也能在輸入框旁，只對這一則訊息改用別的方式', dropdown('mode', g.mode === 'auto' && !taskEngineOn() ? 'free' : g.mode || 'free', groupModeOptions()))}${settingRow('回合上限', '每則訊息最多幾次發言，到了就先停下', dropdown('turnLimit', String(limit), [4, 8, 12, 16].map(n => ({id: String(n), name: n + ' 次'}))))}</div>`;
+    const host = g.id ? groupHostId(g) : '', limit = g.turnLimit || 4;
+    return `<div class="setting-list in-form"><div data-host-field>${settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', host, hostOptions([...chosen])))}</div>${settingRow('討論方式', '送出時也能在輸入框旁，只對這一則訊息改用別的方式', dropdown('mode', g.mode === 'auto' && !taskEngineOn() ? 'free' : g.mode || 'free', groupModeOptions()))}${settingRow('回合上限', '要回答的成員都回一次算 1 回合；自動轉交和追問也算在內，到了就先停下（「自動」做到目標達成為止）', dropdown('turnLimit', String(limit), [4, 5, 8, 12, 16].map(n => ({id: String(n), name: n + ' 回合'}))))}</div><p class="small error-text" data-group-problem role="alert" hidden></p><p class="muted small" data-group-hint hidden></p>`;
   }
   function syncGroupHost(form) {
     const ids = new FormData(form).getAll('botIds'), slot = form.querySelector('[data-host-field]'), now = form.elements.hostId.value;
     slot.innerHTML = settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', ids.includes(now) ? now : '', hostOptions(ids)));
   }
-  const groupModeControl = g => `<div class="effort-pick group-mode" title="討論方式">${dropdown('groupMode', currentGroupMode(g), groupModeOptions())}</div>`;
+  // What the form shows under the settings: why 自動 cannot be saved yet, and a hint when every member is the same vendor (#218).
+  const botFamily = b => { const p = b.provider || state.data.settings.provider || ''; return p === 'auto' ? '' : (state.providers || []).find(x => x.id === p)?.kind || p; };
+  function groupFormNote(form) {
+    const ids = new FormData(form).getAll('botIds'), mode = form.elements.mode?.value, host = form.elements.hostId?.value;
+    const members = ids.map(id => state.data.bots.find(b => b.id === id)).filter(Boolean);
+    const problem = mode !== 'auto' ? '' : !host ? '「自動」要由主持人拆工作、派給成員：請在「主持人」選一位成員，或改用其他討論方式。' : members.length < 2 ? '「自動」至少要 2 位成員，請再選一位。' : '';
+    const families = members.map(botFamily), one = members.length >= 2 && families.every(f => f && f === families[0]);
+    const el = form.querySelector('[data-group-problem]'), hint = form.querySelector('[data-group-hint]');
+    if (el) { el.textContent = problem; el.hidden = !problem; }
+    if (hint) { hint.textContent = one ? `成員都是 ${providerShort(families[0])}，沒有跨家驗收：結果要你自己看，或加一位別家的 Bot。` : ''; hint.hidden = !one; }
+    return !problem;
+  }
+  const groupModeControl = g => `<div class="effort-pick group-mode" title="討論方式">${dropdown('groupMode', currentGroupMode(g), groupModeOptions().filter(o => o.id !== 'auto' || autoReady(g)))}</div>`;
 
   // 預計用量: updated while typing, and never uses a model.
   function groupEstimateLine(g) {
@@ -28,7 +42,9 @@
     const key = g.id + currentGroupMode(g) + ':' + (g.messages || []).length;
     try {
       const e = await post('groups/' + encodeURIComponent(g.id) + '/estimate', {content: $('#chat-input')?.value || '', mode: currentGroupMode(g)});
-      const text = `預計${e.upTo ? '最多 ' : ' '}${e.replies} 次回覆${e.most ? `（主持人退回修正時最多 ${e.most} 次）` : ''}`;  // the token figure meant nothing to people and looked alarming
+      const fallback = currentGroupMode(g) === 'auto' && e.upTo ? `預計至少 ${e.replies} 次回覆：主持人規劃、每位成員做事各算一次，驗收和重做會再多幾次`  // #223①: 自動 has no upper bound
+        : `預計${e.upTo ? '最多 ' : ' '}${e.replies} 次回覆${e.most ? `（主持人退回修正時最多 ${e.most} 次）` : ''}`;
+      const text = e.text || fallback;  // in rounds, worded by the Mac (#174); the token figure meant nothing to people and looked alarming
       state.groupEstimate = {key, text};
       const el = $('#group-estimate');
       if (el && activeGroup()?.id === g.id) el.textContent = text;
@@ -38,7 +54,7 @@
 
   function groupRunBar(g) {
     if (g.status === 'running') return '';
-    if (g.paused) return `<div class="group-bar"><span>這輪已達發言上限，討論還沒結束。</span><button type="button" class="secondary small-btn" data-action="group-discard">結束</button><button type="button" class="primary small-btn" data-action="group-continue">繼續</button></div>`;
+    if (g.paused) return `<div class="group-bar"><span>這次詢問已達 ${esc(String(g.turnLimit || 4))} 回合上限，討論還沒結束。按「繼續」再進行 ${esc(String(g.turnLimit || 4))} 回合。</span><button type="button" class="secondary small-btn" data-action="group-discard">結束</button><button type="button" class="primary small-btn" data-action="group-continue">繼續</button></div>`;
     let after = g.afterAsk;  // worked out over the whole discussion by the Mac, since the page may hold only its newest part
     if (!after) { const messages = groupMsgs(g), lastAsk = messages.map(m => m.role).lastIndexOf('user'), since = messages.slice(lastAsk + 1).filter(m => m.role === 'assistant' && m.content && !m.checkOf); after = {replies: since.length, card: since.some(m => m.card)}; }
     return after.replies >= 2 && !after.card ? `<div class="group-bar"><span></span><button type="button" class="secondary small-btn" data-action="group-summarize">整理結論（多用一次模型請求）</button></div>` : '';
@@ -181,3 +197,25 @@
     else { state.memberWork = null; if (row.dataset.back === 'group' && group) { state.groupId = group; state.page = 'chat'; } }
     render();
   });
+
+  // #223①: a group with nothing in it yet says what happens when you send, in the way it is set to discuss.
+  function groupEmptyView(g) {
+    const mode = currentGroupMode(g), opt = groupModeOptions().find(o => o.id === mode) || GROUP_MODE_OPTIONS[0];
+    const host = groupMembers(g).find(b => b.id === groupHostId(g)), hostName = host ? host.name : '主持人';
+    const steps = mode === 'auto' ? [
+      '在下方說出要完成的事，例如「整理這三份報價，做成一張比較表」。',
+      `${esc(hostName)} 會把工作拆成幾項，列在對話裡的「任務板」：每項寫明誰負責、做到哪裡，最上面的「下一步」會說要不要你做什麼。`,
+      state.data.settings.taskExecution === 'lowrisk' ? '只讀資料的工作會直接開始；會改檔案或對外動作的，要你按「照這個做」才開始。' : '工作排好後，要你按「照這個做」才會開始；不想做就按「不要，停止」。',
+      '成員各自做，交出後由別家的模型驗收；全部完成後主持人整理結果。',
+      '輸入框下方會寫預計幾次回覆和回合上限；驗收和重做會再多幾次。'
+    ] : [
+      `目前的討論方式是「${esc(opt.name)}」：${esc(opt.hint)}。`,
+      host ? `主持人是 ${esc(host.name)}，負責開場分派、收斂討論和總結。` : '沒有設主持人：按上方群組名稱可以指定一位。',
+      '直接發訊息就會開始；用 @ 可以只問某位成員。輸入框旁的下拉可以只對下一則換別的討論方式。'
+    ];
+    return `<div class="empty-chat">${avatarStack(g, 'hero')}<h1>${esc(g.name)}</h1><ol class="group-howto">${steps.map(s => `<li>${s}</li>`).join('')}</ol></div>`;
+  }
+  // Another way picked beside the message box: an empty group's explanation follows it (after 50-forms.js has noted the choice).
+  document.addEventListener('change', e => { if (e.target.name === 'groupMode' && activeGroup() && !(activeGroup().messages || []).length) setTimeout(() => render(true), 0); });
+  // #132②: the member list says the access in a few words; the full sentence is in the tooltip.
+  const memberAccess = b => b.provider !== 'auto' && gatedCli(b.provider) && b.gateFull ? '整台 Mac（危險動作先問你）' : permText(b);
