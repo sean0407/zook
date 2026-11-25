@@ -454,14 +454,15 @@ def interject_send(app, bot, body, by=''):
     if body.get('attachments') or body.get('plan') or body.get('long'): return None, '附件、先規劃和長任務要等它回覆完才能送'
     if job.get('groupId'): return None, '它正在群組裡回覆'
     if job.get('chatId') != bot.get('chatId'): return None, '它正在另一個對話回覆'
-    reason = live_interject(app, job, content.strip())
+    message = dict(id=ID(), role='user', content=content.strip(), createdAt=NOW(), interjected=True)
+    date_check_message(message)  # a date and weekday that do not match: said under it and to the Bot (datecheck.py)
+    reason = live_interject(app, job, content.strip() + date_check_note(message))
     if reason: return None, reason
     messages = chat_messages(bot, job['chatId'])
     at = next((i for i, m in enumerate(messages) if m['id'] == job.get('messageId')), len(messages))
-    message = dict(id=ID(), role='user', content=content.strip(), createdAt=NOW(), interjected=True)
     if by: message['author'] = by
     messages.insert(at, message)  # above the reply it changes, which is still being written
-    job.setdefault('added', []).append(message['id']); job.setdefault('addedText', []).append(content.strip()); store.save()
+    job.setdefault('added', []).append(message['id']); job.setdefault('addedText', []).append(content.strip() + date_check_note(message)); store.save()
     log_activity(store, 'chat', '在回覆途中補充訊息（%s）' % bot.get('name', ''))
     return job, ''
 

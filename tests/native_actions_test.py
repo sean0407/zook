@@ -14,7 +14,7 @@ class NativeActionsTest(unittest.TestCase):
             {'type': 'item.completed', 'item': {'type': 'file_change', 'changes': [{'path': '/w/notes.md', 'kind': 'add'}]}},
             {'type': 'item.completed', 'item': {'type': 'agent_message', 'text': '好了'}}))
         self.assertEqual(out['content'], '好了')
-        self.assertEqual(plain(out['web']), [dict(name='native_command', category='code', arguments={'summary': '執行指令：printf'}),
+        self.assertEqual(plain(out['web']), [dict(name='native_command', category='code', arguments={'summary': '寫入檔案「a.txt」'}),
                                       dict(name='native_write', category='internal', arguments={'path': '/w/notes.md'})])
 
     def test_claude_edits_listed_reads_not(self):
@@ -36,7 +36,7 @@ class NativeActionsTest(unittest.TestCase):
             {'type': 'user', 'message': {'content': [{'type': 'tool_result', 'tool_use_id': 't1', 'is_error': True, 'content': '使用者沒有允許：對外送出 到 api.example.com'},
                                                      {'type': 'tool_result', 'tool_use_id': 't2', 'content': ''}]}},
             {'type': 'result', 'result': '完成', 'is_error': False}))
-        self.assertEqual([(w['arguments'], w.get('status')) for w in out['web']], [({'summary': '對外送出 檔案 /tmp/a.json 到 api.example.com'}, 'denied'), ({'summary': '執行指令：echo、pbcopy'}, 'completed')])
+        self.assertEqual([(w['arguments'], w.get('status')) for w in out['web']], [({'summary': '對外送出'}, 'denied'), ({'summary': '複製到剪貼簿'}, 'completed')])
         self.assertNotIn('SECRET-77', json.dumps(out, ensure_ascii=False)); self.assertNotIn('hunter2', json.dumps(out['web'], ensure_ascii=False))
         out = m.parse_cli_output('cursor', L(
             {'type': 'tool_call', 'subtype': 'started', 'call_id': 'a', 'tool_call': {'shellToolCall': {'args': {'command': 'rm x'}}}},
