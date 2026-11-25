@@ -17,7 +17,7 @@ PROGRESS_STEP = 15  # seconds: lastAt moves in steps, so a busy reply does not r
 
 def progress_start(job_id):
     """A CLI starts for this reply (also a backup model, or the same reply taken up after a restart): counted from here."""
-    PROGRESS[job_id] = dict(read=0, write=0, command=0, web=0, last=time.time(), step='', stepAt=0.0, seen=set())
+    PROGRESS[job_id] = dict(read=0, write=0, command=0, web=0, last=time.time(), step='', stepAt=0.0, seen=set(), asked={}, zookDone=0, zookAt=0.0)
 
 
 def progress_end(job_id):
@@ -63,14 +63,20 @@ def progress_line(kind, d, rec):
         for block in message.get('content') or []:
             if not isinstance(block, dict) or block.get('type') not in ('tool_use', 'server_tool_use'): continue
             inp = block.get('input') if isinstance(block.get('input'), dict) else {}
-            what = _progress_tool(block.get('name'))
-            if what: _progress_add(rec, what, 'c:' + str(block['id']) if block.get('id') else None, inp.get('file_path') or inp.get('notebook_path') or inp.get('path') or '')
+            what = _progress_tool(block.get('name')); where = inp.get('file_path') or inp.get('notebook_path') or inp.get('path') or ''
+            if what and block['type'] == 'server_tool_use': _progress_add(rec, what, 'c:' + str(block.get('id')), where)  # done on the server
+            elif what and block.get('id') and len(rec['asked']) < 500: rec['asked']['c:' + str(block['id'])] = (what, where)  # counted once its result comes back
+        user = d.get('message') if d.get('type') == 'user' and isinstance(d.get('message'), dict) else {}
+        for block in user.get('content') or [] if isinstance(user.get('content'), list) else []:
+            if isinstance(block, dict) and block.get('type') == 'tool_result':
+                asked = rec['asked'].pop('c:' + str(block.get('tool_use_id')), None)
+                if asked and block.get('is_error') is not True: _progress_add(rec, asked[0], 'c:' + str(block.get('tool_use_id')), asked[1])  # refused or failed: not done
     elif kind == 'codex':
-        item = d.get('item') if str(d.get('type') or '').startswith('item.') and isinstance(d.get('item'), dict) else {}
+        item = d.get('item') if d.get('type') == 'item.completed' and isinstance(d.get('item'), dict) else {}  # only what it finished
         ref = 'x:' + str(item.get('id')) if item.get('id') else None
         if item.get('type') == 'command_execution': _progress_add(rec, 'command', ref)
         elif item.get('type') == 'web_search': _progress_add(rec, 'web', ref)
-        elif item.get('type') == 'file_change' and d.get('type') == 'item.completed':
+        elif item.get('type') == 'file_change':
             for i, change in enumerate((item.get('changes') or [])[:50]):
                 if isinstance(change, dict): _progress_add(rec, 'write', None if ref is None else '%s:%d' % (ref, i), change.get('path') or '')
     elif kind == 'grok':
@@ -85,10 +91,11 @@ def progress_line(kind, d, rec):
             name = next(iter(call), ''); raw = (call.get(name) or {}).get('args') if isinstance(call.get(name), dict) else {}
             raw = raw if isinstance(raw, dict) else {}
             what = _progress_tool(name.replace('ToolCall', ''))
-            if what: _progress_add(rec, what, 'u:' + str(d.get('call_id')) if d.get('call_id') else None, raw.get('path') or raw.get('file_path') or '')
+            refused = re.search(r'(?i)"(?:error|rejected|denied|failure)"|permission denied|被拒|沒有允許', json.dumps(call, ensure_ascii=False)[:20000])
+            if what and d.get('subtype') == 'completed' and not refused: _progress_add(rec, what, 'u:' + str(d.get('call_id')) if d.get('call_id') else None, raw.get('path') or raw.get('file_path') or '')
     elif kind == 'antigravity':
         step = d.get('step_update') if d.get('event') == 'step_update' and isinstance(d.get('step_update'), dict) else {}
-        if step.get('step_type') == 'tool':
+        if step.get('step_type') == 'tool' and step.get('state') == 'DONE':
             info = step.get('tool_info') if isinstance(step.get('tool_info'), dict) else {}
             given = info.get('parameters') if isinstance(info.get('parameters'), dict) else {}
             what = _progress_tool(step.get('tool_name'))
@@ -145,7 +152,8 @@ def progress_view(job):
     rec = PROGRESS.get(job.get('id'))
     if job.get('status') != 'running' or rec is None: return out
     read, write, web, other, zook_step, zook_at = _progress_zook(job)
-    step = zook_step if zook_step and zook_at >= rec.get('stepAt', 0) else rec['step'] or zook_step  # whichever came last
+    if read + write + web + other > rec['zookDone']: rec['zookDone'], rec['zookAt'] = read + write + web + other, time.time()  # when it was seen done, not asked for
+    step = zook_step if zook_step and rec['zookAt'] >= rec['stepAt'] else rec['step'] or zook_step  # whichever was done last
     out['progress'] = dict(read=rec['read'] + read, write=rec['write'] + write, command=rec['command'], web=rec['web'] + web, tool=other, lastAt=int(rec['last'] * 1000), step=step)
     return out
 
@@ -162,8 +170,9 @@ def progress_force(app, job_id):
     if proc is None or job_id not in STOPPING: return False
     FORCED.add(job_id)
     inner = getattr(getattr(proc, 'cli', None), 'proc', None) or proc  # a kept CLI's reply stands for its process (live.py)
-    if isinstance(inner, HostedProc): threading.Thread(target=kill_group, args=(proc,), daemon=True).start()  # through its runner, over a connection: not under the lock
-    elif inner.poll() is None: kill_group(proc)  # its leader is not collected yet, so the group number is still its own; otherwise only the wait ends
+    # Under a runner: its runner ends the whole group (it checks the group is still its own). A CLI Zook started itself is not
+    # signalled again here: its number could already belong to another program, and ■ already sent SIGTERM and then SIGKILL.
+    if isinstance(inner, HostedProc): threading.Thread(target=kill_group, args=(proc,), daemon=True).start()
     return True
 
 

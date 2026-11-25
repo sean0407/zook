@@ -570,7 +570,7 @@
           break;
         case 'force-stop':
           el.disabled = true;
-          await forceStop(id);
+          try { await forceStop(id); } finally { el.disabled = false; }  // a failed try can be tried again
           break;
         case 'share': {
           const g = activeGroup();

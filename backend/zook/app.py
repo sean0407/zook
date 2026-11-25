@@ -635,6 +635,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                     with store.lock:
                         waiting_on = store.find('jobs', job_id) or {}; asking = any(a.get('status') == 'pending' for a in waiting_on.get('approvals', []) + (waiting_on.get('questions') or []))
                     now = time.monotonic()
+                    if pipes.last >= began: progress_touch(job_id)  # stderr counts as a sign of life too
                     if kind == 'antigravity' and any(c.get('status') == 'running' for c in waiting_on.get('toolCalls') or []): active[job_id] = now  # agy is silent while a Zook tool works
                     if asking: deadline += now - began; active[job_id] = now; continue  # time spent waiting for the user does not count
                     if now - max(pipes.last, active.get(job_id, 0)) >= quiet_limit: stopped_for = quiet_reason(kind, quiet_limit)

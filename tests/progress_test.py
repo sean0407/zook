@@ -23,9 +23,12 @@ class FeederTest(unittest.TestCase):
 
     def test_claude_counts_each_tool_once(self):
         use = lambda i, name, **inp: dict(type='assistant', message=dict(content=[dict(type='tool_use', id=i, name=name, input=inp)]))
-        m, p = self.feed('claude', [dict(type='system', subtype='init'), use('a', 'Read', file_path='/x/報告.docx'), use('a', 'Read', file_path='/x/報告.docx'),
-                                    use('b', 'Bash', command='for f in *.png; do sips -Z 100 "$f"; done'), use('c', 'Write', file_path='/x/out.md'),
-                                    use('d', 'TodoWrite', todos=[]), use('e', 'mcp__zook__zook_workspace_read', path='/x'), use('f', 'WebSearch', query='q'), 'not json'])
+        done = lambda i, error=False: dict(type='user', message=dict(content=[dict(type='tool_result', tool_use_id=i, is_error=error, content='x')]))
+        m, p = self.feed('claude', [dict(type='system', subtype='init'), use('a', 'Read', file_path='/x/報告.docx'), use('a', 'Read', file_path='/x/報告.docx'), done('a'), done('a'),
+                                    use('b', 'Bash', command='for f in *.png; do sips -Z 100 "$f"; done'), done('b'), use('c', 'Write', file_path='/x/out.md'), done('c'),
+                                    use('g', 'Bash', command='rm -rf x'), done('g', True), use('h', 'Edit', file_path='/x/y.md'),  # refused; not answered yet
+                                    use('d', 'TodoWrite', todos=[]), done('d'), use('e', 'mcp__zook__zook_workspace_read', path='/x'), done('e'),
+                                    dict(type='assistant', message=dict(content=[dict(type='server_tool_use', id='f', name='web_search', input=dict(query='q'))])), 'not json'])
         self.assertEqual((p['read'], p['write'], p['command'], p['web']), (1, 1, 1, 1))
         self.assertEqual(p['step'], '查網路資料')
         self.assertTrue(abs(p['lastAt'] / 1000 - time.time()) < 5)
@@ -39,8 +42,9 @@ class FeederTest(unittest.TestCase):
         self.assertEqual((p['command'], p['read'], p['step']), (1, 1, '讀取檔案「b.txt」'))
         m, p = self.feed('cursor', [dict(type='tool_call', subtype='started', call_id='c1', tool_call=dict(shellToolCall=dict(args=dict(command='ls')))),
                                     dict(type='tool_call', subtype='completed', call_id='c1', tool_call=dict(shellToolCall=dict(args=dict(command='ls')))),
-                                    dict(type='tool_call', subtype='started', call_id='c2', tool_call=dict(editToolCall=dict(args=dict(path='/a/c.md'))))])
-        self.assertEqual((p['command'], p['write']), (1, 1))
+                                    dict(type='tool_call', subtype='started', call_id='c2', tool_call=dict(editToolCall=dict(args=dict(path='/a/c.md')))),
+                                    dict(type='tool_call', subtype='completed', call_id='c3', tool_call=dict(shellToolCall=dict(args=dict(command='rm x'), result=dict(rejected=dict(reason='hook')))))])
+        self.assertEqual((p['command'], p['write']), (1, 0))  # an edit still going and a refused command are not counted
         step = lambda i, state, name, **given: dict(event='step_update', step_update=dict(step_index=i, state=state, step_type='tool', tool_name=name, tool_info=dict(parameters=given)))
         m, p = self.feed('antigravity', [step(2, 'ACTIVE', 'run_command', CommandLine='ls'), step(2, 'DONE', 'run_command', CommandLine='ls'), step(3, 'DONE', 'write_to_file', TargetFile='/a/d.txt'), step(4, 'DONE', 'view_file', AbsolutePath='/a/e.txt')])
         self.assertEqual((p['command'], p['write'], p['read']), (1, 1, 1))
@@ -77,7 +81,7 @@ if os.path.exists(os.path.join(here, 'stubborn')): signal.signal(signal.SIGTERM,
 sys.stdin.read()
 ev = lambda t, **item: print(json.dumps({'type': t, 'item': item}), flush=True)
 ev('item.started', id='c1', type='command_execution', command='python3 make.py'); ev('item.completed', id='c1', type='command_execution', command='python3 make.py')
-ev('item.started', id='c2', type='command_execution', command='sips -Z 10 a.png'); ev('item.completed', id='f1', type='file_change', changes=[{'path': '/tmp/x/報告.docx'}])
+ev('item.started', id='c2', type='command_execution', command='sips -Z 10 a.png'); ev('item.completed', id='c2', type='command_execution', command='sips -Z 10 a.png'); ev('item.completed', id='f1', type='file_change', changes=[{'path': '/tmp/x/報告.docx'}])
 end = time.time() + 60
 while not os.path.exists(os.path.join(here, 'go')) and time.time() < end: time.sleep(0.05)
 ev('item.completed', id='m', type='agent_message', text='完成')
@@ -152,10 +156,10 @@ class EndToEndTest(unittest.TestCase):
         began = time.time()
         status, out = self.req('POST', '/api/jobs/%s/cancel' % job_id, {'force': True})
         self.assertEqual((status, out['status']), (200, 'cancelled'))
-        pid = int((self.root / 'bin/pid').read_text())
-        self.until(lambda: subprocess.run(['/bin/ps', '-p', str(pid)], capture_output=True).returncode != 0, 'not killed')
-        self.assertLess(time.time() - began, 1.8)  # at once, not after the usual moment
         self.until(lambda: not self.job(job_id).get('stopping'), 'still stopping')
+        self.assertLess(time.time() - began, 6)  # Zook let go of it without the usual waits
+        pid = int((self.root / 'bin/pid').read_text())
+        self.until(lambda: subprocess.run(['/bin/ps', '-p', str(pid)], capture_output=True).returncode != 0, 'not killed')  # ■'s SIGKILL ended it
         self.assertEqual(self.req('POST', '/api/jobs/%s/cancel' % job_id, {'force': True})[0], 200)  # again, nothing left: harmless
         self.assertEqual(self.req('POST', '/api/jobs/%s/cancel' % job_id, {'force': 'yes'})[0], 200)
 

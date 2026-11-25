@@ -48,7 +48,7 @@
     });
   }, 1000);
   // ■ pressed: 「正在停止…」 at once, while the Mac is asked.
-  function stopAsked(jobId) { state.stopAsked[jobId] = Date.now(); render(true); }
+  function stopAsked(jobId) { state.stopAsked[jobId] = state.stopAsked[jobId] || Date.now(); render(true); }
   async function forceStop(jobId) {
     await post('jobs/' + encodeURIComponent(jobId) + '/cancel', {force: true});
     toast('已強制停止');
