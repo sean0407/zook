@@ -344,7 +344,9 @@ def native_record(job, w):
     ref = w.get('_ref'); status = w.get('status', 'completed')
     by_user = bool(ref) and any(a.get('name') == 'zook_native_gate' and a.get('status') == 'approved' and (a.get('arguments') or {}).get('toolUseId') == ref for a in job.get('approvals') or [])
     out = dict(dict(category='external_read'), id=ID(), createdAt=NOW(), **{k: v for k, v in w.items() if k != '_ref'})
+    refused = bool(ref) and any(a.get('name') == 'zook_native_gate' and a.get('status') == 'denied' and (a.get('arguments') or {}).get('toolUseId') == ref for a in job.get('approvals') or [])
     out.update(status=status, approvedBy='user' if by_user else 'auto', autoApproved=not by_user and status == 'completed')
+    if refused: out['refused'] = True  # never ran: refused on its approval card (a result's words saying "denied" do not show that)
     return out
 
 
