@@ -32,6 +32,7 @@
     if (e.target.name === 'connectorAccount') switchConnectorAccount(e.target);
     if (e.target.name === 'groupMode' && activeGroup()) { state.groupMode[activeGroup().id] = e.target.value; updateGroupEstimate(); }
     if (e.target.name === 'botIds' && e.target.closest('#group-form')) syncGroupHost(e.target.closest('#group-form'));
+    if (['botIds', 'hostId', 'mode'].includes(e.target.name) && e.target.closest('#group-form')) groupFormNote(e.target.closest('#group-form'));
     if (e.target.id === 'group-file-input' && activeGroup()) uploadGroupFiles(activeGroup(), [...e.target.files]);
     if (e.target.name === 'access' && e.target.closest('#bot-form')) e.target.closest('form').querySelector('[data-access-folder]').hidden = e.target.value !== 'folder';
     if (e.target.name === 'transport' && e.target.closest('#connector-form')) e.target.closest('form').querySelectorAll('[data-for]').forEach(x => x.hidden = x.dataset.for !== e.target.value);
@@ -264,6 +265,7 @@
     if (form.dataset.busy) return;  // the first press is still on its way
     const empty = form.id === 'chat-form' ? null : [...form.elements].find(x => x.required && !x.disabled && !String(x.value).trim());
     if (empty) { fieldError(empty); return; }
+    if (form.id === 'group-form' && !groupFormNote(form)) { form.querySelector('[data-group-problem]')?.scrollIntoView({block: 'nearest'}); return; }
     const button = form.id === 'chat-form' ? null : form.querySelector('button.primary:not([type=button])'), label = button?.textContent, was = button?.disabled;
     if (button) { form.dataset.busy = '1'; button.disabled = true; button.textContent = busyWord(label); }
     try {

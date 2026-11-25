@@ -17,6 +17,9 @@ def set_group_fields(store, group, body, creating=False):
     if 'mode' in body:
         if body['mode'] not in GROUP_MODES or (body['mode'] == 'auto' and not task_on(store)): raise ValueError('討論方式無效。')
         group['mode'] = body['mode']
+    if group.get('mode') == 'auto' and ('mode' in body or 'hostId' in body):  # chosen now: a host gone on its own already turned it back to 自由 (#218)
+        if not (group_host(store, group) if 'hostId' in group or not creating else None): raise ValueError('「自動」討論方式要由主持人拆工作、派給成員，請在「主持人」選一位成員，或改用其他討論方式。')
+        if len([x for x in group['botIds'] if store.find('bots', x)]) < 2: raise ValueError('「自動」討論方式至少要 2 位成員，請再加一位成員。')
     if 'turnLimit' in body:
         if body['turnLimit'] not in GROUP_LIMITS: raise ValueError('回合上限無效。')
         group['turnLimit'] = body['turnLimit']
