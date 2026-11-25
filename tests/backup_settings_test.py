@@ -96,6 +96,7 @@ class BackupSettingsTest(Harness, unittest.TestCase):
         # The place belongs to this Mac: a restore keeps it.
         self.assertEqual(self.backups()['settings']['folder'], str((chosen / 'Zook 備份').resolve()))
         # Startup recovery finds the copies in the chosen place, even once Zook's own folder has none left.
+        time.sleep(1.1)  # backups are named by the second; the restore above just made one
         newest = self.req('POST', '/api/backups', {'label': '最新'})[1]['name']
         self.stop()
         for p in (self.data / 'backups').glob('zook-*'): p.unlink()

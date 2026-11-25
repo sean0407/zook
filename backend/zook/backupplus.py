@@ -199,7 +199,8 @@ def backup_files_size(store):
             for _ in range(20):
                 if not store.__dict__.get('backup_size_counting'): break
                 time.sleep(0.05)
-    return (store.__dict__.get('backup_size_seen') or seen)[1]
+    now = store.__dict__.get('backup_size_seen') or seen
+    return None if now[0] < 0 else now[1]  # None: still being counted
 
 
 def backup_files_job(store, kind, name, raw, label):
