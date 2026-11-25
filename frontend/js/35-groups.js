@@ -31,7 +31,7 @@
 
   // 預計用量: updated while typing, and never uses a model.
   function groupEstimateLine(g) {
-    if (g.status === 'running') return '<div class="group-estimate" id="group-estimate"></div>';  // 插話 is not a new round
+    if (g.status === 'running') return `<div class="group-estimate" id="group-estimate" role="status">${esc(groupWaitText(g))}</div>`;  // 插話 is not a new round
     const key = g.id + currentGroupMode(g) + ':' + (g.messages || []).length;
     if (state.groupEstimate?.key !== key) setTimeout(updateGroupEstimate, 0);
     return `<div class="group-estimate" id="group-estimate">${esc(state.groupEstimate?.key === key ? state.groupEstimate.text : '')}</div>`;
@@ -50,6 +50,18 @@
       if (el && activeGroup()?.id === g.id) el.textContent = text;
     } catch (_) {}
   }
+  // While it runs (#95, #203③): who is answering now and how far this ask is, e.g. 「正在等 研究助手 發言（2／3）」. The count is
+  // the members who have answered or are answering since the user's last message; once everyone has spoken it is left out.
+  function groupWaitText(g) {
+    const messages = groupMsgs(g), asked = messages.map(m => m.role === 'user' && !m.interjected).lastIndexOf(true);
+    const since = messages.slice(asked + 1).filter(m => m.role === 'assistant' && !m.checkOf), now = since.filter(m => m.status === 'running');
+    if (!now.length) return '';
+    const names = [...new Set(now.map(m => state.data.bots.find(b => b.id === m.botId)?.name).filter(Boolean))];
+    if (!names.length) return '';
+    const total = groupMembers(g).length, done = new Set(since.filter(m => m.status !== 'running' && m.content).map(m => m.botId));
+    const n = new Set([...done, ...now.map(m => m.botId)]).size;
+    return `正在等 ${names.join('、')} 發言` + (total > 1 && done.size < total && n <= total ? `（${n}／${total}）` : '');
+  }
   function scheduleGroupEstimate() { clearTimeout(scheduleGroupEstimate.timer); scheduleGroupEstimate.timer = setTimeout(updateGroupEstimate, 400); }
 
   function groupRunBar(g) {
@@ -57,7 +69,7 @@
     if (g.paused) return `<div class="group-bar"><span>這次詢問已達 ${esc(String(g.turnLimit || 4))} 回合上限，討論還沒結束。按「繼續」再進行 ${esc(String(g.turnLimit || 4))} 回合。</span><button type="button" class="secondary small-btn" data-action="group-discard">結束</button><button type="button" class="primary small-btn" data-action="group-continue">繼續</button></div>`;
     let after = g.afterAsk;  // worked out over the whole discussion by the Mac, since the page may hold only its newest part
     if (!after) { const messages = groupMsgs(g), lastAsk = messages.map(m => m.role).lastIndexOf('user'), since = messages.slice(lastAsk + 1).filter(m => m.role === 'assistant' && m.content && !m.checkOf); after = {replies: since.length, card: since.some(m => m.card)}; }
-    return after.replies >= 2 && !after.card ? `<div class="group-bar"><span></span><button type="button" class="secondary small-btn" data-action="group-summarize">整理結論（多用一次模型請求）</button></div>` : '';
+    return after.replies >= 2 && !after.card ? `<div class="group-bar"><span></span><button type="button" class="secondary small-btn" data-action="group-summarize" title="請主持人（沒有主持人時由第一位成員）把這次的討論整理成結論">請大家做個總結（會多用 1 次額度）</button></div>` : '';
   }
 
   const CARD_PARTS = [['conclusion', '結論'], ['decisions', '需要你決定'], ['actions', '待辦'], ['questions', '仍有疑問']];
@@ -91,7 +103,7 @@
     if (!othersIn(g, m)) return '';
     const last = checksOf(g, m).slice(-1)[0];
     if (last && (last.status === 'running' || checkFailed(last))) return '';
-    return `<div class="msg-actions"><button type="button" class="link" data-action="group-verify" data-id="${esc(m.id)}">請其他成員查核</button></div>`;
+    return `<div class="msg-actions"><button type="button" class="link" data-action="group-verify" data-id="${esc(m.id)}" title="請另一位成員（優先找別家的模型）核對這則回覆的事實、數字和檔案，結果寫在這則下面">請其他成員查核</button>${groupMsgs(g).filter(x => x.role === 'assistant' && !x.checkOf && x.content).slice(-1)[0]?.id === m.id ? '<span class="verify-hint">另一位成員核對事實、數字和檔案，會多用 1 次額度</span>' : ''}</div>`;  // said once, under the newest reply (#95)
   };
 
   async function verifyGroupMessage(g, id, anyway = false) {

@@ -200,9 +200,10 @@
 
   // A one-line preview in the sidebar: the words, without Markdown marks.
   const plainPreview = text => String(text || '').replace(/\[([^\]]*)\]\([^)]*\)/g, '$1').replace(/\*\*|__|~~|`+/g, '').replace(/^\s*#+\s*/gm, '');
+  // The sidebar's second line (#87④, #95): the first line of the newest message, short; never the Bot's 工作指示.
   function messagePreview(b) {
-    const m = (b.messages || []).slice(-1)[0];
-    return plainPreview(m?.content) || b.instructions || '開始新的對話'
+    const m = (b.messages || []).slice(-1)[0], line = plainPreview(m?.content).split('\n').map(x => x.trim()).find(Boolean) || '';
+    return line ? (line.length > 60 ? line.slice(0, 59) + '…' : line) : '開始新的對話'
   }
 
   function matches(s) {
