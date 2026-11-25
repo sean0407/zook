@@ -677,10 +677,35 @@ def outside_roots(tool, data, home=''):
     return [p for p in (paths or ['（沒有路徑）']) if not (isinstance(roots, list) and _under(re.split(r'[*?\[{]', p)[0] or '/', [str(r) for r in roots if isinstance(r, str) and r]))]
 
 
+# Why a reply is held to folders (ZOOK_GATE_WHY, set by Zook for this reply) and what the user can do about it. Only explains: what
+# the reply may reach is decided by Zook before the CLI starts, never here (巡檢 #86 #88: 「系統說它無法判讀」, 「不在可動資料夾範圍」).
+HELD = {'probe': ('Zook 還在確認這個 Claude 帳號的安全檢查有沒有生效，確認前這一則只能用 Bot 自己的資料夾',
+                  '這一則用過工具就會確認，使用者下一則再交辦一次就能存到原本要的位置'),
+        'workspace': ('這個 Bot 的存取範圍是「只限 Bot 工作區」',
+                      '使用者要存到別處，可以自己到「編輯 Bot」→「進階設定」→「存取範圍」改成「整台 Mac」或「指定資料夾」；要不要放寬由使用者決定'),
+        'folder': ('這個 Bot 的存取範圍是「指定資料夾」，只能動那個資料夾',
+                   '使用者要存到別處，可以自己到「編輯 Bot」→「進階設定」→「存取範圍」換資料夾或改成「整台 Mac」；要不要放寬由使用者決定'),
+        'plan': ('這一則是只能讀的回覆（例如查核或規劃），只能讀這次附上的檔案', '要存檔請使用者交給負責做事的回覆'),
+        'careful': ('這個 Bot 的主動性是「謹慎」，內建工具只能讀這次附上的檔案', '存檔改用 zook 工具（會先問使用者）')}
+
+
+def held_refusal(away):
+    """The refusal for a path outside what this reply may reach: where it was stopped, why, where to save instead, what the user can do."""
+    reason, then = HELD.get(os.environ.get('ZOOK_GATE_WHY') or '', ('這一則只能動到 Zook 允許的資料夾', '使用者可以在「編輯 Bot」查看這個 Bot 的存取範圍'))
+    save = os.environ.get('ZOOK_GATE_SAVE') or ''
+    instead = '請改存到 %s，回覆時寫出實際位置；' % save if save else ''
+    tell = '直接告訴使用者擋在哪裡、為什麼（%s），以及：%s。不要改用別的方法繞過。' % (reason, then)
+    named = _names([p for p in away if not p.startswith('（')])
+    if not named and away and away[0] == '（無法判讀的指令）':
+        return ('沒有做：這個指令用了變數、$( )、內嵌程式或另一個 shell，Zook 看不出它會動到哪些檔案，而這一則只能動到允許的資料夾，所以擋下了。'
+                '改用寫出完整路徑的簡單指令或寫檔工具；暫存檔也放在允許的資料夾裡，不要用 mktemp、/tmp 或 $變數。%s%s' % (instead, tell))
+    return '沒有做：%s 不在這一則可以動的範圍，擋在 Zook 的存取範圍（不是檔案本身的問題）。%s%s' % (named or away[0], instead, tell)
+
+
 def decide(tool, data, home=''):
     """(allowed, why) for one tool call."""
     away = outside_roots(tool, data, home)
-    if away: return False, '這一則只能動到 Zook 允許的資料夾（例如附件），%s 不在裡面，所以擋下了。直接告訴使用者。' % (_names([p for p in away if not p.startswith('（')]) or away[0])
+    if away: return False, held_refusal(away)
     raw = boundaries(tool, data, home)
     if not raw: return True, ''
     split = [t for k, t in raw if k == 'split']
