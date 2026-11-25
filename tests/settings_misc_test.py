@@ -121,11 +121,16 @@ class SearchRootsFromASafeFolder(unittest.TestCase):
     def test_home_named_after_the_options_is_searched(self):
         for line in ('rg --hidden --no-ignore -e KEY -- --pre ~',  # after --, --pre is a path, not an option taking ~
                      'rg --hidden --no-ignore --pre /bin/cat -e TOKEN ~', 'rg --hidden --no-ignore --regexp=KEY ~', 'rg --hidden --no-ignore -eKEY ~',
-                     'rg -gfoo KEY ~', 'rg KEY ~', 'grep -r --regexp=KEY ~', 'grep -reKEY ~', 'grep -r -- KEY ~', 'rg --sort path KEY ~'):
+                     'rg -gfoo KEY ~', 'rg KEY ~', 'rg --hidden --no-ignore --in /tmp/files.txt TOKEN', 'rg --in0=/tmp/f TOKEN', 'grep -r --regexp=KEY ~', 'grep -reKEY ~', 'grep -r -- KEY ~', 'rg --sort path KEY ~'):
             self.assertIn('secret', self.kinds(line), line)
         self.gate._CWD[0] = os.path.expanduser('~')  # these search the current folder: from home it holds keys
         for line in ('rg -- --files', 'rg -- --regexp=KEY', 'grep -r -- --regexp=KEY', 'rg --maxdepth 1 TOKEN', 'ggrep -d recurse TOKEN',
-                     'ggrep --directories recurse TOKEN', 'ggrep -D skip -r TOKEN', 'grep -drecurse TOKEN'):
+                     'ggrep --directories recurse TOKEN', 'ggrep -D skip -r TOKEN', 'grep -drecurse TOKEN',
+                     'rg --hidden --no-ignore --max-depth 2 TOKEN', "rg --hidden --no-ignore -G '*.txt' TOKEN", 'rg --glob-not x TOKEN', 'rg --max-bytes 10 TOKEN'):
+            self.assertIn('secret', self.kinds(line), line)
+
+    def test_other_tools_keep_their_folders(self):
+        for line in ('tree -d ~/.ssh', 'tree -d -L 2 ~/.ssh'):
             self.assertIn('secret', self.kinds(line), line)
 
     def test_safe_folder_alone_is_fine(self):
