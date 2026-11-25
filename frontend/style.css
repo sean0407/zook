@@ -1076,6 +1076,8 @@ button {
 .approval-card summary { cursor:pointer; }
 .approval-card pre { max-height:180px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; }
 .approval-card .actions { display:flex; gap:8px; margin-top:10px; }
+.approval-card.stale { opacity:.75; border-style:dashed; filter:grayscale(1); }
+.approval-after { margin:0 auto 12px; max-width:800px; padding:8px 12px; border-radius:10px; font-size:13px; color:var(--muted, #6b6b6b); background:rgba(127,127,127,.08); }
 .approval-badge { color:#946000; background:#fff1c9; border-radius:8px; padding:2px 5px; font-size:10px; }
 .tool-timeline { padding:0 18px; font-size:12px; }
 .tool-event { display:grid; gap:4px; padding:9px 0; border-bottom:1px solid #eee; overflow-wrap:anywhere; }

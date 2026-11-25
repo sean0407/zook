@@ -373,7 +373,7 @@ class WorkerSecurityTest(unittest.TestCase):
                     if job['approvals']: break
                     time.sleep(.01)
                 aid = job['approvals'][0]['id']
-                self.assertEqual(post('/api/approvals/'+aid, 'ui-token', {'decision':'deny'})[1]['status'], 'denied')
+                decided = post('/api/approvals/'+aid, 'ui-token', {'decision':'deny'})[1]; self.assertEqual(decided['status'], 'denied'); self.assertTrue(decided.get('decidedAt')); self.assertIn('callsAt', decided)  # #235: the card shows how long ago it was allowed
                 pending.join(2); self.assertEqual(result, [False])
                 self.assertEqual(post('/api/approvals/'+aid, 'ui-token', {'decision':'approve'})[0], 409)
                 pending=threading.Thread(target=lambda: result.append(app.approve('one', 'second', 'write', {}, 'workspace'))); pending.start()
