@@ -250,7 +250,8 @@
     url: '網址', field: '欄位', text: '文字', enter: '按 Enter', number: '連結編號', part: '第幾段', direction: '方向', account: '帳號', effort: '思考強度', jobTitle: '職稱'};
   const humanWords = t => String(t || '').replace(/[_-]+/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2').trim();
   const skillName = id => (state.integrations?.skills || []).find(x => x.id === id)?.name || 'Skill';
-  const fileName = p => String(p || '').split('/').pop() || '檔案';
+  const inAttachments = p => /(^|\/)workspaces\/[^/]+\/attachments\/|^(\.\/)?attachments\//.test(String(p || ''));  // a Bot's own attachments folder
+  const fileName = p => (inAttachments(p) ? String(p).split('/').pop().replace(/^[0-9a-f]{8}-(?=.)/, '') : String(p || '').split('/').pop()) || '檔案';  // an upload without the id Zook put in front of it
   function describeCall(c) {
     const a = c.arguments || {};
     switch (c.name) {
@@ -283,7 +284,7 @@
       case 'web_search': return a.query ? `上網搜尋「${String(a.query).slice(0, 60)}」` : '上網搜尋';
       case 'native_write': return `修改檔案「${fileName(a.path)}」`;
       case 'native_command': return a.summary && a.summary !== '執行指令' ? String(a.summary).slice(0, 80) : '在工作資料夾執行指令';  // 「執行指令：python3、ls」 says which programs
-      case 'native_read': return `查看「${fileName(a.path) || '檔案'}」`;
+      case 'native_read': return inAttachments(a.path) ? `讀取你上傳的附件「${fileName(a.path)}」` : `查看「${fileName(a.path) || '檔案'}」`;
       case 'native_skill': return `使用 Skill「${String(a.name || 'Skill').slice(0, 60)}」`;
       case 'web_fetch': return `讀取網頁「${(String(a.url || '').match(/^https?:\/\/([^/]+)/) || [, a.url || '網頁'])[1]}」`;
     }
@@ -294,6 +295,8 @@
     [/unavailable|not found|No such/i, '找不到需要的資料'], [/exceeds|too large|limit/i, '內容太大'], [/timed? ?out|timeout/i, '等太久沒有回應'],
     [/authori|401|403|sign in/i, '需要先登入這個服務'], [/connect|ECONN|network/i, '連不上這個服務']];
   const humanError = e => (ERROR_WORDS.find(([re]) => re.test(String(e || ''))) || [null, '沒有成功'])[1];
+  // A step that did not go through says why in words next to it (你沒有允許、找不到需要的資料…), not only by its red dot.
+  const evNote = (cls, label) => cls === 'bad' ? `<small class="ev-count">（${esc(label)}）</small>` : '';
   function callStatus(c) {
     if (c.status === 'waiting_approval') return ['wait', '等你核准'];
     if (c.status === 'running' || c.status === 'pending') return ['run', '進行中'];
@@ -358,9 +361,9 @@
       let [cls, label] = callStatus(c);
       if ((cls === 'wait' || cls === 'run') && !c.jobRunning) [cls, label] = ['bad', '已中斷'];
       const who = showWho ? (state.data.bots.find(b => b.id === c.botId)?.name || 'Bot') + ' ' : '';
-      return {cls, label, text: who + describeCall(c), where: c.groupName && !showWho ? c.groupName : '', title: label + (c.name === 'native_command' && (c.arguments?.summary || c.arguments?.command) ? '：' + (c.arguments.summary || c.arguments.command) : ''), n: 1};
-    }).reduce((out, r) => { const last = out[out.length - 1]; if (last && last.text === r.text && last.cls === r.cls && last.where === r.where) last.n++; else out.push(r); return out; }, []);  // the same step several times in a row: one line with a count
-    return `<div class="tool-timeline">${rows.map(r => `<div class="tool-event ${r.cls}" title="${esc(r.title)}"><span class="ev-dot ${r.cls}" role="img" aria-label="${esc(r.label)}"></span><span class="ev-text">${esc(r.text)}${r.n > 1 ? `<small class="ev-count">（連續 ${r.n} 次）</small>` : ''}${r.where ? `<small class="ev-where">在群組「${esc(r.where)}」</small>` : ''}</span></div>`).join('')}</div>`;
+      return {cls, label, text: who + describeCall(c), where: c.groupName && !showWho ? c.groupName : '', title: label + (c.name === 'native_command' && c.arguments?.summary ? '：' + c.arguments.summary : ''), n: 1};
+    }).reduce((out, r) => { const last = out[out.length - 1]; if (last && last.text === r.text && last.cls === r.cls && last.label === r.label && last.where === r.where) last.n++; else out.push(r); return out; }, []);  // the same step several times in a row: one line with a count
+    return `<div class="tool-timeline">${rows.map(r => `<div class="tool-event ${r.cls}" title="${esc(r.title)}"><span class="ev-dot ${r.cls}" role="img" aria-label="${esc(r.label)}"></span><span class="ev-text">${esc(r.text)}${evNote(r.cls, r.label)}${r.n > 1 ? `<small class="ev-count">（連續 ${r.n} 次）</small>` : ''}${r.where ? `<small class="ev-where">在群組「${esc(r.where)}」</small>` : ''}</span></div>`).join('')}</div>`;
   }
   // An empty conversation opens with the Bot's own greeting and questions you might ask it (made from its persona when it was
   // created). A Bot from before that asks for them once; until they arrive, a plain hello.
