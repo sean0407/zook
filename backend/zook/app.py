@@ -337,8 +337,11 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             if inventory and inventory.get('_light'):  # the message is already on screen; connector sign-ins are renewed here, off the request
                 try: inventory = inventory_for(self.store)
                 except Exception: inventory = None  # each try reads it again
+            xlsx_before_reply(self.store, job_id)
             self._run_job(job_id, prompt, provider, model, bot, inventory)
         finally:
+            try: xlsx_after_reply(self.store, job_id)  # read the Excel files it saved; a problem is said under the reply (xlsxcheck.py)
+            except Exception: pass  # a check never stands in the way of the reply
             self.finish_session(job_id); agy_release(self, job_id)  # the next agy of this Bot may start
             try: bg_stop(self, self.store.find('jobs', job_id) or {}); bg_sweep(self)  # a runner never taken up, then the files of runs that are over (background.py)
             except OSError: pass
@@ -517,6 +520,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 else: prompt += '\n工具說明：檔案讀寫與其他動作請使用 zook 工具。zook 工具會依使用者設定的主動性決定是否先請使用者核准，與本機 CLI 沙箱是否唯讀無關；需要時直接呼叫，被拒絕再說明即可。'
             if not selected and scope != 'workspace': prompt += '\n工具說明：' + access_note(scope, root, True)
             if choices_for(store, job): prompt += CHOICE_NOTE
+            prompt += xlsx_carry(store, job)  # what the reply before saved wrong in an Excel file (xlsxcheck.py)
             prompt += latest_ask_note(self.__dict__.get('latest_asks', {}).get(job_id))  # the Skill list and tool notes above can bury the question
             adapter = str(pathlib.Path(__file__).with_name('tool_server.py'))
             stdin_prompt = True
