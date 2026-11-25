@@ -138,6 +138,7 @@ def pptx_pages(path, out, width=1600):
             with zipfile.ZipFile(copy, 'w', zipfile.ZIP_DEFLATED) as z:
                 for name in names: z.writestr(name, one.encode('utf-8') if name == 'ppt/presentation.xml' else parts[name])
             made = quicklook(copy, work, width)
+            os.remove(copy)  # each one-slide copy holds the whole deck: never keep them all at once
             if made:
                 target = os.path.join(out, '%s-%02d.png' % (stem, n)); shutil.move(made, target); done.append((target, w, h))
             else: missing.append(n)

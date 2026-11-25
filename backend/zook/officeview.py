@@ -110,7 +110,7 @@ def office_preview(store, path, strict=False):
             return dict(status='ready', pages=pages, total=total if type(total) is int and pages <= total <= 100000 else pages, note=str(done.get('note') or '')[:200], version=key)
         failed = _preview_json(store, key, 'failed.json')
         at = failed and failed.get('at')
-        if type(at) in (int, float) and 0 <= time.time() - at < PREVIEW_RETRY: return dict(status='failed', reason=str(failed.get('reason') or ''))
+        if type(at) in (int, float) and -1e12 < at < 1e12 and 0 <= time.time() - at < PREVIEW_RETRY: return dict(status='failed', reason=str(failed.get('reason') or ''))
         if info.st_size > MAX_UPLOAD: return dict(status='failed', reason='這個檔案超過 20 MB，無法在 Zook 裡預覽，請在 Finder 開啟。')
         with _preview_lock:
             if key in _preview_running: return dict(status='working')

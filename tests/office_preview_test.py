@@ -81,7 +81,7 @@ class OfficePreviewLogic(unittest.TestCase):
         def broken(source, out): raise RuntimeError('壞了')
         server.office_render = broken; wait_ready(self.store, str(self.doc))
         key = server._preview_key(str(self.doc), os.stat(str(self.doc))); record = self.store.dir / 'previews' / key / 'failed.json'
-        for at in ([1], float('inf'), 'x'):
+        for at in ([1], float('inf'), 'x', 10 ** 400):
             record.write_text(json.dumps(dict(reason='舊的', path=str(self.doc), at=at)))
             self.assertNotEqual(server.office_preview(self.store, str(self.doc)).get('reason'), '舊的')
             wait_ready(self.store, str(self.doc))
@@ -233,6 +233,7 @@ class OfficePreviewWindow(unittest.TestCase):
         self.assertNotIn('esc(o.path)}</p>', outputs)  # #70④: no full path at the bottom of the window
         self.assertIn("kind === 'office'", files)  # group files open the same page preview
         self.assertIn("'office'", groups)
+        self.assertIn('o.size > 20 * 1048576', outputs)  # over 20 MB the download link would fail: Finder only
 
 
 if __name__ == '__main__': unittest.main()

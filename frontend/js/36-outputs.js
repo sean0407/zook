@@ -68,7 +68,7 @@
     if (!o) return;
     const url = '/api/bots/' + encodeURIComponent(botId) + '/outputs/' + encodeURIComponent(o.id);
     const {body, missing} = await previewBody(url, o.kind, o.name);
-    const keep = missing ? '' : `<button type="button" class="secondary" data-action="output-reveal" data-id="${esc(o.id)}" data-bot="${esc(botId)}">在 Finder 顯示</button><a class="secondary button-link" href="${url}" download="${esc(o.name)}">下載</a>`;
+    const keep = missing ? '' : `<button type="button" class="secondary" data-action="output-reveal" data-id="${esc(o.id)}" data-bot="${esc(botId)}">在 Finder 顯示</button>${o.size > 20 * 1048576 ? '' : `<a class="secondary button-link" href="${url}" download="${esc(o.name)}">下載</a>`}`;  // over 20 MB: only 在 Finder 顯示 works
     modal(o.name, `<div class="modal-body">${body}</div><div class="modal-foot">${keep}<button type="button" class="primary" data-action="close-modal">關閉</button></div>`, '', true);  // #70④: no full path on this Mac
     showPdfWhenReady(); fillOfficeView();
   }
