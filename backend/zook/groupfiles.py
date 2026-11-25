@@ -219,44 +219,62 @@ def _open_copy_folder(store, bot_id):
 
 
 def _same_copy(folder_fd, name, size, digest):
-    """Whether this entry is a plain file of its own with exactly this content: Zook's copy, not something the Bot made."""
+    """This entry's identity when it is a plain file of its own with exactly this content (Zook's copy, not something the Bot made), else None."""
     try: fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=folder_fd)
-    except OSError: return False
+    except OSError: return None
     with os.fdopen(fd, 'rb') as f:
         info = os.fstat(f.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != size: return False
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size != size: return None
         found = hashlib.sha256()
         for chunk in iter(lambda: f.read(1 << 20), b''): found.update(chunk)
-        return found.hexdigest() == digest
+        return (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size) if found.hexdigest() == digest else None
 
 
 def drop_group_files(store, server, group):
-    """Lock held. A deleted group's files go, and so do the copies of them Zook put in its members' workspaces (#213). Only a copy
-    still exactly as Zook placed it (same name, same content) is removed; anything else there stays. A Bot kept aside in 已刪除的
-    Bot is not a member any more and its workspace is left alone until it is gone for good (forget_trashed_copies). A member in
-    another group's turn right now is skipped: that turn has already replaced its copy folder with the other group's files."""
-    folder = group_files_dir(store, group['id'])
-    wanted = {}
-    for entry in _plain_files(folder):
-        try: wanted[entry.name] = (entry.stat(follow_symlinks=False).st_size, _file_hash(entry.path))
-        except OSError: pass
-    locks = getattr(server, '__dict__', {}).setdefault('group_copy_locks', {}) if server is not None else {}
-    alive = {b.get('id') for b in store.data.get('bots') or []}
-    for bot_id in dict.fromkeys(group.get('botIds') or []):
-        if bot_id not in alive or not wanted: continue
-        lock = locks.setdefault(bot_id, threading.Lock())
-        if not lock.acquire(blocking=False): continue
+    """Lock held. A deleted group's files go, and so do the copies of them Zook put in its members' workspaces (#213). Under the lock
+    the group's folder is only moved aside; the comparing and removing run in a thread of their own (the files can add up to 200 MB),
+    which is returned. Only a copy still exactly as Zook placed it (same name, same content, the same file when it is removed) goes;
+    anything else there stays. A Bot kept aside in 已刪除的 Bot is not a member any more and its workspace is left alone until it is
+    gone for good (forget_trashed_copies). A member in another group's turn right now is skipped: that turn has already replaced its
+    copy folder with the other group's files. Never raises: the group's deletion goes on whatever happens here."""
+    try:
+        folder = group_files_dir(store, group['id']); aside = folder.parent / ('.deleting-' + ID())
+        os.replace(str(folder), str(aside))
+    except (OSError, ValueError, KeyError): return None  # no files, so no copies of them either
+    members = [b for b in dict.fromkeys(group.get('botIds') or []) if isinstance(b, str)]
+    locks = server.__dict__.setdefault('group_copy_locks', {}) if server is not None and hasattr(server, '__dict__') else {}
+    def work():
         try:
-            fd = _open_copy_folder(store, bot_id)
-            if fd is None: continue
-            try:
-                for name, (size, digest) in wanted.items():
-                    if _same_copy(fd, name, size, digest):
-                        try: os.unlink(name, dir_fd=fd)
-                        except OSError: pass
-            finally: os.close(fd)
-        finally: lock.release()
-    shutil.rmtree(str(folder), ignore_errors=True)
+            wanted = {}
+            for entry in _plain_files(aside):
+                try: wanted[entry.name] = (entry.stat(follow_symlinks=False).st_size, _file_hash(entry.path))
+                except OSError: pass
+            for bot_id in members:
+                with store.lock: alive = bool(store.find('bots', bot_id))
+                if not alive or not wanted: continue
+                lock = locks.setdefault(bot_id, threading.Lock())
+                if not lock.acquire(blocking=False): continue
+                try:
+                    fd = _open_copy_folder(store, bot_id)
+                    if fd is None: continue
+                    try:
+                        for name, (size, digest) in wanted.items():
+                            try:
+                                mark = _same_copy(fd, name, size, digest)
+                                now = os.stat(name, dir_fd=fd, follow_symlinks=False) if mark else None
+                                if now and (now.st_dev, now.st_ino, now.st_mtime_ns, now.st_size) == mark: os.unlink(name, dir_fd=fd)  # not swapped meanwhile
+                            except OSError: pass
+                    finally: os.close(fd)
+                except Exception: pass
+                finally: lock.release()
+        finally:
+            shutil.rmtree(str(aside), ignore_errors=True)
+            for old in aside.parent.glob('.deleting-*'):  # left by an earlier deletion that Zook quit in the middle of
+                try:
+                    if old.is_dir() and not old.is_symlink() and time.time() - old.stat().st_mtime > 3600: shutil.rmtree(str(old), ignore_errors=True)
+                except OSError: pass
+    thread = threading.Thread(target=work, daemon=True, name='zook-group-drop'); thread.start()
+    return thread
 
 
 def forget_trashed_copies(store, gone):

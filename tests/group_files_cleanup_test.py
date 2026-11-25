@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """#213: deleting a group, or a Bot leaving 已刪除的 Bot for good, removes the copies of group files Zook put in Bot workspaces,
 and only those. #150/#151: several files at once go in one by one with one summary; a long name keeps its 刪除 button."""
-import http.client, json, os, sys, tempfile, threading, unittest
+import http.client, json, os, sys, tempfile, threading, time, unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 import choices_test
@@ -14,7 +14,8 @@ if server is None:
 
 
 class Store:
-    def __init__(self, root): self.dir = Path(root); self.data = dict(bots=[], deletedBots=[], groups=[], settings={})
+    def __init__(self, root): self.dir = Path(root); self.data = dict(bots=[], deletedBots=[], groups=[], settings={}); self.lock = threading.RLock()
+    def find(self, kind, item_id): return next((x for x in self.data[kind] if x.get('id') == item_id), None)
 
 
 class Holder: pass
@@ -37,7 +38,7 @@ class CopyCleanup(unittest.TestCase):
         (self.copy('b1') / 'notes.txt').write_text('changed by the Bot')  # no longer Zook's copy
         (self.copy('b1') / 'mine.txt').write_text('the Bot made this')
         (self.root / 'data/workspaces/b1/報告.pdf').write_bytes(b'pdf')  # same content, elsewhere in the workspace
-        server.drop_group_files(self.store, Holder(), self.group)
+        server.drop_group_files(self.store, Holder(), self.group).join(10)
         self.assertFalse(self.shared.exists())
         self.assertEqual(sorted(p.name for p in self.copy('b1').iterdir()), ['mine.txt', 'notes.txt'])
         self.assertEqual(list(self.copy('b2').iterdir()), [])
@@ -46,7 +47,7 @@ class CopyCleanup(unittest.TestCase):
     def test_a_bot_kept_aside_or_busy_is_left_alone(self):
         self.store.data['bots'] = [dict(id='b2')]; self.store.data['deletedBots'] = [dict(id='b1')]  # b1 is in 已刪除的 Bot
         holder = Holder(); busy = holder.__dict__.setdefault('group_copy_locks', {}).setdefault('b2', threading.Lock()); busy.acquire()
-        server.drop_group_files(self.store, holder, self.group); busy.release()
+        server.drop_group_files(self.store, holder, self.group).join(10); busy.release()
         self.assertEqual(sorted(p.name for p in self.copy('b1').iterdir()), ['notes.txt', '報告.pdf'])
         self.assertEqual(sorted(p.name for p in self.copy('b2').iterdir()), ['notes.txt', '報告.pdf'])
 
@@ -54,7 +55,7 @@ class CopyCleanup(unittest.TestCase):
         outside = self.root / 'outside'; outside.mkdir(); (outside / 'notes.txt').write_text('shared')
         (self.copy('b1') / 'notes.txt').unlink(); (self.copy('b1') / 'notes.txt').symlink_to(outside / 'notes.txt')
         folder = self.copy('b2'); server.shutil.rmtree(str(folder)); folder.symlink_to(outside)
-        server.drop_group_files(self.store, Holder(), self.group)
+        server.drop_group_files(self.store, Holder(), self.group).join(10)
         self.assertEqual((outside / 'notes.txt').read_text(), 'shared'); self.assertTrue((self.copy('b1') / 'notes.txt').is_symlink())
 
     def test_a_bot_gone_for_good_loses_its_copies_but_not_its_workspace(self):
@@ -87,6 +88,9 @@ class DeleteGroupOverHttp(choices_test.ChoicesTest):
         for bot in (self.bot['id'], other['id']):  # what a group turn leaves behind
             copy = data / 'workspaces' / bot / 'attachments/group-files'; copy.mkdir(parents=True, exist_ok=True); (copy / 'brief.pdf').write_bytes(b'%PDF-1')
         self.assertEqual(self.req('DELETE', '/api/groups/' + group['id'])[0], 200)
+        for _ in range(50):  # the comparing runs after the answer
+            if not any((data / 'workspaces' / b / 'attachments/group-files/brief.pdf').exists() for b in (self.bot['id'], other['id'])): break
+            time.sleep(0.1)
         for bot in (self.bot['id'], other['id']): self.assertFalse((data / 'workspaces' / bot / 'attachments/group-files/brief.pdf').exists())
         self.assertFalse((data / 'group-files' / group['id']).exists())
 
