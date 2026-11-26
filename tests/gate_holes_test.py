@@ -145,6 +145,16 @@ class GateHoles(unittest.TestCase):
         for line in ("echo '#'; grep '<(rm -rf /tmp/x)' notes.txt", 'sort -o out.txt in.txt', 'tar -xzf /tmp/x.tgz -C src', 'curl -sSo out.html https://example.test'):
             self.assertNotIn('delete', kinds(line), line); self.assertNotIn('guard', kinds(line), line)
 
+    def test_review_round_seven(self):
+        for line in ('bash -c \'F=; cat "${F:-$HOME/.claude/.credentials.json}"\'', 'F=x; cat "${F:-~/.ssh/id_rsa}"', 'F=x; cat "${#F}"', 'F=x; cat $F[1]'):
+            self.assertAsked(line)
+        Path(self.temp.name, 'paths.bin').write_bytes(b'notes.txt\0.env\0'); Path(self.temp.name, 'comma.txt').write_text('a,.env')
+        for line in ('xargs -0 -a paths.bin cat', 'xargs -d , -a comma.txt cat', 'xargs --delimiter=, -a comma.txt cat'):
+            self.assertAsked(line)
+        self.assertNotIn('delete', kinds('echo ok # <(rm -rf /tmp/x)'))
+        self.assertIn('delete', kinds('echo "a\\" # <(rm -rf /tmp/x)'))  # quoting not read for sure: the # may be in quotes
+        self.assertNotAsked('F=notes.txt; cat "${F}"')
+
     def test_cdpath_may_lead_to_keys(self):
         os.environ['CDPATH'] = os.path.expanduser('~')
         self.assertAsked('cd .ssh && rg x .')

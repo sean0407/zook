@@ -56,7 +56,7 @@ def _resolved(path, depth=0):
         if '..' in brace.group(1) or depth > 2: return None
         out = [_resolved(p[:brace.start()] + v + p[brace.end():], depth + 1) for v in brace.group(1).split(',')]
         return None if None in out else [path] + [x for f in out for x in f[1:] or f]
-    if GLUED in p: return None  # a name finished by what $( … ) prints
+    if GLUED in p or re.search(r'\$\{(?!\w+\})|\$\w+\[', p): return None  # finished by what $( … ) prints; ${F:-…}, ${#F}, $F[1]: not followed
     names = re.findall(r'\$\{?(\w+)', p)
     if names or '`' in p:
         held = [_values(n) for n in names]
@@ -83,7 +83,7 @@ def _read_file(path):
     return _secret_any(path)
 
 
-def _listed(files, prog):
+def _listed(files, prog, words=()):
     """xargs -a FILE, parallel :::: FILE: the file, and the paths in it handed to the command (read now: a short plain file only, never
     one that is a key, a link or a pipe); the file itself when what is in it cannot be read. echo and printf open nothing."""
     out = [x for x in map(_secret_any, files) if x]
@@ -93,7 +93,8 @@ def _listed(files, prog):
             fd = os.open(_abs(where[-1]), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK) if where else -1
             with os.fdopen(fd, 'rb') as h: text = h.read(65537).decode('utf-8', 'replace') if stat.S_ISREG(os.fstat(h.fileno()).st_mode) else None
         except (OSError, ValueError, IndexError): text = None
-        out += ['（%s 列出的檔案）' % f] if text is None or len(text) > 65536 else [x for x in map(_secret_any, text.split()) if x]
+        odd = any(re.fullmatch(r'-[^-]*d.*|--delimiter(=.*)?|--colsep(=.*)?', w) for w in words)  # its own separator: not read here
+        out += ['（%s 列出的檔案）' % f] if text is None or len(text) > 65536 or odd else [x for x in map(_secret_any, re.split(r'[\s\0]+', text)) if x]
     return out
 
 

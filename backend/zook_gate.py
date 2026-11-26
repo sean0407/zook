@@ -302,6 +302,7 @@ def _opens(text):
     backslash, $( … ), $'…', backtick, comment or second line; whether it seems in '…', where a shell -c reads it, not this line)."""
     quote, sure = '', not set(text) & set('\\\n`') and '$(' not in text and "$'" not in text  # a # comment: what follows it never runs
     for j, c in enumerate(text[:-1]):
+        if sure and not quote and c == '#' and text[j - 1:j] in ('', ' ', '\t', ';', '&', '|', '('): return  # a comment, read for sure
         if c in '\'"' and quote in ('', c) and (quote == "'" or text[j - 1:j] != '\\'): quote = '' if quote else c
         elif text[j + 1] == '(' and (c in '$<>' or c == '=' and text[j - 1:j] in ('', ' ', '\t', '\n', ';', '&', '|', '(')): yield j, sure and bool(quote), quote == "'"
 
@@ -404,7 +405,7 @@ def command_boundaries(command, depth=0):
             if (script or (prog in INTERPRETERS or prog.startswith('python')) and all(a.startswith('-') for a in stripped[1:])) and (read or n in piped):
                 found.append(_hit('unclear', '（要執行的程式來自另一個指令的輸出）'))  # … | bash, bash < file: the program is what comes in
             found += _redirect_hits(read, written, empty=not stripped or os.path.basename(stripped[0]) in (':', 'true') and len(stripped) == 1 and not read or stripped[:2] == ['cat', '/dev/null'])
-            listed = _listed(_arg_files(words), prog)  # xargs -a FILE, parallel --arg-file FILE or :::: FILE: read too
+            listed = _listed(_arg_files(words), prog, words)  # xargs -a FILE, parallel --arg-file FILE or :::: FILE: read too
             found += [_hit('secret', '讀取 ' + _names(listed))] if listed else []
             found += _argv_boundaries(stripped, command, depth)
     finally: _LINES.pop()
