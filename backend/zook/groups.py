@@ -228,8 +228,9 @@ def drop_group_host(store, group):
 
 
 def group_closer(store, group):
-    """Who wraps up a discussion: the host, or the first member when there is none."""
-    return group_host(store, group) or next((x for x in group['botIds'] if store.find('bots', x)), None)
+    """Who wraps up a discussion: the host, or the first member when there is none (#245: one that is not a 查核員, when there is one)."""
+    present = [x for x in group['botIds'] if store.find('bots', x)]
+    return group_host(store, group) or next((x for x in present if not group_is_checker(store.find('bots', x))), present[0] if present else None)
 
 
 def group_limit(store, group):

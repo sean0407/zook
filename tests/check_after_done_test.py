@@ -27,7 +27,7 @@ def save(): open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('qu
 if name == '專員' and role in ('split_work', 'work', 'split_redo', 'free'):
     if flag('fail') or (role == 'split_redo' and flag('redofail')): time.sleep(0.2); sys.exit(3)
     if flag('slow'): time.sleep(3)
-    if not flag('claim') and not flag('textdeliver') and not flag('vague') and not flag('handed') and not flag('newname') and not (role == 'split_redo' and flag('redonosave')) and folder: save() if role != 'split_redo' else open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('quote v2')
+    if not flag('claim') and not flag('textdeliver') and not flag('vague') and not flag('handed') and not flag('newname') and not (role == 'split_redo' and (flag('redonosave') or flag('redonew'))) and folder: save() if role != 'split_redo' else open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('quote v2')
     text = ('已存好新版報價單.xlsx。' if flag('newname') else '已存好了。' if flag('vague') else '報價單.xlsx 交了，請查收。' if flag('handed') else '已存到群組檔案：報價單.xlsx') + ('\n@查核員 請幫我看' if flag('mention') else '')
 if name == '設計' and role in ('split_work', 'work') and flag('designfail'): time.sleep(0.2); sys.exit(3)
 if name == '專員' and role == 'split_resave':
@@ -39,6 +39,7 @@ if name == '專員' and role == 'split_work' and flag('colon') and folder: open(
 if name == '專員' and role == 'split_work' and flag('dupsave') and folder: open(os.path.join(folder.group(1), '報價-新版.xlsx'), 'w').write('old'); text = '已存到群組檔案：報價-新版.xlsx'
 if name == '專員' and role == 'split_work' and flag('aimiss'): text = '已存到群組檔案：報價單.xlsx、設計.ai'
 if name == '專員' and role == 'split_work' and flag('textdeliver'): text = '已交付三個建議：一、二、三。'
+if name == '專員' and role == 'split_redo' and flag('redonew') and folder: open(os.path.join(folder.group(1), '報價單v2.xlsx'), 'w').write('v2'); text = '改好了，已存到群組檔案：報價單v2.xlsx'
 if role == 'kickoff': text = '目標：報價\n@查核員：檢查使用者給的報價單' if flag('onlycheck') else '目標：報價\n@專員：做報價單' + ('' if flag('nocheck') else '\n@查核員：檢查報價單')
 if role in ('split_merge', 'split_remerge', 'final', 'moderate'): text = '【結論】好\n【待你決定】無\n【行動項目】無\n【未解問題】無'
 if role == 'moderate' and flag('modmention'): text = '@查核員 再看一次合計'
@@ -310,6 +311,16 @@ class CheckAfterDone(unittest.TestCase):
     def test_text_handed_over_is_checked_without_a_file(self):
         self.flag('textdeliver')
         self.say(self.group())
+        self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('專員', 'split_work'), ('查核員', 'split_check'), ('Alpha', 'split_merge')])
+
+    def test_a_redo_saved_under_a_new_name_is_checked(self):
+        self.flag('sendback'); self.flag('redonew')
+        self.say(self.group())
+        self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('專員', 'split_work'), ('查核員', 'split_check'), ('Alpha', 'split_merge'),
+                                        ('專員', 'split_redo'), ('查核員', 'split_check'), ('Alpha', 'split_remerge')])
+
+    def test_without_a_host_a_checker_listed_first_does_not_plan(self):
+        self.say(self.group(names=('查核員', 'Alpha', '專員'), host=''))
         self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('專員', 'split_work'), ('查核員', 'split_check'), ('Alpha', 'split_merge')])
 
     def test_nothing_handed_in_means_no_check(self):

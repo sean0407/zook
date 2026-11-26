@@ -124,11 +124,9 @@ def _names(store, ids):
 
 
 def _work_files(store, group, bot_id):
-    """Lock held. {name: content hash} of the shared files this member's work is in (last saved by it, or saved in this ask), as
-    they are when the host sends the work back."""
-    name = (store.find('bots', bot_id) or {}).get('name')
-    start = _ask_start(group)
-    names = {n for n, info in (group.get('fileInfo') or {}).items() if (info or {}).get('by') == name}
+    """Lock held. {name: content hash} of the shared files this ask's work is in (saved in it, or named by its replies), as they are
+    when the host sends the work back. Older files of the member's are not this work."""
+    start = _ask_start(group); names = set()
     replies = [m for m in group['messages'][start:] if m.get('botId') == bot_id and m.get('role') == 'assistant' and not m.get('checkOf')]
     names |= {n for m in replies for n in m.get('savedFiles') or []}
     out = {}
@@ -143,12 +141,17 @@ def _work_files(store, group, bot_id):
 
 
 def _redone(store, group_id, before, replies, bot_id):
-    """store.lock and _group_files_lock held. Whether redone work with files was really handed in again: one of its files changed. Work without files is judged
-    by its reply (a redo that says it saved but saved nothing goes back like any other reply)."""
+    """store.lock and _group_files_lock held. Whether redone work with files was really handed in again: one of its files changed,
+    or the redo saved a new file its reply names (a new version under a new name). Work without files is judged by its reply."""
     if not before: return True
     for n, digest in before.items():
         path = group_files_dir(store, group_id) / n
         if path.is_file() and not path.is_symlink() and _file_hash(path) != digest: return True
+    pool = [e.name for e in _plain_files(group_files_dir(store, group_id))]
+    for m in replies:
+        if m.get('botId') != bot_id or m.get('role') != 'assistant': continue
+        new = [n for n in m.get('savedFiles') or [] if n in pool and n not in before]
+        if any(_in_prose(w, [n]) or _claim_key(n).endswith(_claim_key(w)) for w in FILE_WORD.findall(m.get('content') or '') for n in new): return True
     return False
 
 
@@ -287,4 +290,6 @@ def task_files_missing(store, group, owner, attempt, msg, spec='', given=()):
         base = re.sub(r'[（(][^（）()]{0,30}[）)]\s*$', '', ' '.join(str(raw or '').split())).strip(' 「」『』`\'"').rsplit('/', 1)[-1]
         if base and base not in gone and _same_file(base, pool, owner) and not _same_file(base, [n for n in pool if n in mine], owner): gone.append(base)
     alias = [k for k in (msg.get('sameAs') or {}) if k]  # saved under its name, kept as the shared file with the same content
-    return [n for n in dict.fromkeys(gone + list(msg.get('skippedFiles') or [])) if not _in_prose(n, alias) and not _same_file(n, alias)][:10]
+    full = [x for x in listed + list(msg.get('savedFiles') or []) + alias if x and x not in gone]  # whole names it handed over: a piece of one picked from the prose is that file
+    piece = lambda n: n in named and any(_claim_key(f).endswith(_claim_key(n)) or _claim_key(_short_name(f)).endswith(_claim_key(n)) for f in full)
+    return [n for n in dict.fromkeys(gone + list(msg.get('skippedFiles') or [])) if not _in_prose(n, alias) and not _same_file(n, alias) and not piece(n)][:10]
