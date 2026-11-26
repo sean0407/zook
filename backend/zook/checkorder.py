@@ -114,6 +114,35 @@ def _names(store, ids):
     return '、'.join(b['name'] for b in (store.find('bots', x) for x in ids) if b)
 
 
+def _work_files(store, group, bot_id):
+    """Lock held. {name: content hash} of the shared files this member's work is in (last saved by it, or saved in this ask), as
+    they are when the host sends the work back."""
+    name = (store.find('bots', bot_id) or {}).get('name')
+    start = _ask_start(group)
+    names = {n for n, info in (group.get('fileInfo') or {}).items() if (info or {}).get('by') == name}
+    replies = [m for m in group['messages'][start:] if m.get('botId') == bot_id and m.get('role') == 'assistant' and not m.get('checkOf')]
+    names |= {n for m in replies for n in m.get('savedFiles') or []}
+    out = {}
+    with _group_files_lock:
+        pool = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
+        names |= {p for p in pool for m in replies for w in CLAIM_WORD.findall(m.get('content') or '') if _in_prose(w, [p])}  # a file its reply says it handed over
+        for n in sorted(names)[:40]:
+            path = group_files_dir(store, group['id']) / n
+            if path.is_file() and not path.is_symlink(): out[n] = _file_hash(path)
+    return out
+
+
+def _redone(store, group_id, before, replies, bot_id):
+    """Lock held. Whether redone work with files was really handed in again: one of its files changed. Work without files is judged
+    by its reply (a redo that says it saved but saved nothing goes back like any other reply)."""
+    if not before: return True
+    with _group_files_lock:
+        for n, digest in before.items():
+            path = group_files_dir(store, group_id) / n
+            if path.is_file() and not path.is_symlink() and _file_hash(path) != digest: return True
+    return False
+
+
 class CheckOrder:
     def _check_gate(self, group_id, run_id, step, steps):
         """Before a 查核員's turn (steps[0] is it): returns steps to run it, steps[1:] when there is nothing to check, a 補存 turn
@@ -140,13 +169,14 @@ class CheckOrder:
             for b, m in latest.items():  # a file the reply says it handed over, by its full name, that is not among the shared files (the user's own files aside)
                 text = m.get('content') or ''
                 if any(w in text for w in SAVE_SAID):
-                    named = [n for n in CLAIM_WORD.findall(text) if not _in_prose(n, given, True) and not _in_prose(n, pool)]
+                    mine = [n for x in group['messages'][start:] if x.get('botId') == b and x.get('role') == 'assistant' for n in x.get('savedFiles') or []]  # what it really saved (Zook may have cleaned the name)
+                    named = [n for n in CLAIM_WORD.findall(text) if not _in_prose(n, given, True) and not _in_prose(n, pool) and not any(_claim_key(s).endswith(_claim_key(n)) or _claim_key(_short_name(n)) == _claim_key(s) for s in mine)]
                     if named: gone[b] = list(dict.fromkeys((gone.get(b) or []) + named))[:10]
             for b, m in latest.items():
                 if m.get('skippedFiles'): gone[b] = list(dict.fromkeys((gone.get(b) or []) + list(m['skippedFiles'])))  # too big to keep: an older file of that name is not this work
                 replies = [x for x in group['messages'][start:] if x.get('role') == 'assistant' and x.get('botId') == b and not x.get('checkOf')]
-                had_files = any(x.get('savedFiles') or CLAIM_WORD.search(x.get('content') or '') for x in replies) or any((i or {}).get('by') == (store.find('bots', b) or {}).get('name') for i in (group.get('fileInfo') or {}).values())
-                if step.get('fresh') and 'savedFiles' in m and not m.get('savedFiles') and had_files: gone.setdefault(b, []).append(NOTHING_SAVED)  # redone work with files: the new version must be saved, not the old one checked
+                before = (step.get('before') or {}).get(b) if isinstance(step.get('before'), dict) else None
+                if step.get('fresh') and before is not None and not _redone(store, group_id, before, group['messages'][since:], b): gone.setdefault(b, []).append(NOTHING_SAVED)  # the new version must be saved, not the old one checked
                 elif not gone.get(b) and _nothing_saved(replies, pool): gone[b] = [NOTHING_SAVED]
             gone = {b: names for b, names in gone.items() if names}
             note = lambda text: group['messages'].append(dict(id=ID(), role='system', content=text, createdAt=NOW()))
@@ -190,15 +220,14 @@ class CheckOrder:
         checked = checkers if redo else [x for x in checkers if x in fixes]  # redone work is checked, also when the first check did not run
         step = dict(role='split_redo', bots=redo, blind=False, waitBusy=True, fixes={k: fixes[k] for k in redo}) if redo else None  # a busy member redoes it once free
         again = check_step(checked, redo or producers, {k: v for k, v in fixes.items() if k in checkers}) if checked and (redo or any(x in fixes for x in checkers)) else None
-        if again and redo: again.update(fresh=True, since=len(group['messages']))
+        if again and redo: again.update(fresh=True, since=len(group['messages']), before={b: _work_files(self.store, group, b) for b in redo})
         return step, again
 
 
 def _check_tasks(run, deps):
-    """(checks not started that can wait for new work, checks already under way or done that cannot) — a check the new work itself
-    waits for is neither."""
-    checks = [t for t in run['tasks'] if t.get('check') and t['n'] not in deps and t['status'] not in ('cancelled', 'failed')]
-    waiting = [t for t in checks if not t['attempts'] and t['status'] in ('pending', 'ready', 'waiting')]
+    """(checks not started that can wait for new work, checks that cannot: under way, done, or one the new work itself waits for)."""
+    checks = [t for t in run['tasks'] if t.get('check') and t['status'] not in ('cancelled', 'failed')]
+    waiting = [t for t in checks if not t['attempts'] and t['status'] in ('pending', 'ready', 'waiting') and t['n'] not in deps]  # one the new work waits for cannot wait for it
     return waiting, [t for t in checks if t not in waiting]
 
 

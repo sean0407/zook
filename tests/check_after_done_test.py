@@ -34,6 +34,8 @@ if name == '專員' and role == 'split_resave':
     if flag('resave') and folder: open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('quote resaved')
     text = '已存到群組檔案：報價單.xlsx' if not flag('cannot') else '這次存不了，權限不足。'
 if name == '查核員': text = '【判定】同意\n看過報價單.xlsx'
+if role == 'split_plan' and flag('idlecheck'): text = '本次目標與產出：報價單\n專員：做報價單\n查核員：本次沒有工作'
+if name == '專員' and role == 'split_work' and flag('colon') and folder: open(os.path.join(folder.group(1), 'a:b.xlsx'), 'w').write('c'); text = '已存到群組檔案：a:b.xlsx'
 if role == 'kickoff': text = '目標：報價\n@查核員：檢查使用者給的報價單' if flag('onlycheck') else '目標：報價\n@專員：做報價單' + ('' if flag('nocheck') else '\n@查核員：檢查報價單')
 if role in ('split_merge', 'split_remerge', 'final', 'moderate'): text = '【結論】好\n【待你決定】無\n【行動項目】無\n【未解問題】無'
 if role == 'moderate' and flag('modmention'): text = '@查核員 再看一次合計'
@@ -276,6 +278,16 @@ class CheckAfterDone(unittest.TestCase):
         self.flag('newname'); g = self.group(); self.upload(g, '報價單.xlsx')
         self.say(g)
         self.assertIn(('專員', 'split_resave'), self.order())
+
+    def test_a_plan_leaving_the_checker_out_does_not_skip_the_check(self):
+        self.flag('idlecheck')
+        self.say(self.group())
+        self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('專員', 'split_work'), ('查核員', 'split_check'), ('Alpha', 'split_merge')])
+
+    def test_a_file_name_zook_cleaned_still_counts(self):
+        self.flag('colon')
+        self.say(self.group())
+        self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('專員', 'split_work'), ('查核員', 'split_check'), ('Alpha', 'split_merge')])
 
     def test_nothing_handed_in_means_no_check(self):
         self.flag('fail')

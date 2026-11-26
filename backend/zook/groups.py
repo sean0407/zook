@@ -567,13 +567,13 @@ class GroupRuns:
         with self.store.lock:
             group = self.store.find('groups', group_id)
             if not group or group.get('runId') != run_id: return steps
-            n = 2 if len(steps) > 1 and steps[1]['role'] == 'split_check' else 1  # #245: the 查核員 waiting after the work too, and who it waits for
-            bots = [b for b in (self.store.find('bots', x) for s in steps[:n] for x in s['bots']) if b]
+            n = 2 if len(steps) > 1 and steps[1]['role'] == 'split_check' else 1  # #245: the check after the work waits only for those who work
+            bots = [b for b in (self.store.find('bots', x) for x in steps[0]['bots']) if b] if steps[0]['role'] == 'split_work' else []  # a 查核員 is asked once the work is in, whatever the plan said
             idle = split_idle(plan['job'].get('content') or '', bots)
             if not idle: return steps
             group['messages'].append(dict(id=ID(), role='system', content='主持人沒有分工作給 %s，這次不用回覆。' % '、'.join(b['name'] for b in bots if b['id'] in idle), createdAt=NOW()))
             self.store.save()
-        return [dict(s, bots=[x for x in s['bots'] if x not in idle], **({'gate': [x for x in s['gate'] if x not in idle]} if 'gate' in s else {})) for s in steps[:n] if [x for x in s['bots'] if x not in idle]] + steps[n:]
+        return [dict(s, bots=[x for x in s['bots'] if x not in idle], **({'gate': [x for x in s['gate'] if x not in idle]} if 'gate' in s else {})) for s in steps[:n] if [x for x in s['bots'] if x not in idle]] + steps[n:]  # a 查核員 never counts as idle here
 
     def _send_back(self, group_id, run_id, step, merged, steps):
         """分工: the host's check found work that does not match what its member said. That member fixes it once, then the host

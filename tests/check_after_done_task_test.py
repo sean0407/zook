@@ -70,7 +70,7 @@ class CheckAfterDoneTask(base.TaskEngineTest):
         self.group = self.req('POST', '/api/groups', {'name': '查核', 'botIds': [self.bots['主持']['id'], self.bots['甲']['id'], checker['id']], 'hostId': self.bots['主持']['id']})[1]
         self.engine()
         self.rules([{'match': PLAN, 'calls': [create(1, '甲'), create(2, '查核員')], 'reply': '分好了'},
-                    {'match': '=== 工作', 'calls': [handed('做好了。', [])]}, {'match': WAKE, 'calls': [create(3, '甲')], 'reply': SUMMARY}])
+                    {'match': '=== 工作', 'calls': [handed('做好了。', [])]}, {'match': WAKE, 'calls': [dict(create(3, '甲'), arguments=dict(create(3, '甲')['arguments'], after=['2']))], 'reply': SUMMARY}])  # the new work even waits for the check
         tasks = self.send()['taskRun']['tasks']
         follow = next(t for t in tasks if t['title'] == '複查：工作2')
         self.assertEqual((follow['deps'], follow.get('check'), follow['changes'], follow['status']), ([3], True, 'none', 'done'))
