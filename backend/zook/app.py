@@ -169,7 +169,7 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
             effort = 'fast'; auto_mark = dict(auto_mark, autoWhy=auto_mark.get('autoWhy', '') + QUICK_NOTE)
         if not P.spec(store.data, provider) or not isinstance(model, str) or len(model) > 100: raise ValueError('模型設定無效。')
         if plan and (provider_kind(provider) not in PLAN_KINDS or not ability_on(store, provider, 'plan')): raise ValueError('這個模型不支援先規劃。')
-        knowledge = knowledge_for(store, bot)  # knowledge.py
+        knowledge = knowledge_for(store, bot, content)  # the passages that match this message (knowsearch.py)
         placed = place_attachments(store, bot['id'], attachments) if attachments else []
         earlier = place_attachments(store, bot['id'], (before := recent_attachments(store, messages[-12:], {a['id'] for a in attachments or []})))
         so_far = place[3] if place else len(messages)
