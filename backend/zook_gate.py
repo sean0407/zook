@@ -23,7 +23,7 @@ MAX_INPUT = 4 * 1024 * 1024
 HOME = os.path.expanduser('~')
 HERE = os.path.dirname(os.path.realpath(__file__))
 LABELS = {'split': '一次做了好幾次傳送', 'delete': '刪除檔案', 'send': '對外送出', 'secret': '動到金鑰或密碼', 'install': '安裝軟體', 'system': '改系統設定',
-          'guard': '改動 Zook 的安全檢查', 'unclear': '執行無法判讀的指令'}
+          'guard': '改動 Zook 的安全檢查', 'unclear': '執行一段指令'}
 KINDS = tuple(LABELS)
 MAX_ACTIONS = 10   # what one card shows in full; more than this, or a line too long to show whole, is refused: the Bot does them one at a time
 MAX_TITLE = 200
@@ -268,13 +268,107 @@ def _short(text, most=60):
 
 
 def _where(path):
-    """Where a file is, whole, so two files of the same name are told apart: ~/… inside the home folder. A web address: its site only."""
-    if '$' in str(path) or '`' in str(path): return '「%s」指向的位置' % _short(str(path).strip('"\''), 40)  # a variable: where it points is not known here
-    if str(path).lower().startswith('file://'): path = _file_url(str(path))
-    elif '://' in str(path): return _host(path) or '網址'
-    full = os.path.normpath(_abs(path))
+    """Where a file is, whole, so two files of the same name are told apart: ~/… inside the home folder. A web address: its site only.
+    Only words for the card (#234): a variable set on the same line is shown as what it holds, one set elsewhere says so; Zook's own
+    folders and the Mac's temporary folder are named, not spelled out. What is asked never depends on these words."""
+    text = str(path or '').strip('"\'').replace('\\$', '$')  # \$ inside sh -c "…" is a $ once the inner shell reads it
+    if '$' in text or '`' in text:
+        known = _resolve(text)
+        if known is None:
+            tail = text.rstrip('/').split('/')[-1]
+            return '「%s」（位置由指令裡的變數決定）' % _mid(tail, 60) if '/' in text and tail and not set(tail) & set('$`{}()') else '指令裡變數指到的位置'
+        if known.startswith(MADE_TEMP):
+            rest = known[len(MADE_TEMP):].strip('/')
+            return '暫存資料夾裡的 %s' % rest if rest else '暫存資料夾'
+        text = known
+    if text.lower().startswith('file://'): text = _file_url(text)
+    elif '://' in text: return _host(text) or '網址'
+    full = os.path.normpath(_abs(text))
     if full == HOME: return '家目錄'
-    return '~' + full[len(HOME):] if full.startswith(HOME + os.sep) else full
+    return _place(full) or ('~' + full[len(HOME):] if full.startswith(HOME + os.sep) else _place(full, temp=True) or full)  # never cut short: the card shows the whole target
+
+
+MADE_TEMP = '\x01temp'  # a variable that holds what mktemp made on the same line
+_VARS = [{}]
+
+
+def _line_vars(command):
+    """The variables a command line plainly sets to something readable, for the card's words only: a statement of its own NAME=value
+    (also after export/local …), a value made of other such variables, or $(mktemp …). Nothing is known when the line could set it
+    otherwise or only sometimes (if, for, read, ||, && before it, a here-document, braces, a subshell), when it is used before it is set,
+    when the name appears as a bare word, or when it is set twice to different things: then the card says a variable decides."""
+    text = re.split(r'<<(?!<)', command)[0]  # what follows a here-document marker may be its text, not commands
+    rest = re.sub(r'\$\(\s*mktemp\b[^()`]*\)|\$\{[A-Za-z_]\w*\}', '', text)
+    if re.search(r'\b(?:if|then|else|elif|fi|for|while|until|do|done|case|esac|select|function|coproc|read|unset|mapfile|readarray|getopts|eval|source|let)\b|\|\||[(){}`]|&&\s*(?:export\s+|local\s+)?[A-Za-z_]\w*=', rest):
+        return {}
+    found, at = {}, {}
+    for m in re.finditer(r'(?:^|[;\n\'"]|&&)\s*(?:(?:export|local|readonly|typeset|declare)(?:\s+-\w+)*\s+)?([A-Za-z_]\w*)=(\$\(\s*mktemp\b[^()`]*\)|"\$\(\s*mktemp\b[^()`"]*\)"|"[^"`]*"|\'[^\']*\'|[^\s;&|()`"\']*)(?=\s*(?:;|&&|\n|$|[\'"]\s*(?:;|&&|\n|$)))', text):
+        name, value = m.group(1), m.group(2)
+        if re.match(r'"?\$\(\s*mktemp\b', value): value = MADE_TEMP
+        elif value[:1] in '"\'' and len(value) >= 2: value = value[1:-1] if value[0] == '"' else value[1:-1].replace('$', '\0')  # nothing expands in single quotes
+        if '$(' in value or '`' in value: value = None
+        found[name] = value if found.get(name, value) == value else None
+        at.setdefault(name, []).append((m.start(1), m.end()))
+    for name in list(found):
+        used = [u.start() for u in re.finditer(r'\$(?:\{%s\}|%s(?!\w))' % (name, name), text)]
+        bare = [b.start() for b in re.finditer(r'(?<![\w$])%s(?!\w)' % name, text) if not (b.start() > 0 and text[b.start() - 1] == '{' and text[b.start() - 2:b.start()] == '${')]
+        if (used and min(used) < at[name][0][0]) or any(not any(a <= b < e for a, e in at[name]) for b in bare): found[name] = None
+    return found
+
+
+def _resolve(text, depth=0):
+    """The text with $NAME and ${NAME} put in from the variables of this line (and $HOME, $TMPDIR, ~); None when one is not known."""
+    text = _expand(text)
+    def put(m):
+        value = _VARS[0].get(m.group(1) or m.group(2))
+        if value is None or depth > 5: raise KeyError
+        value = _resolve(value, depth + 1) if '$' in value else value
+        if value is None: raise KeyError
+        return value
+    try: out = re.sub(r'\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)', put, text)
+    except KeyError: return None
+    if '$' in out or '`' in out: return None
+    out = out.replace('\0', '$')
+    if MADE_TEMP in out[1:]: return None  # a made folder in the middle of a path: not a place
+    return out
+
+
+def _mid(text, most=90):
+    """Long text with its middle left out, so the start and the file name both stay."""
+    text = str(text)
+    return text if len(text) <= most else text[:most // 2 - 1] + '…' + text[-(most - most // 2):]
+
+
+ATTACHED_ID = re.compile(r'^[0-9A-Za-z]{8}-(?=.)')
+
+
+def _place(full, temp=False):
+    """Zook's own folders (and, with temp, the Mac's temporary folder) in words: never the path inside Zook's data or /var/folders."""
+    real = os.path.realpath(full)
+    data = os.environ.get('ZOOK_DATA_DIR', '')
+    for one in dict.fromkeys((full, real)):
+        if data and _under_plain(one, data):
+            rest = [p for p in os.path.relpath(one, os.path.realpath(data) if _under_plain(one, os.path.realpath(data)) else data).split(os.sep) if p and p != '.']
+            if rest[:1] == ['workspaces'] and len(rest) > 2:
+                inside = rest[2:]
+                if inside[0] == '.zook-scratch': return 'Bot 的暫存資料夾' + ('裡的 %s' % '/'.join(inside[1:]) if inside[1:] else '')
+                if inside[:2] == ['attachments', 'group-files'] and inside[2:]: return '群組共用檔案「%s」' % '/'.join(inside[2:])
+                if inside[0] == 'attachments' and inside[1:]: return '你上傳的附件「%s」' % ATTACHED_ID.sub('', '/'.join(inside[1:]))
+                return 'Bot 工作資料夾裡的 %s' % '/'.join(inside)
+            if rest[:1] == ['workspaces'] and len(rest) == 2: return 'Bot 工作資料夾'
+            return 'Zook 的資料' + ('「%s」' % '/'.join(rest) if rest else '')
+        if SCRATCH_PART.search(one):
+            inside = one.split('/.zook-scratch', 1)[1].strip('/')
+            return 'Bot 的暫存資料夾' + ('裡的 %s' % inside if inside else '')
+        m = temp and re.match(r'^(?:/private)?/var/folders/[^/]+/[^/]+/T(?:/(.*))?$', one)
+        if m: return '系統暫存資料夾' + ('裡的 %s' % m.group(1) if m.group(1) else '')
+        if temp and (one == '/private/tmp' or one.startswith('/private/tmp/')): return one[len('/private'):]
+    return ''
+
+
+def _under_plain(path, folder):
+    folder = folder.rstrip('/')
+    return bool(folder) and (path == folder or path.startswith(folder + '/'))
 
 
 def _names(paths):
@@ -420,7 +514,13 @@ def _remote(arg):
 def command_boundaries(command, depth=0):
     """Every boundary in a shell command line, in order, as (kind, title)."""
     if not isinstance(command, str): return []
-    if depth > 4: return [_hit('unclear', '（指令包了太多層）')]
+    if depth == 0:  # the variables of this line, for the words on the card only
+        _VARS[0] = _line_vars(re.sub(r'\\([$"`\\])', r'\1', command))  # also inside sh -c '…', written with or without \\
+        found = command_boundaries(command, 1)
+        plain = _unclear_title(command) if any(k == 'unclear' for k, _ in found) else ''
+        _VARS[0] = {}
+        return [(k, plain if k == 'unclear' else t) for k, t in found]
+    if depth > 5: return [_hit('unclear', '（指令包了太多層）')]
     found = []
     for inner in _inner(command): found += command_boundaries(inner, depth + 1)
     parts, clear = _split(_without_inner(command))  # what runs inside $( … ) was read above, and is counted once
@@ -448,11 +548,41 @@ def _without_inner(command):
         out = out[:start] + instead(out, start) + out[j:]; i = start
 
 
+_WORDS = {}
+
+
+def _plain_steps(command):
+    """What a command does, in the activity list's plain words (actwords.py: fixed words, a file's own name, the kind of program; never
+    the command or code). Loaded from Zook's backend next to this file; [] when it is not there."""
+    if 'describe' not in _WORDS:
+        _WORDS['describe'] = None
+        try:
+            here = sys.modules.get(__name__)
+            me = here if getattr(here, '_split', None) is _split else type('Gate', (), {k: staticmethod(v) if callable(v) else v for k, v in globals().items() if not k.startswith('__')})
+            space = {'gate_module': lambda: me, '__name__': 'zook_gate_words'}
+            with open(os.path.join(HERE, 'zook', 'actwords.py'), encoding='utf-8') as f: exec(compile(f.read(), 'actwords.py', 'exec'), space)
+            _WORDS['describe'] = space
+        except Exception: pass
+    space = _WORDS['describe']
+    if not space: return []
+    try: steps, _ = space['_describe'](space['shell_inner'](command))
+    except Exception: return []
+    return [x for x in dict.fromkeys(steps) if x not in (space['OTHER'], space['UNREADABLE'])]
+
+
+def _unclear_title(command):
+    """The one line for a command whose every effect cannot be read from it: what it does and which files, in plain words (#234),
+    never 「無法判讀」. Why it is asked is said by the card itself."""
+    steps = _plain_steps(command)
+    shown = '、'.join(steps[:3]) + ('等 %d 個步驟' % len(steps) if len(steps) > 3 else '')
+    return '%s：%s' % (LABELS['unclear'], _short(shown, 150)) if steps else '%s（Zook 看不出它會做什麼）' % LABELS['unclear']
+
+
 def merged(found):
     """One line for each different action, and how many times one is done: two uploads of the same file to the same site are 「共 2 次」."""
     counts = {}
     for hit in found: counts[hit] = counts.get(hit, 0) + 1
-    return [(k, t if n == 1 else '%s（共 %d 次）' % (t, n)) for (k, t), n in counts.items()]
+    return [(k, t if n == 1 or k == 'unclear' else '%s（共 %d 次）' % (t, n)) for (k, t), n in counts.items()]
 
 
 def command_boundary(command, depth=0):

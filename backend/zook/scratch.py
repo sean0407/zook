@@ -6,9 +6,9 @@
 # proof the Bot made the file: one rewritten as a new file (sed -i, an editor's save) is new too, and setattrlist can set it. A Bot
 # of a CLI without Zook's gate can delete anything with its own rm anyway. A shell rm is never let through without asking (zook_gate.py), because what it
 # really deletes cannot be known for sure from the command line; /tmp and the Mac's temporary folder are asked as before.
-SCRATCH_NOTE = ('\n暫存檔：中間產物、一次性腳本、轉檔過程的檔案一律放在「%s」，不要放 /tmp 或系統暫存資料夾。用完呼叫 zook_clean_scratch，'
-                '把要刪的檔名（只有檔名，不含路徑）列給它，Zook 會直接清掉這次回覆建立的檔案，不用等使用者核准；在同一次回覆裡清理。'
-                '不要用 rm 刪暫存檔：用 rm 一律會先問使用者。')
+SCRATCH_NOTE = ('\n暫存檔：中間產物、一次性腳本、預覽圖（轉圖看版面的圖片）和轉檔過程的檔案，一律直接放在「%s」裡（不要另建子資料夾），不要放 /tmp、系統暫存資料夾或家目錄。'
+                '回覆結束時 Zook 會自動清掉這次回覆放進去的檔案，不用自己刪、也不用等使用者核准；想提早清可以呼叫 zook_clean_scratch，'
+                '把要刪的檔名（只有檔名，不含路徑）列給它。不要用 rm 刪暫存檔：用 rm 一律會先問使用者。')
 SCRATCH_MOST = 50
 _SCRATCH_LOCK = threading.Lock()
 
@@ -41,7 +41,7 @@ def _make_scratch(workspace, folder):
 def scratch_env(store, bot_id, env):
     """Make (or keep) this Bot's scratch folder and give zook_gate.py its path and identity (ZOOK_SCRATCH, ZOOK_SCRATCH_ID). A folder
     there that Zook did not make (a link, a file, another folder put in its place) is renamed aside, never deleted, and a new one made.
-    Returns (path, identity), or None when it could not be set up (then the tool is not offered and the record is left as it is)."""
+    Returns (path, identity, since), or None when it could not be set up (then the tool is not offered and the record is left as it is)."""
     for key in ('ZOOK_SCRATCH', 'ZOOK_SCRATCH_ID'): env.pop(key, None)  # never one inherited from elsewhere
     workspace = os.path.normpath(os.path.abspath(str(store.dir / 'workspaces' / bot_id)))
     folder = os.path.join(workspace, '.zook-scratch')
@@ -64,7 +64,7 @@ def scratch_env(store, bot_id, env):
                 log_activity(store, 'tool', 'Bot 暫存資料夾的紀錄損壞（%s），這次不提供清理工具；刪掉這個紀錄檔就會重建。' % record, by='Zook')
             return None
     env['ZOOK_SCRATCH'], env['ZOOK_SCRATCH_ID'] = folder, ident
-    return folder, ident
+    return folder, ident, time.time() - 2  # since when files there are this reply's (a little slack for the file system's clock)
 
 
 def scratch_note(scratch):
@@ -105,6 +105,22 @@ def clean_scratch(folder, ident, names, since):
     return deleted, kept
 
 
+def scratch_sweep(store, bot, scratch):
+    """When a reply ends (#331 #249): Zook clears what the Bot left right in its scratch folder during this reply (preview pictures,
+    one-off scripts), with the same checks as zook_clean_scratch, so no rm and no approval card is needed. Only when no other reply of
+    the Bot is running (its files would be this reply's too by their time). Returns the names deleted."""
+    if not scratch or len(scratch) < 3: return []
+    folder, ident, since = scratch[:3]
+    try: names = sorted(n for n in os.listdir(folder) if scratch_file_name(n))
+    except OSError: return []
+    deleted = []
+    for i in range(0, len(names), SCRATCH_MOST):
+        try: deleted += clean_scratch(folder, ident, names[i:i + SCRATCH_MOST], since)[0]
+        except RuntimeError: break  # not the folder Zook made any more: nothing more is touched
+    if deleted: log_activity(store, 'tool', 'Zook 在回覆結束後清掉「%s」暫存資料夾裡這次回覆留下的 %d 個檔案' % (bot.get('name', 'Bot'), len(deleted)), by='Zook')
+    return deleted
+
+
 def _unlink_checked(fd, name, seen):
     """Delete the very file looked at: first renamed to a name nobody can guess (so nothing can be put under it meanwhile), and deleted
     only when it is still that file; otherwise given its name back (unless something else took it)."""
@@ -128,7 +144,7 @@ def scratch_tools(store, bot, runtime, scratch):
     """zook_clean_scratch, for a Bot whose scratch folder Zook set up for this reply. Never asked (False: Zook's runtime treats it like
     a read, so no mode asks; a reply that may only read never has it, see plan_safe); each use is in the activity record."""
     if not scratch: return []
-    folder, ident = scratch
+    folder, ident = scratch[:2]
     since = time.time() - 2  # made before the CLI starts; a little slack for the file system's clock
     def clean(args):
         deleted, kept = clean_scratch(folder, ident, args.get('names'), since)

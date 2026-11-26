@@ -2,6 +2,7 @@
   // Choices answered with one click: the options a Bot lists at the end of a reply, and a question it asks in the middle of its work.
   if (!state.answering) state.answering = {};
   if (!state.answerDraft) state.answerDraft = {};
+  if (!state.seenQuestions) state.seenQuestions = {};
   const choicesOn = () => state.data?.settings?.choiceButtons !== false;
 
   // Only under the newest reply, and only while nothing else is on its way.
@@ -18,6 +19,15 @@
       ${(q.options || []).length ? `<div class="choice-row">${q.options.map(o => `<button type="button" class="choice-btn" data-answer="${esc(q.id)}" data-text="${esc(o)}" ${state.answering[q.id] ? 'disabled' : ''}>${esc(o)}</button>`).join('')}</div>` : ''}
       <form class="answer-form" data-answer-form="${esc(q.id)}"><input type="text" maxlength="2000" placeholder="${(q.options || []).length ? '或自己回答' : '輸入你的回答'}" aria-label="自己回答" value="${esc(state.answerDraft[q.id] || '')}" data-answer-draft="${esc(q.id)}"><button class="secondary" ${state.answering[q.id] ? 'disabled' : ''}>送出</button></form>
       <small class="approval-reason">回答只會告訴 Bot 你的選擇；它之後要做的動作仍照你設定的主動性核准。</small></section>`).join('');
+  }
+
+  // #248: a question the Bot stopped waiting for stays in sight, greyed, with why; Zook never answers in the user's place.
+  function goneQuestions(botId) {
+    const who = state.data.bots.find(x => x.id === botId)?.name || 'Bot', now = Date.now();
+    // A reply that ended on its own with the question open (not one you stopped) also stopped waiting for it (巡檢 H02).
+    const gone = jobsForBot(botId).flatMap(j => (j.questions || []).filter(q => q.status === 'expired' && (['timeout', 'gone'].includes(q.expiredWhy) || q.expiredWhy === 'ended' && j.status !== 'cancelled' && j.status !== 'running') && !state.seenQuestions[q.id] && now - new Date(q.expiredAt || 0).getTime() < 6 * 3600000));
+    return gone.map(q => `<section class="question-card stale" role="status"><strong>${esc(q.expiredWhy === 'timeout' ? `${who} 等了 10 分鐘沒等到你的回答，已先停在這一步` : q.expiredWhy === 'gone' ? `${who} 已不再等這個問題的回答（它可能改用別的做法，或已經停下）` : `${who} 沒等到你的回答就結束了這次回覆`)}</strong><p>${esc(q.question)}</p>
+      <small class="approval-reason">Zook 沒有替你選，Bot 也不會當成你拒絕。要回答的話，直接在下面輸入，Bot 會接著做。</small><div class="actions"><button class="secondary" data-action="dismiss-question" data-id="${esc(q.id)}">知道了</button></div></section>`).join('');
   }
 
   async function answerQuestion(id, text) {
@@ -45,6 +55,8 @@
       input.dispatchEvent(new Event('input', {bubbles: true}));  // the box grows to fit, as when typing
       return;
     }
+    const seen = e.target.closest('[data-action="dismiss-question"]');
+    if (seen) { state.seenQuestions[seen.dataset.id] = true; render(true); return; }
     const answer = e.target.closest('[data-answer]');
     if (answer) answerQuestion(answer.dataset.answer, answer.dataset.text);
   });

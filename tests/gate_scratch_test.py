@@ -199,11 +199,11 @@ class ZookMakesTheFolder(unittest.TestCase):
     def test_made_once_and_kept(self):
         made, env = self.make()
         info = os.lstat(self.folder)
-        self.assertEqual(made, (self.folder, '%d:%d' % (info.st_dev, info.st_ino)))
+        self.assertEqual(made[:2], (self.folder, '%d:%d' % (info.st_dev, info.st_ino))); self.assertLess(made[2], time.time())  # and since when its files are this reply's
         self.assertEqual(env, {'ZOOK_SCRATCH': self.folder, 'ZOOK_SCRATCH_ID': made[1]})
         Path(self.folder, 'a.txt').write_text('x')
         again, env2 = self.make()
-        self.assertEqual(again, made); self.assertTrue(Path(self.folder, 'a.txt').exists())
+        self.assertEqual(again[:2], made[:2]); self.assertTrue(Path(self.folder, 'a.txt').exists())
         self.assertEqual([p.name for p in (self.base / 'workspaces/bot1').iterdir()], ['.zook-scratch'])  # no leftover temporary folder
 
     def test_a_folder_put_in_its_place_is_moved_aside_never_deleted(self):
