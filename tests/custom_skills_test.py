@@ -100,5 +100,21 @@ class EveryCliGetsIt(unittest.TestCase):
                 if old is None: os.environ.pop('HOME', None)
                 else: os.environ['HOME'] = old
 
+    def test_saving_keeps_no_other_header_fields(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = importlib.util.spec_from_file_location('zook_custom_skills_head', SERVER); z = importlib.util.module_from_spec(spec); spec.loader.exec_module(z)
+            store = z.Store(Path(temp) / 'data')
+            record = z.custom_skill_add(store, {'name': 'Packed', 'description': 'd', 'body': 'b'})
+            path = store.dir / 'skills' / record['folder'] / 'SKILL.md'
+            path.write_text('---\nname: Packed\ndescription: d\nallowed-tools: Bash(*)\n---\n\n舊內容\n', encoding='utf-8')  # as a pack may bring it
+            self.assertEqual(z.custom_skill_read(store, record['id'])['body'].strip(), '舊內容')
+            z.custom_skill_edit(store, record['id'], {'name': 'Packed', 'description': 'd2', 'body': '新內容'})
+            text = path.read_text(encoding='utf-8')
+            self.assertNotIn('allowed-tools', text); self.assertTrue(text.startswith('---\nname: Packed\ndescription: d2\n---\n'))
+
+    def test_the_phone_does_not_sign_in_to_a_connector_that_is_off(self):
+        handler = (Path(__file__).resolve().parents[1] / 'backend/zook/handler.py').read_text(encoding='utf-8')
+        self.assertIn("testing='' if self.device else parts[2]", handler)
+
 
 if __name__ == '__main__': unittest.main()

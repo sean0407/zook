@@ -591,7 +591,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.error(404, '找不到資源。')
             if len(parts) == 4 and parts[:2] == ['api', 'mcp'] and parts[3] == 'test' and self.command == 'POST':
                 self.body()
-                return self.respond(200, runtime_module().test_connection(parts[2], inventory_for(self.server.store, testing=parts[2])))
+                return self.respond(200, runtime_module().test_connection(parts[2], inventory_for(self.server.store, testing='' if self.device else parts[2])))
             if path == '/api/uploads/path' and self.command == 'POST' and not self.device: return self.respond(201, upload_from_path(store, self.body().get('path')))  # 附上 a file the user named, after they clicked
             if path == '/api/uploads' and self.command == 'POST' and not self.device:
                 # One attached file, sent as the raw request body; the name comes in X-File-Name.

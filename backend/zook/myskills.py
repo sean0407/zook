@@ -22,24 +22,17 @@ def _skill_text(body):
     return name, about, text.strip('\n')
 
 
-def _skill_head(path):
-    """The header lines of a SKILL.md other than its name and description (a pack's Skill may carry more), and the text after it."""
+def _skill_body(path):
+    """The text of a SKILL.md after its header."""
     try: text = path.read_text(encoding='utf-8', errors='replace')
-    except OSError: return [], ''
-    if not text.startswith('---'): return [], text
-    parts = text.split('---', 2)
-    if len(parts) < 3: return [], text
-    keep, skipping = [], False
-    for line in parts[1].splitlines():
-        if line.startswith(('name:', 'description:')): skipping = True; continue
-        if skipping and line[:1] in (' ', '\t'): continue  # the rest of a value written over several lines
-        skipping = False
-        if line.strip(): keep.append(line)
-    return keep, parts[2].lstrip('\n')
+    except OSError: return ''
+    parts = text.split('---', 2) if text.startswith('---') else []
+    return parts[2].lstrip('\n') if len(parts) == 3 else text
 
 
-def _skill_write(path, name, about, body, keep=()):
-    path.write_text('---\nname: %s\ndescription: %s\n%s---\n\n%s\n' % (name, about, ''.join(line + '\n' for line in keep), body), encoding='utf-8')
+def _skill_write(path, name, about, body):
+    """Only a name and a description in the header: a Skill saved here never carries other header fields (allowed tools and the like)."""
+    path.write_text('---\nname: %s\ndescription: %s\n---\n\n%s\n' % (name, about, body), encoding='utf-8')
 
 
 def _skill_clash(store, name, own=None):
@@ -71,7 +64,7 @@ def custom_skill_read(store, record_id):
     record = _editable_skill(store, record_id)
     path = store.dir / 'skills' / record['folder'] / 'SKILL.md'
     name, about = skill_title(path.parent, record['name'])
-    _, body = _skill_head(path)
+    body = _skill_body(path)
     return dict(id=record['id'], name=name, description=about, body=body)
 
 
@@ -81,8 +74,7 @@ def custom_skill_edit(store, record_id, body):
     path = store.dir / 'skills' / record['folder'] / 'SKILL.md'
     with store.lock:
         _skill_clash(store, name, record['id'])
-        keep, _ = _skill_head(path)
-        _skill_write(path, name, about, text, keep)
+        _skill_write(path, name, about, text)
         for x in store.data['skills']:
             if x['id'] == record['id']: x['name'] = name
         store.save()
