@@ -335,11 +335,10 @@ def sync_group_files_out(store, group_id, bot_name, bot_id, seen, kept=None):
                             continue
                         name = free_group_file_name(shared, name, bot_name)
                     if now is None or name != _short_name(entry_name):  # a new file: one with the very same content already shared is not kept twice (#170)
-                        if same is None: same = {_file_hash(e.path): e.name for e in _plain_files(shared)}
+                        same = {_file_hash(e.path): e.name for e in _plain_files(shared)}  # as the files are now: another member may have saved one meanwhile
                         if digest in same:
                             if kept is not None: kept.append((_short_name(entry_name), same[digest]))
                             continue
-                    if same is not None: same[digest] = name
                     if size > MAX_UPLOAD or group_files_size(store, group_id, name) + size > GROUP_FILES_TOTAL: skipped.append(name); continue
                     os.replace(str(temp), str(shared / name)); saved.append(name)
             finally:

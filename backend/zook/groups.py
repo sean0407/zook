@@ -526,7 +526,7 @@ class GroupRuns:
                 if not turn.get('staged', True): raise OSError('attachments')
                 seen = sync_group_files_in(store, group_id, bot['id'], turn['skipFiles'])
                 lost = [n for n in turn.get('need') or [] if n not in seen]  # #245: a file the check is for went away after it was let through
-                if lost: raise RuntimeError('要查核的檔案 %s 在查核開始前不見了（可能被刪掉），這次沒有查核。' % '、'.join(lost))
+                if lost: turn['job']['lostFiles'] = lost; raise RuntimeError('要查核的檔案 %s 在查核開始前不見了（可能被刪掉），這次沒有查核。' % '、'.join(lost))
                 if turn.get('check'): turn['prompt'] += named_check_copy(store, group_id, bot['id'], turn['job'], turn['check'])
             except (OSError, ValueError, RuntimeError) as exc:
                 return self._group_stage_failed(turn['job']['id'], str(exc) if isinstance(exc, RuntimeError) else '')

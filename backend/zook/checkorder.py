@@ -9,7 +9,7 @@
 # the check is a step between the work and the host's merge, and runs again after the host sends work back; in a discussion with
 # a host it comes after the members' independent round. In 任務引擎 a task reported with files that are not there is tried again
 # before another vendor checks it.
-CHECKER_NAME = re.compile(r'查核|驗收|審核|審查|校對|稽核|覆核|複核|把關|品管|品檢|品保|檢查員|(?<![A-Za-z])(?:QA|reviewer|checker)(?![A-Za-z])', re.I)
+CHECKER_NAME = re.compile(r'查核|驗收|審核|審查|校對|稽核|覆核|複核|把關|品管|品檢|品保|品質|檢查|(?<![A-Za-z])(?:QA|reviewer|checker)(?![A-Za-z])', re.I)
 CHECKER_DUTY = re.compile(r'(?:負責|專門|主要|擔任|你是|我是|身為|作為)(?:做|進行|的)?[^，。,.；;\n]{0,6}?(?:查核|驗收|審核|審查|校對|稽核|覆核|複核|把關|檢查)')
 FILE_KINDS = CLAIM_KINDS + ('ai', 'psd', 'eps', 'svg', 'gif', 'webp', 'heic', 'tif', 'tiff', 'bmp', 'key', 'numbers', 'pages', 'rtf', 'odt', 'ods', 'odp', 'xml',
                             'yaml', 'yml', 'tsv', 'log', 'epub', 'indd', 'sketch', 'fig', 'mp4', 'mov', 'm4a', 'mp3', 'wav', 'py', 'js', 'sql', 'ics', 'vcf', 'xlsm')
@@ -98,7 +98,8 @@ def _in_prose(word, names, loose=False):
 PROSE_JOIN = ('存', '好', '了', '到', '成', '進', '的', '是', '為', '为', '：', ':', '傳', '交', '出', '付', '上', '把', '將', '将', '即', '和', '與', '与', '及', '在')
 
 
-SAVE_SAID = ('已存', '存到', '存好', '存成', '存進', '另存', '已上傳', '上傳到', '交了', '交出', '已交', '交件', '交付', '附上')  # a reply that says it saved or handed over something
+SAVE_WORDS = ('已存', '存到', '存好', '存成', '存進', '另存', '已上傳', '上傳到')  # it says it saved a file
+SAVE_SAID = SAVE_WORDS + ('交了', '交出', '已交', '交件', '交付', '附上')  # it says it saved or handed over something (a file only when it names one)
 
 
 def _nothing_saved(replies, pool):
@@ -106,7 +107,8 @@ def _nothing_saved(replies, pool):
     names a file that is already there (saved earlier, unchanged). Only replies whose files Zook brought back count; one that could
     not save, such as in 謹慎, is not asked to."""
     looked = [m for m in replies if 'savedFiles' in m]
-    if not looked or any(n in pool for m in looked for n in m.get('savedFiles') or []) or not any(w in (m.get('content') or '') for m in looked for w in SAVE_SAID): return False
+    if not looked or any(n in pool for m in looked for n in m.get('savedFiles') or []): return False
+    if not any(any(w in (m.get('content') or '') for w in SAVE_WORDS) or (any(w in (m.get('content') or '') for w in SAVE_SAID) and FILE_WORD.search(m.get('content') or '')) for m in looked): return False  # 「已交付三個建議」 hands over text, not a file
     return not any(_in_prose(n, pool) for m in looked for n in FILE_WORD.findall(m.get('content') or ''))
 
 
