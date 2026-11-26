@@ -102,4 +102,29 @@ class GroupFileSafety(unittest.TestCase):
         self.assertEqual(server.group_card('完整成果\n【結論】甲')['body'], '完整成果')
 
 
+    def test_reported_files_are_looked_for_as_zook_saved_them(self):  # #245
+        (self.shared / 'ab.xlsx').write_text('x'); (self.shared / '報價單（甲）.xlsx').write_text('x'); (self.shared / '報價單（舊版）.pdf').write_text('x')
+        listed = ['a:b.xlsx', '報價單.xlsx', '報價單.pdf', 'README']
+        self.assertEqual(server.checked_present(self.store, 'g1', listed, exact=listed, owner='甲'), ['報價單.pdf', 'README'])
+        self.assertEqual(server.checked_present(self.store, 'g1', ['keep.txt', 'gone.docx']), ['gone.docx'])
+        (self.shared / '提案.pptx').write_text('old'); self.assertEqual(server.checked_present(self.store, 'g1', ['提案（新版）.pptx', '提案.pptx（群組檔案）'], exact=['提案（新版）.pptx']), ['提案（新版）.pptx'])
+        (self.shared / '舊版合約.docx').write_text('old'); self.assertEqual(server.checked_present(self.store, 'g1', ['合約.docx']), ['合約.docx'])  # an older file that merely ends the same is not it
+        group = dict(id='g1', fileInfo={'報價單（甲）.xlsx': {'by': '甲'}, 'ab.xlsx': {'by': '乙'}})
+        self.assertEqual(server.task_files_missing(self.store, group, '甲', dict(files=['報價單.xlsx', 'ab.xlsx']), {}), ['ab.xlsx'])  # another member's file is not its work
+        self.assertEqual(server.task_files_missing(self.store, group, '甲', dict(files=['ab.xlsx']), dict(savedFiles=['ab.xlsx'])), [])
+        self.assertEqual(server.task_files_missing(self.store, group, '甲', dict(files=[]), dict(skippedFiles=['big.pdf'])), ['big.pdf'])
+        self.assertEqual(server.task_files_missing(self.store, group, '甲', dict(files=[], summary='已存好報價單.xlsx，依照需求.pdf'), {}, '讀 /tmp/in/需求.pdf'), ['已存好報價單.xlsx'])  # named in the summary only (the words run together); the input file is not its work
+        (self.shared / '報價單.xlsx').write_text('x')
+        self.assertEqual(server.task_files_missing(self.store, group, '甲', dict(files=[], summary='已存好報價單.xlsx'), {}), ['已存好報價單.xlsx'])  # someone else's file of that name
+        self.assertEqual(server.task_files_missing(self.store, dict(group, fileInfo={'報價單.xlsx': {'by': '甲'}}), '甲', dict(files=[], summary='已存好報價單.xlsx'), {}), [])
+        self.assertEqual(server.task_files_missing(self.store, dict(group, fileInfo={'報價單.xlsx': {'by': '甲', 'byId': 'other'}}), '甲', dict(files=['報價單.xlsx']), {}, owner_id='mine'), ['報價單.xlsx'])  # another Bot named 甲
+        self.assertEqual(server.task_files_missing(self.store, group, '甲', dict(files=[], summary='已存好新版需求.pdf'), {}, '讀 /tmp/in/需求.pdf'), ['已存好新版需求.pdf'])  # not the input it read
+        (self.shared / 'Q3 報價單.xlsx').write_text('q3')
+        self.assertEqual(server.task_files_missing(self.store, dict(group, fileInfo={'Q3 報價單.xlsx': {'by': '甲'}}), '甲', dict(files=['Q3 報價單.xlsx'], summary='已存好 Q3 報價單.xlsx'), dict(savedFiles=['Q3 報價單.xlsx'])), [])  # a piece of a whole name it handed over
+        self.assertEqual([server.named_checker(dict(name=n)) for n in ('查核員', '非查核員', '不負責查核員', 'QA', 'AQAB')], [True, False, False, True, False])
+        self.assertEqual([server.named_checker(dict(name='甲', persona=x)) for x in ('不只負責查核，也要寫報價。', '主要不負責查核，做報價單。', '你擔任驗收角色。', '負責檢查其他成員的成果。', '主要撰寫驗收報告。', '我是設計師，曾負責驗收舊版，現在製作報價單。', '過去負責查核，現在做報價。', '我是設計師，負責驗收其他成員的成果。')], [True, False, True, True, False, False, False, True])
+        self.assertEqual([server.named_checker(dict(name=n)) for n in ('品質檢查員', '驗收報告撰寫', '文件審核員', '檢查專員', '品質檢查專員', '品質改善工程師', '品質檢查流程設計師', '驗收工程師', 'QA 工程師')], [True, False, True, True, True, False, False, True, True])
+        self.assertEqual(server.verify_again(dict(verify=dict(state='done', need={'a.xlsx': 'h'}))), dict(state='waiting', need={'a.xlsx': 'h'}))
+        (self.shared / '新版報價.xlsx').write_text('n'); self.assertEqual(server.task_files_missing(self.store, dict(group, fileInfo={'新版報價.xlsx': {'by': '甲', 'byId': 'mine'}}), '甲', dict(files=['報價.xlsx']), dict(savedFiles=['新版報價.xlsx']), owner_id='mine'), ['報價.xlsx'])  # a longer name is another file
+
 if __name__ == '__main__': unittest.main()
