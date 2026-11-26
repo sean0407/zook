@@ -2176,6 +2176,7 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .page:has(.dir-bar) { scrollbar-gutter: stable; }
 @media (max-width: 940px) { .dir-search { order: 3; flex: 1 0 100%; width: 100%; margin-left: 0; } }
 /* #176: 產出's switch for the scripts a Bot wrote to make its files */
+.output-head { margin: 8px 0 2px; padding: 0 2px; font-size: 12px; color: var(--muted); }
 .output-scripts { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; padding: 0 2px; font-size: 12px; color: var(--muted); cursor: pointer; }
 /* 知識庫 (#84, #122, #123) */
 .know-intro { margin: 0 0 6px; }
