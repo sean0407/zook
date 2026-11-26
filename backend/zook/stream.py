@@ -16,10 +16,30 @@ def stream_on(store): return store.data['settings'].get('streamReplies') is not 
 
 def partial_start(job):
     """A new attempt begins with nothing on screen: what an earlier model wrote before it failed is not carried over."""
+    PARTIAL_GAP.pop(job['id'], None)
     PARTIALS[job['id']] = dict(text='', messageId=job.get('messageId'), choices=(_active['data'].get('settings') or {}).get('choiceButtons') is not False and not job.get('groupId') and not job.get('origin') and not job.get('internal'))
 
 
-def partial_end(job_id): PARTIALS.pop(job_id, None)
+# #264: between one attempt's end and the next one's start (a backup model, a retry) the job is still running and the window may
+# still show the words; 停止 in that moment keeps them too. Only until the next attempt starts, and never longer than a minute.
+PARTIAL_GAP = {}  # job id -> (time, entry)
+PARTIAL_GAP_SECONDS = 60
+
+
+def partial_end(job_id, going_on=False):
+    """going_on: the job is still running (another attempt may follow), so a 停止 now keeps these words; otherwise they are gone."""
+    entry, now = PARTIALS.pop(job_id, None), time.monotonic()
+    PARTIAL_GAP.pop(job_id, None)
+    for key in [k for k, (at, _) in list(PARTIAL_GAP.items()) if now - at > PARTIAL_GAP_SECONDS]: PARTIAL_GAP.pop(key, None)
+    if going_on and entry and entry.get('text'): PARTIAL_GAP[job_id] = (now, entry)
+
+
+def partial_kept(job_id):
+    """What a stopped reply keeps: the words on screen now, or those of the attempt that just ended while the next has not started."""
+    if job_id in PARTIALS: return partial_text(job_id)
+    at, entry = PARTIAL_GAP.pop(job_id, (0, None))
+    if not entry or time.monotonic() - at > PARTIAL_GAP_SECONDS: return ''
+    return hide_choice_block(entry.get('text') or '') if entry.get('choices') else entry.get('text') or ''
 
 
 def partial_text(job_id):

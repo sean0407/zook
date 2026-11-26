@@ -1657,6 +1657,8 @@ button.group-file-name:hover strong { text-decoration: underline; }
 .office-page figcaption { margin-top: 4px; font-size: 12px; color: var(--muted); }
 .output-link { font: inherit; text-decoration: underline; text-decoration-style: dotted; }
 .local-link { font: inherit; color: #2563eb; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; text-align: left; }
+.local-link.missing-file { color: #8a8a8a; }
+.missing-note { color: #a44035; font-size: 12.5px; margin-left: 2px; }
 .button-link { display: inline-flex; align-items: center; text-decoration: none; }
 .catalog-item.off { opacity: 0.55; }
 .catalog-item .dir-icon, .catalog-item .item-icon { flex: none; }

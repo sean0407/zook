@@ -286,7 +286,7 @@
           content = input.value.trim();
         if (pendingList().some(f => f.uploading)) { toast('檔案還在上傳，請稍等'); return; }
         const attachments = pendingList().map(f => f.id);
-        if (!content && !attachments.length) return;
+        if (!content && !attachments.length) { toast('請先輸入內容'); input.focus(); return; }  // #263: not a silent nothing
         const g = activeGroup();
         if (g && g.status === 'running' && attachments.length) { toast('討論進行中只能傳文字；附件請等這輪結束或先停止'); return; }
         // Shown at once; the reply, the refresh and anything slow on the Mac come after. Each message has its own id.
