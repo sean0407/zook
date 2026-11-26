@@ -556,7 +556,7 @@ class GroupRuns:
                 said_msg = find_message(group, turn['msg']['id'])
                 if said_msg: said_msg['unrenderedClaim'] = True
             said_msg = find_message(group, turn['msg']['id'])
-            if said_msg: said_msg.update(savedFiles=list(dict.fromkeys(list(saved) + list(turn.get('kept') or []))), skippedFiles=list(skipped))  # #245: what really reached the group's files, for the check
+            if said_msg: said_msg.update(savedFiles=list(dict.fromkeys(list(saved) + [x[1] for x in turn.get('kept') or []])), sameAs=dict(turn.get('kept') or []), skippedFiles=list(skipped))  # #245: what really reached the group's files, for the check
             for name in saved: group.setdefault('fileInfo', {})[name] = dict(by=bot['name'], **{k: v for k, v in (group.get('fileInfo', {}).get(name) or {}).items() if k == 'origName'})  # the uploaded name stays known
             if saved: group['messages'].append(dict(id=ID(), role='system', content='%s 存了共用檔案：%s' % (bot['name'], '、'.join(saved)), createdAt=NOW()))
             if skipped: group['messages'].append(dict(id=ID(), role='system', content='%s 的檔案太大沒有存進群組：%s' % (bot['name'], '、'.join(skipped)), createdAt=NOW()))
@@ -837,9 +837,9 @@ class GroupRuns:
         spent = dict(n=turns); began = turns
         rounds = (resume or {}).get('rounds', 0); blind_next = (resume or {}).get('blind', False); hidden = list((resume or {}).get('hide') or []); hidden_files = list((resume or {}).get('hideFiles') or [])
         gate, gate_step = (resume or {}).get('checkAfter'), (resume or {}).get('checkStep')  # #245: the 查核員 the kickoff named, after the work
-        if not resume and not moderated and not engine and planned is None:  # #245: a 查核員 the message names checks after the others, only reading
-            makers, held = split_checkers(store, [p[0] for p in pending])
-            if held: pending, gate = [p for p in pending if p[0] in makers], dict(bots=held, gate=makers, held=held)
+        if not resume and not moderated and not engine and planned is None:  # #245: a 查核員 checks after the others, only reading, also when named later
+            makers, named = split_checkers(store, [p[0] for p in pending]); held = split_checkers(store, [b['id'] for b in members])[1]
+            if held and (makers or named): pending, gate = [p for p in pending if p[0] in makers], dict(bots=named, gate=makers, held=held)
         try:
             if engine or planned is not None:
                 result = self.run_task_engine(group_id, run_id) if engine else self._run_steps(group_id, run_id, planned, limit, spent)

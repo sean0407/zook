@@ -9,9 +9,10 @@
 # the check is a step between the work and the host's merge, and runs again after the host sends work back; in a discussion with
 # a host it comes after the members' independent round. In 任務引擎 a task reported with files that are not there is tried again
 # before another vendor checks it.
-CHECKER_NAME = re.compile(r'查核|驗收|審核|審查|校對|稽核|覆核|複核|把關|品管|(?<![A-Za-z])(?:QA|reviewer|checker)(?![A-Za-z])', re.I)
-CHECKER_DUTY = re.compile(r'(?:負責|專門|主要|擔任|你是|我是|身為|作為)(?:做|進行|的)?[^，。,.；;\n]{0,6}?(?:查核|驗收|審核|審查|校對|稽核|覆核|複核|把關)')
+CHECKER_NAME = re.compile(r'查核|驗收|審核|審查|校對|稽核|覆核|複核|把關|品管|品檢|品保|檢查員|(?<![A-Za-z])(?:QA|reviewer|checker)(?![A-Za-z])', re.I)
+CHECKER_DUTY = re.compile(r'(?:負責|專門|主要|擔任|你是|我是|身為|作為)(?:做|進行|的)?[^，。,.；;\n]{0,6}?(?:查核|驗收|審核|審查|校對|稽核|覆核|複核|把關|檢查)')
 CHECKER_NOT = re.compile(r'[不沒没非無无別]')  # 「不負責查核」「我不是負責查核的」: said not to be its job
+CHECKER_WRITES = re.compile(r'撰寫|寫|整理|製作|起草|報告|文件|紀錄|記錄|表單|清單')  # 「主要撰寫驗收報告」: it makes a document about checking
 MODERATOR_RULES['split_check'] = ['現在輪到你查核。照主持人分派給你的查核工作，實際打開要查的檔案（成員交的，或使用者給的）逐項核對，不要只看別人的說法。',
                                   '第一行只寫【判定】同意、【判定】有疑慮 或 【判定】有錯誤 其中之一，接著用最多 4 點說明依據；有檔案沒打開，就寫明哪個沒看，不能判定通過。',
                                   '要給客戶或外部的內容，核對有沒有內部註記、計算過程、內部折扣或報價規則、【待確認】。',
@@ -24,9 +25,10 @@ MODERATOR_RULES['split_plan'] = MODERATOR_RULES['split_plan'][:-1] + ['負責查
 def group_is_checker(bot):
     """Whether a member's role is checking others' work: its name says so, or its persona starts by saying that is its job."""
     name = str((bot or {}).get('name') or '')
-    if any(not CHECKER_NOT.search(re.sub('不只|不僅|不但', '', name[:hit.start()])) for hit in CHECKER_NAME.finditer(name)): return True  # 「非查核員」「不負責查核員」 are not
+    if not CHECKER_WRITES.search(name) and any(not CHECKER_NOT.search(re.sub('不只|不僅|不但', '', name[:hit.start()])) for hit in CHECKER_NAME.finditer(name)): return True  # 「非查核員」「不負責查核員」 are not
     persona = str((bot or {}).get('persona') or (bot or {}).get('instructions') or '')[:80]
-    return any(not CHECKER_NOT.search(re.sub('不只|不僅|不但', '', persona[max(0, hit.start() - 4):hit.end()])) for hit in CHECKER_DUTY.finditer(persona))
+    return any(not CHECKER_NOT.search(re.sub('不只|不僅|不但', '', persona[max(0, hit.start() - 4):hit.end()])) and not CHECKER_WRITES.search(hit.group(0) + re.split(r'[，。,.；;、\n]', persona[hit.end():hit.end() + 4])[0])
+               for hit in CHECKER_DUTY.finditer(persona))
 
 
 def split_checkers(store, ids):
@@ -159,7 +161,8 @@ class CheckOrder:
             latest = {b: m for b, m in last.items() if m.get('status') == 'completed' and m.get('content')}
             unfinished = [b for b in step.get('gate', []) if b not in latest and store.find('bots', b) and b in group['botIds']]  # no reply, or one that did not finish: not handed in
             earlier = step.get('missing') if isinstance(step.get('missing'), dict) else {}  # what was missing before 補存 is looked for again, whatever the new reply says
-            said = {b: [n for n in dict.fromkeys(list(m.get('missingFiles') or []) + list(earlier.get(b) or [])) if n != NOTHING_SAVED] for b, m in latest.items()}  # looked for again by the full name, among the files there now
+            alias = {b: [k for x in group['messages'][start:] if x.get('botId') == b and x.get('role') == 'assistant' for k in (x.get('sameAs') or {})] for b in latest}  # saved, kept as a shared file with the same content
+            said = {b: [n for n in dict.fromkeys(list(m.get('missingFiles') or []) + list(earlier.get(b) or [])) if n != NOTHING_SAVED and not _same_file(n, alias[b])] for b, m in latest.items()}  # looked for again by the full name, among the files there now
             checkers = _names(store, step['bots'])
             with _group_files_lock:  # nothing is being saved into the group's files while they are looked at
                 gone = {b: checked_present(store, group_id, names) for b, names in said.items() if names}
@@ -170,7 +173,7 @@ class CheckOrder:
                 text = m.get('content') or ''
                 if any(w in text for w in SAVE_SAID):
                     mine = [n for x in group['messages'][start:] if x.get('botId') == b and x.get('role') == 'assistant' for n in x.get('savedFiles') or []]  # what it really saved (Zook may have cleaned the name)
-                    named = [n for n in CLAIM_WORD.findall(text) if not _in_prose(n, given, True) and not _in_prose(n, pool) and not any(_claim_key(s).endswith(_claim_key(n)) or _claim_key(_short_name(n)) == _claim_key(s) for s in mine)]
+                    named = [n for n in CLAIM_WORD.findall(text) if not _in_prose(n, given, True) and not _in_prose(n, pool) and not _in_prose(n, alias[b]) and not any(_claim_key(s).endswith(_claim_key(n)) or _claim_key(_short_name(n)) == _claim_key(s) for s in mine)]
                     if named: gone[b] = list(dict.fromkeys((gone.get(b) or []) + named))[:10]
             for b, m in latest.items():
                 if m.get('skippedFiles'): gone[b] = list(dict.fromkeys((gone.get(b) or []) + list(m['skippedFiles'])))  # too big to keep: an older file of that name is not this work
@@ -270,4 +273,5 @@ def task_files_missing(store, group, owner, attempt, msg, spec='', given=()):
     for raw in listed:
         base = re.sub(r'[（(][^（）()]{0,30}[）)]\s*$', '', ' '.join(str(raw or '').split())).strip(' 「」『』`\'"').rsplit('/', 1)[-1]
         if base and base not in gone and _same_file(base, pool, owner) and not _same_file(base, [n for n in pool if n in mine], owner): gone.append(base)
-    return list(dict.fromkeys(gone + list(msg.get('skippedFiles') or [])))[:10]
+    alias = [k for k in (msg.get('sameAs') or {}) if k]  # saved under its name, kept as the shared file with the same content
+    return [n for n in dict.fromkeys(gone + list(msg.get('skippedFiles') or [])) if not _in_prose(n, alias) and not _same_file(n, alias)][:10]

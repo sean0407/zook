@@ -115,6 +115,7 @@ class GroupFileSafety(unittest.TestCase):
         self.assertEqual(server.task_files_missing(self.store, group, '甲', dict(files=[], summary='已存好報價單.xlsx，依照需求.pdf'), {}, '讀 /tmp/in/需求.pdf'), ['已存好報價單.xlsx'])  # named in the summary only (the words run together); the input file is not its work
         (self.shared / '報價單.xlsx').write_text('x'); self.assertEqual(server.task_files_missing(self.store, group, '甲', dict(files=[], summary='已存好報價單.xlsx'), {}), [])
         self.assertEqual([server.group_is_checker(dict(name=n)) for n in ('查核員', '非查核員', '不負責查核員', 'QA', 'AQAB')], [True, False, False, True, False])
-        self.assertEqual([server.group_is_checker(dict(name='甲', persona=x)) for x in ('不只負責查核，也要寫報價。', '主要不負責查核，做報價單。', '你擔任驗收角色。')], [True, False, True])
+        self.assertEqual([server.group_is_checker(dict(name='甲', persona=x)) for x in ('不只負責查核，也要寫報價。', '主要不負責查核，做報價單。', '你擔任驗收角色。', '負責檢查其他成員的成果。', '主要撰寫驗收報告。')], [True, False, True, True, False])
+        self.assertEqual([server.group_is_checker(dict(name=n)) for n in ('品質檢查員', '驗收報告撰寫')], [True, False])
 
 if __name__ == '__main__': unittest.main()
