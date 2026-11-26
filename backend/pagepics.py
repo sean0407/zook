@@ -147,35 +147,77 @@ def pptx_pages(path, out, width=1600):
     return done, missing
 
 
-# A Word file's text laid out on A4 pages by macOS's own text system (no app window), saved as a PDF. Quick Look only pictures
-# the first page of a .docx; this gives every page. Pictures inside the document may be left out: it is a preview, not the file.
+# A Word file's text laid out on A4 pages by macOS's own text system (no app window), saved as PDFs. Quick Look only pictures
+# the first page of a .docx; this gives every page. macOS's reader drops Word's page breaks (#338), so a copy marks each one
+# with PAGE_MARK first and the text is laid out in pieces cut there, each piece starting a new page. Pictures inside the
+# document may be left out: it is a preview, not the file.
+PAGE_MARK = 'ZOOKPAGEBREAK7F3A'
 DOCX_TO_PDF = '''ObjC.import('AppKit');
-function run(argv) {
-  var text = $.NSAttributedString.alloc.initWithURLOptionsDocumentAttributesError($.NSURL.fileURLWithPath(argv[0]), $({}), null, null);
-  if (!text || text.isNil()) return 'unreadable';
+function layout(text, path) {
   var info = $.NSPrintInfo.sharedPrintInfo.copy;
   info.paperSize = $.NSMakeSize(595, 842); info.topMargin = 56; info.bottomMargin = 56; info.leftMargin = 56; info.rightMargin = 56;
   info.horizontalPagination = $.NSFitPagination; info.verticalPagination = $.NSAutoPagination; info.jobDisposition = $.NSPrintSaveJob;
-  info.dictionary.setObjectForKey($.NSURL.fileURLWithPath(argv[1]), $.NSPrintJobSavingURL);
+  info.dictionary.setObjectForKey($.NSURL.fileURLWithPath(path), $.NSPrintJobSavingURL);
   var view = $.NSTextView.alloc.initWithFrame($.NSMakeRect(0, 0, 483, 730));
   view.textStorage.setAttributedString(text);
   var job = $.NSPrintOperation.printOperationWithViewPrintInfo(view, info);
   job.showsPrintPanel = false; job.showsProgressPanel = false;
-  return job.runOperation ? 'ok' : 'failed';
+  return job.runOperation;
+}
+function run(argv) {
+  var text = $.NSAttributedString.alloc.initWithURLOptionsDocumentAttributesError($.NSURL.fileURLWithPath(argv[0]), $({}), null, null);
+  if (!text || text.isNil()) return 'unreadable';
+  var plain = text.string.js, mark = argv[2], cuts = [], at = 0, from = 0, n = 0;
+  while ((at = plain.indexOf(mark, at)) >= 0) { cuts.push(at); at += mark.length; }
+  cuts.push(plain.length);
+  for (var i = 0; i < cuts.length && i < 2000; i++) {
+    var start = from, end = cuts[i]; from = end + mark.length;
+    while (start < end && plain[start] === '\\n') start++;
+    if (start >= end && i > 0 && i === cuts.length - 1) break;  // nothing after the last break
+    if (!layout(text.attributedSubstringFromRange($.NSMakeRange(start, Math.max(0, end - start))), argv[1] + '-' + (++n) + '.pdf')) return 'failed';
+  }
+  return 'ok';
 }'''
 
 
+def mark_page_breaks(xml):
+    """word/document.xml with each page break (a break run, a paragraph set to start a new page, a section that starts on a new
+    page) written as PAGE_MARK text, which macOS's reader keeps."""
+    run = '<w:r><w:t>%s</w:t></w:r>' % PAGE_MARK
+    xml = re.sub(r'<w:br\b[^>]*\bw:type="page"[^>]*/>', '<w:t>%s</w:t>' % PAGE_MARK, xml)
+    xml = re.sub(r'(<w:p\b[^>]*>\s*<w:pPr>(?:(?!</w:pPr>).)*?<w:pageBreakBefore(?![^>]*w:val="(?:0|false|off)")[^>]*/>(?:(?!</w:pPr>).)*</w:pPr>)', lambda m: m.group(1) + run, xml, flags=re.S)
+    return re.sub(r'(<w:pPr>(?:(?!</w:pPr>).)*<w:sectPr\b(?:[^>]*/>|(?:(?!</w:sectPr>|</w:pPr>).)*</w:sectPr>)(?:(?!</w:pPr>).)*</w:pPr>(?:(?!</w:p>).)*)(</w:p>)',
+                  lambda m: m.group(1) + ('' if re.search(r'<w:type w:val="continuous"', m.group(1)) else run) + m.group(2), xml, flags=re.S)
+
+
 def docx_pages(path, out, width=1600):
-    """Every page of a Word file: laid out as a PDF by macOS, then drawn like any PDF. Returns ([(png, w, h)], [pages not written])."""
+    """Every page of a Word file: laid out as PDFs by macOS, then drawn like any PDF. Returns ([(png, w, h)], [pages not written])."""
     work = tempfile.mkdtemp(prefix='.zook-pagepics-', dir=out)
     try:
         stem = os.path.splitext(os.path.basename(path))[0]
-        script, pdf = os.path.join(work, 'layout.js'), os.path.join(work, stem + '.pdf')
+        script, marked = os.path.join(work, 'layout.js'), os.path.join(work, 'marked.docx')
         with open(script, 'w', encoding='utf-8') as f: f.write(DOCX_TO_PDF)
-        _run(['/usr/bin/osascript', '-l', 'JavaScript', script, os.path.abspath(path), pdf])
-        if not os.path.exists(pdf) or not os.path.getsize(pdf): return [], []
-        try: return pdf_pages(pdf, out, width)
-        except SystemExit: return [], []  # an unreadable layout: Quick Look's first page instead
+        try:
+            with zipfile.ZipFile(path) as z, zipfile.ZipFile(marked, 'w', zipfile.ZIP_DEFLATED) as copy:
+                for item in z.infolist():
+                    data = z.read(item)
+                    if item.filename == 'word/document.xml': data = mark_page_breaks(data.decode('utf-8')).encode('utf-8')
+                    copy.writestr(item.filename, data)
+        except (OSError, ValueError, zipfile.BadZipFile, UnicodeDecodeError): marked = os.path.abspath(path)
+        _run(['/usr/bin/osascript', '-l', 'JavaScript', script, marked, os.path.join(work, 'part'), PAGE_MARK])
+        parts = sorted((n for n in os.listdir(work) if re.fullmatch(r'part-\d+\.pdf', n)), key=lambda n: int(n[5:-4]))
+        done, missing, most = [], [], MOST[0]
+        for i, name in enumerate(parts):
+            if most and len(done) >= most: SKIPPED[0] = max(SKIPPED[0], len(parts) - i); break
+            MOST[0] = most - len(done) if most else 0
+            try: made, lost = pdf_pages(os.path.join(work, name), work, width)
+            except SystemExit: continue  # an unreadable piece
+            for target, w, h in made:
+                final = os.path.join(out, '%s-%02d.png' % (stem, len(done) + len(missing) + 1)); shutil.move(target, final); done.append((final, w, h))
+            for _ in lost: missing.append(len(done) + len(missing) + 1)
+        MOST[0] = most
+        if most and len(done) >= most and SKIPPED[0]: SKIPPED[0] = max(SKIPPED[0], 1)
+        return done, missing
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

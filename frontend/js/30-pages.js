@@ -29,7 +29,7 @@
   if (!state.pendingBy) state.pendingBy = restorePending();  // files waiting to be sent, per Bot or group
   const pendingKey = () => activeGroup() ? effortKey() : effortKey() + ':' + ((state.data?.bots || []).find(b => b.id === state.selected)?.chatId || '');  // each conversation has its own
   const pendingList = () => state.pendingBy[pendingKey()] || (state.pendingBy[pendingKey()] = []);
-  const kb = n => n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1024 / 1024).toFixed(1) + ' MB';
+  const kb = n => n < 1024 ? n + ' B' : n < 1024 * 1024 ? Math.round(n / 1024) + ' KB' : (n / 1024 / 1024).toFixed(1) + ' MB';  // #337④: 1 B is not 1 KB
   // #108: what a Bot can make sense of, a program file that it cannot, and an icon for each kind of file.
   const ATTACH_HINT = 'Bot 看得懂文字、PDF、Word、Excel、簡報和圖片；程式或安裝檔（例如 .exe、.dmg）只能收下，讀不懂內容。';
   const UNREADABLE = /\.(exe|msi|dll|dmg|pkg|app|bin|iso|apk|bat|cmd)$/i;

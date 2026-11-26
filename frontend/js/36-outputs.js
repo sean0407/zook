@@ -20,31 +20,34 @@
   function outputsPanel(b) {
     const list = state.outputs[b.id];
     if (!list) { setTimeout(() => loadOutputs(b.id), 0); return '<div class="detail-empty">正在讀取產出…</div>'; }
-    const icon = {image: '🖼', pdf: '📕', office: '📊', markdown: '📝', text: '📄', file: '📎'};
     const [files, scripts] = splitScripts(list), showScripts = !!state.showScripts?.[b.id];
-    const row = o => `<button class="note-row output-row" data-action="output-open" data-id="${esc(o.id)}" title="${esc(o.path)}"><strong>${icon[o.kind] || '📎'} ${esc(o.name)}</strong><small>${esc(fileSize(o.size))} · ${esc(formatDate(o.at))}</small></button>`;
+    const row = o => `<button class="note-row output-row" data-action="output-open" data-id="${esc(o.id)}" title="${esc(o.name)}"><strong>${fileIcon(o.name)} ${esc(midName(o.name, 40))}</strong><small>${esc(fileSize(o.size))} · ${esc(formatDate(o.at))}</small></button>`;
     const more = scripts.length ? `<label class="output-scripts">${toggle('data-show-scripts="' + esc(b.id) + '"', showScripts, '顯示製作用的程式')}<span>顯示製作用的程式（${scripts.length}）</span></label>${showScripts ? scripts.map(row).join('') : ''}` : '';
     return `<div class="detail-title">產出 <button class="link" data-action="outputs-refresh">重新整理</button></div>${list.length ? files.map(row).join('') + more : '<div class="detail-empty">這個 Bot 建立或修改過的檔案會出現在這裡。</div>'}`;
-  }
-  // A PDF opens fitted to the window's width; it stays hidden behind a line of text until it has loaded, instead of a dark box.
-  const pdfFrame = (url, name) => `<div class="pdf-wrap"><p class="pdf-loading muted">正在開啟 PDF…</p><iframe class="output-pdf" src="${esc(url)}#view=FitH&zoom=page-width" title="${esc(name)}"></iframe></div>`;
-  function showPdfWhenReady() {
-    const frame = document.querySelector('.modal .output-pdf');
-    if (!frame) return;
-    const show = () => frame.classList.add('ready');
-    frame.addEventListener('load', show, {once: true}); setTimeout(show, 4000);
   }
   // #153④⑥: what the preview window shows. A file that is gone says so and has nothing to download; one that cannot be read
   // (a picture that is not one, a 「PDF」 that is not a PDF, an empty file) says so in plain words and can still be downloaded.
   const CANT_OPEN = '這個檔案打不開，可能已損壞或副檔名不對。可以下載後用其他程式開啟。';
   const imageOpens = src => new Promise(done => { const img = new Image(); img.onload = () => done(img.naturalWidth > 0); img.onerror = () => done(false); img.src = src; });
-  // #239: Excel, Word and PowerPoint as pictures of their pages, made by Zook on this Mac (Quick Look). The window opens at once with
-  // 「正在產生預覽…」; the pictures come in when ready (fillOfficeView), or a plain reason when they cannot be made.
-  const officeShell = url => `<div class="office-view" data-src="${esc(url)}"><p class="muted office-wait">正在產生預覽…</p></div>`;
+  // #239: Word and PowerPoint as pictures of their pages, made by Zook on this Mac (Quick Look); a PDF too (#334: drawn by macOS,
+  // fitted to the window, never turned dark with the dark look, no thumbnail column, no black box while it loads). Excel as its
+  // real tables, every sheet and column (#320). The window opens at once with 「正在產生預覽…」; the pages come in when ready
+  // (fillOfficeView), or a plain reason when they cannot be made.
+  const isSheet = name => /\.xlsx$/i.test(String(name || ''));
+  const officeShell = (url, name, kind) => `<div class="office-view" data-src="${esc(url)}" data-sheet="${isSheet(name) ? 1 : ''}" data-kind="${esc(kind || 'office')}"><p class="muted office-wait">正在產生預覽…</p></div>`;
+  // #108④ #337③: a web page shown as a page, never run: no scripts, forms, pop-ups or plug-ins (sandbox with nothing allowed, so it
+  // is also cut off from Zook's own pages and data), and nothing loaded from anywhere (its own policy allows only pictures,
+  // styles and fonts written into the file itself). Tags that could reach out or move the page are taken out first as well.
+  const HTML_POLICY = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; media-src data:; form-action 'none'";
+  function htmlFrame(text, name) {
+    const page = String(text).replace(/<(meta|base|link)\b[^>]*>/gi, m => /^<meta\b/i.test(m) && !/http-equiv/i.test(m) ? m : '');
+    const doc = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${HTML_POLICY}"><base target="_blank">` + page;
+    return `<div class="html-view"><p class="muted small office-note">網頁預覽：不執行程式、不連網，版面可能和瀏覽器略有不同。</p><iframe sandbox="" referrerpolicy="no-referrer" srcdoc="${esc(doc)}" title="${esc(name)}"></iframe></div>`;
+  }
   async function previewBody(url, kind, name) {
     if (kind === 'office') {
-      let res = null; try { res = await fetch(url + '/pages'); } catch (_) {}
-      return res && res.status === 404 ? {missing: true, body: '<p class="error-text">找不到這個檔案，可能已經被移走或刪除。</p>'} : {body: officeShell(url)};
+      let res = null; try { res = await fetch(url + (isSheet(name) ? '/pages/sheets' : '/pages')); } catch (_) {}  // an Excel file never starts Quick Look pictures
+      return res && res.status === 404 ? {missing: true, body: '<p class="error-text">找不到這個檔案，可能已經被移走或刪除。</p>'} : {body: officeShell(url, name)};
     }
     let res = null;
     try { res = await fetch(url); } catch (_) {}
@@ -56,7 +59,8 @@
       const local = URL.createObjectURL(blob);
       return (await imageOpens(local)) ? {body: `<div class="image-view"><img src="${esc(local)}" alt="${esc(name)}"></div>`} : {body: `<p class="muted">${CANT_OPEN}</p>`};
     }
-    if (kind === 'pdf') return (await blob.slice(0, 1024).text()).includes('%PDF-') ? {body: pdfFrame(url, name)} : {body: `<p class="muted">${CANT_OPEN}</p>`};
+    if (kind === 'pdf') return (await blob.slice(0, 1024).text()).includes('%PDF-') ? {body: officeShell(url.split('?')[0], name, 'pdf')} : {body: `<p class="muted">${CANT_OPEN}</p>`};
+    if (kind === 'html') return {body: htmlFrame((await blob.text()).slice(0, 2000000), name)};
     if (kind === 'text' || kind === 'markdown') {
       const text = (await blob.text()).slice(0, 200000);
       return {body: kind === 'markdown' ? `<div class="md output-text">${markdown(text)}</div>` : `<pre class="output-text">${esc(text)}</pre>`};
@@ -69,20 +73,22 @@
     const url = '/api/bots/' + encodeURIComponent(botId) + '/outputs/' + encodeURIComponent(o.id);
     const {body, missing} = await previewBody(url, o.kind, o.name);
     const keep = missing ? '' : `<button type="button" class="secondary" data-action="output-reveal" data-id="${esc(o.id)}" data-bot="${esc(botId)}">在 Finder 顯示</button>${o.size > 20 * 1048576 ? '' : `<a class="secondary button-link" href="${url}" download="${esc(o.name)}">下載</a>`}`;  // over 20 MB: only 在 Finder 顯示 works
-    modal(o.name, `<div class="modal-body">${body}</div><div class="modal-foot">${keep}<button type="button" class="primary" data-action="close-modal">關閉</button></div>`, '', true);  // #70④: no full path on this Mac
-    showPdfWhenReady(); fillOfficeView();
+    modal(o.name, `<div class="modal-body">${body}</div>${keep ? `<div class="modal-foot">${keep}</div>` : ''}`, '', 'viewer');  // #70④: no full path on this Mac; #270: × alone closes it
+    fillOfficeView();
   }
   async function fillOfficeView() {
     const box = document.querySelector('.modal .office-view');
     if (!box) return;
     const src = box.dataset.src, until = Date.now() + 200000;
+    if (box.dataset.sheet) return fillSheetView(box, src);
     while (box.isConnected) {
       let res = null, info = {};
       try { res = await fetch(src + '/pages'); info = await res.json(); } catch (_) {}
       if (!box.isConnected) return;
       if (info.status === 'ready') {
         const n = info.pages, more = info.total > n ? `，只顯示前 ${n} 頁` : '';
-        box.innerHTML = `<p class="muted small office-note">這是預覽圖，版面可能和原檔略有不同${n > 1 ? `。共 ${info.total} 頁${more}` : ''}。${esc(info.note || '')}</p><div class="office-pages">${Array.from({length: n}, (_, i) => `<figure class="office-page"><img src="${esc(src + '/pages/' + (i + 1) + '?v=' + info.version)}" alt="第 ${i + 1} 頁" loading="lazy">${n > 1 ? `<figcaption>${i + 1} / ${n}</figcaption>` : ''}</figure>`).join('')}</div>`;
+        const about = box.dataset.kind === 'pdf' ? (n > 1 ? `共 ${info.total} 頁${more}。` : '') : `這是預覽圖，版面可能和原檔略有不同${n > 1 ? `。共 ${info.total} 頁${more}` : ''}。`;
+        box.innerHTML = `${about || info.note ? `<p class="muted small office-note">${about}${esc(info.note || '')}</p>` : ''}<div class="office-pages">${Array.from({length: n}, (_, i) => `<figure class="office-page"><img src="${esc(src + '/pages/' + (i + 1) + '?v=' + info.version)}" alt="第 ${i + 1} 頁" loading="lazy">${n > 1 ? `<figcaption>${i + 1} / ${n}</figcaption>` : ''}</figure>`).join('')}</div>`;
         return;
       }
       if (info.status !== 'working' || Date.now() > until) {
@@ -92,6 +98,26 @@
       await new Promise(done => setTimeout(done, 1000));
     }
   }
+  // #320 #337⑤: an Excel file as tables, a tab per sheet, every column (scrolls sideways), first 300 rows of each.
+  const columnName = n => { let s = ''; for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; };
+  async function fillSheetView(box, src) {
+    let info = {};
+    try { const res = await fetch(src + '/pages/sheets'); info = await res.json(); if (res.status === 404) info = {reason: '找不到這個檔案，可能已經被移走或刪除。'}; } catch (_) {}
+    if (!box.isConnected) return;
+    if (info.status !== 'ready') { box.innerHTML = `<p class="muted">${esc(info.reason || info.error || '無法產生預覽，可以下載後用其他程式開啟。')}</p>`; return; }
+    const sheets = info.sheets || [];
+    if (!sheets.length) { box.innerHTML = '<p class="muted">這份試算表沒有內容。</p>'; return; }
+    const cut = sheets.some(t => t.more || t.wide), notes = ['顯示的是存檔時算好的數值', cut ? '每個工作表只顯示前 300 列、60 欄' : '', info.charts ? '圖表不會顯示' : '', info.more ? '只顯示前 30 個工作表' : ''].filter(Boolean);
+    const table = (t, i) => `<div class="sheet-table" data-sheet-index="${i}" ${i ? 'hidden' : ''}>${t.rows.length ? `<table><thead><tr><th></th>${Array.from({length: t.cols}, (_, c) => `<th>${columnName(c + 1)}</th>`).join('')}</tr></thead><tbody>${t.rows.map(([r, cells]) => `<tr><th>${r}</th>${Array.from({length: t.cols}, (_, c) => `<td>${esc(cells[c] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '<p class="muted">這個工作表是空的。</p>'}</div>`;
+    const tabs = sheets.length > 1 ? `<div class="sheet-tabs" role="tablist">${sheets.map((t, i) => `<button type="button" role="tab" class="sheet-tab${i ? '' : ' active'}" aria-selected="${!i}" data-sheet-tab="${i}">${esc(t.name)}</button>`).join('')}</div>` : '';
+    box.innerHTML = `<p class="muted small office-note">${esc(notes.join('；'))}${cut || info.charts ? '，完整內容請下載後查看' : ''}。</p>${tabs}${sheets.map(table).join('')}`;
+  }
+  document.addEventListener('click', e => {
+    const tab = e.target.closest?.('[data-sheet-tab]'); if (!tab) return;
+    const view = tab.closest('.office-view');
+    view.querySelectorAll('.sheet-tab').forEach(x => { const on = x === tab; x.classList.toggle('active', on); x.setAttribute('aria-selected', on); });
+    view.querySelectorAll('.sheet-table').forEach(x => { x.hidden = x.dataset.sheetIndex !== tab.dataset.sheetTab; });
+  });
   // The output a link's path points at (/tmp and /private/tmp are one place). Only the exact file: another file with the same
   // name elsewhere is a different file. Each list is [owner, outputs]; returns [owner, output].
   const samePath = p => String(p || '').replace(/^\/private(?=\/(tmp|var)\/)/, '');
@@ -115,21 +141,15 @@
     if (shared) return openGroupFile(g.id, shared.name);
     navigator.clipboard?.writeText(path).then(() => toast('已複製檔案位置：' + path), () => toast('檔案位置：' + path));
   });
-  // File names of this Bot's outputs inside a reply open the preview.
+  // #280: a file of this Bot's already has its card under the reply (預覽, 下載), so a link to it in the text is only its words,
+  // not a second link that may read differently from the card.
   function linkOutputs(html, botId) {
-    const list = (state.outputs[botId] || []).filter(o => o.name.length >= 4).slice(0, 80);
-    if (!list.length) return html;
-    const byName = {}; list.forEach(o => { byName[esc(o.name)] = byName[esc(o.name)] || o; });
-    const re = new RegExp('(' + Object.keys(byName).sort((a, b) => b.length - a.length).map(x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'g');
-    // A Markdown link straight to one of the files opens its preview, like its name does.
+    if (!(state.outputs[botId] || []).length) return html;
     const plain = text => { const t = document.createElement('textarea'); t.innerHTML = text; return t.value; };
-    html = html.replace(/<button type="button" class="link local-link" data-path="([^"]*)"[^>]*>([\s\S]*?)<\/button>/g, (whole, path, label) => {
+    return html.replace(/<button type="button" class="link local-link" data-path="([^"]*)"[^>]*>([\s\S]*?)<\/button>/g, (whole, path, label) => {
       const o = (outputAt([[botId, state.outputs[botId]]], plain(path)) || [])[1];
-      return o ? `<button type="button" class="link output-link" data-action="output-open" data-id="${esc(o.id)}">${label}</button>` : whole;
+      if (!o) return whole;
+      return plain(path).includes(o.name) ? `<span class="file-ref">${label}</span>`  // its card shows under the reply
+        : `<button type="button" class="link output-link" data-action="output-open" data-id="${esc(o.id)}">${label}</button>`;  // written so the card cannot find it (%20)
     });
-    let skip = 0;
-    return html.split(/(<[^>]+>)/).map(part => {
-      if (part.startsWith('<')) { if (/^<(pre|a|button)\b/i.test(part)) skip++; else if (/^<\/(pre|a|button)>/i.test(part)) skip = Math.max(0, skip - 1); return part; }
-      return skip ? part : part.replace(re, name => `<button type="button" class="link output-link" data-action="output-open" data-id="${esc(byName[name].id)}">${name}</button>`);
-    }).join('');
   }

@@ -2,7 +2,7 @@
 # Loaded by backend/server.py into one shared namespace.
 OUTPUT_LIMIT = 200
 OUTPUT_SECONDS = 4  # 產出 answers within this, with what it found by then
-OUTPUT_PREVIEW = {'.txt': 'text', '.md': 'markdown', '.markdown': 'markdown', '.csv': 'text', '.json': 'text', '.log': 'text', '.py': 'text', '.js': 'text', '.ts': 'text', '.html': 'text', '.css': 'text',
+OUTPUT_PREVIEW = {'.txt': 'text', '.md': 'markdown', '.markdown': 'markdown', '.csv': 'text', '.json': 'text', '.log': 'text', '.py': 'text', '.js': 'text', '.ts': 'text', '.html': 'html', '.htm': 'html', '.css': 'text',
                   '.swift': 'text', '.sh': 'text', '.yml': 'text', '.yaml': 'text', '.xml': 'text', '.sql': 'text', '.pdf': 'pdf'}
 _OUTPUT_SKIP = ('attachments', 'node_modules', '__pycache__')
 
@@ -171,8 +171,13 @@ def output_response(item):
     suffix = pathlib.Path(item['name']).suffix.lower()
     if item['kind'] == 'image': return data, IMAGE_TYPES[suffix]
     if item['kind'] == 'pdf': return data, 'application/pdf'
-    if item['kind'] in ('text', 'markdown'): return data, 'text/plain; charset=utf-8'
+    if item['kind'] in ('text', 'markdown', 'html'): return data, 'text/plain; charset=utf-8'  # html: shown by the page in a sandbox (#108④)
     return data, OFFICE_TYPES.get(suffix, 'application/octet-stream')  # #201: a Word file downloads as one
+
+
+# #338 #337⑧: a Word file on A4 with its page breaks where the pages end; a document for other people is never signed with the Bot.
+FILE_DELIVERY_NOTE += ('Word 檔用 A4 紙張（python-docx 預設是 Letter，要把每節的 page_width、page_height 設成 A4），換頁的地方插入分頁符。'
+                       '文件裡的署名、承辦人、簽核欄不要填 Bot 的名稱，留【承辦人】這類具名欄位給使用者填；範本的空格也用具名欄位（【姓名】【到職日】），不要全寫成同一個【請填寫】。')
 
 
 # 這段對話的資料夾 (#241): where a conversation's files go when the user names no place, instead of the real Desktop. Inside the

@@ -12,6 +12,7 @@ PREVIEW_KEEP = 60        # files whose pictures are kept; the oldest go first
 PREVIEW_RETRY = 600      # a failed preview is tried again after this many seconds (the Mac may just have been busy)
 PREVIEW_SWEEP_EVERY = 3600
 PREVIEW_WAITING = 3      # files waiting for pictures at once; more are asked to try again shortly
+PICTURED_TYPES = set(OFFICE_TYPES) | {'.pdf'}  # #334: a PDF too is shown as pictures of its pages (no dark-look inversion, fits the window)
 PREVIEW_UNPACKED = 400 * 1024 * 1024  # an Office file is a ZIP: one that unpacks to more than this, or into more than 5000 parts, is not pictured
 _preview_lock = threading.Lock()
 _preview_running = set()
@@ -61,7 +62,7 @@ def _preview_key(path, info):
 def _preview_open(path, strict):
     """(fd, key) for one file the caller already found shareable. Only an ordinary file of its own: a link put in its place, a
     folder or a hard link to another file is refused (OSError). strict: the path must be the file's real place (產出)."""
-    if pathlib.Path(path).suffix.lower() not in OFFICE_TYPES: raise OSError('not an office file')
+    if pathlib.Path(path).suffix.lower() not in PICTURED_TYPES: raise OSError('not an office file')
     if strict and os.path.realpath(path) != path: raise OSError('moved')
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)  # a pipe put in its place cannot make Zook wait
     info = os.fstat(fd)
@@ -234,8 +235,9 @@ def group_preview_path(store, group_id, name):
 
 
 def preview_route(handler, store, path, rest, strict=False):
-    """GET …/pages: how the preview stands; GET …/pages/<n>: the picture of page n."""
+    """GET …/pages: how the preview stands; GET …/pages/<n>: the picture of page n; GET …/pages/sheets: an Excel file's tables (sheetview.py)."""
     try:
+        if rest == ['sheets']: return handler.respond(200, sheet_preview(path, strict))
         if not rest: return handler.respond(200, office_preview(store, path, strict))
         data = preview_page(store, path, rest[0], strict)
     except OSError: return handler.error(404, '找不到這個檔案，可能已經被移走或刪除。')
