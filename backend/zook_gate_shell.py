@@ -30,12 +30,17 @@ def _folders():
     return list(dict.fromkeys(found))
 
 
+def _no_heredocs(text):
+    """The line without what its here-documents hold: lines of text for a program, never commands or settings of the line."""
+    return re.sub(r'(<<-?\s*([\'"]?)(\w+)\2[^\n]*)\n.*?\n\s*\3(?=\n|$)', r'\1', text, flags=re.S)
+
+
 def _values(name):
     """What a variable of the line being read may hold: set on it on its own (NAME=value, export NAME=value) or a for loop's words;
     None when not known (set from outside, by read, by $( … ), or only for one command)."""
     if name == 'PWD': return None if any(re.search(r'\bPWD\+?=', x) for x in _LINES) else _folders()  # set by hand: not where it runs
     found = []
-    for line in _LINES:
+    for line in map(_no_heredocs, _LINES):
         use = min([m.start() for m in re.finditer(r'\$\{?%s\b' % re.escape(name), line)] or [len(line)])
         for m in re.finditer(r'(?<![\w-])(?:(?:export|local|declare|readonly|typeset)\s+)?%s\+?=|\bfor\s+%s\s+in\b' % (re.escape(name), re.escape(name)), line):
             ahead = re.sub(r'\$\(\s*mktemp[^()]*\)', '', line[:m.start()])  # only set for sure, before it is read: not in if, ||, ( … ), a function
@@ -78,7 +83,9 @@ def _secret_any(path, unsure=True):
     """Where a key or sign-in is named, after the cds of this line; '' when none is. unsure: a path in a folder that cannot be known
     (cd "$VAR") counts too, as $PWD/…"""
     found = _resolved(path)
-    if found is None: return _secret_path(path) and path or ((path if set(path) & set('$`') or GLUED in path else '$PWD/' + _expand(path)) if unsure else '')
+    if found is None:  # a variable is shown by its name only: never the rest of the word, which may be anything
+        named = re.search(r'\$\{?\w+\}?', path); named = '$ZOOKSUB' if GLUED in path or '`' in path else named.group() if named else ''
+        return _secret_path(path) and path or ((named or '$PWD/' + _expand(path)) if unsure else '')
     return next((x for x in found if _secret_path(x)), '')
 
 
@@ -97,12 +104,13 @@ def _listed(files, prog, words=(), bases=None):
         for one in where or [None]:  # every folder the line may run in: the list there
             try:
                 fd = os.open(_abs(one), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK) if one else -1
-                with os.fdopen(fd, 'rb') as h: text = h.read(65537).decode('utf-8', 'replace') if stat.S_ISREG(os.fstat(h.fileno()).st_mode) else None
-                parts = set(text.split('\0') + text.splitlines() + text.split()) if text is not None and len(text) <= 65536 else None  # whole records too
-                for m in marks: parts |= set(re.split(m.encode().decode('unicode_escape') if len(m) <= 2 else m, text))  # xargs -d ',', parallel --colsep (a pattern)
+                with os.fdopen(fd, 'rb') as h: raw = h.read(65537) if stat.S_ISREG(os.fstat(h.fileno()).st_mode) else None
+                text = raw.decode('utf-8', 'replace') if raw is not None and len(raw) <= 65536 else None  # longer: not all of it is seen
+                null = any(w in ('-0', '--null', '--from0') or re.fullmatch(r'-[^-]*0\w*', w) for w in words)
+                parts = set(text.split('\0') if null else [p for m in marks for p in re.split(m.encode().decode('unicode_escape') if len(m) <= 2 else m, text)] if marks else text.splitlines() + text.split())  # as the tool splits it
                 if prog in TARS and any(x.startswith('-') for x in parts): parts = None  # tar -T: a line may be an option (-C ~): not followed here
                 parts = parts if bases is None else parts | {os.path.join(b, x.lstrip('/')) for b in bases for x in parts}  # rsync --files-from: under each source
-            except (OSError, ValueError, IndexError, TypeError, re.error): parts = None
+            except (OSError, ValueError, IndexError, TypeError, AttributeError, re.error): parts = None
             out += ['（%s 列出的檔案）' % f] if parts is None else [x for x in map(_secret_any, parts) if x]
     return out
 

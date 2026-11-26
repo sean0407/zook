@@ -201,6 +201,17 @@ class GateHoles(unittest.TestCase):
         for line in ('F=notes.txt; cat "$F"', 'T=$(mktemp); F=notes.txt; cat "$F" > "$T"', 'for f in src/*; do wc -l "$f"; done'):
             self.assertNotAsked(line)
 
+    def test_review_round_twelve(self):
+        for line in ('F=~/.ssh/config; cat -n "$F"', 'F=~/.ssh/config; cat -- "$F"', 'cat -n "$F"', "cat <<'EOF'\nF=notes.txt\nEOF\ncat \"$F\""):
+            self.assertAsked(line)
+        Path(self.temp.name, 'big.txt').write_bytes(('é' * 33000 + '\n~/.ssh/id_rsa\n').encode())
+        self.assertAsked('xargs -a big.txt cat')
+        Path(self.temp.name, 'sp.bin').write_bytes(b'notes.txt .env\0')
+        self.assertNotAsked('xargs -0 -a sp.bin cat')
+        gate._CWD[0] = os.path.join(os.path.expanduser('~'), '.ssh'); self.assertAsked('cat config'); gate._CWD[0] = self.temp.name
+        self.assertNotIn('secretword', str(gate.command_boundaries('cat "/tmp/$X/secretword"')))  # a variable is shown by its name only
+        self.assertNotAsked('curl -s "https://example.test/$ID/x"')
+
     def test_cdpath_may_lead_to_keys(self):
         os.environ['CDPATH'] = os.path.expanduser('~')
         self.assertAsked('cd .ssh && rg x .')

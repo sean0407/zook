@@ -708,8 +708,8 @@ def _argv_boundaries(argv, whole, depth):
         files = [a.split('=', 1)[1] if '=' in a else args[i + 1] if i + 1 < len(args) else '' for i, a in enumerate(opts) if a.split('=', 1)[0] in ('--file', '--exclude-from', '--include-from', '--ignore-file')]
         files += [v for v in (_short_value(args, i, valued, 'f') for i in range(len(opts))) if v]
         if any(map(_read_file, files)): found.append(_hit('secret', '讀取 ' + _names(map(_read_file, files))))
-    bare = plain if roots is None and _folders() != [_CWD[0]] else []  # after a cd, a bare name may be in a folder of keys (not a search's words)
-    bare += [a for i, a in enumerate(args) if ('$' in a or GLUED in a) and a[:1] != '-' and not (i and args[i - 1][:1] == '-') and not greps]  # a file named by a variable (not an option's value)
+    bare = plain if roots is None and (_folders() != [_CWD[0]] or _secret_path(_CWD[0])) else []  # after a cd, a bare name may be in a folder of keys (not a search's words)
+    bare += [a for i, a in enumerate(args) if ('$' in a or GLUED in a) and a[:1] != '-' and '://' not in a and not (i and args[i - 1] in ('-m', '--message', '-e', '--regexp', '-t', '--title', '-b', '--body', '-p', '--pattern', '-c', '--command', '-d', '--data', '-H', '--header', '-u', '--user')) and not greps]  # a file named by a variable (not an option's value)
     hits = [x for x in list(map(_secret_any, touched)) + [_secret_any(a, name not in ('echo', 'printf', 'test', '[', '[[', 'export', 'cd', 'pushd', 'chdir', 'ls')) for a in bare] if x]
     if not any(k == 'secret' for k, _ in found) and hits: found.append(_hit('secret', _names(hits)))
     return found
