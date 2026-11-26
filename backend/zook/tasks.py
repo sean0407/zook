@@ -257,7 +257,7 @@ def task_stop(store, group):
     for t in run.get('tasks') or []:
         if t.get('parent') and t.get('staged'): task_handoff_abort(run, t['parent'])  # its member's turn is being stopped
     for t in run.get('tasks') or []:
-        if t.get('status') == 'verifying': t['verify'] = dict(state='waiting'); t['note'] = '工作本身已經回報完成，重試只會重新驗收。'  # stopped during its check
+        if t.get('status') == 'verifying': t['verify'] = verify_again(t); t['note'] = '工作本身已經回報完成，重試只會重新驗收。'  # stopped during its check
         if t.get('status') == 'review': t['status'] = 'stuck'  # its result can still be accepted
         if t.get('status') not in TASK_SETTLED: t['status'] = 'cancelled'
         t.pop('staged', None)
@@ -279,7 +279,7 @@ def task_recover(group, store=None):
         if t.get('status') not in TASK_SETTLED or t.get('status') == 'review': t['before'] = t.get('status')
         if t.get('parent') and t.get('staged'): task_handoff_abort(run, t['parent'])  # its member's turn was cut short
     for t in run.get('tasks') or []:
-        if t.get('status') == 'verifying': t['status'] = 'unknown'; t['verify'] = dict(state='waiting'); t['note'] = '工作本身已經回報完成，重試只會重新驗收。'
+        if t.get('status') == 'verifying': t['status'] = 'unknown'; t['verify'] = verify_again(t); t['note'] = '工作本身已經回報完成，重試只會重新驗收。'
         elif t.get('status') == 'running':
             t['status'] = 'unknown'
             last = (t.get('attempts') or [{}])[-1]

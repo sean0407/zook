@@ -23,7 +23,7 @@ def _whole(full, part):
     or character of a longer word (「新版報價單.xlsx」 is another file)."""
     full, part = _claim_key(full), _claim_key(part)
     return full == part or (full.endswith(part) and not full[len(full) - len(part) - 1].isalnum())
-CHECKER_NAME_WRITES = re.compile(r'撰寫|寫手|起草|整理|製作|設計|開發|工程師|企劃|規劃')  # 「驗收報告撰寫」 makes a document about checking; 「文件審核員」 checks
+CHECKER_NAME_WRITES = re.compile(r'撰寫|寫手|起草|整理|製作|設計|開發|企劃|規劃')  # 「驗收報告撰寫」 makes a document about checking; 「文件審核員」 checks
 CHECKER_NOT = re.compile(r'[不沒没非無无別]')  # 「不負責查核」「我不是負責查核的」: said not to be its job
 CHECKER_WRITES = re.compile(r'撰寫|寫|整理|製作|起草|報告|文件|紀錄|記錄|表單|清單')  # 「主要撰寫驗收報告」: it makes a document about checking
 MODERATOR_RULES['split_check'] = ['現在輪到你查核。照主持人分派給你的查核工作，實際打開要查的檔案（成員交的，或使用者給的）逐項核對，不要只看別人的說法。',
@@ -218,7 +218,7 @@ class CheckOrder:
                      '%s 補存後還是找不到 %s，%s 這次不查核；請 %s 重新存檔後再請查核。' % (_names(store, list(gone)), files, checkers, _names(store, list(gone))))
                 store.save(); return steps[1:]
             need = sorted({n for b in latest for x in group['messages'][start:] if x.get('botId') == b and x.get('role') == 'assistant' and not x.get('checkOf')
-                           for n in list(x.get('savedFiles') or []) + list((x.get('sameAs') or {}).values()) if n in pool})[:40]
+                           for n in list(x.get('savedFiles') or []) + list((x.get('sameAs') or {}).values()) + [p for w in file_words(x.get('content')) for p in pool if _in_prose(w, [p])] if n in pool})[:40]  # saved, or named and already there
             step['need'] = {n: _file_hash(group_files_dir(store, group_id) / n) for n in need}  # what the check is for, as it is now: gone or changed by the time it starts, it does not run
         return steps
 
@@ -273,6 +273,12 @@ def task_check_new_work(run, task):
                              question='', answer='', staged=True, createdAt=NOW(), confirmed=task.get('confirmed', True), why='Zook 加的：查核開始後才新增了工作 %d' % task['n']))
     for key in ('verify', 'note', 'feedback', 'redo', 'missingFiles', 'decisions', 'reviewSince', 'resumed', 'acceptedCut', 'gate'): run['tasks'][-1].pop(key, None)
     run['log'].append(dict(at=NOW(), what='create', task=run['tasks'][-1]['n']))
+
+
+def verify_again(task):
+    """A check that runs again (stopped, restarted, retried) keeps the files it is for."""
+    need = (task.get('verify') or {}).get('need')
+    return dict(state='waiting', **({'need': need} if isinstance(need, dict) else {}))
 
 
 def task_files_kept(store, group, msg, attempt=None, owner=''):

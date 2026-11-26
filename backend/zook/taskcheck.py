@@ -267,7 +267,7 @@ def task_route(handler, store, group, parts):
             task.update(status='done', note=TASK_CUT_ACCEPTED if cut else '你看過後接受了結果（沒有經過另一家驗收）。'); task['verify'] = dict(task.get('verify') or {}, state='accepted'); task.pop('reviewSince', None)
             if cut: task.update(acceptedCut=True, acceptedAt=NOW()); task.pop('resumed', None)
         elif reported and (task.get('verify') or {}).get('verdict') != 'fail':
-            task.update(status='verifying', verify=dict(state='waiting')); task.pop('note', None)  # the work is done: only the check runs again
+            task.update(status='verifying', verify=verify_again(task)); task.pop('note', None)  # the work is done: only the check runs again
         else:
             # A new series: the count starts again, the history stays. What waits for it waits again.
             task.update(status='pending' if task.get('deps') or task.get('gate') else 'ready', failures=0, confirmed=True if task['attempts'] else task.get('confirmed', True)); task.pop('note', None)  # never started: it still needs 「照這個做」
