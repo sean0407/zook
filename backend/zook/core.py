@@ -951,26 +951,6 @@ def limit_reached_now(snap):
     return now - at < LIMIT_FRESH
 
 
-def quota_exhausted(store, provider):
-    if provider == 'antigravity': return False  # its limits are per model group; a used-up group simply fails over
-    """True when the last known quota snapshot says this provider is used up and has not reset yet."""
-    snap = (store.data.get('quota') or {}).get(provider) or {}
-    if limit_reached_now(snap): return True  # the CLI says so itself, e.g. a workspace out of credits with every window still open
-    now = time.time()
-    return any(isinstance(w.get('usedPercent'), (int, float)) and w['usedPercent'] >= 100 and _window_open(w, snap, now) for w in snap.get('windows') or [])
-
-
-def provider_chain(store, bot, provider, model):
-    """Models to try for one reply: the Bot's own model first, then its backup order (or the default order from 設定)."""
-    settings = store.data['settings']
-    order = bot.get('fallbacks') if isinstance(bot.get('fallbacks'), list) else settings.get('fallbacks') or []
-    chain = [(provider, model)]
-    for p in order:
-        if p != provider and p not in [x[0] for x in chain] and P.spec(store.data, p):
-            chain.append((p, settings.get('model', '') if p == settings.get('provider', 'codex') else ''))
-    return chain
-
-
 def fallback_reason(error):
     error = error or ''
     if 'macOS' in error: return 'macOS 權限擋住'

@@ -30,11 +30,14 @@ class RingsAgree(unittest.TestCase):
 
     def rings(self): return {r['id']: r for r in self.m.usage_rings(self.store)}
 
-    def test_grok_used_up_without_a_reset_time_stays_used_up(self):
+    def test_grok_used_up_without_a_reset_time_is_not_full_again(self):
         # #158④: the ring said 每週剩餘 100% six hours after Grok reported 100% used, while the menu said 已用完.
+        # #323: such an old reading is 無法確定 on the ring, the cards and for the replies alike, never 100%.
         self.store.data['quota'] = {'grok': {'windows': [{'label': '每週', 'usedPercent': 100, 'resetsAt': None}], 'updatedAt': ago(6)}}
         ring = self.rings()['grok']
-        self.assertEqual((ring['week'], ring['left']), (0, 0))
+        self.assertEqual((ring['week'], ring['left'], ring['unknown']), (None, None, True))
+        self.store.data['quota']['grok']['updatedAt'] = ago(1)  # a recent one still says used up
+        self.assertEqual((self.rings()['grok']['week'], self.rings()['grok']['left']), (0, 0))
 
     def test_a_limit_with_a_passed_reset_is_still_full_again(self):
         self.store.data['quota'] = {'codex': {'windows': [{'label': '每週', 'usedPercent': 100, 'resetsAt': time.time() - 60}], 'updatedAt': ago(1)}}
@@ -156,7 +159,7 @@ class TroubleInTheInterface(unittest.TestCase):
     def test_backup_menus_are_marked(self):
         self.assertIn("base + (troubleMark(modelTrouble(value, '')) || levelMark(accountLevel(value, '')))", self.code)  # Bot form
         self.assertIn("name: p.name + troubleMark(modelTrouble(p.id, ''))", self.code)  # 設定
-        self.assertIn('依序改用備用 AI 1、2，回覆裡會註明改用哪一家', self.code)
+        self.assertIn('先換同一家其他有額度的帳號，再換備用 AI（剩餘額度多的先）', self.code)  # #33
 
     def test_antigravity_is_never_called_used_up_as_a_whole(self):
         self.assertEqual(self.code.count("provider !== 'antigravity'"), 2)

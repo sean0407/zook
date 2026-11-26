@@ -566,7 +566,7 @@
     dd.querySelectorAll('.dd-opt').forEach(o => {
       const base = o.dataset.base || (o.dataset.base = o.dataset.label), value = o.dataset.value, same = !!id && value === id, chosen = o.classList.contains('selected');
       o.hidden = same && !chosen;
-      o.dataset.label = value === '' ? fallbackDefaultLabel(id) : same ? base + '（同一家，不會切換）' : value === '__none' ? base : base + (troubleMark(modelTrouble(value, '')) || levelMark(accountLevel(value, '')));  // #80③ #158③
+      o.dataset.label = value === '' ? fallbackDefaultLabel(id) : same ? base + '（只換這家的其他帳號）' : value === '__none' ? base : base + (troubleMark(modelTrouble(value, '')) || levelMark(accountLevel(value, '')));  // #80③ #158③
       o.querySelector('strong').textContent = o.dataset.label;
       if (chosen) dd.querySelector('.dd-label').textContent = o.dataset.label;
     });

@@ -206,13 +206,8 @@ BACKUP_MIN_LEFT = 20  # a backup with less left than this is used only when ever
 
 
 def backup_low(store, provider, account_id=''):
-    """True when the saved quota shows less than BACKUP_MIN_LEFT% left in a limit that has not reset yet."""
-    snap = (store.data.get('quota') or {}).get(provider + '@' + account_id if account_id else provider) or {}
-    if limit_reached_now(snap): return True
-    windows = [w for w in snap.get('windows') or [] if isinstance(w, dict)]
-    if provider == 'antigravity': windows = [w for w in windows if 'gemini' in str(w.get('label')).lower()] or windows  # Zook runs its default Gemini model
-    now = time.time()
-    return any(isinstance(w.get('usedPercent'), (int, float)) and w['usedPercent'] > 100 - BACKUP_MIN_LEFT and _window_open(w, snap, now) for w in windows)
+    """True when less than BACKUP_MIN_LEFT% is left in a limit that has not reset yet (quota_low, the shared reading, #323)."""
+    return quota_low(store, provider, account_id, BACKUP_MIN_LEFT)
 
 
 def backups_with_room(store, bot, backups):
@@ -226,13 +221,8 @@ def backups_with_room(store, bot, backups):
 
 
 def auto_quota_low(store, provider, account_id=''):
-    """True when the saved quota shows less than 10% left in a limit that has not reset yet."""
-    snap = (store.data.get('quota') or {}).get(provider + '@' + account_id if account_id else provider) or {}
-    if limit_reached_now(snap): return True  # e.g. the workspace ran out of credits (a recent reading only)
-    windows = [w for w in snap.get('windows') or [] if isinstance(w, dict)]
-    if provider == 'antigravity': windows = [w for w in windows if 'gemini' in str(w.get('label')).lower()] or windows  # Zook runs its default Gemini model
-    now = time.time()
-    return any(isinstance(w.get('usedPercent'), (int, float)) and w['usedPercent'] > 100 - AUTO_MIN_LEFT and _window_open(w, snap, now) for w in windows)
+    """True when less than AUTO_MIN_LEFT% is left in a limit that has not reset yet (quota_low, the shared reading, #323)."""
+    return quota_low(store, provider, account_id, AUTO_MIN_LEFT)
 
 
 def pick_auto(store, content, names=(), plan=False, bot=None, taken=None, keep=None):
@@ -479,15 +469,6 @@ def _old_quota_match(bot):
     found = _OLD_MATCH.search(str(bot.get('autoReason') or ''))
     if not found: return ''
     return 'move' if found.group(1) == auto_choice_name(bot.get('provider') or '', bot.get('account') or '') else 'gone'
-
-
-def quota_left(store, provider, account_id=''):
-    """Percent left in the tightest limit that has not reset, from the saved quota; 50 when nothing is known."""
-    snap = (store.data.get('quota') or {}).get(provider + '@' + account_id if account_id else provider) or {}
-    if limit_reached_now(snap): return 0
-    now = time.time()
-    used = [w['usedPercent'] for w in snap.get('windows') or [] if isinstance(w, dict) and isinstance(w.get('usedPercent'), (int, float)) and _window_open(w, snap, now)]
-    return max(0, 100 - max(used)) if used else 50
 
 
 def auto_backups(store, bot, provider, job=None):
