@@ -62,6 +62,15 @@ def catalog_icon_for_url(url):
     return catalog_icon(item['id']) if item else None
 
 
+def catalog_about(name, url=''):
+    """What a connector can do, in plain words, when it is one the catalog knows: by its address, else by the company's name (#181)."""
+    item = next((x for x in CONNECTOR_CATALOG if url and x['url'] == url), None)
+    if not item:
+        words = same_name(name)
+        item = next((x for x in CONNECTOR_CATALOG if len(x['id']) >= 4 and re.search(r'(^|[^a-z0-9])%s([^a-z0-9]|$)' % re.escape(same_name(x['name'].split('（')[0])), words)), None)
+    return item['about'] if item else ''
+
+
 def catalog_view(store):
     """The catalog, with which entries are already in Zook."""
     with store.lock: have = {c.get('url'): c['id'] for c in store.data.get('connectors') or []}
@@ -111,10 +120,11 @@ def catalog_add(app, item_id, key=None):
                 if not record.get('secretId'): record['secretId'] = made = ID()
                 record['secretName'] = 'Authorization'; secret_set(record['secretId'], key)
             with store.lock:
-                taken = {c['name'] for c in store.data['connectors'] if c['id'] != record['id']}
-                record['name'] = next((n for n in [record['name']] + ['%s %d' % (item['name'], i) for i in range(2, 200)] if n not in taken), '%s %s' % (item['name'], record['id'][:6]))
+                taken = {same_name(c['name']) for c in store.data['connectors'] if c['id'] != record['id']}
+                record['name'] = next((n for n in [record['name']] + ['%s %d' % (item['name'], i) for i in range(2, 200)] if same_name(n) not in taken), '%s %s' % (item['name'], record['id'][:6]))
                 store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]
-                st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + ['zook:' + record['id']]))
+                if auth != 'login':  # checked above; one that needs a sign-in is switched on once signed in and tested (#303)
+                    st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + ['zook:' + record['id']]))
                 store.save()
         except Exception:
             if made: secret_delete(made)  # the connector was not saved, so its key does not stay behind

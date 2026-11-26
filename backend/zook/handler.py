@@ -464,6 +464,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, bot)
             if path == '/api/skill-templates' and self.command == 'GET': return self.respond(200, dict(items=template_view(store)))
             if path == '/api/skills/template' and self.command == 'POST' and not self.device: return self.respond(201, template_add(store, self.body().get('id')))
+            if parts[:2] == ['api', 'skills'] and ((len(parts) == 2 and self.command == 'POST') or (len(parts) == 3 and self.command in ('GET', 'PATCH'))) and not self.device: return self.respond(*custom_skill_route(store, self.command, parts[2:], self.body() if self.command != 'GET' else {}))
             if path == '/api/skills/import' and self.command == 'POST':
                 ids = self.body().get('ids')
                 if not isinstance(ids, list) or len(ids) > 1024 or any(not isinstance(x, str) for x in ids): return self.error(400, '請選擇要匯入的 Skill。')
@@ -504,9 +505,10 @@ class Handler(BaseHTTPRequestHandler):
                 with store.lock:
                     store.data['connectors'].append(record)
                     st = store.data['settings']; shared = st.get('sharedMcp') or []; was_on = ident in shared
-                    st['sharedMcp'] = [x for x in shared if x != ident] + (['zook:' + record['id']] if was_on else [])
+                    st['sharedMcp'] = [x for x in shared if x != ident]
                     store.save()
-                return self.respond(201, dict(id='zook:' + record['id'], name=record['name'], on=was_on))
+                on, test = connector_first_test(store, 'zook:' + record['id'], was_on)
+                return self.respond(201, dict(id='zook:' + record['id'], name=record['name'], on=on, test=test))
             if path == '/api/pack' and self.command == 'GET':
                 try: raw, skill_count, connector_count = pack_export(store)
                 except ValueError as exc: return self.error(400, str(exc))
@@ -554,7 +556,7 @@ class Handler(BaseHTTPRequestHandler):
                     if (len(parts) == 2 and self.command == 'POST') or (existing and self.command == 'PATCH'):
                         record, secret = connector_fields(body, existing)
                         with store.lock:
-                            if any(c['name'] == record['name'] and c['id'] != record['id'] for c in store.data['connectors']): raise ValueError('已經有同名的連接器。')
+                            if any(same_name(c['name']) == same_name(record['name']) and c['id'] != record['id'] for c in store.data['connectors']): raise ValueError('已經有同名的連接器（大小寫不同也算同名）。')
                         if secret:
                             record['secretId'] = record['secretId'] or ID(); secret_set(record['secretId'], secret)
                         elif not record['secretName'] and record['secretId']:
@@ -572,10 +574,10 @@ class Handler(BaseHTTPRequestHandler):
                                 if current.get('otherAccounts'): record['otherAccounts'] = current['otherAccounts']
                             store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]
                             for blob in drop: blob_delete(blob)  # the address or the way to sign in changed
-                            if not existing:  # a connector you just added is switched on for every Bot
-                                st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + ['zook:' + record['id']]))
                             store.save()
-                        return self.respond(200 if existing else 201, dict(id='zook:' + record['id'], name=record['name']))
+                        if existing: return self.respond(200, dict(id='zook:' + record['id'], name=record['name']))
+                        on, test = connector_first_test(store, 'zook:' + record['id'])  # on for every Bot only once it worked (#303)
+                        return self.respond(201, dict(id='zook:' + record['id'], name=record['name'], on=on, test=test))
                     if existing and self.command == 'DELETE':
                         with store.lock:
                             store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != existing['id']]
@@ -589,7 +591,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.error(404, '找不到資源。')
             if len(parts) == 4 and parts[:2] == ['api', 'mcp'] and parts[3] == 'test' and self.command == 'POST':
                 self.body()
-                return self.respond(200, runtime_module().test_connection(parts[2], inventory_for(self.server.store)))
+                return self.respond(200, runtime_module().test_connection(parts[2], inventory_for(self.server.store, testing=parts[2])))
             if path == '/api/uploads/path' and self.command == 'POST' and not self.device: return self.respond(201, upload_from_path(store, self.body().get('path')))  # 附上 a file the user named, after they clicked
             if path == '/api/uploads' and self.command == 'POST' and not self.device:
                 # One attached file, sent as the raw request body; the name comes in X-File-Name.

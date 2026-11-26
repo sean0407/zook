@@ -132,7 +132,7 @@ console.log(JSON.stringify(ctx.out));
 class PageSource(unittest.TestCase):
     def test_skill_off_says_where_it_went(self):
         forms = source('50-forms.js')
-        self.assertIn('移到「未啟用」', forms)
+        self.assertIn('移到「已關閉」', forms)
 
     def test_tab_count_shows_how_many_are_on(self):
         self.assertIn('已開啟', source('20-models.js')[source('20-models.js').index('const counts'):][:900])

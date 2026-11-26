@@ -1,0 +1,112 @@
+# Skills written on the Skills page (#306), and a connector's first test right after it is added (#303).
+# Loaded by backend/server.py into one shared namespace.
+#
+# A Skill written here is an ordinary Zook Skill: one SKILL.md in Zook's own Skill folder, so every Bot and every CLI gets it the
+# same way as a template (inventory_for -> shared_skill_ids -> zook_read_skill). It holds text only, never a program: what a Bot
+# does after reading it still goes through the same approval as anything else it does.
+SKILL_NAME_MAX, SKILL_ABOUT_MAX, SKILL_BODY_MAX = 80, 500, 20000
+
+
+def _skill_text(body):
+    """(name, description, body) checked. Name and description are one line each, as SKILL.md's header needs them."""
+    name, about, text = body.get('name'), body.get('description'), body.get('body')
+    if not isinstance(name, str) or not name.strip(): raise ValueError('請輸入 Skill 名稱。')
+    if not isinstance(about, str) or not about.strip(): raise ValueError('請用一句話寫出這個 Skill 能做什麼。')
+    if not isinstance(text, str) or not text.strip(): raise ValueError('請寫下 Skill 的內容。')
+    name, about = name.strip(), about.strip()
+    if len(name) > SKILL_NAME_MAX: raise ValueError('名稱最多 %d 個字。' % SKILL_NAME_MAX)
+    if len(about) > SKILL_ABOUT_MAX: raise ValueError('說明最多 %d 個字。' % SKILL_ABOUT_MAX)
+    if len(text) > SKILL_BODY_MAX: raise ValueError('內容最多 %d 個字。' % SKILL_BODY_MAX)
+    for value, what in ((name, '名稱'), (about, '說明')):
+        if '\n' in value or '\r' in value or '---' in value: raise ValueError('%s只能寫一行，也不能有「---」。' % what)
+    return name, about, text.strip('\n')
+
+
+def _skill_head(path):
+    """The header lines of a SKILL.md other than its name and description (a pack's Skill may carry more), and the text after it."""
+    try: text = path.read_text(encoding='utf-8', errors='replace')
+    except OSError: return [], ''
+    if not text.startswith('---'): return [], text
+    parts = text.split('---', 2)
+    if len(parts) < 3: return [], text
+    keep, skipping = [], False
+    for line in parts[1].splitlines():
+        if line.startswith(('name:', 'description:')): skipping = True; continue
+        if skipping and line[:1] in (' ', '\t'): continue  # the rest of a value written over several lines
+        skipping = False
+        if line.strip(): keep.append(line)
+    return keep, parts[2].lstrip('\n')
+
+
+def _skill_write(path, name, about, body, keep=()):
+    path.write_text('---\nname: %s\ndescription: %s\n%s---\n\n%s\n' % (name, about, ''.join(line + '\n' for line in keep), body), encoding='utf-8')
+
+
+def _skill_clash(store, name, own=None):
+    """Lock held. Another Skill already has this name, apart from upper and lower case (#288)."""
+    if any(same_name(x['name']) == same_name(name) and x['id'] != own for x in store.data['skills']): raise ValueError('已經有同名的 Skill（大小寫不同也算同名）。')
+
+
+def _editable_skill(store, record_id):
+    with store.lock: record = copy.deepcopy(next((x for x in store.data['skills'] if x['id'] == record_id), None))
+    if not record: raise LookupError('找不到這個 Skill。')
+    if record.get('originPath'): raise ValueError('這個 Skill 是從其他工具匯入的，會跟著原來源更新，不能在這裡編輯。')
+    return record
+
+
+def custom_skill_add(store, body):
+    name, about, text = _skill_text(body)
+    home = skills_home(store)
+    with store.lock:
+        _skill_clash(store, name)
+        folder = skill_folder(name if re.search(r'[A-Za-z0-9]', name) else 'my-skill', {x['folder'].lower() for x in store.data['skills']})
+        target = home / folder; target.mkdir(mode=0o700)
+        _skill_write(target / 'SKILL.md', name, about, text)
+        record = dict(id=ID(), name=name, folder=folder, origin='custom')
+        store.data['skills'].append(record); store.save()
+    return record
+
+
+def custom_skill_read(store, record_id):
+    record = _editable_skill(store, record_id)
+    path = store.dir / 'skills' / record['folder'] / 'SKILL.md'
+    name, about = skill_title(path.parent, record['name'])
+    _, body = _skill_head(path)
+    return dict(id=record['id'], name=name, description=about, body=body)
+
+
+def custom_skill_edit(store, record_id, body):
+    record = _editable_skill(store, record_id)
+    name, about, text = _skill_text(body)
+    path = store.dir / 'skills' / record['folder'] / 'SKILL.md'
+    with store.lock:
+        _skill_clash(store, name, record['id'])
+        keep, _ = _skill_head(path)
+        _skill_write(path, name, about, text, keep)
+        for x in store.data['skills']:
+            if x['id'] == record['id']: x['name'] = name
+        store.save()
+    return dict(id=record['id'], name=name)
+
+
+def custom_skill_route(store, method, rest, body):
+    """(status, reply) for POST /api/skills, GET and PATCH /api/skills/<id>."""
+    try:
+        if not rest and method == 'POST': return 201, custom_skill_add(store, body)
+        if len(rest) == 1 and method == 'GET': return 200, custom_skill_read(store, rest[0])
+        if len(rest) == 1 and method == 'PATCH': return 200, custom_skill_edit(store, rest[0], body)
+    except LookupError as exc: return 404, {'error': str(exc)}
+    return 404, {'error': '找不到資源。'}
+
+
+def connector_first_test(store, ident, turn_on=True):
+    """Test a connector just added. It is switched on for every Bot only when it worked (#303); otherwise it stays off and the
+    reason goes back with the answer. Never called with store.lock held: starting a program or reaching a service takes time."""
+    try: test = runtime_module().test_connection(ident, inventory_for(store, testing=ident))
+    except Exception as exc: test = {'status': 'error', 'toolCount': 0, 'error': str(exc)[:300] or '連線失敗。'}
+    on = bool(turn_on) and test.get('status') == 'ready'
+    if on:
+        with store.lock:
+            on = any('zook:' + c['id'] == ident for c in store.data['connectors'])  # not removed while it was being tested
+            if on: st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + [ident])); store.save()
+    return on, test
