@@ -58,7 +58,7 @@ class CardOrder(unittest.TestCase):
 
     def test_the_page(self):
         page = frontend()
-        for part in ("{id: 'custom', name: '自訂（可拖動）'}", "{id: 'auto', name: '自動（剩最多的在前）'}", 'draggable="true" data-card-key=', "usageCardSort: 'custom'", 'data-card-sort'):
+        for part in ("{id: 'custom', name: '自訂（可拖動）'}", "{id: 'auto', name: '自動（剩最多的在前）'}", 'class="usage-family-head" draggable="true"', "usageCardSort: 'custom'", 'data-card-sort'):
             self.assertIn(part, page)
         self.assertNotIn('interject-pick', page); self.assertNotIn('busySend', page); self.assertNotIn('interject:', page)  # the switch is gone
         chat = (ROOT / 'frontend/js/10-chat.js').read_text(encoding='utf-8')
