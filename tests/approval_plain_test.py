@@ -116,6 +116,14 @@ class PlainCards(unittest.TestCase):
         self.assertEqual(asked.call_count, 2)
         self.assertTrue(g._PLAIN[0])
 
+    def test_a_file_changing_between_the_two_readings_is_refused(self):  # review: the measuring pass must see the same actions
+        real, calls = g.boundaries, []
+        def flaky(tool, data, home=''):
+            calls.append(1); return real(tool, data, home) if len(calls) == 1 else []
+        with unittest.mock.patch.object(g, 'boundaries', side_effect=flaky), unittest.mock.patch.object(g, 'ask', return_value=True) as asked:
+            self.assertFalse(g.decide('Bash', {'command': 'rm ~/a.txt'})[0])
+        self.assertEqual(asked.call_count, 0); self.assertTrue(g._PLAIN[0])
+
     def test_a_target_too_long_for_one_card_is_still_refused(self):  # never cut short: a card shows the whole target or is not asked
         folder = '/Users/someone/' + '很長的資料夾/' * 30
         with unittest.mock.patch.object(g, 'ask', return_value=True):

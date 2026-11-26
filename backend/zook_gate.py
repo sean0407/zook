@@ -886,8 +886,11 @@ def decide(tool, data, home=''):
     if split: return False, '%s。請拆成幾個指令，每次一個檔案、一個目的地，讓使用者逐一確認。' % split[0]
     found = merged(raw)
     _PLAIN[0] = False  # a card too long is measured exactly as before #234: the new words never turn a refusal into a card
-    try: before = merged(boundaries(tool, data, home))
+    try: measured = boundaries(tool, data, home)
     finally: _PLAIN[0] = True
+    before = merged(measured)
+    if [k for k, _ in measured] != [k for k, _ in raw]:  # the files changed between the two readings: nothing is asked on either
+        return False, '檔案在檢查時變動了，請再試一次。'
     if len(raw) > MAX_ACTIONS or any(len(t) > MAX_TITLE for _, t in before):  # one card could not show all of it: never approved as a batch
         return False, '這一步同時要做 %d 件需要核准的事，或目標太長，一張核准卡放不下。請分成幾個較小的步驟，一次一件，讓使用者逐一確認。' % len(raw)
     if ask(found): return True, ''
