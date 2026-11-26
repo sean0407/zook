@@ -51,7 +51,9 @@ class OAuthTest(unittest.TestCase):
         self.base = 'http://127.0.0.1:%d' % self.provider.server_address[1]
         self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name); (self.root / 'assets').mkdir(); (self.root / 'assets/index.html').write_text('x'); (self.root / 'secrets').mkdir()
         self.start()
-        self.connector = self.req('POST', '/api/connectors', {'name': 'Remote', 'transport': 'http', 'url': self.base + '/mcp'})[1]['id']; self.cid = self.connector.split(':')[1]
+        made = self.req('POST', '/api/connectors', {'name': 'Remote', 'transport': 'http', 'url': self.base + '/mcp'})[1]; self.connector = made['id']; self.cid = self.connector.split(':')[1]
+        self.assertFalse(made['on']); self.assertTrue(made['test']['needsLogin'])  # #303: not signed in yet, so it waits, off
+        self.assertEqual(self.req('PATCH', '/api/settings', {'sharedMcp': [self.connector]})[0], 200)  # as the page does once signed in and tested
 
     def start(self):
         env = dict(os.environ, ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', ZOOK_SECRETS_DIR=str(self.root / 'secrets'), ZOOK_NO_BROWSER='1', HOME=str(self.root))
@@ -76,6 +78,27 @@ class OAuthTest(unittest.TestCase):
         self.assertIn('offline_access', query.get('scope', ''))   # asked for whenever the service offers it, so the sign-in lasts
         self.assertEqual((query['code_challenge_method'], query['redirect_uri'], query['resource']), ('S256', 'http://127.0.0.1:%d/oauth/callback' % self.port, self.base + '/mcp'))
         return query['state']
+
+    def fresh(self):
+        """A connector just added that waits for its sign-in, untouched since."""
+        made = self.req('POST', '/api/connectors', {'name': 'Remote 2', 'transport': 'http', 'url': self.base + '/mcp'})[1]
+        self.assertFalse(made['on']); self.connector = made['id']; self.cid = self.connector.split(':')[1]
+
+    def test_switched_on_and_off_while_waiting_for_the_sign_in_stays_off(self):
+        self.fresh()
+        for shared in ([self.connector], []): self.assertEqual(self.req('PATCH', '/api/settings', {'sharedMcp': shared})[0], 200)  # the user decided by hand
+        state = self.login(); self.assertEqual(self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % state, auth=False)[0], 200)
+        status, out = self.req('POST', '/api/connectors/%s/turn-on' % self.cid, {})
+        self.assertEqual((status, out['on'], out['test']['status'], out['test']['wanted']), (200, False, 'ready', False))
+        self.assertNotIn(self.connector, self.req('GET', '/api/state')[1]['settings']['sharedMcp'])
+
+    def test_one_still_off_can_be_tested_once_signed_in(self):
+        self.fresh()  # #303: waiting for its sign-in
+        state = self.login(); self.assertEqual(self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % state, auth=False)[0], 200)
+        test = self.req('POST', '/api/mcp/%s/test' % self.connector, {})[1]; self.assertEqual((test['status'], test['toolCount']), ('ready', 1))
+        status, out = self.req('POST', '/api/connectors/%s/turn-on' % self.cid, {})  # what the page asks once the sign-in is done
+        self.assertEqual((status, out['on'], out['test']['status']), (200, True, 'ready'))
+        self.assertIn(self.connector, self.req('GET', '/api/state')[1]['settings']['sharedMcp'])
 
     def test_sign_in_use_and_sign_out(self):
         self.assertTrue(self.item()['canLogin']); self.assertFalse(self.item()['signedIn'])

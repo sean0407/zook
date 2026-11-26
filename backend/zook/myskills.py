@@ -1,0 +1,209 @@
+# Skills written on the Skills page (#306), and a connector's first test right after it is added (#303).
+# Loaded by backend/server.py into one shared namespace.
+#
+# A Skill written here is an ordinary Zook Skill: one SKILL.md in Zook's own Skill folder, so every Bot and every CLI gets it the
+# same way as a template (inventory_for -> shared_skill_ids -> zook_read_skill). It holds text only, never a program: what a Bot
+# does after reading it still goes through the same approval as anything else it does.
+SKILL_NAME_MAX, SKILL_ABOUT_MAX, SKILL_BODY_MAX = 80, 500, 20000
+
+
+def _skill_text(body):
+    """(name, description, body) checked. Name and description are one line each, as SKILL.md's header needs them."""
+    name, about, text = body.get('name'), body.get('description'), body.get('body')
+    if not isinstance(name, str) or not name.strip(): raise ValueError('請輸入 Skill 名稱。')
+    if not isinstance(about, str) or not about.strip(): raise ValueError('請用一句話寫出這個 Skill 能做什麼。')
+    if not isinstance(text, str) or not text.strip(): raise ValueError('請寫下 Skill 的內容。')
+    name, about = name.strip(), about.strip()
+    if len(name) > SKILL_NAME_MAX: raise ValueError('名稱最多 %d 個字。' % SKILL_NAME_MAX)
+    if len(about) > SKILL_ABOUT_MAX: raise ValueError('說明最多 %d 個字。' % SKILL_ABOUT_MAX)
+    if len(text) > SKILL_BODY_MAX: raise ValueError('內容最多 %d 個字。' % SKILL_BODY_MAX)
+    for value, what in ((name, '名稱'), (about, '說明')):
+        if '\n' in value or '\r' in value or '---' in value: raise ValueError('%s只能寫一行，也不能有「---」。' % what)
+    return name, about, text.strip('\n')
+
+
+def _skill_body(path):
+    """The text of a SKILL.md after its header."""
+    try: text = path.read_text(encoding='utf-8', errors='replace')
+    except OSError: return ''
+    parts = text.split('---', 2) if text.startswith('---') else []
+    return parts[2].lstrip('\n') if len(parts) == 3 else text
+
+
+def _skill_write(path, name, about, body):
+    """Only a name and a description in the header: a Skill saved here never carries other header fields (allowed tools and the like)."""
+    path.write_text('---\nname: %s\ndescription: %s\n---\n\n%s\n' % (name, about, body), encoding='utf-8')
+
+
+def _skill_clash(store, name, own=None):
+    """Lock held. Another Skill already has this name, apart from upper and lower case (#288)."""
+    if any(same_name(x['name']) == same_name(name) and x['id'] != own for x in store.data['skills']): raise ValueError('已經有同名的 Skill（大小寫不同也算同名）。')
+
+
+def _editable_skill(store, record_id):
+    with store.lock: record = copy.deepcopy(next((x for x in store.data['skills'] if x['id'] == record_id), None))
+    if not record: raise LookupError('找不到這個 Skill。')
+    if record.get('originPath'): raise ValueError('這個 Skill 是從其他工具匯入的，會跟著原來源更新，不能在這裡編輯。')
+    return record
+
+
+def custom_skill_add(store, body):
+    name, about, text = _skill_text(body)
+    home = skills_home(store)
+    with store.lock:
+        _skill_clash(store, name)
+        folder = skill_folder(name if re.search(r'[A-Za-z0-9]', name) else 'my-skill', {x['folder'].lower() for x in store.data['skills']})
+        target = home / folder; target.mkdir(mode=0o700)
+        _skill_write(target / 'SKILL.md', name, about, text)
+        record = dict(id=ID(), name=name, folder=folder, origin='custom')
+        store.data['skills'].append(record); store.save()
+    return record
+
+
+def custom_skill_read(store, record_id):
+    record = _editable_skill(store, record_id)
+    path = store.dir / 'skills' / record['folder'] / 'SKILL.md'
+    name, about = skill_title(path.parent, record['name'])
+    body = _skill_body(path)
+    return dict(id=record['id'], name=name, description=about, body=body)
+
+
+def custom_skill_edit(store, record_id, body):
+    record = _editable_skill(store, record_id)
+    name, about, text = _skill_text(body)
+    path = store.dir / 'skills' / record['folder'] / 'SKILL.md'
+    with store.lock:
+        _skill_clash(store, name, record['id'])
+        _skill_write(path, name, about, text)
+        for x in store.data['skills']:
+            if x['id'] == record['id']: x['name'] = name
+        store.save()
+    return dict(id=record['id'], name=name)
+
+
+def custom_skill_route(store, method, rest, body):
+    """(status, reply) for POST /api/skills, GET and PATCH /api/skills/<id>."""
+    try:
+        if not rest and method == 'POST': return 201, custom_skill_add(store, body)
+        if len(rest) == 1 and method == 'GET': return 200, custom_skill_read(store, rest[0])
+        if len(rest) == 1 and method == 'PATCH': return 200, custom_skill_edit(store, rest[0], body)
+    except LookupError as exc: return 404, {'error': str(exc)}
+    return 404, {'error': '找不到資源。'}
+
+
+_connector_revs, _revs_lock = {}, threading.Lock()
+
+
+_auto_on = {}  # connector id -> its change count when Zook was asked to switch it on once signed in (#303)
+
+
+def connector_touch(connector_id, signed_in=False):
+    """Count a change to what a connector connects with: its settings, a key replaced in the Keychain (same id), an account signed
+    in, switched or signed out, switched on or off, removal. A sign-in renewed while it is used or tested is not counted.
+    Any change also drops a waiting 「switch on once signed in」, except the sign-in it was waiting for (signed_in)."""
+    with _revs_lock:
+        now = _connector_revs.get(connector_id, 0); _connector_revs[connector_id] = now + 1
+        if signed_in and _auto_on.get(connector_id) == now: _auto_on[connector_id] = now + 1
+        else: _auto_on.pop(connector_id, None)
+
+
+def connector_wait_sign_in(connector_id, rev):
+    """Lock held. Switch this connector on once it is signed in and tested, unless anything about it changes before then."""
+    with _revs_lock:
+        if _connector_revs.get(connector_id, 0) == rev: _auto_on[connector_id] = rev
+
+
+def shared_touch(before, after):
+    """A connector switched on or off for every Bot is a change too: a test running meanwhile does not switch it back (#303)."""
+    for ident in set(before or []) ^ set(after or []):
+        if isinstance(ident, str) and ident.startswith('zook:'): connector_touch(ident[5:])
+
+
+def connector_keys_write(record, secret, more):
+    """Write a connector's new keys under new Keychain ids and point the record at them. Returns {key name ('' for the main key):
+    new id}. A key is never overwritten in place, so a test reading the old one cannot be mistaken for the new.
+    If one cannot be written, the ones already written are deleted and the record is left as it was."""
+    made, plan = [], ([('', secret)] if secret else []) + sorted(more.items())
+    try:
+        for key, value in plan:
+            ident = ID(); secret_set(ident, value); made.append((key, ident))
+    except Exception:
+        for _, ident in made: secret_delete(ident)
+        raise
+    for key, ident in made:
+        if key: record['moreSecrets'][key] = ident
+        else: record['secretId'] = ident
+    if not secret and not record['secretName']: record['secretId'] = ''  # the key was removed
+    return dict(made)
+
+
+def secret_drop(ident):
+    """Delete a key that nothing uses any more. A failure is written to Zook's log (the id only, never the key)."""
+    if not secret_delete(ident): sys.stderr.write('zook: could not delete an unused connector key (%s) from the Keychain\n' % ident); sys.stderr.flush()
+
+
+def connector_publish(store, record, written):
+    """Save an edited or new connector with its new keys, as one change. Keys this edit did not change follow what is saved now
+    (another edit may have replaced them meanwhile). If saving fails, nothing changes and the new keys are deleted.
+    Returns (the keys nothing uses any more, sign-ins to delete); both are deleted by the caller once this is saved."""
+    with store.lock:
+        current = copy.deepcopy(next((c for c in store.data['connectors'] if c['id'] == record['id']), None)) or {}
+        if '' not in written and record.get('secretId') and current.get('secretId'): record['secretId'] = current['secretId']
+        for key in record['moreSecrets']:
+            if key not in written and (current.get('moreSecrets') or {}).get(key): record['moreSecrets'][key] = current['moreSecrets'][key]
+        stale, drop = current.get('oauth'), connector_blob_ids(current)  # read now, so a sign-in that just finished is not lost
+        if stale and record['transport'] == 'http' and record['url'] == current.get('url') and '' not in written:  # still the same sign-ins
+            record['oauth'] = stale; drop = []
+            if current.get('otherAccounts'): record['otherAccounts'] = current['otherAccounts']
+        before = list(store.data['connectors'])
+        store.data['connectors'] = [c for c in before if c['id'] != record['id']] + [record]; connector_touch(record['id'])  # settings and keys published together
+        try: store.save()
+        except Exception:
+            store.data['connectors'] = before
+            for ident in written.values(): secret_delete(ident)
+            raise
+    keep = set(connector_secret_ids(record))
+    return [x for x in connector_secret_ids(current) if x not in keep], drop
+
+
+def settings_patch(store, body):
+    """設定 changed from the page. Under the lock with the change count, so a connector the user switches off while a test is
+    finishing stays off: either the test sees the change, or the user's list is saved after it."""
+    with store.lock:
+        was = list(store.data['settings'].get('sharedMcp') or [])
+        update(store.data['settings'], body, 'settings'); shared_touch(was, store.data['settings'].get('sharedMcp')); store.save()
+        return store.data['settings']
+
+
+def connector_rev(connector_id):
+    with _revs_lock: return _connector_revs.get(connector_id, 0)
+
+
+def connector_first_test(store, ident, turn_on=True, waiting=False):
+    """Test a connector just added, or just signed in to. It is switched on for every Bot only when it worked and nothing about it
+    changed while it was tested (#303); otherwise it stays off and the reason goes back with the answer. A new one that needs a
+    sign-in first is remembered (waiting=True when adding); after the sign-in, waiting=True means: on only if it is still remembered.
+    Never called with store.lock held: starting a program or reaching a service takes time."""
+    cid = ident.split(':', 1)[1] if ident.startswith('zook:') else ''
+    exists = lambda: any(c['id'] == cid for c in store.data['connectors'])
+    with store.lock:
+        rev = connector_rev(cid); there = exists()  # read before the test reads its settings and keys
+        if waiting and turn_on == 'if-waiting':
+            with _revs_lock: turn_on = _auto_on.get(cid) == rev  # still wanted: nothing changed, nobody switched it on or off since
+    try: test = runtime_module().test_connection(ident, inventory_for(store, testing=ident))
+    except Exception as exc: test = {'status': 'error', 'toolCount': 0, 'error': str(exc)[:300] or '連線失敗。'}
+    on = bool(turn_on) and test.get('status') == 'ready'
+    if on:
+        with store.lock:
+            on = there and exists() and connector_rev(cid) == rev  # any change in between, even one changed back, means it was not what was tested
+            if on:
+                st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + [ident])); store.save()
+                with _revs_lock: _auto_on.pop(cid, None)
+        if not on: test = dict(test, changed=True, error='測試時的設定已經被修改或移除，先維持關閉。請再測試一次。')
+    if waiting and not on:
+        with store.lock:
+            if test.get('needsLogin') and turn_on: connector_wait_sign_in(cid, rev)  # still waits for its sign-in (only if nothing changed)
+            else:
+                with _revs_lock: _auto_on.pop(cid, None)  # failed for another reason, or no longer wanted: switched on by hand from now
+    if waiting: test = dict(test, wanted=bool(turn_on))  # whether it was still to be switched on by itself
+    return on, test

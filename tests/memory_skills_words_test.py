@@ -57,7 +57,7 @@ class SkillsAndConnectors(unittest.TestCase):
         self.assertIn('data-action="dir-tab" data-id="skills"', self.models)
 
     def test_switched_off_skills_say_so(self):
-        self.assertIn("SKILLS_OFF = '未啟用'", self.models)
+        self.assertIn("SKILLS_OFF = '已關閉'", self.models)
         self.assertIn('所有 Bot 都不會再用它', JS('50-forms.js'))  # the card switch is a change event
 
     def test_import_names_the_skills(self):
