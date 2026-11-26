@@ -67,6 +67,7 @@ Zook 是 macOS App（Swift 視窗 + Python 後端 + 純 JS 介面）加 iPhone A
 | `ZOOK_GMAIL_SKIP_CHECK=1` | 不實際連 Gmail |
 | `ZOOK_TRIGGER_EVERY=<秒>`、`ZOOK_TRIGGER_MAIL_FILE=<json>` | 觸發條件的檢查間隔；用一個 JSON 檔假裝信箱 |
 | `ZOOK_SYNC_EVERY=<秒>` | 多台同步的間隔（預設 30） |
+| `ZOOK_MEMBER_STALL=<秒>` | 群組成員多久完全沒動作算卡住、改用備用模型（預設 900） |
 | `ZOOK_NO_INTRO=1` | 建立或修改 Bot 時不生成招呼語（假 CLI 會計算每次呼叫的測試用） |
 | `ZOOK_GROUP_REPLY_CAP=<次>` | 一次詢問最多幾次回覆（只給測試回合上限的暫停用，預設不限） |
 | `ZOOK_TASK_CHECK_EVERY=<回合>` | 自動模式每幾回合先收斂、問要不要繼續（預設 10） |

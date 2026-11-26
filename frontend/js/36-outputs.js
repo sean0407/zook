@@ -113,6 +113,7 @@
     if (!a) return;
     e.preventDefault();
     const path = a.dataset.path || '', g = activeGroup();
+    if (a.classList.contains('missing-file')) return toast('檔案找不到：' + path + '。它可能沒有真的存好，或已被移走。');
     const bots = g ? (g.botIds || []) : [activeBot()?.id].filter(Boolean);
     const hit = outputAt(bots.map(id => [id, state.outputs[id]]), path);
     if (hit) return openOutput(hit[0], hit[1].id);
@@ -121,6 +122,14 @@
     navigator.clipboard?.writeText(path).then(() => toast('已複製檔案位置：' + path), () => toast('檔案位置：' + path));
   });
   // File names of this Bot's outputs inside a reply open the preview.
+  // #258: a link to a file that was not on this Mac when the reply finished (missingFiles, outputs.py) says so beside it.
+  function markMissing(html, m, botId) {  // one of its outputs by now (saved later) is there after all
+    const gone = new Set(Array.isArray(m.missingFiles) ? m.missingFiles.filter(x => typeof x === 'string') : []);
+    if (!gone.size) return html;
+    const plain = text => { const t = document.createElement('textarea'); t.innerHTML = text; return t.value; };
+    return html.replace(/<button type="button" class="link local-link" data-path="([^"]*)"([^>]*)>([\s\S]*?)<\/button>/g, (whole, path, rest, label) =>
+      gone.has(plain(path)) && !outputAt([[botId, state.outputs[botId]]], plain(path)) ? `<button type="button" class="link local-link missing-file" data-path="${path}"${rest}>${label}</button><span class="missing-note">（檔案找不到）</span>` : whole);
+  }
   function linkOutputs(html, botId) {
     const list = (state.outputs[botId] || []).filter(o => o.name.length >= 4).slice(0, 80);
     if (!list.length) return html;

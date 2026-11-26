@@ -1,5 +1,6 @@
 # 產出: the files a Bot made or changed, for its detail panel. Listing only; nothing here widens what a Bot can reach.
 # Loaded by backend/server.py into one shared namespace.
+import errno
 OUTPUT_LIMIT = 200
 OUTPUT_SECONDS = 4  # 產出 answers within this, with what it found by then
 OUTPUT_PREVIEW = {'.txt': 'text', '.md': 'markdown', '.markdown': 'markdown', '.csv': 'text', '.json': 'text', '.log': 'text', '.py': 'text', '.js': 'text', '.ts': 'text', '.html': 'text', '.css': 'text',
@@ -51,6 +52,57 @@ def named_folders(text):
         if word.count('/') >= 2 and word not in found and not _folder_never(word):
             found.append(word)
             if len(found) >= 10: break
+    return found
+
+
+# #258: a link in a reply to a file that is not on this Mac is marked 「檔案找不到」. Read the way the window reads links (10-chat.js
+# MD_LINK, mdTarget and the bare file:// links), so the paths noted are the ones its buttons carry.
+LINK_MD = re.compile(r'\[([^\[\]]+)\]\((\s*<[^<>\n]*>[^()\n]*|(?:[^()\n]|\([^()\n]*\))*)\)')
+LINK_FILE = re.compile(r'(?<![A-Za-z0-9+.\-/])file://(?:localhost)?/[^\s<>()（）"\'`*\x00，。、；：！？「」『』【】《》]+', re.I)
+LINK_CODE = re.compile(r'```[\s\S]*?(?:```|$)|`[^`\n]+`')
+MISSING_MAX = 20
+LINK_MOUNTED = ('/Volumes/', '/Network/', '/net/', '/automount/', '/System/Volumes/')
+
+
+def _link_path(target):
+    """The file on this Mac a link target names, as the window's button carries it ('' when it names none)."""
+    t = target.strip()
+    q = t[-1:]
+    at = t.rfind(q, 0, len(t) - 1) if q in ('"', "'") else -1
+    if at > 0 and t[at - 1].isspace(): t = t[:at].strip()  # a title: [a](<b> "title")
+    if t.startswith('<'):
+        t = t[1:]; close = t.find('>')
+        if close >= 0: t = t[:close]
+    t = t.rstrip(' \t\r\n\f\v>').strip()
+    if re.match(r'file:/?/', t, re.I):
+        t = re.sub(r'^file:(//(localhost)?)?', '', t, flags=re.I)
+        try: t = unquote(t, errors='strict')
+        except (UnicodeDecodeError, ValueError): pass
+    elif not re.match(r'(/(?!/)|~/)', t): return ''
+    return t if (t.startswith('/') and not t.startswith('//')) or t.startswith('~/') else ''
+
+
+def _link_there(path):
+    """False only when the file is certainly not there; a folder it may not look into, or any other doubt, counts as there."""
+    try: os.stat(path); return True
+    except OSError as exc: return exc.errno not in (errno.ENOENT, errno.ENOTDIR)
+    except ValueError: return True
+
+
+def reply_missing_links(text):
+    """Paths a reply links to (Markdown links and bare file:// links) that are not on this Mac, as written, in order. Outside the store lock."""
+    text = LINK_CODE.sub(' ', str(text or '')[:50000])  # what is shown as code is not a link
+    targets = [m.group(2) for m in LINK_MD.finditer(text)]
+    targets += [m.group(0)[:len(m.group(0).rstrip('.,;:!?'))] for m in LINK_FILE.finditer(LINK_MD.sub(' ', text))]
+    found = []
+    for target in targets:
+        path = _link_path(target)
+        if not path or len(path) > 1024 or path in found: continue
+        if os.path.normpath(os.path.expanduser(path)).startswith(LINK_MOUNTED): continue  # another disk or a network share may not answer quickly: not checked
+        there = any(_link_there(os.path.expanduser(p)) for p in (path, unquote(path)))
+        if not there:
+            found.append(path)
+            if len(found) >= MISSING_MAX: break
     return found
 
 
