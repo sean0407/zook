@@ -66,6 +66,23 @@ class GateHoles(unittest.TestCase):
         for line in ('tar -C Library -C ../.ssh -czf /tmp/x.tgz config', 'gtar -C ~ -czf /tmp/x.tgz .', 'bsdtar -czf /tmp/x.tgz .ssh'):
             self.assertAsked(line)
 
+    def test_review_round_two(self):
+        self.assertIn('unclear', kinds('cat <(case ok in ok) rm -f marker.txt;; esac)'))  # case's ) is not where it ends
+        self.assertIn('unclear', kinds('"r$(printf m)" -rf /tmp/important'))
+        for line in ("printf 'rm -f x' | bash -s -- arg", 'echo x | bash -s', 'echo x | (bash)'):
+            self.assertIn('unclear', kinds(line), line)
+        for line in ('cd "$DIR"; cat config', 'cd "$DIR"; grep Host config', 'rg -uuu . ~/.ss*', 'rg -uuu . ~/.{ssh,x}', 'CDPATH=$HOME/.ssh; cd archive; rg -uuu .'):
+            self.assertAsked(line)
+        self.assertIn('delete', kinds('xargs -aplan rm -f'))  # -aplan: the file is plan, rm is the command
+        self.assertIn('delete', kinds('xargs --arg-file plan rm -f'))
+        self.assertIn('guard', kinds('cd %s && cp evil.py zook_gate_words.py' % (ROOT / 'backend')))
+        self.assertIn('guard', kinds('cd %s && rm zook_gate_words.py' % (ROOT / 'backend')))
+        gate._CWD[0] = os.path.expanduser('~/Documents') if os.path.isdir(os.path.expanduser('~/Documents')) else self.temp.name
+        self.assertAsked('tar -c -f /tmp/a.tar -C "$HOME" . Documents')
+        gate._CWD[0] = self.temp.name
+        for line in ('pwd; bash --version | head -1', 'echo xargs -a auth.json', 'grep -eauth.json report.txt', 'bash -c "ls" | head'):
+            self.assertNotAsked(line)
+
     def test_cdpath_may_lead_to_keys(self):
         os.environ['CDPATH'] = os.path.expanduser('~')
         self.assertAsked('cd .ssh && rg x .')

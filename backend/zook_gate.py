@@ -17,7 +17,7 @@ timeout) is a refusal.
 
 This is a careful reading of what the CLI asked for, not a sandbox: a program written to a file and run later is not read.
 """
-import hmac, json, os, re, shlex, shutil, stat, sys, time, urllib.error, urllib.parse, urllib.request
+import glob, hmac, json, os, re, shlex, shutil, stat, sys, time, urllib.error, urllib.parse, urllib.request
 
 MAX_INPUT = 4 * 1024 * 1024
 HOME = os.path.expanduser('~')
@@ -104,6 +104,7 @@ def _folders():
                 if os.path.isabs(where): found.append(os.path.normpath(where)); continue
                 more = [os.path.normpath(os.path.join(f, where)) for f in found]
                 if not re.match(r'\.\.?(/|$)', where):  # a plain name: CDPATH may lead to a folder of that name elsewhere
+                    if any('CDPATH' in x for x in _LINES): return None  # set on this very line: where it leads is not known here
                     if any('/%s/' % os.path.normpath(where).strip('/') in s.rstrip('/') + '/' for d in SECRET_DIRS + CREDENTIALS + _accounts_folder() for s in (d, os.path.realpath(d))): return None
                     more += [os.path.join(_expand(c), where) for c in os.environ.get('CDPATH', '').split(':') if os.path.isabs(_expand(c))]
                 found += more
@@ -113,9 +114,11 @@ def _folders():
 
 
 def _resolved(path):
-    """The path, and where it is from each folder a cd of this line may have led to (a relative path); None when one cannot be known."""
+    """The path, and where it is from each folder a cd of this line may have led to (a relative path), with what a wildcard matches
+    there; None when one cannot be known."""
     p = _expand(path); folders = [] if not p or os.path.isabs(p) else _folders()
-    return None if folders is None else [path] + [os.path.join(f, p) for f in folders]
+    found = None if folders is None else [path] + [os.path.join(f, p) for f in folders]
+    return found and found + [m for x in found[1:] or [p] if set(x) & set('*?[') for m in glob.glob(_expand(x))]
 
 
 def _secret_any(path, unsure=True):
@@ -128,8 +131,8 @@ def _secret_any(path, unsure=True):
 
 def _rooted(starts):
     """(the folders a search starts from, after the cds of its line; whether one cannot be known: a variable, or an unknown cd)."""
-    p = [_expand(s) for s in starts]; rel = [x for x in p if not os.path.isabs(x) and not set(x) & set('$`')]; folders = _folders() if rel else []
-    return [x for x in p if os.path.isabs(x)] + [os.path.join(f, x) for f in folders or [] for x in rel], folders is None or any(set(x) & set('$`') for x in p)
+    found = [_resolved(s) if not set(_expand(s)) & set('$`{}') else None for s in starts]  # a variable, or {a,b}: not known here
+    return [os.path.normpath(_abs(x)) for f in found for x in f or []], None in found
 
 
 def _short_value(args, i, valued, letters):
@@ -143,7 +146,8 @@ def _arg_files(words):
     """The files xargs (-a, --arg-file) and GNU parallel (-a, --arg-file, :::: and ::::+) read their arguments from."""
     out, tool, listing = [], '', False
     for i, w in enumerate(words):
-        if os.path.basename(w) in ('xargs', 'parallel'): tool = os.path.basename(w); continue
+        if os.path.basename(w) in ('xargs', 'parallel') and not tool and all(os.path.basename(x) in WRAPPERS or x[:1] == '-' or '=' in x or x.isdigit() for x in words[:i]):
+            tool = os.path.basename(w); continue
         if not tool: continue
         if w in ('::::', '::::+'): listing = True
         elif w.startswith(':::'): listing = False
@@ -196,6 +200,7 @@ def _expand(path):
 
 
 _CWD = [os.getcwd()]
+_PIPED = [set()]
 GLUED, TARS = '_glued_', ('tar', 'gtar', 'gnutar', 'bsdtar')  # GLUED: where $( … ) was, inside a word
 _LINES = []  # the command line being read, and the ones around it (bash -c, $( … ), <( … )): a cd in any of them leads what follows
 
@@ -385,7 +390,7 @@ def _inner(command):
     found = re.findall(r'`([^`]*)`', command)
     for start, quoted in _opens(command):
         j, ended = _closing(command, start)
-        if not quoted: found.append(command[start + 2:j - 1] if ended else None)
+        if not quoted: found.append(command[start + 2:j - 1] if ended and not re.search(r'\bcase\b', command[start:j]) else None)  # case's ) ends nothing
     return found
 
 
@@ -400,13 +405,15 @@ def _split(command):
     except ValueError:  # unbalanced quotes: read it word by word, and ask
         clear = False
         words = re.split(r'\s+|(?=[;&|()<>])|(?<=[;&|()<>])', command)
-    parts, current = [], []
-    for w in words:
+    parts, current, piped, pipe = [], [], set(), False
+    for w in words + [';']:
         if not w: continue
-        if set(w) <= set(';&|()<>') and not set(w) & set('<>'): parts.append(current); current = []
+        if set(w) <= set(';&|()<>') and not set(w) & set('<>'):
+            if current: piped |= {len(parts)} if pipe else set(); parts.append(current)
+            pipe, current = w in ('|', '|&') or pipe and not current, []
         else: current.append(w)
-    parts.append(current)
-    return [p for p in parts if p], clear
+    _PIPED[0] = piped  # which simple commands read what the one before them writes (… | bash)
+    return parts, clear
 
 
 def _redirects(argv):
@@ -441,7 +448,8 @@ def _strip(argv):
                 option = argv.pop(0)
                 if name == 'env' and (option.split('=', 1)[0] == '--split-string' or re.fullmatch(r'-[^-]*S.*', option)): return ['$env -S']  # a command line in one word
                 valued = WRAPPER_VALUED.get(name, ())
-                if argv and (option in valued or re.fullmatch(r'-[A-Za-z0-9]+', option) and '-' + option[-1] in valued): argv.pop(0)  # -tn 1: the last letter takes the value
+                first = next((k for k, ch in enumerate(option[1:], 2) if '-' + ch in valued), 0) if re.fullmatch(r'-[A-Za-z0-9]+', option) else 0
+                if argv and (option in valued or first and not option[first:]): argv.pop(0)  # -tn 1: the first letter taking a value takes the rest, or the next word
             continue
         break
     return argv
@@ -460,12 +468,13 @@ def command_boundaries(command, depth=0):
     _LINES.append(command)  # a cd here leads the searches of the commands inside it too
     try:
         for inner in _inner(command): found += [_hit('unclear', '（括號沒有成對）')] if inner is None else command_boundaries(inner, depth + 1)
-        parts, clear = _split(_without_inner(command))  # what runs inside $( … ) was read above, and is counted once
+        parts, clear = _split(_without_inner(command)); piped = _PIPED[0]  # what runs inside $( … ) was read above, and is counted once
         if not clear: found.append(_hit('unclear', '（引號沒有成對）'))
         for n, argv in enumerate(parts):
             words, read, written = _redirects(argv)
             stripped = _strip(words); prog = os.path.basename(stripped[0]) if stripped else ''
-            if (prog in SHELLS | INTERPRETERS or prog.startswith('python')) and all(a.startswith('-') for a in stripped[1:]) and (read or n and '|' in command):
+            script = prog in SHELLS and not any(re.fullmatch(r'-[a-z]*c[a-z]*', a) for a in stripped[1:]) and (any(re.fullmatch(r'-[a-z]*s[a-z]*', a) for a in stripped[1:]) or all(a.startswith('-') for a in stripped[1:]))
+            if (script or (prog in INTERPRETERS or prog.startswith('python')) and all(a.startswith('-') for a in stripped[1:])) and (read or n in piped):
                 found.append(_hit('unclear', '（要執行的程式來自另一個指令的輸出）'))  # … | bash, bash < file: the program is what comes in
             found += _redirect_hits(read, written, empty=not stripped or os.path.basename(stripped[0]) in (':', 'true') and len(stripped) == 1 and not read or stripped[:2] == ['cat', '/dev/null'])
             listed = [w for w in map(_secret_any, _arg_files(words)) if w]  # xargs -a FILE, parallel --arg-file FILE or :::: FILE: read too
@@ -610,7 +619,7 @@ def _search_roots(name, args, whole='', depth=0):
         if name == 'zip' and not any(re.fullmatch(r'-[a-zA-Z]*r[a-zA-Z]*', a) for a in args): return None
         plain = _positional(args, (RG_VALUED if name in ('rg', 'ripgrep') else UGREP_VALUED if name == 'ugrep' else GREP_VALUED) | {'-f', '--file', '-C', '--directory'})
         if name in ('rg', 'ag', 'ack', 'ugrep', 'ripgrep', 'pt'): plain = _past_pattern(plain, args, any(a in ('-e', '-f', '--regexp', '--file', '--files') or a.startswith(('--regexp=', '--file=')) for a in _options(args)))
-        if name in ('zip', 'cp', 'ditto') + TARS: plain = plain[1:] if name in ('zip',) + TARS else plain[:-1]
+        if name in ('zip', 'cp', 'ditto') + TARS: plain = plain[1:] if name == 'zip' else plain if name in TARS else plain[:-1]
         if name in TARS:  # tar -C folder: the names after it are there; each -C from the one before it, so any of them counts
             moved = []
             for v in [v for i, a in enumerate(args) for v in [a[12:] if a.startswith('--directory=') else ''.join(args[i + 1:i + 2]) if a == '--directory' else _short_value(args, i, {'-f', '-b', '-T', '-X', '-s'}, 'C')] if v is not None]:
@@ -625,7 +634,7 @@ def _search_roots(name, args, whole='', depth=0):
 def _argv_boundaries(argv, whole, depth):
     if not argv: return []
     word = argv[0]; name = os.path.basename(word); args = argv[1:]
-    if '$' in word and word != '$' or '`' in word or GLUED in argv[:2]: return [_hit('unclear', '（要執行的程式是變數）')]
+    if '$' in word and word != '$' or '`' in word or GLUED in word or GLUED in argv[:2]: return [_hit('unclear', '（要執行的程式是變數）')]
     if (name in SHELLS | INTERPRETERS | {'source', '.', 'eval'} or name.startswith('python')) and '/dev/fd/63' in args:
         return [_hit('unclear', '（要執行的程式來自另一個指令的輸出）')]  # bash <( … ): what it runs is that command's output
     if word == '$': return []
@@ -657,7 +666,7 @@ def _argv_boundaries(argv, whole, depth):
         rooted, unknown = _rooted(starts)  # a relative folder from wherever the line's cds led
         if any(_secret_path(s) for s in rooted + starts): found.append(_hit('secret', '讀取 ' + _names([s for s in rooted + starts if _secret_path(s)])))
         elif reads and any(_holds_secrets(s) for s in rooted): found.append(_hit('secret', '（搜尋 %s，範圍包含 ~/.ssh 等金鑰資料夾）' % _names([s for s in rooted if _holds_secrets(s)])))
-        elif reads and unknown: found.append(_hit('secret', '（搜尋的資料夾要執行時才知道，可能包含 ~/.ssh 等金鑰資料夾）'))
+        elif unknown: found.append(_hit('secret', '（搜尋的資料夾要執行時才知道，可能包含 ~/.ssh 等金鑰資料夾）'))
         if name == 'find':
             for i, a in enumerate(args):
                 if a in ('-exec', '-execdir', '-ok', '-okdir'):
@@ -728,20 +737,21 @@ def _argv_boundaries(argv, whole, depth):
     if name == 'truncate' and any(re.fullmatch(r'(-s|--size=?)0?', a) or a in ('-s0', '--size=0') for a in args) and ('0' in args or any(a.endswith('0') for a in args)):
         found.append(_hit('delete', '清空 %s 的內容' % _names([a for a in plain if a != '0'])))
     if name in ('cp', 'mv') and plain[:1] == ['/dev/null'] and len(plain) == 2 and _nonempty(plain[1]): found.append(_hit('delete', '清空 %s 的內容' % _names(plain[1:])))
+    targets = [x for t in targets for x in _resolved(t) or [t]]; removed = [x for t in plain for x in _resolved(t) or [t]] if name in DELETE_COMMANDS else []
     if any(_guard_path(t) for t in targets): found.append(_hit('guard', '修改 ' + _names([t for t in targets if _guard_path(t)])))
     elif name not in DELETE_COMMANDS and any(_system_path(t) for t in targets) and name not in ('touch', 'mkdir'): found.append(_hit('system', '寫入 ' + _names([t for t in targets if _system_path(t)])))
-    if name in DELETE_COMMANDS and any(_guard_path(t) for t in plain): found.append(_hit('guard', '刪除 ' + _names([t for t in plain if _guard_path(t)])))
+    if any(_guard_path(t) for t in removed): found.append(_hit('guard', '刪除 ' + _names([t for t in removed if _guard_path(t)])))
     local = [_file_url(a) if a.lower().startswith('file://') else a for a in args]  # file:// is a file on this Mac, checked like one
     web = set(_curl_addresses(args)) if name in ('curl', 'wget') else set()  # an address without https:// is still not a file here
     touched = [a for a in local if '://' not in a and a not in web and (a.startswith(('/', '~', '$HOME', '${HOME}', '.', '@')) or '/' in a or os.path.basename(a).startswith('.env'))]
     touched += [a.split('=', 1)[1] for a in args if a.startswith('--') and '=' in a]
-    touched += [a[k:] for a in args if re.match(r'-[^-]', a) for k in range(2, len(a)) if k == 2 or a[k] in '/~$.']  # a value fixed to its option: -f$HOME/…
+    touched += [a[k:] for a in args if re.match(r'-[^-]', a) for k in range(2, len(a)) if a[k] in '/~$.']  # a value fixed to its option: -f$HOME/…
     if name in ('grep', 'egrep', 'fgrep', 'ggrep', 'rg', 'ripgrep', 'ugrep'):  # the files its patterns or globs come from: -f FILE, -if FILE, --file FILE
         valued, opts = RG_VALUED if name in ('rg', 'ripgrep') else UGREP_VALUED if name == 'ugrep' else GREP_ONLY_VALUED, _options(args)
         touched += [a.split('=', 1)[1] if '=' in a else args[i + 1] if i + 1 < len(args) else '' for i, a in enumerate(opts) if a.split('=', 1)[0] in ('--file', '--exclude-from', '--include-from', '--ignore-file')]
         touched += [v for v in (_short_value(args, i, valued, 'f') for i in range(len(opts))) if v]
     bare = plain if roots is None and _folders() != [_CWD[0]] else []  # after a cd, a bare name may be in a folder of keys (not a search's words)
-    hits = [x for x in list(map(_secret_any, touched)) + [_secret_any(a, False) for a in bare] if x]
+    hits = [x for x in list(map(_secret_any, touched)) + [_secret_any(a, name not in ('echo', 'printf', 'test', '[', 'export', 'cd', 'pushd', 'chdir')) for a in bare] if x]
     if not any(k == 'secret' for k, _ in found) and hits: found.append(_hit('secret', _names(hits)))
     return found
 

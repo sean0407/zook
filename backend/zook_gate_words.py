@@ -29,7 +29,7 @@ TEMP_DIRS = ['/tmp', '/private/tmp', '/var/folders', '/private/var/folders']
 CLI_FOLDERS = {'.claude', '.cursor', '.codex', '.grok', '.gemini', '.antigravity', 'cursor-config'}
 WRAPPERS = {'env', 'nohup', 'time', 'command', 'builtin', 'exec', 'nice', 'caffeinate', 'timeout', 'xargs', 'stdbuf', 'arch', 'noglob', 'nocorrect', 'busybox', 'parallel'}
 WRAPPER_VALUED = {'env': {'-u', '-P', '-C'}, 'nice': {'-n'}, 'timeout': {'-s', '-k', '--signal', '--kill-after'}, 'caffeinate': {'-t', '-w'},
-                  'xargs': {'-I', '-J', '-L', '-n', '-P', '-R', '-S', '-s', '-E', '-d', '-a'}, 'stdbuf': {'-i', '-o', '-e'}, 'time': {'-o', '-f'}, 'exec': {'-a'},
+                  'xargs': {'-I', '-J', '-L', '-n', '-P', '-R', '-S', '-s', '-E', '-d', '-a', '--arg-file', '--delimiter', '--max-args', '--max-procs', '--eof', '--replace'}, 'stdbuf': {'-i', '-o', '-e'}, 'time': {'-o', '-f'}, 'exec': {'-a'},
                   'parallel': {'-j', '--jobs', '-S', '--sshlogin', '-a', '--arg-file', '--colsep', '-d', '--delimiter', '-n', '-N', '--timeout'}}
 SHELL_WORDS = {'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until', '!', '{', '}', 'coproc'}  # what runs after them is a command too
 SHELLS = {'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish'}
