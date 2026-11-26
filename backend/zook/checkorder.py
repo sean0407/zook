@@ -75,11 +75,20 @@ def checked_present(store, group_id, names, exact=(), owner=''):
     return gone[:10]
 
 
-def _in_prose(word, names):
-    """Whether a word picked from prose (Chinese runs words together: 「已存好報價單.xlsx」) is one of these files: it ends with the
-    file's full name."""
+def _in_prose(word, names, loose=False):
+    """Whether a word picked from prose (Chinese runs words together: 「已存好報價單.xlsx」) is one of these files: the full name, or the
+    name right after a word that joins it to the sentence (存好、交了、：…). 「新版報價單.xlsx」 is not 「報價單.xlsx」. loose: any ending
+    (only for leaving the user's own files out, where a wrong match can only mean one check fewer of a missing file)."""
     word = _claim_key(word)
-    return any(n and word.endswith(_claim_key(n)) for n in names)
+    for n in names:
+        key = _claim_key(n)
+        if not n or not word.endswith(key): continue
+        lead = word[:len(word) - len(key)]
+        if not lead or loose or lead.endswith(PROSE_JOIN): return True
+    return False
+
+
+PROSE_JOIN = ('存', '好', '了', '到', '成', '進', '的', '是', '為', '为', '：', ':', '傳', '交', '出', '付', '上', '把', '將', '将', '即', '和', '與', '与', '及', '在')
 
 
 SAVE_SAID = ('已存', '存到', '存好', '存成', '存進', '另存', '已上傳', '上傳到', '交了', '交出', '已交', '交件', '交付', '附上')  # a reply that says it saved or handed over something
@@ -131,7 +140,7 @@ class CheckOrder:
             for b, m in latest.items():  # a file the reply says it handed over, by its full name, that is not among the shared files (the user's own files aside)
                 text = m.get('content') or ''
                 if any(w in text for w in SAVE_SAID):
-                    named = [n for n in CLAIM_WORD.findall(text) if not _in_prose(n, given) and not _in_prose(n, pool)]
+                    named = [n for n in CLAIM_WORD.findall(text) if not _in_prose(n, given, True) and not _in_prose(n, pool)]
                     if named: gone[b] = list(dict.fromkeys((gone.get(b) or []) + named))[:10]
             for b, m in latest.items():
                 if m.get('skippedFiles'): gone[b] = list(dict.fromkeys((gone.get(b) or []) + list(m['skippedFiles'])))  # too big to keep: an older file of that name is not this work
@@ -146,11 +155,15 @@ class CheckOrder:
                 who = _names(store, list(gone))
                 note('%s 說交了 %s，但群組檔案裡找不到；先退回給 %s 補存，補好再請 %s 查核。' % (who, '、'.join(n for v in gone.values() for n in v), who, checkers))
                 store.save()
-                return [dict(role='split_resave', bots=list(gone), blind=False, fixes=fixes), dict(step, resaved=True, missing=gone)] + steps[1:]
+                return [dict(role='split_resave', bots=list(gone), blind=False, waitBusy=True, fixes=fixes), dict(step, resaved=True, missing=gone, resaveAt=len(group['messages']))] + steps[1:]  # a busy member saves once free
             if not latest or unfinished:  # the check waits for everyone's part: nothing is checked half-handed-in
                 note('%s 還沒交出成果，%s 這次不用查核。' % (_names(store, unfinished or step.get('gate', [])) or '成員', checkers)); store.save(); return steps[1:]
             if gone:
-                note('%s 補存後還是找不到 %s，%s 這次不查核；請 %s 重新存檔後再請查核。' % (_names(store, list(gone)), '、'.join(n for v in gone.values() for n in v), checkers, _names(store, list(gone))))
+                at = step.get('resaveAt') if isinstance(step.get('resaveAt'), int) else len(group['messages'])
+                idle = [b for b in gone if not any(x.get('role') == 'assistant' and x.get('botId') == b for x in group['messages'][at:])]  # never got to 補存 (busy, or skipped)
+                files = '、'.join(n for v in gone.values() for n in v)
+                note(('%s 沒有補存到（正在忙或沒有回覆），%s 還是找不到；%s 這次不查核。' % (_names(store, idle), files, checkers)) if idle else
+                     '%s 補存後還是找不到 %s，%s 這次不查核；請 %s 重新存檔後再請查核。' % (_names(store, list(gone)), files, checkers, _names(store, list(gone))))
                 store.save(); return steps[1:]
         return steps
 
@@ -158,12 +171,12 @@ class CheckOrder:
         """A discussion with a host: the 查核員 the kickoff named, once the members' independent round is over. Returns
         (turns to add, the gate still to pass, the step those turns run with); False when the run ended."""
         if not gate.get('bots'): return [], None, None  # no 查核員 was named for this work
-        step = check_step(gate['bots'], gate['gate']); step.update(resaved=gate.get('resaved', False), missing=gate.get('missing') or {})
+        step = check_step(gate['bots'], gate['gate']); step.update(resaved=gate.get('resaved', False), missing=gate.get('missing') or {}, resaveAt=gate.get('resaveAt'))
         after = self._check_gate(group_id, run_id, step, [step])
         if after is False: return False
         if not after: return [], None, None
         now = {k: v for k, v in after[0].items() if k != 'waitBusy'}  # a member busy elsewhere is skipped with a line, as in any discussion
-        later = dict(gate, resaved=True, missing=after[1].get('missing')) if now['role'] == 'split_resave' else None
+        later = dict(gate, resaved=True, missing=after[1].get('missing'), resaveAt=after[1].get('resaveAt')) if now['role'] == 'split_resave' else None
         return [(x, False, now['role']) for x in now['bots']], later, now
 
     def _recheck(self, group_id, run_id, closer, fixes):
@@ -219,7 +232,7 @@ def task_files_missing(store, group, owner, attempt, msg, spec='', given=()):
     listed = list(attempt.get('files') or [])
     said = str(attempt.get('summary') or '') + '\n' + str(msg.get('content') or '')
     inputs = {p.rsplit('/', 1)[-1] for p in named_paths(str(spec or ''))} | set(given)  # files the work was told to read, or the user gave
-    named = [n for n in CLAIM_WORD.findall(said) if not _in_prose(n, inputs)] if any(w in said for w in SAVE_SAID) else []  # 「已存好報價單.xlsx」 without listing it in files
+    named = [n for n in CLAIM_WORD.findall(said) if not _in_prose(n, inputs, True)] if any(w in said for w in SAVE_SAID) else []  # 「已存好報價單.xlsx」 without listing it in files
     with _group_files_lock:
         pool = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
         gone = checked_present(store, group['id'], listed + list(msg.get('missingFiles') or []), exact=listed, owner=owner) + [n for n in named if not _in_prose(n, pool)]

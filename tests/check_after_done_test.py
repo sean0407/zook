@@ -27,8 +27,8 @@ def save(): open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('qu
 if name == '專員' and role in ('split_work', 'work', 'split_redo', 'free'):
     if flag('fail') or (role == 'split_redo' and flag('redofail')): time.sleep(0.2); sys.exit(3)
     if flag('slow'): time.sleep(3)
-    if not flag('claim') and not flag('vague') and not flag('handed') and not (role == 'split_redo' and flag('redonosave')) and folder: save() if role != 'split_redo' else open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('quote v2')
-    text = ('已存好了。' if flag('vague') else '報價單.xlsx 交了，請查收。' if flag('handed') else '已存到群組檔案：報價單.xlsx') + ('\n@查核員 請幫我看' if flag('mention') else '')
+    if not flag('claim') and not flag('vague') and not flag('handed') and not flag('newname') and not (role == 'split_redo' and flag('redonosave')) and folder: save() if role != 'split_redo' else open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('quote v2')
+    text = ('已存好新版報價單.xlsx。' if flag('newname') else '已存好了。' if flag('vague') else '報價單.xlsx 交了，請查收。' if flag('handed') else '已存到群組檔案：報價單.xlsx') + ('\n@查核員 請幫我看' if flag('mention') else '')
 if name == '設計' and role in ('split_work', 'work') and flag('designfail'): time.sleep(0.2); sys.exit(3)
 if name == '專員' and role == 'split_resave':
     if flag('resave') and folder: open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('quote resaved')
@@ -57,7 +57,8 @@ class CheckAfterDone(unittest.TestCase):
             cli = self.root / 'bin' / name; cli.write_text(CLI); cli.chmod(0o755)
         env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', GROUP_LOG=str(self.log), ZOOK_SECRETS_DIR=str(self.root / 'secrets'))
         env.pop('ZOOK_GROUP_REPLY_CAP', None)
-        if self._testMethodName == 'test_a_check_left_at_the_limit_runs_after_continue': env['ZOOK_GROUP_REPLY_CAP'] = '1'
+        cap = {'test_a_check_left_at_the_limit_runs_after_continue': '1', 'test_split_paused_before_the_check_continues_with_it': '2', 'test_split_paused_after_a_resave_continues_with_the_check': '3'}.get(self._testMethodName)
+        if cap: env['ZOOK_GROUP_REPLY_CAP'] = cap
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
         self.req('PATCH', '/api/settings', {'permissionMode': 'auto'})
@@ -251,6 +252,30 @@ class CheckAfterDone(unittest.TestCase):
         self.flag('handed')
         self.say(self.group(), '做一份報價單.xlsx')
         self.assertIn(('專員', 'split_resave'), self.order()); self.assertNotIn('查核員', [n for n, _ in self.order()])
+
+    def cont(self, g):
+        self.assertEqual(self.req('POST', '/api/groups/%s/continue' % g['id'], {})[0], 202)
+        for _ in range(300):
+            if self.req('GET', '/api/groups/' + g['id'])[1]['group']['status'] != 'running': break
+            time.sleep(.1)
+
+    def test_split_paused_before_the_check_continues_with_it(self):
+        g = self.group(); self.assertTrue(self.say(g).get('paused'))
+        self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('專員', 'split_work')])
+        self.cont(g)
+        self.assertEqual(self.order()[2:4], [('查核員', 'split_check'), ('Alpha', 'split_merge')])
+
+    def test_split_paused_after_a_resave_continues_with_the_check(self):
+        self.flag('claim'); self.flag('resave')
+        g = self.group(); self.assertTrue(self.say(g).get('paused'))
+        self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('專員', 'split_work'), ('專員', 'split_resave')])
+        self.cont(g)
+        self.assertEqual(self.order()[3:5], [('查核員', 'split_check'), ('Alpha', 'split_merge')])
+
+    def test_a_new_version_named_in_prose_is_not_the_old_file(self):
+        self.flag('newname'); g = self.group(); self.upload(g, '報價單.xlsx')
+        self.say(g)
+        self.assertIn(('專員', 'split_resave'), self.order())
 
     def test_nothing_handed_in_means_no_check(self):
         self.flag('fail')
