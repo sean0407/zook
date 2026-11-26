@@ -103,12 +103,14 @@ class Scheduling:
 def number_same_schedule(store, record):
     """#299 (#166③): a new schedule for the same Bot or group, at the same time and with the same content as one already there is
     called 「整理信件（2）」、「（3）」…, as a group with a name already in use is; a name of its own gets the number too. Lock held."""
-    key = lambda x: (x.get('botId') or '', x.get('groupId') or '', x.get('content') or '', schedule_when(x))
+    key = lambda x: tuple(str(x.get(k) or '') for k in ('botId', 'groupId', 'content', 'trigger', 'repeat', 'time', 'watchFolder', 'mailFrom', 'mailSubject')) + (
+        x.get('date') if x.get('repeat') == 'once' else '', x.get('day') if x.get('repeat') == 'monthly' else '')  # the fields, not the words: two folders may share a name
     others = [x for x in store.data['schedules'] if x is not record and x.get('id') != record.get('id')]
-    if not any(key(x) == key(record) for x in others): return record
+    same = sum(key(x) == key(record) for x in others)
+    if not same: return record
     title, taken = schedule_title(record), {schedule_title(x) for x in others}
     base = title.rstrip('…')  # unnamed and long: the first words, without the 「…」
-    n = 2
+    n = same + 1  # the third of its kind is （3）, whatever the others are called
     while (base[:SCHEDULE_NAME_MAX - len('（%d）' % n)] + '（%d）' % n) in taken: n += 1
     record['name'] = base[:SCHEDULE_NAME_MAX - len('（%d）' % n)] + '（%d）' % n
     return record

@@ -36,7 +36,7 @@
   document.addEventListener('click', e => {
     const el = e.target.closest('[data-team]');
     if (!el) return;
-    if (el.dataset.team === 'open') teamAsk();
+    if (el.dataset.team === 'open') leaveModalForm().then(go => { if (go) teamAsk(); });  // from a Bot or group form with changes: asks first (#297)
     else if (el.dataset.team === 'again') teamAsk(state.team?.goal || '');
     else if (el.dataset.team === 'remove') { teamRead(); state.team.roles.splice(Number(el.dataset.id), 1); teamPreview(); }
   });
@@ -48,7 +48,7 @@
     e.preventDefault(); e.stopPropagation();
     const button = form.querySelector('button.primary');
     if (button.disabled) return;
-    button.disabled = true;
+    button.disabled = true; form.dataset.busy = '1';  // closing waits while it is on its way (21b-unsaved.js)
     if (form.id === 'team-ask') {
       const goal = form.elements.goal.value.trim();
       button.textContent = '規劃中，大約半分鐘…';
@@ -64,5 +64,5 @@
       state.page = 'chat'; state.groupId = made.group.id; render();
       if (t.kickoff && typeof pollGroup === 'function') pollGroup(made.group.id);
       toast(`已建立「${made.group.name}」和 ${made.bots.length} 個 Bot`);
-    } catch (err) { button.disabled = false; toast(err.message); }
+    } catch (err) { button.disabled = false; delete form.dataset.busy; toast(err.message); }
   }, true);

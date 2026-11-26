@@ -10,7 +10,6 @@ EXPORT_FENCE_END = re.compile(r'^\s{0,3}(`{3,}|~{3,})\s*$')
 EXPORT_QUOTE = re.compile(r'^((?: {0,3}>\s?)*)(.*)$')
 EXPORT_HEADING = re.compile(r'^( {0,3})(#{1,6})(?=\s|$)')
 EXPORT_SETEXT = re.compile(r'^ {0,3}(=+|-+)\s*$')
-EXPORT_NOT_SAVED = ('denied', 'error', 'failed', 'rejected', 'cancelled', 'pending', 'running')  # a write that did not go through
 
 
 def export_time(stamp):
@@ -79,9 +78,10 @@ def export_message(data, jobs, m, speaker, tag='', verdict=''):
 
 
 def export_saved(job):
-    """The names of the files a reply saved (#302), from what its tools wrote; only the names, never where on this Mac."""
-    paths = [(c.get('arguments') or {}).get('path') for c in (job or {}).get('toolCalls') or [] if isinstance(c, dict) and c.get('name') in ('native_write', 'zook_workspace_write') and c.get('status') not in EXPORT_NOT_SAVED]
-    names = [str(p).rstrip('/').rsplit('/', 1)[-1] for p in paths + list((job or {}).get('wrote') or []) if isinstance(p, str) and p.strip()]
+    """The names of the files a reply saved (#302), from the writes its tools finished; only the names, never where on this Mac.
+    An old reply slimmed down (upkeep trim_jobs) keeps paths picked from its words too, which are not sure to be saved: not listed."""
+    paths = [(c.get('arguments') or {}).get('path') for c in (job or {}).get('toolCalls') or [] if isinstance(c, dict) and c.get('name') in ('native_write', 'zook_workspace_write') and c.get('status', 'completed') == 'completed']  # turned down, failed or still waiting: not saved
+    names = [str(p).rstrip('/').rsplit('/', 1)[-1] for p in paths if isinstance(p, str) and p.strip()]
     return list(dict.fromkeys(n for n in names if n))[:20]
 
 

@@ -2,8 +2,19 @@
   // 排程, 知識, 連接器… every window made with modal()); with nothing changed it just closes. Saving closes it with closeModal() as before.
   // A change is what the person did: the form is noted down at their first key or click, before it takes effect, so what the page
   // fills in by itself (a new Bot's draft, the model list) is not one, and typing something and putting it back is nothing to lose.
-  const modalEdit = {snap: null, touched: false};
-  function modalEditsReset() { modalEdit.snap = null; modalEdit.touched = false; }
+  const modalEdit = {snap: null, touched: false, form: null};
+  // modal() calls this after drawing: the same form drawn again (團隊 after a model is picked) keeps what was noted; another starts afresh.
+  function modalEditsReset() {
+    const id = modalRoot.querySelector('form')?.id || null;
+    if (id && id === modalEdit.form) return;
+    modalEdit.snap = null; modalEdit.touched = false; modalEdit.form = id;
+  }
+  // Before leaving a form window for another (新增帳號, 用一句話建立整個團隊, 返回): true when it may go on.
+  async function leaveModalForm() {
+    if (!modalDirty()) return true;
+    await requestCloseModal();
+    return !modalRoot.querySelector('form');
+  }
   function modalFields() {
     return [...modalRoot.querySelectorAll('form')].map(f => [...f.elements]
       .filter(el => el.name && el.type !== 'button' && el.type !== 'submit' && el.type !== 'file' && el.type !== 'search' && !('memberSearch' in el.dataset))
@@ -30,7 +41,7 @@
       const away = await ask({title: '要放棄修改嗎？', lines: ['剛才的修改還沒儲存，放棄就不會留下。'], ok: '放棄修改', keep: '繼續編輯'});
       if (!away || modalRoot.firstElementChild !== shown) return;  // 繼續編輯, or the window is already another one
       if (form?.id === 'bot-form' && !form.dataset.id) try { sessionStorage.removeItem('swarmr-new-bot-draft'); } catch (_) {}  // the new Bot's draft is what was given up
-      closeModal();
+      closeModal(); modalEdit.form = null;
     } finally { closeAsking = false; }
   }
   // Enter in a field (a Bot's name, a schedule, a conversation's name) does not save and close the window (#20): 儲存 does.

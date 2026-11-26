@@ -44,7 +44,7 @@ class UnsavedChanges(unittest.TestCase):
         self.assertIn('requestCloseModal()', case(actions, 'overlay'))  # a click outside
         forms = source('50-forms.js')
         self.assertRegex(forms, r"e\.key === 'Escape' && state\.modal\) \{\s*requestCloseModal\(\)")  # Esc
-        self.assertIn('modalEditsReset()', source('20-models.js'))  # each window starts with nothing changed
+        self.assertEqual(source('20-models.js').count('modalEditsReset()'), 2)  # each window starts with nothing changed; a redraw of the same form keeps it
 
     def test_only_real_changes_count(self):
         unsaved = source('21b-unsaved.js')
@@ -61,7 +61,10 @@ class UnsavedChanges(unittest.TestCase):
         self.assertIn("e.key !== 'Enter'", unsaved); self.assertIn("closest?.('.modal form')", unsaved)
         self.assertIn('|password)$/', unsaved)  # a password still goes in with Enter
         self.assertIn("querySelector('form[data-busy]')", unsaved)  # while it is being saved, closing waits
-        self.assertIn('requestCloseModal()', case(source('40-actions.js'), 'chats'))  # 返回 from 對話名稱
+        self.assertIn('leaveModalForm()', case(source('40-actions.js'), 'chats'))  # 返回 from 對話名稱
+        self.assertIn('leaveModalForm()', case(source('40-actions.js'), 'accounts-from-form'))  # 新增帳號 from the Bot form
+        self.assertIn("leaveModalForm().then(go => { if (go) teamAsk(); })", source('31-team.js'))  # 用一句話建立整個團隊
+        self.assertIn("form.dataset.busy = '1'", source('31-team.js'))  # the team form while it is on its way
 
 
 class MemoryPage(unittest.TestCase):
@@ -133,8 +136,8 @@ class SameSchedule(unittest.TestCase):
         body = {'botId': bot, 'content': '整理信件', 'time': '09:00', 'repeat': 'daily', 'on': False}
         names = [self.req('POST', '/api/schedules', body)[1].get('name', '') for _ in range(3)]
         self.assertEqual(names, ['', '整理信件（2）', '整理信件（3）'])  # unnamed: named after what it does
-        self.assertEqual(self.req('POST', '/api/schedules', dict(body, name='早上'))[1]['name'], '早上（2）')  # a name of its own is numbered too
-        self.assertEqual(self.req('POST', '/api/schedules', dict(body, name='早上'))[1]['name'], '早上（3）')
+        self.assertEqual(self.req('POST', '/api/schedules', dict(body, name='早上'))[1]['name'], '早上（4）')  # a name of its own is numbered too, by how many there are
+        self.assertEqual(self.req('POST', '/api/schedules', dict(body, name='早上'))[1]['name'], '早上（5）')
         self.assertEqual(self.req('POST', '/api/schedules', dict(body, time='10:00'))[1].get('name', ''), '')  # another time is another schedule
         self.assertEqual(self.req('POST', '/api/schedules', dict(body, content='整理檔案'))[1].get('name', ''), '')
         first = self.req('GET', '/api/state')[1]['schedules'][0]
@@ -152,11 +155,13 @@ class ExportFiles(unittest.TestCase):
                              dict(id='a1', role='assistant', status='completed', content='好了', createdAt='2026-11-23T06:01:00+00:00')])
         job = dict(id='j1', botId='b1', messageId='a1', status='completed', usage=dict(provider='claude', model='claude-x'),
                    toolCalls=[dict(name='native_write', arguments=dict(path='/Users/x/報表.xlsx')), dict(name='zook_workspace_write', arguments=dict(path='說明.md')),
-                              dict(name='zook_workspace_write', arguments=dict(path='沒存成.md'), status='denied')],
-                   wrote=['/Users/x/報表.xlsx', '/Users/x/圖.png'])
+                              dict(name='zook_workspace_write', arguments=dict(path='沒存成.md'), status='denied'), dict(name='native_write', arguments=dict(path='/Users/x/圖.png'), status='completed'),
+                              dict(name='native_write', arguments=dict(path='/Users/x/等核准.md'), status='waiting_approval')],
+                   wrote=['/Users/x/只在文字裡.md'])
         text = server.export_chat(dict(bots=[bot], jobs=[job]), bot, 'c1')['markdown']
         self.assertIn('這則回覆存的檔案：報表.xlsx、說明.md、圖.png', text)
-        self.assertNotIn('沒存成.md', text)  # turned down: not saved
+        self.assertNotIn('沒存成.md', text); self.assertNotIn('等核准.md', text)  # turned down or still waiting: not saved
+        self.assertNotIn('只在文字裡.md', text)  # a path only picked from the reply's words is not sure to be saved
         self.assertNotIn('/Users/x', text)  # names only, never where on this Mac
 
 
