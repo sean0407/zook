@@ -10,8 +10,8 @@
     const out = liveTail(j.messageId);
     return `<div class="member-live"><div class="wait-line${s.stuck ? ' stuck' : ''}" role="status" ${attrs}><span class="wait-text">${esc(s.text)}</span></div>${row('正在', esc(p.now || p.step || '思考'))}${files ? row('最近的檔案', files) : ''}${row('最近的輸出', `<span class="live-out" data-live-mid="${esc(j.messageId || '')}">${esc(out || '還沒有輸出')}</span>`)}<small class="muted">15 分鐘完全沒有動作時，Zook 會停下這一份，改用備用模型重做。</small></div>`;
   }
-  // The reply's own words so far (the same words its bubble in the group shows), a full path cut to the file's name.
-  const liveTail = mid => { const t = String((state.partials || {})[mid] || '').replace(/(?:~|\/(?:Users|private|tmp|var|Volumes|opt|Applications|Library|home))(?:\/[^\s/`'"「」）)]+)*\/([^\s/`'"「」）)]+)/g, '$1').trim(); return t.length > 400 ? '…' + t.slice(-400) : t; };
+  // The reply's own words so far (the same words its bubble in the group shows), a full path cut to the file's name (folders with spaces too).
+  const liveTail = mid => { const t = String((state.partials || {})[mid] || '').replace(/(?:~|\/(?:Users|private|tmp|var|Volumes|opt|Applications|Library|home))\/(?:(?:[^\s\/~`'"「」，。；、：（）]| (?=[A-Za-z0-9]))*\/)*/g, '').trim(); return t.length > 400 ? '…' + t.slice(-400) : t; };
   // The words arrive with each poll of the group; only this line changes, the page is not redrawn.
   setInterval(() => document.querySelectorAll('.live-out[data-live-mid]').forEach(el => { const t = liveTail(el.dataset.liveMid); if (t && el.textContent !== t) el.textContent = t; }), 1500);
   // The Bot's own page while it answers in a group: what it is doing, and the way to its whole work there.

@@ -413,7 +413,6 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                     job.update(status='failed', error='自動選擇選的 %s 現在不能用（%s）。請到「各模型使用量」確認。' % (auto_choice_name(p, a or ''), problem), finishedAt=NOW())
                     store.finish_message(job, '', 'failed'); store.save(); return
                 (store.find('jobs', job_id) or {})['ran'] = [p, m, run_bot.get('account') or '']  # what really runs, for the task limits
-                stall_switch(store, store.find('jobs', job_id) or {}, bot, p, a)  # a stalled part goes to this model (stall.py)
             if job.get('compact') and not compacted: compacted = True; prompt = self.compact_chat(job_id, prompt, (p, m), run_bot, inventory)  # two long replies in a row: start this one from a summary
             with store.lock: before = len(store.find('jobs', job_id).get('toolCalls') or [])
             self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)
@@ -635,6 +634,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 proc = kept or bg_popen(self, job, args, cli_cwd, env, stdin_prompt, kind)  # under a runner when it may go on while Zook is closed (background.py)
                 kept = kept or bg_turn(proc, kind, feed, job); proc = kept or proc  # a kept CLI's reply taken up after a restart
                 self.processes[job_id] = proc; note_cli_pid(store, job_id, proc, binary)  # resume.py
+                stall_switch(store, job, provider, (account or {}).get('id', ''))  # a stalled part: said once its backup has really started (stall.py)
             bg_ready(self, proc)  # its runner's report is waited for with the lock let go (#290, background.py)
             try:
                 # A reply may take as long as it keeps working. It is stopped when nothing has happened for a while (no output from the

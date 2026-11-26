@@ -52,11 +52,11 @@ def _stall_note(store, job, text):
     group['messages'].append(dict(id=ID(), role='system', content=text % ('「%s」' % (bot.get('name') or '這位成員')), createdAt=NOW()))
 
 
-def stall_switch(store, job, bot, provider, account):
-    """Lock held. Right before the backup model starts on a part whose try stalled: say so in the group."""
+def stall_switch(store, job, provider, account):
+    """Lock held. The backup model's CLI has just started on a part whose try stalled: say so in the group. Stopped or Zook closing
+    before that: nothing is said (stall_finish says nothing for a part that was stopped)."""
     stall = job.pop('stallSwitch', None)
     if not stall: return
-    if account is None: account = (find_account(bot.get('account'), provider) or {}).get('id', '')
     _stall_note(store, job, '%%s 已經 %d 分鐘沒有任何動作，已停下這一份，改用 %s 重做。' % (stall['minutes'], auto_choice_name(provider, account or '')))
 
 
