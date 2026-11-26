@@ -31,13 +31,14 @@
     if (test.needsLogin) { state.waitOn = state.waitOn || new Set(); state.waitOn.add(made.id); return '已新增，要先登入。登入並測試成功後會自動開啟'; }
     return '已新增，但連線測試沒有成功，先維持關閉。原因寫在卡片上';
   }
-  // After a sign-in: a connector waiting for it is switched on once its test worked.
+  // After a sign-in: Zook tests the connector again and switches it on only when that worked with the settings saved now (#303).
   async function connectorOnIfReady(id) {
-    const shared = state.data.settings.sharedMcp || [];
-    if (state.mcpTests[id]?.status !== 'ready' || shared.includes(id)) return false;
-    state.data.settings = await post('settings', {sharedMcp: [...shared, id]}, 'PATCH');
-    state.waitOn?.delete(id);
-    return true;
+    let r;
+    try { r = await post('connectors/' + encodeURIComponent(id.split(':')[1]) + '/turn-on'); }
+    catch (error) { state.mcpTests[id] = {status: 'error', error: error.message}; return false; }
+    state.mcpTests[id] = r.test;
+    if (r.on) { state.data.settings.sharedMcp = [...new Set([...(state.data.settings.sharedMcp || []), id])]; state.waitOn?.delete(id); }
+    return r.on;
   }
   function skillModal(item) {
     modal(item ? '編輯 Skill' : '新增 Skill', `<form id="skill-form" data-id="${esc(item?.id || '')}"><div class="modal-body"><p class="muted">Skill 是寫給 Bot 的做事方法。存好後所有 Bot、所有模型都會用；Bot 遇到相關的工作會先讀它。</p><label class="field">名稱<input name="name" required maxlength="80" placeholder="例如：客服回覆" value="${esc(item?.name || '')}"></label><label class="field">能做什麼（一句話）<input name="description" required maxlength="500" placeholder="例如：依公司語氣回覆客戶的問題" value="${esc(item?.description || '')}"><small class="muted">Bot 看這句話決定什麼時候用它。</small></label><label class="field">內容<textarea name="body" required rows="10" maxlength="20000" placeholder="使用時機：…&#10;做法：&#10;1. …">${esc(item?.body || '')}</textarea><small class="muted">寫給 Bot 看的說明，只是文字，不能執行程式。Bot 照著做的每個動作，仍然照你的核准設定先問你。</small></label><p class="form-error" role="alert" hidden></p></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">${item ? '儲存' : '新增'}</button></div></form>`);

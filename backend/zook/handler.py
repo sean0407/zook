@@ -538,6 +538,8 @@ class Handler(BaseHTTPRequestHandler):
                 try: google_switch(store, self.body().get('account'))
                 except LookupError as exc: return self.error(404, str(exc))
                 return self.respond(200, {'ok': True})
+            if len(parts) == 4 and parts[:2] == ['api', 'connectors'] and parts[3] == 'turn-on' and self.command == 'POST' and not self.device:  # after its sign-in: tested again here, on only if what was tested is what is saved (#303)
+                self.body(); on, test = connector_first_test(store, 'zook:' + parts[2]); return self.respond(200, dict(on=on, test=test))
             if len(parts) == 4 and parts[:2] == ['api', 'connectors'] and parts[3] in ('login', 'logout') and self.command == 'POST' and not self.device:
                 with store.lock: record = copy.deepcopy(next((c for c in store.data['connectors'] if c['id'] == parts[2]), None))
                 if not record: return self.error(404, '找不到這個連接器。')

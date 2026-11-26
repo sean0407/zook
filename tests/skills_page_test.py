@@ -32,7 +32,7 @@ class PageSource(unittest.TestCase):
         self.assertIn('connectorAddedNote(made)', block); self.assertIn('state.mcpTests[made.id] = made.test', block)
         note = self.page.split('function connectorAddedNote(')[1].split('\n  }')[0]
         self.assertIn('先維持關閉', note); self.assertIn('要先登入', note)
-        self.assertIn('connectorOnIfReady(made.id)', source('38-catalog.js'))
+        self.assertIn('connectorOnIfReady(made.id)', source('38-catalog.js')); self.assertIn("'/turn-on'", self.page)  # the Mac side tests and decides
 
     def test_skill_form_is_plain_fields(self):
         form = self.page.split('function skillModal(')[1].split('\n  }')[0]

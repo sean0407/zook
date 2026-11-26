@@ -83,6 +83,9 @@ class OAuthTest(unittest.TestCase):
         self.assertEqual(self.req('PATCH', '/api/settings', {'sharedMcp': []})[0], 200)  # #303: waiting for its sign-in
         state = self.login(); self.assertEqual(self.req('GET', '/oauth/callback?state=%s&code=CODE-1' % state, auth=False)[0], 200)
         test = self.req('POST', '/api/mcp/%s/test' % self.connector, {})[1]; self.assertEqual((test['status'], test['toolCount']), ('ready', 1))
+        status, out = self.req('POST', '/api/connectors/%s/turn-on' % self.cid, {})  # what the page asks once the sign-in is done
+        self.assertEqual((status, out['on'], out['test']['status']), (200, True, 'ready'))
+        self.assertIn(self.connector, self.req('GET', '/api/state')[1]['settings']['sharedMcp'])
 
     def test_sign_in_use_and_sign_out(self):
         self.assertTrue(self.item()['canLogin']); self.assertFalse(self.item()['signedIn'])

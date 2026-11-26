@@ -50,6 +50,13 @@ class ConnectorAddTest(unittest.TestCase):
         self.assertNotIn(made['id'], self.shared())
         self.assertEqual([m['name'] for m in self.req('GET', '/api/integrations')[1]['mcp'] if m['source'] == 'zook'], ['Broken'])  # kept, so it can be fixed
 
+    def test_turn_on_after_sign_in_tests_again(self):
+        status, made = self.req('POST', '/api/connectors', {'name': 'Broken', 'transport': 'stdio', 'command': '%s %s' % (sys.executable, self.root / 'broken.py')})
+        status, out = self.req('POST', '/api/connectors/%s/turn-on' % made['id'].split(':')[1], {})
+        self.assertEqual((status, out['on'], out['test']['status']), (200, False, 'error')); self.assertNotIn(made['id'], self.shared())
+        spec = importlib.util.spec_from_file_location('zook_turn_on_phone', SERVER); z = importlib.util.module_from_spec(spec); spec.loader.exec_module(z)
+        self.assertFalse(z.device_may('POST', '/api/connectors/abc/turn-on'))
+
     def test_names_that_differ_only_in_case_clash(self):
         command = '%s %s' % (sys.executable, self.root / 'mcp.py')
         self.assertEqual(self.req('POST', '/api/connectors', {'name': 'GitHub', 'transport': 'stdio', 'command': command})[0], 201)
@@ -86,9 +93,20 @@ class CatalogSignIn(unittest.TestCase):
                 return {'status': 'ready', 'toolCount': 1}
             z.runtime_module = lambda: type('R', (), {'test_connection': staticmethod(tested)})
             z.inventory_for = lambda store, **kw: {}
-            self.assertEqual(z.connector_first_test(store, 'zook:c1')[0], False)
+            on, test = z.connector_first_test(store, 'zook:c1')
+            self.assertFalse(on); self.assertTrue(test['changed']); self.assertIn('設定已經被修改', test['error'])
             self.assertNotIn('zook:c1', store.data['settings'].get('sharedMcp') or [])
             self.assertEqual(z.connector_first_test(store, 'zook:c1')[0], True)  # tested as it is now: on
+
+    def test_a_sign_in_renewed_by_the_test_is_not_a_change(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = importlib.util.spec_from_file_location('zook_first_test_renew', SERVER); z = importlib.util.module_from_spec(spec); spec.loader.exec_module(z)
+            store = z.Store(Path(temp) / 'data')
+            store.data['connectors'].append(dict(id='c1', name='C', transport='http', command='', url='https://x.example/mcp', env={}, secretName='', secretId='', headers={}, moreSecrets={}, origin='', oauth={'blob': 'a'}))
+            def tested(ident, inventory): store.data['connectors'][0]['oauth'] = {'blob': 'b'}; return {'status': 'ready', 'toolCount': 1}
+            z.runtime_module = lambda: type('R', (), {'test_connection': staticmethod(tested)})
+            z.inventory_for = lambda store, **kw: {}
+            self.assertEqual(z.connector_first_test(store, 'zook:c1')[0], True)
 
 
 if __name__ == '__main__': unittest.main()

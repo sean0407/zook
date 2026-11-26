@@ -54,8 +54,8 @@
       await new Promise(r => setTimeout(r, 2000));
       let now; try { now = await api('integrations'); } catch (_) { continue; }
       if ((now.mcp || []).find(i => i.id === made.id)?.signedIn) {
-        state.integrations = now; await retestConnector(made.id); await connectorOnIfReady(made.id); render(true);  // on only once signed in and tested (#303)
-        toast(state.mcpTests[made.id]?.status === 'ready' ? `${item.name} 已登入，連線測試成功，所有 Bot 都可以使用` : `${item.name} 已登入，但連線沒有成功，先維持關閉`); return;
+        state.integrations = now; await connectorOnIfReady(made.id); render(true);  // tested again by Zook, on only if it worked (#303)
+        const t = state.mcpTests[made.id] || {}; toast(t.changed ? `${item.name} 已登入，但測試時設定被改過，先維持關閉。請再測試一次` : t.status === 'ready' ? `${item.name} 已登入，連線測試成功，所有 Bot 都可以使用` : `${item.name} 已登入，但連線沒有成功，先維持關閉`); return;
       }
     }
   }
