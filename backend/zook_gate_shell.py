@@ -20,7 +20,7 @@ def _folders():
                 if len(rest) > 1 or where[:1] in ('-', '+', '', '~') or set(where) & set('$`*?[]{}\\'): return None  # ~-: the folder before
                 more = [x for f in found for x in (os.path.normpath(os.path.join(f, where)), os.path.realpath(os.path.join(f, where)))]  # cd -P: links first
                 if not re.match(r'\.\.?(/|$)|/', where):  # a plain name: CDPATH may lead to a folder of that name elsewhere
-                    if any(re.search(r'\bCDPATH\s*=', x) for x in _LINES): return None  # set on this very line: where it leads is not known here
+                    if any(re.search(r'\bCDPATH\s*\+?=', x) for x in _LINES): return None  # set on this very line: where it leads is not known here
                     if any('/%s/' % os.path.normpath(where).strip('/') in s.rstrip('/') + '/' for d in SECRET_DIRS + CREDENTIALS + _accounts_folder() for s in (d, os.path.realpath(d))): return None
                     more += [os.path.normpath(os.path.join(f, _expand(c) or '.', where)) for c in os.environ.get('CDPATH', '').split(':') for f in found]
                 found = list(dict.fromkeys(found + more))
@@ -56,6 +56,7 @@ def _resolved(path, depth=0):
         if '..' in brace.group(1) or depth > 2: return None
         out = [_resolved(p[:brace.start()] + v + p[brace.end():], depth + 1) for v in brace.group(1).split(',')]
         return None if None in out else [path] + [x for f in out for x in f[1:] or f]
+    if GLUED in p: return None  # a name finished by what $( … ) prints
     names = re.findall(r'\$\{?(\w+)', p)
     if names or '`' in p:
         held = [_values(n) for n in names]
@@ -73,7 +74,7 @@ def _secret_any(path, unsure=True):
     """Where a key or sign-in is named, after the cds of this line; '' when none is. unsure: a path in a folder that cannot be known
     (cd "$VAR") counts too, as $PWD/…"""
     found = _resolved(path)
-    if found is None: return _secret_path(path) and path or ((path if set(path) & set('$`') else '$PWD/' + _expand(path)) if unsure else '')
+    if found is None: return _secret_path(path) and path or ((path if set(path) & set('$`') or GLUED in path else '$PWD/' + _expand(path)) if unsure else '')
     return next((x for x in found if _secret_path(x)), '')
 
 
@@ -122,6 +123,8 @@ def _arg_files(words):
         if os.path.basename(w) in ('xargs', 'parallel') and not tool and not _strip(words[:i]):  # in the place of the command
             tool = os.path.basename(w); continue
         if not tool: continue
+        if not done and os.path.basename(w) in ('xargs', 'parallel') and not _takes_next(words[i - 1], WRAPPER_VALUED[tool]):  # xargs … parallel …: its own lists too
+            tool, listing = os.path.basename(w), False; continue
         done = done or not w.startswith('-') and not _takes_next(words[i - 1], WRAPPER_VALUED[tool]) and not listing and not w.startswith(':::')
         if w in ('::::', '::::+'): listing = True
         elif w.startswith(':::'): listing = False

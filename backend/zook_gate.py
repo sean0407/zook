@@ -300,7 +300,7 @@ def _hit(kind, what):
 def _opens(text):
     """(where each $( … ), <( … ), >( … ) (process substitution) or zsh's =( … ) starts, whether it is inside quotes read for sure: no
     backslash, $( … ), $'…', backtick, comment or second line; whether it seems in '…', where a shell -c reads it, not this line)."""
-    quote, sure = '', not set(text) & set('#\\\n`') and '$(' not in text and "$'" not in text
+    quote, sure = '', not set(text) & set('\\\n`') and '$(' not in text and "$'" not in text  # a # comment: what follows it never runs
     for j, c in enumerate(text[:-1]):
         if c in '\'"' and quote in ('', c) and (quote == "'" or text[j - 1:j] != '\\'): quote = '' if quote else c
         elif text[j + 1] == '(' and (c in '$<>' or c == '=' and text[j - 1:j] in ('', ' ', '\t', '\n', ';', '&', '|', '(')): yield j, sure and bool(quote), quote == "'"
@@ -661,6 +661,10 @@ def _argv_boundaries(argv, whole, depth):
     elif name in ('tee', 'touch', 'mkdir', 'truncate', 'chmod', 'chown', 'chgrp', 'chflags', 'xattr', 'patch'): targets = plain
     elif name in ('sed', 'gsed', 'perl') and any(a.startswith('-i') or a == '--in-place' or re.fullmatch(r'-[a-zA-Z]*i[a-zA-Z]*', a) for a in args): targets = plain[1:] if name != 'perl' else plain
     elif name == 'dd': targets = [a[3:] for a in args if a.startswith('of=')]
+    letter = {'sort': 'o', 'curl': 'o', 'wget': 'O', 'unzip': 'd'}.get(name, '')  # sort -o FILE, curl -o FILE, wget -O FILE, unzip -d FOLDER
+    targets += [v for i in range(len(args)) for v in [_short_value(args, i, set(), letter) if letter else None] if v] + [a.split('=', 1)[1] for a in args if a.startswith(('--output=', '--output-document=')) and name in ('sort', 'curl', 'wget')]
+    if name == 'unzip' and not any(a.startswith('-') and 'd' in a for a in args) or name in TARS and any(a in ('--extract', '--get') or re.fullmatch(r'-?[a-zA-Z]*x[a-zA-Z]*', a) for a in args[:1] + [a for a in args if a[:1] == '-']):
+        targets += [v for i in range(len(args)) for v in [_short_value(args, i, {'-f', '-b', '-T', '-X', '-s'}, 'C') if name in TARS else None] if v] + [a[12:] for a in args if a.startswith('--directory=')] or ['.']  # unpacking here
     if name == 'truncate' and any(re.fullmatch(r'(-s|--size=?)0?', a) or a in ('-s0', '--size=0') for a in args) and ('0' in args or any(a.endswith('0') for a in args)):
         found.append(_hit('delete', '清空 %s 的內容' % _names([a for a in plain if a != '0'])))
     if name in ('cp', 'mv') and plain[:1] == ['/dev/null'] and len(plain) == 2 and _nonempty(plain[1]): found.append(_hit('delete', '清空 %s 的內容' % _names(plain[1:])))
@@ -680,8 +684,8 @@ def _argv_boundaries(argv, whole, depth):
         files += [v for v in (_short_value(args, i, valued, 'f') for i in range(len(opts))) if v]
         if any(map(_read_file, files)): found.append(_hit('secret', '讀取 ' + _names(map(_read_file, files))))
     bare = plain if roots is None and _folders() != [_CWD[0]] else []  # after a cd, a bare name may be in a folder of keys (not a search's words)
-    bare += [a for i, a in enumerate(args) if '$' in a and a[:1] != '-' and not (i and args[i - 1][:1] == '-') and not greps]  # a file named by a variable (not an option's value)
-    hits = [x for x in list(map(_secret_any, touched)) + [_secret_any(a, name not in ('echo', 'printf', 'test', '[', '[[', 'export', 'cd', 'pushd', 'chdir')) for a in bare] if x]
+    bare += [a for i, a in enumerate(args) if ('$' in a or GLUED in a) and a[:1] != '-' and not (i and args[i - 1][:1] == '-') and not greps]  # a file named by a variable (not an option's value)
+    hits = [x for x in list(map(_secret_any, touched)) + [_secret_any(a, name not in ('echo', 'printf', 'test', '[', '[[', 'export', 'cd', 'pushd', 'chdir', 'ls')) for a in bare] if x]
     if not any(k == 'secret' for k, _ in found) and hits: found.append(_hit('secret', _names(hits)))
     return found
 
