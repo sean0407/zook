@@ -87,14 +87,17 @@ def _listed(files, prog, words=()):
     """xargs -a FILE, parallel :::: FILE: the file, and the paths in it handed to the command (read now: a short plain file only, never
     one that is a key, a link or a pipe); the file itself when what is in it cannot be read. echo and printf open nothing."""
     out = [x for x in map(_secret_any, files) if x]
+    marks = [v for i, w in enumerate(words) for v in [w.split('=', 1)[1] if w.startswith(('--delimiter=', '--colsep=')) else ''.join(words[i + 1:i + 2]) if w in ('--delimiter', '--colsep') else _short_value(words, i, set(), 'dC')] if v is not None]
     for f in [] if out or prog in ('echo', 'printf') else files:
         where = [x for x in _resolved(f) or [] if os.path.isfile(_abs(x))]
-        try:
-            fd = os.open(_abs(where[-1]), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK) if where else -1
-            with os.fdopen(fd, 'rb') as h: text = h.read(65537).decode('utf-8', 'replace') if stat.S_ISREG(os.fstat(h.fileno()).st_mode) else None
-        except (OSError, ValueError, IndexError): text = None
-        odd = any(re.fullmatch(r'-[^-]*d.*|--delimiter(=.*)?|--colsep(=.*)?', w) for w in words)  # its own separator: not read here
-        out += ['（%s 列出的檔案）' % f] if text is None or len(text) > 65536 or odd else [x for x in map(_secret_any, set(text.split('\0') + text.splitlines() + text.split())) if x]  # whole records too
+        for one in where or [None]:  # every folder the line may run in: the list there
+            try:
+                fd = os.open(_abs(one), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK) if one else -1
+                with os.fdopen(fd, 'rb') as h: text = h.read(65537).decode('utf-8', 'replace') if stat.S_ISREG(os.fstat(h.fileno()).st_mode) else None
+                parts = set(text.split('\0') + text.splitlines() + text.split()) if text is not None and len(text) <= 65536 else None  # whole records too
+                for m in marks: parts |= set(re.split(m.encode().decode('unicode_escape') if len(m) <= 2 else m, text))  # xargs -d ',', parallel --colsep (a pattern)
+            except (OSError, ValueError, IndexError, TypeError, re.error): parts = None
+            out += ['（%s 列出的檔案）' % f] if parts is None else [x for x in map(_secret_any, parts) if x]
     return out
 
 

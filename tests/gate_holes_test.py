@@ -177,6 +177,18 @@ class GateHoles(unittest.TestCase):
         self.assertNotAsked("bash -c 'ls'")
         self.assertNotAsked("python3 - <<'PY'\nprint(1)\nPY"); self.assertNotAsked('node <<EOF\nconsole.log(1)\nEOF')
 
+    def test_review_round_ten(self):
+        self.assertIn('delete', kinds("bash -c -- '-; rm -rf /tmp/victim' harmless"))
+        for line in ("bash /dev/stdin <<< 'rm -rf /tmp/victim'", "printf 'rm -rf /tmp/victim' | bash /dev/stdin", 'source /dev/stdin', 'bash /dev/fd/0', 'sh - < x.sh',
+                     "printf '%s\\n' bash | xargs -I{} {} -c 'rm -rf /tmp/victim'"):
+            self.assertIn('unclear', kinds(line), line)
+        self.assertIn('delete', kinds("parallel 'rm -rf /tmp/victim' ::: once"))
+        os.makedirs(os.path.join(self.temp.name, 'other'))
+        Path(self.temp.name, 'list').write_text('.env\n'); Path(self.temp.name, 'other', 'list').write_text('notes.txt\n')
+        self.assertAsked('pushd %s/other; popd; xargs -a list cat' % self.temp.name)
+        Path(self.temp.name, 'c.txt').write_text('notes.txt,src/a.txt'); Path(self.temp.name, 'k.txt').write_text('notes.txt,.env')
+        self.assertNotAsked('xargs -d , -a c.txt cat'); self.assertAsked('xargs -d , -a k.txt cat'); self.assertAsked("parallel --colsep ',' cat :::: k.txt")
+
     def test_cdpath_may_lead_to_keys(self):
         os.environ['CDPATH'] = os.path.expanduser('~')
         self.assertAsked('cd .ssh && rg x .')

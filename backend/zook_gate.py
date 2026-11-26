@@ -403,7 +403,9 @@ def command_boundaries(command, depth=0):
             stripped = _strip(words); prog = os.path.basename(stripped[0]) if stripped else ''
             script = prog in SHELLS and not any(re.fullmatch(r'-[a-z]*c[a-z]*', a) for a in stripped[1:]) and (any(re.fullmatch(r'-[a-z]*s[a-z]*', a) for a in stripped[1:]) or all(a.startswith('-') for a in stripped[1:]))
             fed = [w for k, w in enumerate(words[:-1]) if words[k].startswith('<<')]  # bash <<< 'text', bash <<EOF: the program is in the line
-            handed = any(os.path.basename(w) in ('xargs', 'parallel') for w in words[:len(words) - len(stripped)]) and (prog in SHELLS | {'eval', 'source', '.'})  # xargs bash -c: from the input
+            before = [os.path.basename(w) for w in words[:len(words) - len(stripped)]]
+            handed = ('xargs' in before or 'parallel' in before) and (prog in SHELLS | {'eval', 'source', '.'})  # xargs bash -c: from the input
+            if 'parallel' in before: found += command_boundaries(' '.join(stripped[:next((k for k, w in enumerate(stripped) if w.startswith(':::')), len(stripped))]), depth + 1)  # its command is a shell line
             if (script or (prog in INTERPRETERS or prog.startswith('python')) and all(a.startswith('-') for a in stripped[1:])) and (read or n in piped) or script and '<<' in ''.join(argv) or handed:  # python <<PY: its code is read below
                 found += command_boundaries(argv[argv.index('<<<') + 1], depth + 1) if script and '<<<' in argv and not handed and not read and n not in piped else [_hit('unclear', '（要執行的程式來自另一個指令的輸出）')]  # … | bash, bash < file
             found += _redirect_hits(read, written, empty=not stripped or os.path.basename(stripped[0]) in (':', 'true') and len(stripped) == 1 and not read or stripped[:2] == ['cat', '/dev/null'])
@@ -564,14 +566,15 @@ def _search_roots(name, args, whole='', depth=0):
 def _argv_boundaries(argv, whole, depth):
     if not argv: return []
     word = argv[0]; name = os.path.basename(word); args = argv[1:]
-    if '$' in word and word != '$' or '`' in word or GLUED in word or GLUED in argv[:2] or word not in ('[', '[[') and re.search(r'\{[^}]*(,|\.\.)|[*?]|\[.', word): return [_hit('unclear', '（要執行的程式是變數）')]
-    if (name in SHELLS | INTERPRETERS | {'source', '.', 'eval'} or name.startswith('python')) and '/dev/fd/63' in args:
+    if '$' in word and word != '$' or '`' in word or GLUED in word or GLUED in argv[:2] or word not in ('[', '[[') and re.search(r'\{[^}]*(,|\.\.)|[*?]|\[.|^\{\S*\}$', word): return [_hit('unclear', '（要執行的程式是變數）')]
+    if (name in SHELLS | INTERPRETERS | {'source', '.', 'eval'} or name.startswith('python')) and any(re.fullmatch(r'/dev/(?:fd/\d+|stdin)', a) or a == '-' and name in SHELLS for a in args[:3]):  # python - <<PY: its code is read below
         return [_hit('unclear', '（要執行的程式來自另一個指令的輸出）')]  # bash <( … ): what it runs is that command's output
     if word == '$': return []
     plain = [a for a in args if not a.startswith('-')]
     found = []
     if name in SHELLS or name == 'eval':
-        script = next((next((x for x in args[i + 1:] if x[:1] != '-'), None) for i, a in enumerate(args) if re.fullmatch(r'-[a-z]*c[a-z]*', a)), None) if name in SHELLS else ' '.join(args)  # bash -c -- '…'
+        after = next((args[i + 1:] for i, a in enumerate(args) if re.fullmatch(r'-[a-z]*c[a-z]*', a)), [])  # bash -c [options] [--] '…'
+        script = next((after[k + 1] if x == '--' else x for k, x in enumerate(after) if x == '--' and k + 1 < len(after) or x[:1] != '-'), None) if name in SHELLS else ' '.join(args)
         if script is None and name in SHELLS and any(re.fullmatch(r'-[a-z]*c[a-z]*', a) for a in args): return [_hit('unclear', '（shell -c 沒有寫出要執行的內容）')]
         if script: return command_boundaries(script, depth + 1)
     if name in INTERPRETERS or re.fullmatch(r'python3(\.\d+)?', name):
