@@ -21,7 +21,7 @@ def run(script):
         "const esc = s => String(s ?? '').replace(/[&<>\"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '\"': '&quot;'})[c]); let state = {};",
         part(models, '  function fmtReset', '  const loadingBlock'), part(models, '  const quotaFor', '  function botUsageSection'),
         part(usage, '  const fmtTok', '  const OVERVIEW_METRICS'),
-        part(cards, '  // Percent left in one limit', '  function loginButtons'), part(cards, '  function outNext', '  function accountRow'),
+        part(cards, '  // Percent left in one limit', '  function loginButtons'), part(cards, '  function outNext', '  // ---- #316'),
         script])
     done = subprocess.run(['node', '-e', code], capture_output=True, text=True, timeout=20)
     if done.returncode: raise AssertionError(done.stderr)
@@ -60,7 +60,7 @@ class UsageWords(unittest.TestCase):
         self.assertIn('沒有說何時重置', got['grokNext']); self.assertIn('改用「Codex」', got['grokNext'])
         self.assertIn('等到', got['wNext']); self.assertIn('重置後再用', got['wNext']); self.assertIn('改用「Codex」', got['wNext'])
         cards = (JS / '32b-cards.js').read_text(encoding='utf-8')
-        self.assertIn("<span class=\"out-badge\">已用完</span>", cards); self.assertIn("lv.reset || '未提供重置時間'", cards)
+        self.assertIn("text: '已用完'", cards); self.assertIn('const resetWords = r => fmtReset(r) || \'未提供重置時間\'', cards)
 
     def test_one_token_unit(self):
         got = run("console.log(JSON.stringify([fmtTok(1234), fmtTok(32000), fmtTok(31760000), fmtTok(48500000), fmtTok(123000000)]))")
@@ -77,8 +77,7 @@ class GeminiWords(unittest.TestCase):
         said = re.search(r"if 'ineligibletiererror'.*?\n\s+return '([^']+)'", src, re.S).group(1)
         self.assertIn('這個 Google 登入不能用', said); self.assertIn('用量頁 Gemini 卡片按「＋ 帳號」', said)
         cards = (JS / '32b-cards.js').read_text(encoding='utf-8')
-        self.assertIn("const issue = a ? '' : p.issue", cards)          # an API-key card does not repeat the Google sign-in problem
-        self.assertIn("if (!a && p.issue) return done;", cards)          # nor does the main card add 不提供額度資料 under it
+        self.assertIn("if (!a && p.issue) return {cls: 'off', text: '無法使用', note: issueShort(p.issue)}", cards)  # only the CLI's own sign-in, in one line (#316)
         self.assertIn('<b>依用量計費</b>', cards)
 
 

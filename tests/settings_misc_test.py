@@ -187,11 +187,18 @@ class PagesKeepTheirAddress(unittest.TestCase):
         for page in ('skills', 'mcp', 'plugins'): self.assertRegex(code, r"PAGE_HASHES = \[[^\]]*'%s'" % page)  # the kept pages have an address too
 
 
+class UsageCardsSayNotSignedIn(unittest.TestCase):
+    def test_card_badge_uses_the_last_sign_in_check(self):
+        """#116's one card per account shows the sign-in check #111 added: 無法使用 with 尚未登入 on the badge."""
+        code = js()
+        self.assertIn("(state.data?.rings || []).find(x => x.id === p.id)?.signedIn === false) return {cls: 'off', text: '無法使用', note: '尚未登入'}", code)
+
+
 class NarrowUsageTable(unittest.TestCase):
     def test_scrolls_sideways(self):
         css = (ROOT / 'frontend/style.css').read_text(encoding='utf-8')
-        self.assertIn('.bot-usage { overflow-x: auto; }', css)
-        self.assertIn('.bot-usage-row { min-width: 680px; }', css)
+        self.assertIn('.bot-usage-scroll { overflow-x:auto;', css)  # #69①: main's own wrapper (#116) scrolls it sideways; no second scroll inside
+        self.assertNotIn('.bot-usage { overflow-x: auto; }', css)
 
 
 if __name__ == '__main__': unittest.main()
