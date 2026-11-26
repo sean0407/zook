@@ -22,7 +22,7 @@
     const score = c => present.filter(x => x !== c && fam[x] && fam[c] && (fam[x] === fam[c]) === same).length;
     let best = '', top = -1;
     for (const c of seats) { const s = score(c); if (s >= top) { best = c; top = s; } }
-    return top > 0 || same ? best : '';
+    return top > 0 ? best : '';
   }
   function checkHint(form, ids, host) {
     const mode = form.elements.checkMode?.value, name = id => state.data.bots.find(b => b.id === id)?.name || '';
@@ -33,7 +33,9 @@
     const debate = form.elements.mode?.value === 'debate' && ids.filter(id => state.data.bots.some(b => b.id === id)).length < 3 ? '「辯論」只有兩位成員時，查核員也要上場辯論，這次不另外查核。' : '';
     if (pick) return debate || `會請「${name(pick)}」在其他成員交件後查核一次（只讀，不接製作的工作）。`;
     if (!seats.length) return '主持人以外至少要一位成員，才會有人查核；目前不會查核。';
-    const fam = botFamily(state.data.bots.find(b => b.id === seats[0]));
+    const fam = botFamily(state.data.bots.find(b => b.id === seats[0])), unknown = ids.some(id => state.data.bots.some(b => b.id === id && !botFamily(b)));
+    if (unknown) return '有成員用「自動選擇」模型，Zook 事先不知道是哪一家，可能挑不到查核員；要確定由誰查核，請改選「指定查核員」。';
+    if (mode === 'same') return '沒有和其他成員同一家的成員可以複查，這次不會查核；可以改選「自動請一位別家成員查核一次」。';
     return `成員都是 ${providerShort(fam) || '同一家'}，找不到別家的成員查核，這次不會查核；要查核請改選「同家複查」，或加一位別家的 Bot。`;
   }
   function syncChecker(form) {

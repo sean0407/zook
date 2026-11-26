@@ -33,6 +33,8 @@ def set_group_fields(store, group, body, creating=False):
     if 'instructions' in body:  # 長期指示 (#294)
         if not isinstance(body['instructions'], str) or len(body['instructions']) > GROUP_STANDING_MAX: raise ValueError('長期指示最多 %s 字，目前是 %s 字。' % (format(GROUP_STANDING_MAX, ','), format(len(str(body['instructions'])), ',')))
         group['instructions'] = body['instructions'].strip()
+    if group.get('status') == 'running' and (('checkMode' in body and body['checkMode'] != group.get('checkMode', 'name')) or (body.get('checkMode', group.get('checkMode')) == 'pick' and 'checkerId' in body and body['checkerId'] != group.get('checkerId'))):
+        raise ValueError('群組討論進行中，暫時無法修改驗收方式。')  # the steps already planned keep their check
     if 'checkMode' in body:  # 驗收方式 (#296); 'name' keeps a group from before it as it was
         if body['checkMode'] not in CHECK_MODES + ('name',): raise ValueError('驗收方式無效。')
         group['checkMode'] = body['checkMode']

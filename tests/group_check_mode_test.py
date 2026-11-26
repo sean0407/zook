@@ -54,7 +54,7 @@ class Picking(unittest.TestCase):
         self.assertEqual(server.group_checkers(store, dict(group, checkMode='none')), [])  # 「查核員」 by name is a maker now
         self.assertEqual(server.group_checkers(store, dict(group)), ['b2'])  # from before 驗收方式: by its name, as #245 did
         self.assertEqual(server.group_checkers(store, dict(botIds=['b0', 'b1'], hostId='b0', checkMode='auto')), ['b1'])  # the host makes the work, the other vendor checks it
-        self.assertEqual(server.group_checkers(store, dict(botIds=['b0', 'b1'], hostId='b0', checkMode='same')), ['b1'])  # only one can check
+        self.assertEqual(server.group_checkers(store, dict(botIds=['b0', 'b1'], hostId='b0', checkMode='same')), [])  # no member of the same vendor
         self.assertEqual(server.group_checkers(store, dict(botIds=['b0', 'b1', 'b2'], hostId='', checkMode='same')), ['b2'])  # the same vendor as the most others
         self.assertEqual(server.group_checkers(store, dict(botIds=['b1', 'b0', 'b2'], hostId='', checkMode='same')), ['b2'])
         self.assertEqual(server.group_checkers(store, dict(botIds=['b0'], hostId='', checkMode='auto')), [])  # nobody left to make the work
@@ -68,6 +68,13 @@ class Picking(unittest.TestCase):
         self.assertEqual([s['role'] for s in server.current_paused(store, dict(group, checkMode='none'), paused)['steps']], ['final'])
         self.assertEqual(server.current_paused(store, dict(group, checkMode='pick', checkerId='b3'), paused)['steps'][0]['bots'], ['b3'])
         self.assertEqual(server.current_paused(store, dict(group, checkMode='auto'), paused)['steps'][0]['bots'], ['b3'])
+
+    def test_check_mode_cannot_change_mid_discussion(self):
+        store = self.store('codex', 'claude', 'codex')
+        group = dict(botIds=['b0', 'b1', 'b2'], hostId='b0', status='running', checkMode='auto', name='g')
+        with self.assertRaises(ValueError): server.set_group_fields(store, group, {'checkMode': 'none'})
+        server.set_group_fields(store, group, {'checkMode': 'auto', 'checkerId': ''})  # unchanged: fine
+        legacy = dict(group); legacy.pop('checkMode'); server.set_group_fields(store, legacy, {'checkMode': 'name'})
 
     def test_numbered_name(self):
         self.assertEqual(server.numbered_name('週會', ['週會', '週會（2）']), '週會（3）')

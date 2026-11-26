@@ -47,8 +47,8 @@ def bot_vendor(store, bot):
 
 def group_checkers(store, group, engine=False):
     """The members who check (#296), by the group's 驗收方式. 自動 and 同家複查 pick one member that is not the host, only when
-    another member (the host too) is left to make the work. 自動 picks the one whose vendor differs from the most others, never one
-    of the same vendor as everyone; 同家複查 the one of the same vendor as the most others (the later one on a tie, both). In 任務引擎
+    another member (the host too) is left to make the work. 自動 picks the one whose vendor differs from the most others, 同家複查
+    the one of the same vendor as the most others (the later one on a tie, both); nobody when no member fits. In 任務引擎
     (engine) every task is already checked by another vendor, so 自動 and 同家複查 pick nobody there; a checker the user named, or a
     group from before 驗收方式 (by name, as #245 did), still counts."""
     present = [x for x in (group or {}).get('botIds') or [] if store.find('bots', x)]
@@ -61,7 +61,7 @@ def group_checkers(store, group, engine=False):
     family = {x: bot_vendor(store, store.find('bots', x)) for x in present}
     score = lambda c: sum(1 for x in present if x != c and family[x] and family[c] and (family[x] == family[c]) == (mode == 'same'))
     best = max(reversed(seats), key=score)  # the first best in this order: the later member on a tie
-    return [best] if score(best) or mode == 'same' else []
+    return [best] if score(best) else []  # a vendor not known (自動選擇) is never counted as another one, or as the same
 
 
 def group_is_checker(store, group, bot, engine=False):
