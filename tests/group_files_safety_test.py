@@ -112,5 +112,7 @@ class GroupFileSafety(unittest.TestCase):
         self.assertEqual(server.task_files_missing(self.store, group, '甲', dict(files=['報價單.xlsx', 'ab.xlsx']), {}), ['ab.xlsx'])  # another member's file is not its work
         self.assertEqual(server.task_files_missing(self.store, group, '甲', dict(files=['ab.xlsx']), dict(savedFiles=['ab.xlsx'])), [])
         self.assertEqual(server.task_files_missing(self.store, group, '甲', dict(files=[]), dict(skippedFiles=['big.pdf'])), ['big.pdf'])
+        self.assertEqual([server.group_is_checker(dict(name=n)) for n in ('查核員', '非查核員', 'QA', 'AQAB')], [True, False, True, False])
+        self.assertEqual([server.group_is_checker(dict(name='甲', persona=x)) for x in ('不只負責查核，也要寫報價。', '主要不負責查核，做報價單。', '你擔任驗收角色。')], [True, False, True])
 
 if __name__ == '__main__': unittest.main()

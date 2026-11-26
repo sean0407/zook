@@ -23,9 +23,10 @@ MODERATOR_RULES['split_plan'] = MODERATOR_RULES['split_plan'][:-1] + ['負責查
 
 def group_is_checker(bot):
     """Whether a member's role is checking others' work: its name says so, or its persona starts by saying that is its job."""
-    if CHECKER_NAME.search(str((bot or {}).get('name') or '')): return True
+    name = str((bot or {}).get('name') or '')
+    if any(not CHECKER_NOT.search(name[max(0, hit.start() - 2):hit.start()]) for hit in CHECKER_NAME.finditer(name)): return True  # 「非查核員」 is not one
     persona = str((bot or {}).get('persona') or (bot or {}).get('instructions') or '')[:80]
-    return any(not CHECKER_NOT.search(persona[max(0, hit.start() - 4):hit.end()]) for hit in CHECKER_DUTY.finditer(persona))
+    return any(not CHECKER_NOT.search(re.sub('不只|不僅|不但', '', persona[max(0, hit.start() - 4):hit.end()])) for hit in CHECKER_DUTY.finditer(persona))
 
 
 def split_checkers(store, ids):
@@ -113,8 +114,7 @@ class CheckOrder:
             latest = {b: m for b, m in last.items() if m.get('status') == 'completed' and m.get('content')}
             unfinished = [b for b in step.get('gate', []) if b not in latest and store.find('bots', b) and b in group['botIds']]  # no reply, or one that did not finish: not handed in
             earlier = step.get('missing') if isinstance(step.get('missing'), dict) else {}  # what was missing before 補存 is looked for again, whatever the new reply says
-            saves = lambda b: [n for x in group['messages'][start:] if x.get('botId') == b and x.get('role') == 'assistant' for n in x.get('savedFiles') or []]
-            said = {b: [n for n in dict.fromkeys(list(m.get('missingFiles') or []) + list(earlier.get(b) or [])) if n != NOTHING_SAVED and not _claim_present(n, saves(b))] for b, m in latest.items()}  # saved since, under a fuller name, counts
+            said = {b: [n for n in dict.fromkeys(list(m.get('missingFiles') or []) + list(earlier.get(b) or [])) if n != NOTHING_SAVED] for b, m in latest.items()}  # looked for again by the full name, among the files there now
             checkers = _names(store, step['bots'])
             with _group_files_lock:  # nothing is being saved into the group's files while they are looked at
                 gone = {b: checked_present(store, group_id, names) for b, names in said.items() if names}
@@ -124,7 +124,7 @@ class CheckOrder:
             for b, m in latest.items():  # a file the reply says it handed over, by its full name, that is not among the shared files (the user's own files aside)
                 text = m.get('content') or ''
                 if any(w in text for w in SAVE_SAID):
-                    named = [n for n in CLAIM_WORD.findall(text) if n not in given and n not in asked and not _same_file(n, pool) and not _claim_present(n, saves(b))]
+                    named = [n for n in CLAIM_WORD.findall(text) if n not in given and n not in asked and not _same_file(n, pool)]
                     if named: gone[b] = list(dict.fromkeys((gone.get(b) or []) + named))[:10]
             for b, m in latest.items():
                 if m.get('skippedFiles'): gone[b] = list(dict.fromkeys((gone.get(b) or []) + list(m['skippedFiles'])))  # too big to keep: an older file of that name is not this work
@@ -171,6 +171,33 @@ class CheckOrder:
         again = check_step(checked, redo or producers, {k: v for k, v in fixes.items() if k in checkers}) if checked and (redo or any(x in fixes for x in checkers)) else None
         if again and redo: again.update(fresh=True, since=len(group['messages']))
         return step, again
+
+
+def _check_tasks(run, deps):
+    """(checks not started that can wait for new work, checks already under way or done that cannot) — a check the new work itself
+    waits for is neither."""
+    checks = [t for t in run['tasks'] if t.get('check') and t['n'] not in deps and t['status'] not in ('cancelled', 'failed')]
+    waiting = [t for t in checks if not t['attempts'] and t['status'] in ('pending', 'ready', 'waiting')]
+    return waiting, [t for t in checks if t not in waiting]
+
+
+def task_check_room(run, deps):
+    """Lock held. How many follow-up checks new work would need: one when a check is under way or done and none waits for it."""
+    waiting, begun = _check_tasks(run, deps)
+    return 1 if begun and not waiting else 0
+
+
+def task_check_new_work(run, task):
+    """Lock held. Work added after the host planned its checks: a check that has not started waits for it too; when every check
+    has already started (or finished), a follow-up check of it is added, by the same member and only reading."""
+    waiting, begun = _check_tasks(run, task.get('deps') or [])
+    for t in waiting: t['deps'] = list(t.get('deps') or []) + [task['n']]; t['status'] = 'pending'
+    if waiting or not begun: return
+    model = begun[-1]
+    run['tasks'].append(dict(model, id=ID(), n=len(run['tasks']) + 1, title=('複查：' + model['title'])[:40], deps=[task['n']], status='pending', attempts=[], failures=0,
+                             question='', answer='', staged=True, createdAt=NOW(), confirmed=task.get('confirmed', True), why='Zook 加的：查核開始後才新增了工作 %d' % task['n']))
+    for key in ('verify', 'note', 'feedback', 'redo', 'missingFiles', 'decisions', 'reviewSince', 'resumed', 'acceptedCut', 'gate'): run['tasks'][-1].pop(key, None)
+    run['log'].append(dict(at=NOW(), what='create', task=run['tasks'][-1]['n']))
 
 
 def task_files_missing(store, group, owner, attempt, msg):

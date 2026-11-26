@@ -35,6 +35,7 @@ if name == '專員' and role == 'split_resave':
 if name == '查核員': text = '【判定】同意\n看過報價單.xlsx'
 if role == 'kickoff': text = '目標：報價\n@查核員：檢查使用者給的報價單' if flag('onlycheck') else '目標：報價\n@專員：做報價單' + ('' if flag('nocheck') else '\n@查核員：檢查報價單')
 if role in ('split_merge', 'split_remerge', 'final', 'moderate'): text = '【結論】好\n【待你決定】無\n【行動項目】無\n【未解問題】無'
+if role == 'moderate' and flag('modmention'): text = '@查核員 再看一次合計'
 if role == 'split_merge' and flag('sendback'): text = '【退回】專員：合計改成公式\n' + text
 if 'DUPWRITE' in s and folder: open(os.path.join(folder.group(1), name + '-copy.txt'), 'w').write('same content')
 if role == 'free' and name == 'solo': text = 'ok'
@@ -55,6 +56,7 @@ class CheckAfterDone(unittest.TestCase):
             cli = self.root / 'bin' / name; cli.write_text(CLI); cli.chmod(0o755)
         env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', GROUP_LOG=str(self.log), ZOOK_SECRETS_DIR=str(self.root / 'secrets'))
         env.pop('ZOOK_GROUP_REPLY_CAP', None)
+        if self._testMethodName == 'test_a_check_left_at_the_limit_runs_after_continue': env['ZOOK_GROUP_REPLY_CAP'] = '1'
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
         self.req('PATCH', '/api/settings', {'permissionMode': 'auto'})
@@ -211,6 +213,27 @@ class CheckAfterDone(unittest.TestCase):
     def test_the_user_naming_only_the_checker_reads_only(self):
         self.say(self.group(mode='free', host=''), '@查核員 看一下報價單')
         self.assertEqual(self.order(), [('查核員', 'split_check')]); self.assertIn('read-only', self.runs()[0]['args'])
+
+    def test_a_checker_the_kickoff_leaves_out_still_checks(self):
+        self.flag('nocheck')
+        self.say(self.group(mode='free'))
+        self.assertEqual(self.order()[:3], [('Alpha', 'kickoff'), ('專員', 'work'), ('查核員', 'split_check')])
+
+    def test_a_check_left_at_the_limit_runs_after_continue(self):
+        g = self.group(mode='free', host='')
+        found = self.say(g, '@專員 做報價單 @查核員 檢查')
+        self.assertEqual(self.order(), [('專員', 'free')]); self.assertTrue(found.get('paused'))
+        self.assertEqual(self.req('POST', '/api/groups/%s/continue' % g['id'], {})[0], 202)
+        for _ in range(200):
+            if self.req('GET', '/api/groups/' + g['id'])[1]['group']['status'] != 'running': break
+            time.sleep(.1)
+        self.assertEqual(self.order(), [('專員', 'free'), ('查核員', 'split_check')])
+
+    def test_a_checker_asked_again_later_still_only_reads(self):
+        self.flag('modmention')
+        self.say(self.group(mode='free'))
+        again = [r for r in self.runs() if r['name'] == '查核員']
+        self.assertGreaterEqual(len(again), 2); self.assertTrue(all('read-only' in r['args'] for r in again))
 
     def test_nothing_handed_in_means_no_check(self):
         self.flag('fail')

@@ -522,10 +522,8 @@ def task_tools(app, job_id, runtime):
                     if not dep: raise RuntimeError('after 裡的「%s」不是已建立的工作編號。先建立前面的工作。' % key)
                     if dep['n'] not in deps: deps.append(dep['n'])
                 checking = group_is_checker(bot)  # #245: a check waits for all the work there is (later work too, below) and only reads
-                started = [t['n'] for t in run['tasks'] if t['attempts'] and t['status'] not in TASK_SETTLED and group_is_checker(store.find('bots', t['assignee']))]
-                if started and not checking: raise RuntimeError('查核工作 %s 已經開始，現在新增的工作它查不到。等查核結束後再建立，並另建一項查核工作。' % '、'.join(map(str, started)))
                 if checking and any(not group_is_checker(store.find('bots', x)) for x in group['botIds'] if x != bot['id']):
-                    work = [t['n'] for t in run['tasks'] if not group_is_checker(store.find('bots', t['assignee'])) and t['status'] not in ('cancelled', 'failed')]
+                    work = [t['n'] for t in run['tasks'] if not t.get('check') and t['status'] not in ('cancelled', 'failed')]
                     if not work: raise RuntimeError('%s 負責查核：先建立它要查的工作，再建立查核工作，等交件後才開始。' % bot['name'])
                     deps += [n for n in work if n not in deps]
                 changes = str(args.get('changes') or 'files').strip().lower()
@@ -549,11 +547,11 @@ def task_tools(app, job_id, runtime):
                 # New work waits for the user's 「照這個做」, unless 設定 lets work that changes nothing start by itself.
                 confirmed = task_execution(store) == 'lowrisk' and changes == 'none' and not any(t['status'] == 'stuck' for t in run['tasks'])
                 task = dict(id=ID(), n=len(run['tasks']) + 1, title=title, spec=spec, doneWhen=done_when, assignee=bot['id'], suggested=suggested['name'], deps=deps,
-                            why=moved, basis=basis, kind=kind, depth=1, status='pending' if deps else 'ready', attempts=[], failures=0, question='', answer='', changes=changes, confirmed=confirmed, staged=True, createdAt=NOW())
+                            why=moved, basis=basis, kind=kind, depth=1, status='pending' if deps else 'ready', attempts=[], failures=0, question='', answer='', changes=changes, confirmed=confirmed, staged=True, createdAt=NOW(),
+                            **({'check': True} if checking else {}))
+                if not checking and task_check_room(run, deps) > task_max(run) - len(run['tasks']) - 1: raise RuntimeError('查核已經開始，新增的工作要另外複查，但工作數已到上限。把工作合併，或先寫總結。')
                 run['tasks'].append(task); run['log'].append(dict(at=NOW(), what='create', task=task['n'])); acted()
-                for t in run['tasks'] if not checking else []:  # work added later: a check that has not started waits for it too
-                    if t is not task and t['status'] in ('pending', 'ready', 'waiting') and not t['attempts'] and t['n'] not in deps and group_is_checker(store.find('bots', t['assignee'])):
-                        t['deps'] = list(t.get('deps') or []) + [task['n']]; t['status'] = 'pending'
+                if not checking: task_check_new_work(run, task)  # #245: work added later is checked too
                 task_board_update(store, group); store.save()
             app.task_poke(group_id)
             out = dict(created=task['n'], assignee=bot['name'], next='已建立。全部建立好就結束這一輪；有結果時 Zook 會叫醒你。')

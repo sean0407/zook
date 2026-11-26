@@ -65,4 +65,16 @@ class CheckAfterDoneTask(base.TaskEngineTest):
         self.assertEqual((task['status'], task['failures']), ('stuck', 3))
         self.assertEqual([r for r in self.runs() if CHECK in r['prompt']], [])
 
+    def test_work_added_after_the_check_gets_a_follow_up_check(self):
+        checker = self.req('POST', '/api/bots', {'name': '查核員', 'provider': 'claude'})[1]
+        self.group = self.req('POST', '/api/groups', {'name': '查核', 'botIds': [self.bots['主持']['id'], self.bots['甲']['id'], checker['id']], 'hostId': self.bots['主持']['id']})[1]
+        self.engine()
+        self.rules([{'match': PLAN, 'calls': [create(1, '甲'), create(2, '查核員')], 'reply': '分好了'},
+                    {'match': '=== 工作', 'calls': [handed('做好了。', [])]}, {'match': WAKE, 'calls': [create(3, '甲')], 'reply': SUMMARY}])
+        tasks = self.send()['taskRun']['tasks']
+        follow = next(t for t in tasks if t['title'] == '複查：工作2')
+        self.assertEqual((follow['deps'], follow.get('check'), follow['changes'], follow['status']), ([3], True, 'none', 'done'))
+        runs = {r['prompt'].split('=== 工作 ')[1].split('：')[0]: r for r in self.runs() if '=== 工作 ' in r['prompt']}
+        self.assertGreaterEqual(runs[str(follow['n'])]['began'], runs['3']['ended'])
+
 if __name__ == '__main__': unittest.main()

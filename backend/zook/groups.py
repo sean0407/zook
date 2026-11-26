@@ -864,7 +864,7 @@ class GroupRuns:
                 batch = pending[:limit - turns] if blind_next else pending[:1]
                 del pending[:len(batch)]
                 still_blind = blind_next and bool(pending)  # the turn limit cut this independent round short
-                turns_here = self._group_batch(group_id, run_id, batch, moderated, blind_next, gate_step if gate_step and batch[0][2] == gate_step['role'] else dict(hide=hidden, hideFiles=hidden_files) if blind_next else None)
+                turns_here = self._group_batch(group_id, run_id, batch, moderated, blind_next, gate_step if gate_step and batch[0][2] == gate_step['role'] else dict(hide=hidden, hideFiles=hidden_files) if blind_next else dict(noSave=True) if group_is_checker(store.find('bots', batch[0][0])) else None)  # #245: a 查核員 only reads, also when asked again later
                 if turns_here is False: return
                 hidden = hidden + [t['msg']['id'] for t in turns_here] if still_blind else []
                 hidden_files = hidden_files + [n for t in turns_here for n in t['saved']] if still_blind else []
@@ -890,7 +890,7 @@ class GroupRuns:
                                 mentioned = mentioned or [b['id'] for b in members if b['id'] != bot_id]; blind_next = True
                                 held = split_checkers(store, [b['id'] for b in members if b['id'] != bot_id])[1]  # every 查核員 waits for the work, named now or later
                                 makers = [x for x in mentioned if x not in held]
-                                if held: mentioned, gate, blind_next = makers, dict(bots=[x for x in mentioned if x in held], gate=makers, held=held), bool(makers)  # named alone: it checks what is there now, still only reading
+                                if held: mentioned, gate, blind_next = makers, dict(bots=held if makers else [x for x in mentioned if x in held], gate=makers, held=held), bool(makers)  # every 查核員 checks the work; named alone it checks what is there now, still only reading
                             if role == 'moderate' and not mentioned: rounds = GROUP_MODERATION_ROUNDS + 1  # host already wrapped up
                             for target in mentioned:
                                 if target not in [x[0] for x in pending]: pending.append((target, False, None))
@@ -901,7 +901,7 @@ class GroupRuns:
                     store.save()
             with store.lock:
                 group = store.find('groups', group_id)
-                unfinished = pending or (moderated and rounds <= GROUP_MODERATION_ROUNDS)
+                unfinished = pending or gate or (moderated and rounds <= GROUP_MODERATION_ROUNDS)  # #245: a check still to come is kept for 繼續
                 if group and group.get('runId') == run_id and turns >= limit and unfinished:
                     self._pause_group(group, limit, dict(kind='free', pending=pending, rounds=rounds, moderated=moderated, blind=blind_next, hide=hidden, hideFiles=hidden_files, broadcast=broadcast, checkAfter=gate, checkStep=gate_step))
                 elif group and group.get('runId') == run_id and turns > began and not spoke and broadcast:
