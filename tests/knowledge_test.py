@@ -63,12 +63,17 @@ class KnowledgeFiles(unittest.TestCase):
     def item(self, item_id):
         return next(x for x in self.request('GET', '/api/state')[1]['knowledge'] if x['id'] == item_id)
 
-    def settled(self, item_id):
-        for _ in range(300):
-            x = self.item(item_id)
-            if x['status'] != 'processing': return x
+    def wait_for(self, check, what, seconds=60):
+        """#352: waits until check() gives something; the time is only a guard against hanging, and running out says what never happened."""
+        end = time.monotonic() + seconds
+        while True:
+            found = check()
+            if found: return found
+            if time.monotonic() > end: self.fail('%s 在 %d 秒內沒有發生' % (what, seconds))
             time.sleep(.05)
-        self.fail('still processing')
+
+    def settled(self, item_id):
+        return self.wait_for(lambda: (lambda x: x if x['status'] != 'processing' else None)(self.item(item_id)), '檔案 %s 處理完成' % item_id)
 
     def test_files_are_read_and_say_how_it_went(self):
         status, item = self.upload('公司規定.md', '# 請假\n請假要提前三天申請。'.encode('utf-8'))
@@ -108,9 +113,8 @@ class KnowledgeFiles(unittest.TestCase):
         mine = self.settled(self.upload('只給別人.txt', '這段只給另一個 Bot'.encode(), bot=other['id'])[1]['id'])
         self.assertEqual(mine['botId'], other['id'])
         reply = self.request('POST', '/api/chat', {'botId': bot['id'], 'content': '保固多久？'})[1]
-        for _ in range(200):
-            if self.request('GET', '/api/jobs/' + reply['jobId'])[1]['status'] != 'running': break
-            time.sleep(.05)
+        job = self.wait_for(lambda: (lambda j: j if j['status'] != 'running' else None)(self.request('GET', '/api/jobs/' + reply['jobId'])[1]), '回覆完成')
+        self.assertEqual(job['status'], 'completed', job)  # the prompt below is only whole once the reply is done
         prompt = self.prompt.read_text(encoding='utf-8')
         self.assertIn('【出處：產品（檔案：產品.txt）】\n旗艦款保固兩年', prompt); self.assertIn('【出處：地址】\n台北市信義路一段', prompt)
         self.assertNotIn('這段只給另一個 Bot', prompt); self.assertNotIn(failed['title'], prompt)
@@ -153,6 +157,36 @@ class KnowledgeUnits(unittest.TestCase):
         self.assertEqual([x['id'] for x in picked], [str(i) for i in range(11, 4, -1)])  # labels count against the budget too
         self.assertLessEqual(sum(len(x['text']) for x in picked), self.ns['KNOWLEDGE_BUDGET'])
         self.assertIn('【出處：t11】\n' + 'c' * 1500, self.ns['knowledge_lines'](picked[:1]))
+
+    def fake_store(self, root, items=()):
+        import threading
+        class S:
+            lock = threading.RLock(); dir = root; data = {'knowledge': list(items), 'bots': []}
+            def find(self, kind, item_id): return next((x for x in self.data[kind] if x.get('id') == item_id), None)
+            def save(self): pass
+        return S()
+
+    def test_upload_answer_is_not_changed_by_the_reader(self):
+        # #352: the reader may finish before the answer is written; the answer is still the item as it was made (處理中).
+        with tempfile.TemporaryDirectory() as d:
+            store, sent = self.fake_store(Path(d)), []
+            self.ns['knowledge_queue'] = lambda s, item_id: self.ns['knowledge_process'](s, item_id)  # the reader wins the race
+            class H:
+                headers = {'Content-Length': '6', 'X-File-Name': 'a.txt'}; rfile = io.BytesIO(b'hello\n'); close_connection = False
+                def respond(self, code, data): sent.append((code, json.loads(json.dumps(data))))
+                def error(self, code, why): sent.append((code, why))
+            self.ns['knowledge_upload'](H(), store)
+            self.assertEqual(sent[0][0], 201); self.assertEqual(sent[0][1]['status'], 'processing'); self.assertEqual(sent[0][1]['content'], '')
+            self.assertEqual(store.data['knowledge'][0]['status'], 'ready')
+
+    def test_a_reply_right_after_start_finds_the_passages(self):
+        # #352: the passages are made at start in the background; a reply before that is done cuts them itself.
+        long = '\n\n'.join('# 第%d章\n' % i + '其他內容。' * 400 for i in range(6)) + '\n\n# 保固\n旗艦款保固兩年。'
+        with tempfile.TemporaryDirectory() as d:
+            store = self.fake_store(Path(d), [dict(id='k', title='手冊', content=long, botId='')])
+            self.assertNotIn(store, self.ns['_KINDEX'])  # nothing warmed yet
+            mode, found = self.ns['knowledge_pick'](store, 'b', '保固多久？')
+            self.assertEqual(mode, 'match'); self.assertTrue(any('保固兩年' in p['text'] for p in found))
 
     def test_review_findings(self):
         import tempfile as _t
