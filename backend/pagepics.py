@@ -24,8 +24,8 @@ def _run(command, timeout=120):
     """One helper program in its own group, ended (with whatever it started) on time-out or when pagepics is stopped."""
     proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     _children.append(proc)
-    try: proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired: _end(proc)
+    try: proc.wait(timeout=timeout); return True
+    except subprocess.TimeoutExpired: _end(proc); return False
     finally:
         if proc in _children: _children.remove(proc)
 
@@ -88,7 +88,8 @@ def pdf_pages(path, out, width=1600):
         w, h = (box.h, box.w) if turn in (90, 270) else (box.w, box.h)
         scale = width / w
         pw, ph = int(round(w * scale)), int(round(h * scale))
-        ctx = cg.CGBitmapContextCreate(None, pw, ph, 8, 0, space, 1)  # premultiplied last
+        ctx = cg.CGBitmapContextCreate(None, pw, ph, 8, 0, space, 1) if w > 0 and 0 < ph <= 20 * width else None  # premultiplied last; a page 20 times taller than wide is not drawn
+        if not ctx: missing.append(n); continue
         cg.CGContextSetRGBFillColor(ctx, 1, 1, 1, 1); cg.CGContextFillRect(ctx, _Rect(0, 0, pw, ph))
         cg.CGContextScaleCTM(ctx, scale, scale)
         if turn: cg.CGContextTranslateCTM(ctx, w / 2, h / 2); cg.CGContextRotateCTM(ctx, -turn * 3.141592653589793 / 180); cg.CGContextTranslateCTM(ctx, -box.w / 2, -box.h / 2)
@@ -151,7 +152,7 @@ def pptx_pages(path, out, width=1600):
 # the first page of a .docx; this gives every page. macOS's reader drops Word's page breaks (#338), so a copy marks each one
 # with PAGE_MARK first and the text is laid out in pieces cut there, each piece starting a new page. Pictures inside the
 # document may be left out: it is a preview, not the file.
-PAGE_MARK = 'ZOOKPAGEBREAK7F3A'
+PAGE_MARK = 'ZOOKPAGEBREAK' + os.urandom(8).hex().upper()  # new each run: text in a document cannot pose as a break
 DOCX_TO_PDF = '''ObjC.import('AppKit');
 function layout(text, path) {
   var info = $.NSPrintInfo.sharedPrintInfo.copy;
@@ -191,7 +192,7 @@ def mark_page_breaks(xml):
     for part in xml.split('</w:p>'):
         start = part.find('<w:pPr>'); end = part.find('</w:pPr>', start) if start >= 0 else -1
         props = part[start:end] if 0 <= start < end else ''
-        if props and re.search(r'<w:pageBreakBefore\b(?![^>]*w:val="(?:0|false|off)")', props):
+        if props and re.search(r'<w:pageBreakBefore\b(?![^<>]{0,200}w:val="(?:0|false|off)")', props):
             part = part[:end + 8] + run + part[end + 8:]
         if props and '<w:sectPr' in props and 'w:val="continuous"' not in props: part += run
         out.append(part)
@@ -212,7 +213,7 @@ def docx_pages(path, out, width=1600):
                     if item.filename == 'word/document.xml': data = mark_page_breaks(data.decode('utf-8')).encode('utf-8')
                     copy.writestr(item.filename, data)
         except (OSError, ValueError, zipfile.BadZipFile, UnicodeDecodeError): marked = os.path.abspath(path)
-        _run(['/usr/bin/osascript', '-l', 'JavaScript', script, marked, os.path.join(work, 'part'), PAGE_MARK])
+        if not _run(['/usr/bin/osascript', '-l', 'JavaScript', script, marked, os.path.join(work, 'part'), PAGE_MARK]): return [], []  # ran out of time: not a partial layout as if whole
         parts = sorted((n for n in os.listdir(work) if re.fullmatch(r'part-\d+\.pdf', n)), key=lambda n: int(n[5:-4]))
         done, missing, most = [], [], MOST[0]
         for i, name in enumerate(parts):

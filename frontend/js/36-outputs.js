@@ -52,7 +52,7 @@
     doc.querySelectorAll('meta[http-equiv], base, link, script, noscript, iframe, frame, frameset, object, embed, portal, title').forEach(x => x.remove());
     for (const el of doc.querySelectorAll('*')) for (const at of [...el.attributes]) {  // every href (SVG's xlink:href too), form targets and pings
       const to = at.value.trim();
-      if (at.localName === 'href' && !/^(https?:\/\/|mailto:|#)/i.test(to) || ['action', 'formaction', 'ping'].includes(at.localName) || ['src', 'srcset', 'poster', 'background', 'data'].includes(at.localName) && !/^data:/i.test(to)) el.removeAttributeNode(at);  // only what the file itself holds
+      if (at.localName === 'href' && !/^(https?:\/\/|mailto:|#)/i.test(to) || ['action', 'formaction', 'ping', 'target'].includes(at.localName) || ['src', 'srcset', 'poster', 'background', 'data'].includes(at.localName) && !/^data:/i.test(to)) el.removeAttributeNode(at);  // only what the file itself holds
     }
     const page = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${HTML_POLICY}"><base target="_blank"></head><body>` + box.innerHTML + '</body></html>';
     return `<div class="html-view"><p class="muted small office-note">網頁預覽：不執行程式、不連網，版面可能和瀏覽器略有不同。</p><iframe sandbox="" referrerpolicy="no-referrer" srcdoc="${esc(page)}" title="${esc(name)}"></iframe></div>`;

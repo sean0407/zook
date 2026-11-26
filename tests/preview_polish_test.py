@@ -63,6 +63,8 @@ class SheetTables(unittest.TestCase):
         try: self.assertTrue(server.sheet_tables(xlsx([('x', '<row r="1"><c r="A1" t="s"><v>2</v></c></row>')], shared=['a', 'b', 'c']))['partial'])  # says it is partial
         finally: server.SHEET_STRINGS = old
         self.assertFalse(server.sheet_tables(xlsx([('x', '<row r="1"><c r="A1"><v>1</v></c></row>')]))['partial'])
+        twice = xlsx([('a', '<row r="1"><c r="A1"><v>1</v></c></row>')], extra={'xl/workbook.xml': '<workbook xmlns="%s" xmlns:r="%s"><sheets><sheet name="a" r:id="rId1"/><sheet name="b" r:id="rId1"/></sheets></workbook>' % (SS, RS)})
+        self.assertEqual(len(server.sheet_tables(twice)['sheets']), 1)  # one sheet part is read once
 
     def test_crafted_files_are_refused(self):
         bomb = '<!DOCTYPE x [<!ENTITY a "aaaaaaaa"><!ENTITY b "&a;&a;&a;&a;">]>'
@@ -159,7 +161,7 @@ class PageCode(unittest.TestCase):
         frame = code[code.index('  function htmlFrame'):code.index('  async function previewBody')]
         self.assertIn("document.createElement('template')", frame)  # read inert, not cut with patterns (review: '>' inside quotes; nothing loads while read)
         for tag in ('meta[http-equiv]', 'base', 'link', 'script', 'iframe', 'object', 'embed'): self.assertIn(tag, frame)
-        self.assertIn('(https?:\\/\\/|mailto:|#)', frame); self.assertIn("at.localName === 'href'", frame); self.assertIn("'src', 'srcset'", frame)  # a link to Zook's own addresses is taken out
+        self.assertIn('(https?:\\/\\/|mailto:|#)', frame); self.assertIn("at.localName === 'href'", frame); self.assertIn("'src', 'srcset'", frame); self.assertIn("'ping', 'target'", frame)  # a link to Zook's own addresses is taken out
 
     def test_cards_icons_names_and_sizes(self):
         files, pages, groups = self.read('36b-files.js'), self.read('30-pages.js'), self.read('35-groups.js')

@@ -79,8 +79,8 @@ def _sheet_styles(z):
     def start(name, attrs):
         if name == 'numFmt': codes[attrs.get('numFmtId', '')] = attrs.get('formatCode', '')[:200]
         elif name == 'cellXfs': inside[0] = True
-        elif name == 'xf' and inside[0]:
-            fid = attrs.get('numFmtId', '0'); styles.append((int(fid) if fid.isdigit() else 0, codes.get(fid, '')))
+        elif name == 'xf' and inside[0] and len(styles) < 65000:  # Excel itself allows 64000 styles
+            fid = attrs.get('numFmtId', '0'); styles.append((int(fid) if fid.isdigit() and len(fid) < 6 else 0, codes.get(fid, '')))
     def end(name):
         if name == 'cellXfs': inside[0] = False
     part = _sheet_part(z, 'xl/styles.xml')
@@ -126,19 +126,19 @@ def _read_sheet(z, name, shared, styles, date1904):
     def start(tag, attrs):
         if tag == 'row':
             r = attrs.get('r', '')
-            state['row'] = int(r) if r.isdigit() else state['row'] + 1; state['col'] = 0
+            state['row'] = int(r) if r.isdigit() and len(r) < 8 else state['row'] + 1; state['col'] = 0  # short numbers only: no huge int()
             if state['row'] > SHEET_ROWS or len(rows) >= SHEET_ROWS: state['more'] = True; raise _SheetStop()  # row numbers may repeat in a crafted file
             rows.append([state['row'], []])
         elif tag == 'c' and rows:
             col = _column_number(attrs.get('r', '')) or state['col'] + 1; state['col'] = col
             s = attrs.get('s', '0')
-            cell.clear(); cell.update(col=col, t=attrs.get('t', 'n'), s=int(s) if s.isdigit() else 0, v=[], text=[])
+            cell.clear(); cell.update(col=col, t=attrs.get('t', 'n'), s=int(s) if s.isdigit() and len(s) < 6 else 0, v=[], text=[])
         elif tag in ('v', 'is') and cell: state['in'] = tag
     def end(tag):
         if tag in ('v', 'is'): state['in'] = None
         elif tag == 'c' and cell and rows:
             col, kind, raw = cell['col'], cell['t'], ''.join(cell['v']).strip()
-            if kind == 's': value = shared[int(raw)] if raw.isdigit() and int(raw) < len(shared) else ''
+            if kind == 's': value = shared[int(raw)] if raw.isdigit() and len(raw) < 8 and int(raw) < len(shared) else ''
             elif kind == 'inlineStr': value = ''.join(cell['text'])
             elif kind == 'b': value = 'TRUE' if raw == '1' else 'FALSE'
             elif kind in ('str', 'e'): value = ''.join(cell['v'])
@@ -177,11 +177,13 @@ def sheet_tables(data):
             if part is None: raise SheetRefused('no workbook')
             with part: _sheet_xml(part, walk)
         _sheet_partial[0] = False
-        shared, styles, sheets = _shared_strings(z), _sheet_styles(z), []
+        shared, styles, sheets, seen = _shared_strings(z), _sheet_styles(z), [], set()
         for title, rid in listed[:SHEET_TABS]:
             target = targets.get(rid, '')
             target = target.lstrip('/') if target.startswith('/') else 'xl/' + target
             target = os.path.normpath(target)
+            if target in seen: continue  # two tabs on one sheet part: read once
+            seen.add(target)
             if target not in names: continue
             sheets.append(dict(name=title[:100] or '工作表', **_read_sheet(z, target, shared, styles, flags['date1904'])))
         return dict(sheets=sheets, partial=_sheet_partial[0], more=len(listed) > SHEET_TABS, charts=any(n.startswith('xl/charts/chart') for n in names))
