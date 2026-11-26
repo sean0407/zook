@@ -273,7 +273,9 @@ def _knowledge_xml(book, name, budget):
     info = book.getinfo(name)
     budget[0] -= info.file_size
     if budget[0] < 0: raise KnowledgeUnreadable('檔案解開後太大，請拆成幾個檔案再上傳。')
-    return _KET.fromstring(book.read(name))
+    data = book.read(name)
+    if re.search(rb'<!\s*(?:DOCTYPE|ENTITY)', data, re.I): raise KnowledgeUnreadable('這個檔案裡有不安全的 XML 設定（DOCTYPE 或實體定義），Zook 不讀。')  # #240: entity expansion (billion laughs) could fill the memory
+    return _KET.fromstring(data)
 
 
 def _knowledge_column(ref):

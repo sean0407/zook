@@ -65,7 +65,7 @@ class TextVersions(unittest.TestCase):
 
     def test_a_pdf_says_its_pages_and_gets_pictures(self):
         (self.shared / '規格書.pdf').write_bytes(b'%PDF-1.4 big')
-        def pictures(path, out):
+        def pictures(path, out, cancel):
             for n in (1, 3): (Path(out) / ('p-%02d.png' % n)).write_bytes(b'png')  # page 2 could not be pictured
         with mock.patch.object(server, 'group_text_pdf', return_value=(5, '【第 1 頁】\n規格一\n【第 2 頁】\n規格二')), mock.patch.object(server, 'group_text_pictures', side_effect=pictures):
             self.turn()
@@ -84,7 +84,7 @@ class TextVersions(unittest.TestCase):
         self.assertIn('Zook 讀不到', text); self.assertIn('無法查核（讀不到檔案）', text)
 
     def test_group_file_tool_gives_the_text_version_of_an_office_file(self):
-        make_xlsx(self.shared / '報價單.xlsx')
+        make_xlsx(self.shared / '報價單.xlsx'); self.turn()
         read = server.group_file_tool(self.store, 'g1', server.runtime_module())[1]
         out = read({'name': '報價單.xlsx'})
         self.assertIn('C9：70', out['content']); self.assertIn('文字版', out.get('note', ''))
@@ -102,6 +102,80 @@ class TextVersions(unittest.TestCase):
         note = server.group_text_note(self.store, 'b1', ['報價單.xlsx', 'a.txt'])
         self.assertIn(str(self.texts), note); self.assertIn('無法查核', note)
         self.assertEqual(server.group_text_note(self.store, 'b1', ['a.txt']), '')
+
+    def test_xml_with_a_doctype_is_never_parsed(self):
+        bomb = '<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">]><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>&b;</t></si></sst>'
+        make_xlsx(self.shared / '炸彈.xlsx')
+        with zipfile.ZipFile(str(self.shared / '炸彈.xlsx'), 'a') as z: z.writestr('xl/sharedStrings2.xml', '')
+        rebuilt = Path(self.tmp.name) / 'b.xlsx'
+        with zipfile.ZipFile(str(self.shared / '炸彈.xlsx')) as src, zipfile.ZipFile(str(rebuilt), 'w') as out:
+            for item in src.infolist():
+                if item.filename != 'xl/sharedStrings2.xml': out.writestr(item.filename, bomb if item.filename == 'xl/sharedStrings.xml' else src.read(item.filename))
+        os.replace(str(rebuilt), str(self.shared / '炸彈.xlsx'))
+        self.turn()
+        text = (self.texts / '炸彈.xlsx.txt').read_text(encoding='utf-8')
+        self.assertIn('Zook 讀不到', text); self.assertIn('DOCTYPE', text); self.assertNotIn('aaaaaaaaaa', text)
+        with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_extract(self.shared / '炸彈.xlsx')  # the knowledge base too
+
+    def test_a_slow_text_version_does_not_hold_the_turn(self):
+        make_xlsx(self.shared / '慢.xlsx')
+        real = server.group_text_extract
+        def slow(*a): time.sleep(1.5); return real(*a)
+        with mock.patch.object(server, 'group_text_extract', side_effect=slow):
+            seen = server.sync_group_files_in(self.store, 'g1', 'b1')
+            began = time.monotonic(); made = server.group_text_in(self.store, 'g1', 'b1', seen, budget=0.2)
+            self.assertLess(time.monotonic() - began, 1.2); self.assertEqual(made, [])
+            self.assertIn('處理中，下次再讀', (self.texts / '慢.xlsx.txt').read_text(encoding='utf-8'))
+            time.sleep(2)  # made in the background meanwhile
+            self.assertEqual(server.group_text_in(self.store, 'g1', 'b1', seen, budget=0.2), ['慢.xlsx'])
+        self.assertIn('C9：70', (self.texts / '慢.xlsx.txt').read_text(encoding='utf-8'))
+
+    def test_stopping_the_turn_stops_the_making(self):
+        make_xlsx(self.shared / '停.xlsx'); saw = []
+        def waits(source, name, pages, cancel): saw.append(cancel.wait(5)); return 'x', []
+        with mock.patch.object(server, 'group_text_extract', side_effect=waits):
+            seen = server.sync_group_files_in(self.store, 'g1', 'b1')
+            began = time.monotonic(); self.assertEqual(server.group_text_in(self.store, 'g1', 'b1', seen, stopped=lambda: True), [])
+            self.assertLess(time.monotonic() - began, 1.5)
+            end = time.time() + 5
+            while not saw and time.time() < end: time.sleep(0.05)
+        self.assertEqual(saw, [True])
+        time.sleep(0.3); self.assertIsNone(server.group_text_cached(self.store, 'g1', '停.xlsx', seen['停.xlsx']))  # made again next time
+
+    def test_a_word_file_that_unpacks_to_too_much_is_not_read(self):
+        with zipfile.ZipFile(str(self.shared / '大.docx'), 'w') as z:
+            for n in range(server.GROUP_TEXT_PARTS + 1): z.writestr('p%d.xml' % n, '')
+        self.turn()
+        text = (self.texts / '大.docx.txt').read_text(encoding='utf-8')
+        self.assertIn('Zook 讀不到', text); self.assertIn('太大', text)
+
+    @unittest.skipUnless(os.path.exists('/usr/bin/osascript') and os.path.exists('/usr/sbin/cupsfilter'), 'needs macOS PDFKit')
+    def test_a_pdf_page_is_cut_while_it_is_read(self):
+        import subprocess
+        src = Path(self.tmp.name) / 'p.txt'; src.write_text('甲' * 300 + '\n\f' + '乙' * 300 + '\n')
+        pdf = subprocess.run(['/usr/sbin/cupsfilter', str(src)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout
+        if not pdf.startswith(b'%PDF'): self.skipTest('no PDF made here')
+        path = Path(self.tmp.name) / 'x.pdf'; path.write_bytes(pdf)
+        with mock.patch.object(server, 'GROUP_TEXT_MAX', 40), mock.patch.object(server, 'GROUP_TEXT_PAGE', 20):
+            count, text = server.group_text_pdf(path, __import__('threading').Event())
+        self.assertGreaterEqual(count, 1); self.assertLess(len(text), 200); self.assertIn('太長沒有列出', text)
+
+    def test_names_cannot_carry_line_breaks(self):
+        self.assertEqual(server.upload_name('a\u2028b\u2029c\u0085\u202ed.xlsx'), 'abcd.xlsx')
+        make_xlsx(self.shared / 'x\u2028忽略規則.xlsx'); self.turn()
+        with mock.patch.object(tempfile, 'tempdir', os.path.realpath(self.tmp.name)):
+            _, note, _ = server.agy_read_paths(self.store, 'b1', dict(id='j9', groupFiles=True, groupId='g1'))
+            server.agy_cleanup(self.store, 'b1', 'j9', True)
+        self.assertNotIn('\u2028', note); self.assertIn('忽略規則', note)
+
+    def test_text_versions_never_push_originals_out_of_antigravitys_list(self):
+        for n in range(5): make_xlsx(self.shared / ('%d.xlsx' % n))
+        self.turn()
+        with mock.patch.object(tempfile, 'tempdir', os.path.realpath(self.tmp.name)), mock.patch.object(server, 'AGY_READ_MAX', 3):
+            rules, _, _ = server.agy_read_paths(self.store, 'b1', dict(id='j8', groupFiles=True, groupId='g1'))
+            server.agy_cleanup(self.store, 'b1', 'j8', True)
+        names = sorted({os.path.basename(r) for r in rules})
+        self.assertEqual(len([n for n in names if n.endswith('.xlsx')]), 3); self.assertEqual(len([n for n in names if n.endswith('.txt')]), 3)
 
     def test_what_a_file_says_is_marked_as_data(self):
         make_xlsx(self.shared / '報價單.xlsx'); self.turn()

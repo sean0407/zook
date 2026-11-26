@@ -526,7 +526,7 @@ class GroupRuns:
                 else: seen = sync_group_files_in(store, group_id, bot['id'], turn['skipFiles'])
                 lost = [n for n, digest in need.items() if seen.get(n) != digest]
                 if lost: turn['job']['lostFiles'] = lost; raise RuntimeError('要查核的檔案 %s 在查核開始前不見了（可能被刪掉），這次沒有查核。' % '、'.join(lost))
-                group_text_turn(store, group_id, bot['id'], seen)  # #240: text versions of the Office files and PDFs it has
+                group_text_turn(store, group_id, bot['id'], seen, turn['job']['id'])  # #240: text versions of the Office files and PDFs it has
                 if turn.get('check'): turn['prompt'] += named_check_copy(store, group_id, bot['id'], turn['job'], turn['check'])
             except (OSError, ValueError, RuntimeError) as exc:
                 return self._group_stage_failed(turn['job']['id'], str(exc) if isinstance(exc, RuntimeError) else '')
