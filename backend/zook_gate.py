@@ -71,6 +71,15 @@ GIT_FLAGS = {'-p', '--paginate', '-P', '--no-pager', '--bare', '--no-replace-obj
              '--icase-pathspecs', '--no-optional-locks', '--html-path', '--man-path', '--info-path', '--version', '--help', '-v', '-h', '--no-lazy-fetch', '--no-advice'}
 GREP_VALUED = {'-e', '-f', '-m', '-A', '-B', '-C', '--regexp', '--file', '--max-count', '--include', '--exclude', '--exclude-dir', '--context', '--after-context',
                '--before-context', '--label', '-g', '--glob', '-t', '--type', '-T', '--type-not', '-M', '--max-columns', '--max-depth', '-j', '--threads', '--iglob'}
+# grep's own options that take a value (-d recurse searches the folder below): only for grep, where tree -d or tar -d mean something else.
+GREP_ONLY_VALUED = GREP_VALUED | {'-d', '--directories', '-D', '--devices', '--exclude-from', '--binary-files'}
+UGREP_VALUED = GREP_ONLY_VALUED | {'--include-from'}  # ugrep takes grep's options, and a file of globs to include
+# ripgrep's own options that take a value: without them its value (rg --pre /bin/cat -e KEY) was read as the folder searched,
+# so the current folder went unchecked. Not for grep, where -E, -r and -d mean something else.
+RG_VALUED = GREP_VALUED | {'--pre', '--pre-glob', '--sort', '--sortr', '-d', '-E', '--encoding', '--ignore-file', '--type-add', '--type-clear',
+                           '--path-separator', '-r', '--replace', '--max-filesize', '--dfa-size-limit', '--regex-size-limit', '--colors', '--color',
+                           '--context-separator', '--field-context-separator', '--field-match-separator', '--engine', '--hostname-bin',
+                           '--hyperlink-format', '--generate', '--maxdepth', '--max-depth', '-G', '--glob-not', '--max-bytes', '--in', '--in0'}
 # Inline code (python -c, node -e, a here-document) that may delete, send, run commands or touch keys: it cannot be read reliably.
 CODE_HINTS = re.compile(r'\b(?:os\.(?:remove|unlink|rmdir|removedirs|system|popen|exec\w*|spawn\w*|rename|replace)|shutil\.(?:rmtree|move)|subprocess|send2trash|'
                         r'unlink(?:Sync)?|rmSync|rename\w*\s*\(|File::Copy|fs\.promises|renameSync|moveItem|removeItem|File\.rename|FileUtils|rmdirSync|rm_rf|child_process|execSync|spawnSync|requests\.|httpx|urlopen|urllib|http\.client|smtplib|ftplib|'
@@ -479,6 +488,7 @@ def _positional(args, valued):
     out, i = [], 0
     while i < len(args):
         a = args[i]
+        if a == '--': return out + list(args[i + 1:])  # the end of the options: every word after it is a pattern or a path
         if a.startswith('-') and a != '-':
             i += 2 if a in valued else 1
             continue
@@ -520,7 +530,36 @@ def _gh(args):
     return []
 
 
-def _search_roots(name, args):
+# rg --files only lists names, as fd does (#138). Only in its plainest form is it taken at its word: the whole command line, typed at
+# the top (not inside $( … ), a shell's -c or eval), is `rg --files` followed by nothing but folders, with no character that could
+# hand the names on, hide words in a comment, quote, expand or add words (a glob may expand to a file named --pre=…). Any other form
+# is read as a search of what is in the files.
+RG_LIST_UNSAFE = set('#;|&<>()`$\'"\\\n\r*?[]{}=')
+
+
+def _rg_list_only(args, whole, depth=0):
+    if depth or not isinstance(whole, str) or any(c in RG_LIST_UNSAFE for c in whole) or os.environ.get('RIPGREP_CONFIG_PATH'): return False
+    words = whole.split()
+    return (words[:2] in (['rg', '--files'], ['ripgrep', '--files']) and list(args) == words[1:]
+            and not any(w.startswith('-') for w in words[2:]))
+
+
+def _options(args):
+    """The words before a bare --: only they can be options."""
+    return list(args[:args.index('--')]) if '--' in args else list(args)
+
+
+def _past_pattern(plain, args, given):
+    """The words after the search pattern. given: the pattern was set by its own option (-e KEY, --regexp=KEY), so every word is a path.
+    A pattern may also be fixed to its option (-eKEY, -ie KEY), which cannot be told apart from another short option with a value that
+    holds an e or f (-gfoo): then every word counts, and the current folder too while at most one word is left, so a folder is never
+    missed either way."""
+    if given: return plain
+    if any(re.match(r'-(?!-)[A-Za-z]*[ef]', a) for a in _options(args) if a != '-'): return plain + (['.'] if len(plain) <= 1 else [])
+    return plain[1:]
+
+
+def _search_roots(name, args, whole='', depth=0):
     """(starting folders, whether it reads what is under them) for find and the grep family; None for other commands."""
     if name == 'find':
         starts = []
@@ -529,17 +568,21 @@ def _search_roots(name, args):
             starts.append(a)
         return starts or ['.'], any(a in ('-exec', '-execdir', '-ok', '-okdir') for a in args)
     if name in ('grep', 'egrep', 'fgrep', 'ggrep'):
-        recursive = any(a in ('-r', '-R', '--recursive', '--dereference-recursive') or re.fullmatch(r'-[a-zA-Z]*[rR][a-zA-Z]*', a) or a.startswith('--directories=recurse') for a in args)
-        plain = _positional(args, GREP_VALUED)
-        if not any(a in ('-e', '-f', '--regexp', '--file') or a.startswith(('--regexp=', '--file=')) for a in args): plain = plain[1:]  # the first is the pattern
+        opts = _options(args)
+        recursive = any(a in ('-r', '-R', '--recursive', '--dereference-recursive') or re.fullmatch(r'-[a-zA-Z]*[rR][a-zA-Z]*', a) or a in ('--directories=recurse', '-drecurse')
+                        or a in ('-d', '--directories') and opts[i + 1:i + 2] == ['recurse'] for i, a in enumerate(opts))
+        plain = _positional(args, GREP_ONLY_VALUED)
+        plain = _past_pattern(plain, args, any(a in ('-e', '-f', '--regexp', '--file') or a.startswith(('--regexp=', '--file=')) for a in opts))  # the first is the pattern
         return (plain or (['.'] if recursive else [])), recursive
     if name in ('rg', 'ag', 'ack', 'ugrep', 'ripgrep', 'pt', 'fd', 'fdfind', 'tree', 'zip', 'tar', 'cp', 'ditto'):
         if name in ('cp',) and not any(re.fullmatch(r'-[a-zA-Z]*[rRa][a-zA-Z]*', a) for a in args): return None
         if name == 'zip' and not any(re.fullmatch(r'-[a-zA-Z]*r[a-zA-Z]*', a) for a in args): return None
-        plain = _positional(args, GREP_VALUED | {'-f', '--file', '-C', '--directory'})
-        if name in ('rg', 'ag', 'ack', 'ugrep', 'ripgrep', 'pt') and not any(a in ('-e', '-f', '--regexp', '--file', '--files') for a in args): plain = plain[1:]
+        plain = _positional(args, (RG_VALUED if name in ('rg', 'ripgrep') else UGREP_VALUED if name == 'ugrep' else GREP_VALUED) | {'-f', '--file', '-C', '--directory'})
+        if name in ('rg', 'ag', 'ack', 'ugrep', 'ripgrep', 'pt'): plain = _past_pattern(plain, args, any(a in ('-e', '-f', '--regexp', '--file', '--files') or a.startswith(('--regexp=', '--file=')) for a in _options(args)))
         if name in ('tar', 'zip', 'cp', 'ditto'): plain = plain[1:] if name in ('tar', 'zip') else plain[:-1]
-        return (plain or ['.']), name not in ('fd', 'fdfind', 'tree')
+        listing = name in ('rg', 'ripgrep') and _rg_list_only(args, whole, depth)  # names only (#138)
+        if name in ('rg', 'ripgrep') and any(a in ('--in', '--in0') or a.startswith(('--in=', '--in0=')) for a in _options(args)): plain = plain + ['/']  # the paths come from a list Zook does not read: any of them
+        return (plain or ['.']), name not in ('fd', 'fdfind', 'tree') and not listing
     return None
 
 
@@ -568,7 +611,7 @@ def _argv_boundaries(argv, whole, depth):
         found.append(_hit('system', '用 %s 執行 %s' % (name, _word(program))))
         if inner: found += _argv_boundaries(inner, whole, depth + 1)
     if name in DELETE_COMMANDS: found.append(_hit('delete', _names(plain) or '（%s）' % name))
-    roots = _search_roots(name, args)
+    roots = _search_roots(name, args, whole, depth)
     if roots is not None:
         starts, reads = roots
         if name == 'find' and ('-delete' in args or any(a in ('-exec', '-execdir', '-ok', '-okdir') and i + 1 < len(args) and os.path.basename(args[i + 1]) in DELETE_COMMANDS for i, a in enumerate(args))):

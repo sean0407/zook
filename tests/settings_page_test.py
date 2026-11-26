@@ -131,8 +131,8 @@ class Saving(unittest.TestCase):
         self.assertTrue("if (path === 'settings' && method === 'PATCH') settingSaved();" in JS, "if (path === 'settings' && method === 'PATCH') settingSaved();")
 
     def test_the_page_has_its_own_address(self):
-        self.assertTrue("location.hash === '#settings'" in JS, "location.hash === '#settings'")
-        self.assertTrue("history.replaceState(null, '', '#settings')" in JS, "history.replaceState(null, '', '#settings')")
+        self.assertTrue("PAGE_HASHES = ['settings'," in JS, 'settings is one of the pages with an address')  # #168③: every page now
+        self.assertTrue("history.replaceState(null, '', want)" in JS, "history.replaceState(null, '', want)")
 
     def test_settings_menus_are_drawn_alike_and_have_a_table_of_contents(self):
         self.assertTrue('function mirrorSelects(form)' in JS, 'function mirrorSelects(form)')

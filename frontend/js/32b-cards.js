@@ -131,6 +131,7 @@
     if (!a && p.install?.state === 'running') return {cls: 'off', text: '無法使用', note: '正在安裝／更新'};
     if (!p.installed) return {cls: 'off', text: '無法使用', note: '尚未安裝'};
     if (['not_logged_in', 'not_installed'].includes(who.status)) return {cls: 'off', text: '無法使用', note: flow?.state === 'running' ? '正在登入' : '尚未登入'};
+    if (!a && who.status !== 'logged_in' && (state.data?.rings || []).find(x => x.id === p.id)?.signedIn === false) return {cls: 'off', text: '無法使用', note: '尚未登入'};  // the last sign-in check (#111 #158), until this page reads it again
     if (!a && p.issue) return {cls: 'off', text: '無法使用', note: issueShort(p.issue)};
     const changed = !a && (p.changed || []).length ? '部分功能暫時關閉' : '';
     if (lv.level === 'out') return {cls: 'out', text: '已用完', note: lv.why || (lv.group ? `「${lv.group}」用完了` : '')};
