@@ -5,7 +5,8 @@
       else body = {access: input.value, accessFolder: st.accessFolder || ''};
     } else if (key === 'effort') body = {effort: input.value};
     else body = {features: {...(st.features || {}), [key]: input.checked}};
-    try { state.data.settings = await post('settings', body, 'PATCH'); toast('已更新 Bot 預設'); } catch (error) { toast(error.message); }
+    const title = rowTitle(input.closest('.setting-row')) || 'Bot 預設';  // say which one (#76③)
+    try { state.data.settings = await post('settings', body, 'PATCH'); toast('已更新「' + title + '」'); } catch (error) { toast(error.message); }
     render(true);
   }
   async function switchConnectorAccount(input) {
@@ -27,11 +28,13 @@
   }
   document.addEventListener('change', e => {
     if (e.target.name === 'providerChoice' && e.target.closest('#bot-form')) syncFeatureRows(e.target.closest('#bot-form'));
+    if (e.target.dataset.showScripts) { state.showScripts = {...state.showScripts, [e.target.dataset.showScripts]: e.target.checked}; render(true); }  // 產出: a Bot's build scripts (#176)
     if (e.target.dataset.autoModel) saveAutoModel(e.target);
     if (e.target.dataset.botDefault) saveBotDefault(e.target);
     if (e.target.name === 'connectorAccount') switchConnectorAccount(e.target);
     if (e.target.name === 'groupMode' && activeGroup()) { state.groupMode[activeGroup().id] = e.target.value; updateGroupEstimate(); }
     if (e.target.name === 'botIds' && e.target.closest('#group-form')) syncGroupHost(e.target.closest('#group-form'));
+    if (['botIds', 'hostId', 'mode'].includes(e.target.name) && e.target.closest('#group-form')) groupFormNote(e.target.closest('#group-form'));
     if (e.target.id === 'group-file-input' && activeGroup()) uploadGroupFiles(activeGroup(), [...e.target.files]);
     if (e.target.name === 'access' && e.target.closest('#bot-form')) e.target.closest('form').querySelector('[data-access-folder]').hidden = e.target.value !== 'folder';
     if (e.target.name === 'transport' && e.target.closest('#connector-form')) e.target.closest('form').querySelectorAll('[data-for]').forEach(x => x.hidden = x.dataset.for !== e.target.value);
@@ -39,6 +42,7 @@
   });
   document.addEventListener('input', e => {
     if (e.target.id === 'chat-input' && activeGroup()) scheduleGroupEstimate();
+    if ('memberSearch' in (e.target.dataset || {})) filterGroupMembers(e.target);
     if (e.target.closest('#bot-form')) saveBotDraft(e.target.closest('form'));
     if (e.target.name === 'modelCustom') {
       const f = e.target.closest('form');
@@ -139,6 +143,12 @@
     }
     if (e.target.dataset.scheduleNotify !== undefined) {
       try { state.data.settings = await post('settings', {scheduleNotify: e.target.checked}, 'PATCH'); toast(e.target.checked ? '會跳出排程通知' : '已關閉排程通知'); }
+      catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
+      return;
+    }
+    if (e.target.dataset.phoneNotify !== undefined) {
+      const label = e.target.getAttribute('aria-label') || '手機通知';
+      try { state.data.settings = await post('settings', {phoneNotify: {[e.target.dataset.phoneNotify]: e.target.checked}}, 'PATCH'); toast((e.target.checked ? '已開啟' : '已關閉') + label.replace('手機：', '手機「') + '」'); }
       catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
       return;
     }
@@ -263,7 +273,8 @@
     const form = e.target;
     if (form.dataset.busy) return;  // the first press is still on its way
     const empty = form.id === 'chat-form' ? null : [...form.elements].find(x => x.required && !x.disabled && !String(x.value).trim());
-    if (empty) { fieldError(empty); return; }
+    if (empty) { fieldError(empty); sayMissing(form); return; }  // also beside the button, which may be far from the field (#224)
+    if (form.id === 'group-form' && !groupFormNote(form)) { form.querySelector('[data-group-problem]')?.scrollIntoView({block: 'nearest'}); return; }
     const button = form.id === 'chat-form' ? null : form.querySelector('button.primary:not([type=button])'), label = button?.textContent, was = button?.disabled;
     if (button) { form.dataset.busy = '1'; button.disabled = true; button.textContent = busyWord(label); }
     try {
@@ -280,7 +291,7 @@
         const sending = g ? sendingAdd(g.id, 'groups/' + encodeURIComponent(g.id) + '/messages', {content, attachments, effort: pickedEffort(), mode: currentGroupMode(g)}, g.id)
           : sendingAdd(botId + '/' + (b?.chatId || ''), 'chat', {botId, content, attachments, effort: pickedEffort(), plan: !!state.plan[botId], long: !!state.long[botId]});
         if (!g) chooseChat(botId);  // sending here makes this conversation this window's own
-        pendingList().length = 0; input.value = ''; updateInputMirror();
+        pendingList().length = 0; keepPending(); input.value = ''; updateInputMirror();
         if (g) { delete state.groupMode[g.id]; state.groupEstimate = null; } else { state.plan[botId] = false; state.long[botId] = false; }
         render(true); $('#chat-input')?.focus();
         await sendingSend(sending);
@@ -304,7 +315,7 @@
         };
         if (d.get('heldAccess') === 'full' && !form.querySelector('[data-held-access]').hidden) Object.assign(data, {access: 'full', accessFolder: ''});  // #284: back behind the gate
         if (!id) data.clientId = onceId(form);
-        if (data.access === 'folder' && !data.accessFolder) { toast('請先選擇資料夾'); return; }
+        if (data.access === 'folder' && !data.accessFolder) { if (form.querySelector('[data-access-row]')?.hidden) toast('請先選擇資料夾'); else needFolder(form); return; }
         let result = await post(id ? 'bots/' + encodeURIComponent(id) : 'bots', data, id ? 'PATCH' : 'POST');
         if (!id) { try { sessionStorage.removeItem('swarmr-new-bot-draft'); } catch (_) {} }
         closeModal();
@@ -386,8 +397,8 @@
         toast('已送出授權碼');
         state.accounts = await api('accounts'); render(true); pollAccounts();
       } else if (form.id === 'group-form') {
-        const d = new FormData(form), id = form.dataset.id;
-        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds'), hostId: d.get('hostId') || '', mode: d.get('mode') || 'free', turnLimit: Number(d.get('turnLimit')) || 8, ...(id ? {} : {clientId: onceId(form)})}, id ? 'PATCH' : 'POST');
+        const d = new FormData(form), id = form.dataset.id, keepAuto = groupKeepsAuto(form);  // #223②: not quietly saved as 自由
+        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds'), hostId: d.get('hostId') || '', ...(keepAuto ? {} : {mode: d.get('mode') || 'free'}), turnLimit: Number(d.get('turnLimit')) || 4, ...(id ? {} : {clientId: onceId(form)})}, id ? 'PATCH' : 'POST');
         closeModal();
         state.groupId = result.id;
         state.page = 'chat';
@@ -437,19 +448,7 @@
         const next = scheduleNext(saved || {});
         toast(next ? `已儲存排程，下次執行：${nextLabel(next)}` : '已儲存排程');
       } else if (form.id === 'note-form') {
-        let d = new FormData(form),
-          id = form.dataset.id;
-        let data = {
-          title: d.get('title').trim(),
-          content: d.get('content'),
-          tags: d.get('tags').split(',').map(x => x.trim()).filter(Boolean),
-          botId: d.get('botId') || ''
-        };
-        if (!id) data.clientId = onceId(form);
-        await post(id ? 'knowledge/' + encodeURIComponent(id) : 'knowledge', data, id ? 'PATCH' : 'POST');
-        closeModal();
-        await refresh();
-        toast('已儲存知識')
+        await saveNote(form, form.dataset.id ? '' : onceId(form));  // 36c-knowledge.js; a typed one is made once however often 儲存 is pressed
       } else if (form.id === 'settings-form') {
         let d = new FormData(form);
         await post('settings', {

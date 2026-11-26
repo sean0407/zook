@@ -22,7 +22,7 @@
           groupModal(activeGroup());
           break;
         case 'delete-group':
-          if (await ask({title: '刪除這個群組？', lines: ['群組的對話、群組檔案和它的排程會一起刪除，無法復原。', '成員 Bot 不會被刪除，它們自己的對話都還在。'],
+          if (await ask({title: '刪除這個群組？', lines: ['群組的對話、任務板、群組檔案和它的排程會一起刪除，無法復原。', '成員 Bot 不會被刪除，它們自己的對話都還在。'],
                          run: () => api('groups/' + encodeURIComponent($('#group-form').dataset.id), {method: 'DELETE'})})) {
             closeModal();
             state.groupId = null;
@@ -184,7 +184,7 @@
         case 'group-verify-dismiss': delete (state.verifyNotes || {})[id]; render(true); break;
         case 'card-copy': { const m = groupMsgs(activeGroup()).find(x => x.id === id); await navigator.clipboard.writeText(cardText(m.card)); toast('已複製結論'); break; }
         case 'card-save': { const g = activeGroup(), m = groupMsgs(g).find(x => x.id === id); await post('knowledge', {title: g.name + ' 討論結論', content: cardText(m.card)}); toast('已存到知識庫'); break; }
-        case 'group-tab': state.groupTab = id; if (activeGroup()) delete state.groupFiles[activeGroup().id]; render(true); break;
+        case 'group-tab': state.groupTab = id; if (activeGroup()) { delete state.groupFiles[activeGroup().id]; if (state.groupFileNote) delete state.groupFileNote[activeGroup().id]; } render(true); break;
         case 'group-file-pick': $('#group-file-input').click(); break;
         case 'group-file-delete': { const g = activeGroup(); if (!(await ask({title: `刪除「${id}」？`, lines: ['這個檔案會從群組檔案刪除，無法復原。'], run: () => api('groups/' + encodeURIComponent(g.id) + '/files/' + encodeURIComponent(id), {method: 'DELETE'})}))) break; await loadGroupFiles(g); toast('已刪除檔案'); break; }
         case 'stop-group':
@@ -305,11 +305,13 @@
           break;
         }
         case 'unattach':
-          pendingList().splice(pendingList().findIndex(f => f.key === id), 1); render(true);
+          dropPending(id); render(true);
           break;
-        case 'view-image':
-          modal(el.dataset.name || '圖片', `<div class="modal-body image-view"><img src="/api/uploads/${esc(id)}" alt="${esc(el.dataset.name || '')}"></div>`, '', true);
+        case 'view-image': {  // an attached picture: gone or broken says so (#153④⑤)
+          const url = '/api/uploads/' + encodeURIComponent(id), {body, missing} = await previewBody(url, 'image', el.dataset.name || '');
+          modal(el.dataset.name || '圖片', `<div class="modal-body">${body}</div>${missing ? '' : `<div class="modal-foot"><a class="secondary button-link" href="${url}" download="${esc(el.dataset.name || '')}">下載</a><button type="button" class="primary" data-action="close-modal">關閉</button></div>`}`, '', true);
           break;
+        }
         case 'run-plan': {
           const b = activeBot();
           const sent = await post('chat', {botId: b.id, content: '請照上面的計畫執行。', effort: pickedEffort()});
@@ -337,11 +339,17 @@
           break;
         }
         case 'redo-model': {
-          const b = activeBot(), installed = (state.providers || []).filter(p => p.installed !== false);
-          const options = installed.map(p => ({id: p.id, name: String(p.name).split('（')[0], hint: p.id === (b.provider || state.data.settings.provider) ? '這個 Bot 目前用的' : ''}));
+          const b = activeBot(), options = redoModelOptions(b);
           if (!options.length) { toast('沒有其他可用的模型'); break; }
-          const other = options.find(o => !o.hint) || options[0];
-          modal('換模型重答', `<form id="redo-model-form"><div class="modal-body"><p class="muted">只有這一次用別的模型回答，不會改變 Bot 的設定。</p><div class="setting-list in-form">${settingRow('模型', '用預設版本回答', dropdown('provider', other.id, options))}</div></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">重答</button></div></form>`);
+          const pick = options.find(o => !o.current && !o.out) || options.find(o => !o.current) || options[0];
+          modal('換模型重答', `<form id="redo-model-form"><div class="modal-body"><p class="muted">只有這一次用別的模型回答，不會改變 Bot 的設定。</p><div class="setting-list in-form">${settingRow('模型', `<span data-redo-model>${esc(redoModelLine(pick.id))}</span>`, dropdown('provider', pick.id, options))}</div></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">重答</button></div></form>`);
+          if (!state.quota) api('quota').then(q => {  // 已用完 beside each model once the figures are in
+            state.quota = q; const form = $('#redo-model-form');
+            if (!form?.isConnected) return;
+            const chosen = form.elements.provider.value, fresh = redoModelOptions(b), keep = fresh.find(o => o.id === chosen && !o.out) || fresh.find(o => !o.current && !o.out) || fresh.find(o => o.id === chosen) || fresh[0];
+            form.querySelector('.dd')?.replaceWith(Object.assign(document.createElement('div'), {innerHTML: dropdown('provider', keep.id, fresh)}).firstElementChild);
+            form.querySelector('[data-redo-model]').textContent = redoModelLine(keep.id);
+          }).catch(() => {});
           break;
         }
         case 'open-message':
@@ -385,12 +393,14 @@
         case 'edit-note':
           noteModal(state.data.knowledge.find(n => n.id === id));
           break;
-        case 'delete-note':
-          if (await ask({title: '刪除這則知識？', lines: ['刪除後無法復原，Bot 之後不會再參考它。'], run: () => api('knowledge/' + encodeURIComponent(id), {method: 'DELETE'})})) {
+        case 'delete-note': {
+          const note = state.data.knowledge.find(n => n.id === id);
+          if (await ask({title: '刪除「' + (note?.title || '這則知識') + '」？', lines: [note?.source ? '會一併刪除上傳的檔案「' + note.source + '」。' : '', '刪除後無法復原，Bot 之後不會再參考它。'], run: () => api('knowledge/' + encodeURIComponent(id), {method: 'DELETE'})})) {
             await refresh();
             toast('已刪除知識')
           }
           break;
+        }
         case 'delete-bot': {
           const botId = $('#bot-form').dataset.id, name = state.data.bots.find(b => b.id === botId)?.name || '這個 Bot';
           const inGroups = (state.data.groups || []).filter(g => (g.botIds || []).includes(botId));
@@ -409,7 +419,7 @@
         }
         case 'choose-folder': {
           const picked = (await post('choose-folder')).path, form = $('#bot-form');
-          if (picked && form) { form.elements.accessFolder.value = picked; form.querySelector('[data-access-path]').textContent = picked; saveBotDraft(form); }
+          if (picked && form) { form.elements.accessFolder.value = picked; form.querySelector('[data-access-path]').textContent = picked; saveBotDraft(form); recheckForm(form); }
           break;
         }
         case 'close-modal':
@@ -419,7 +429,7 @@
           if (e.target === el) closeModal();
           break;
         case 'avatar-pick': { const panel = $('#bot-form .avatar-panel'); panel.hidden = !panel.hidden; break; }
-        case 'default-folder': { const picked = (await post('choose-folder')).path; if (picked) { state.data.settings = await post('settings', {access: 'folder', accessFolder: picked}, 'PATCH'); render(true); toast('已更新 Bot 預設'); } break; }
+        case 'default-folder': { const picked = (await post('choose-folder')).path; if (picked) { state.data.settings = await post('settings', {access: 'folder', accessFolder: picked}, 'PATCH'); render(true); toast('已更新「存取範圍」'); } break; }
         case 'shape':
           $('#bot-form [name=shape]').value = id;
           $$('.shape-btn').forEach(x => x.classList.toggle('selected', x.dataset.id === id));
@@ -436,7 +446,7 @@
           toggleVoice();
           break;
         case 'composer-menu':
-          modal('更多選項', '<div class="modal-body more-options"><button class="secondary" data-action="pick-files">📎 附加檔案或圖片</button><p class="muted">也可以拖進對話或貼上截圖。最多 10 個，單檔 20 MB。</p><button class="secondary" data-action="new-note">＋ 新增知識</button><p class="muted">新增知識，為 Bot 提供相關背景。</p>' + `<div class="setting-list mode-rows">${effortRow()}</div>` + (activeGroup() ? '' : '<p class="muted">在訊息框輸入 <b>/goal</b> 開啟長任務、<b>/plan</b> 開啟先規劃。</p>') + '</div>');
+          modal('更多選項', '<div class="modal-body more-options"><button class="secondary" data-action="pick-files">📎 附加檔案或圖片</button><p class="muted">也可以拖進對話或貼上截圖。最多 10 個，單檔 20 MB。' + ATTACH_HINT + '</p><button class="secondary" data-action="new-note">＋ 新增知識</button><p class="muted">新增知識，為 Bot 提供相關背景。</p>' + `<div class="setting-list mode-rows">${effortRow()}</div>` + (activeGroup() ? '' : '<p class="muted">在訊息框輸入 <b>/goal</b> 開啟長任務、<b>/plan</b> 開啟先規劃。</p>') + '</div>');
           break;
         case 'chat-folder': { const b = activeBot(); if (b) await post('bots/' + encodeURIComponent(b.id) + '/chats/' + encodeURIComponent(b.chatId) + '/folder'); break; }
         case 'dismiss-approval': state.seenApprovals[id] = true; render(true); break;
@@ -595,7 +605,7 @@
         }
         case 'export': {
           let data = await post('export');
-          download(JSON.stringify(data, null, 2), 'Zook-export.json', 'application/json');
+          download(JSON.stringify(data, null, 2), `Zook-export-${fileDay()}.json`, 'application/json');
           break
         }
         case 'refresh-models':

@@ -203,7 +203,7 @@ class TaskEngineTest(unittest.TestCase):
 
     def test_reports_bind_to_the_attempt(self):
         self.engine()
-        self.rules([{'match': PLAN, 'calls': [create(1, '甲'), create(2, '乙'), create(3, '主持'), create(4, '沒有這個人')], 'reply': '分好了'},
+        self.rules([{'match': PLAN, 'calls': [create(3, '主持'), create(1, '甲'), create(2, '乙'), create(4, '沒有這個人')], 'reply': '分好了'},
                     {'match': WAKE, 'reply': SUMMARY},
                     {'match': '=== 工作 1', 'calls': [done(), done('再報一次')]},
                     {'match': '=== 工作 2', 'reply': '我忘了回報'}])
@@ -211,12 +211,28 @@ class TaskEngineTest(unittest.TestCase):
         run = group['taskRun']
         self.assertEqual([(t['n'], t['status']) for t in run['tasks']], [(1, 'done'), (2, 'stuck')])
         plan = next(r for r in self.runs() if r['match'] == PLAN)
-        self.assertEqual([a['error'] for a in plan['answers']], [False, False, True, True])  # not to the host itself, not to a stranger
+        self.assertEqual([a['error'] for a in plan['answers']], [True, False, False, True])  # not to the host before any member has work (#71), not to a stranger
         first = next(r for r in self.runs() if r['match'] == '=== 工作 1')
         self.assertEqual([a['error'] for a in first['answers']], [False, True])
         self.assertIn('不屬於目前這次', first['answers'][1]['text'])
         self.assertEqual(run['tasks'][0]['attempts'][0]['summary'], '做完了。沒有發現問題。沒有剩下的事。')
         self.assertIn('沒有用 zook_task_done 回報', run['tasks'][1]['attempts'][0]['summary'])
+
+    def test_host_may_take_one_task_after_the_members(self):
+        """#71 (decisions #5, #6): the host may give itself one task, once a member has one; never a second, never the only one."""
+        self.engine()
+        self.rules([{'match': PLAN, 'calls': [create(1, '主持'), create(1, '甲'), create(2, '主持'), create(3, '主持')], 'reply': '分好了'},
+                    {'match': WAKE, 'reply': SUMMARY},
+                    {'match': '=== 工作', 'calls': [done()], 'reply': '完成'}])
+        group = self.send()
+        plan = next(r for r in self.runs() if r['match'] == PLAN)
+        self.assertEqual([a['error'] for a in plan['answers']], [True, False, False, True], plan['answers'])
+        self.assertIn('先把成員的工作', plan['answers'][0]['text']); self.assertIn('最多', plan['answers'][3]['text'])
+        run = group['taskRun']
+        self.assertEqual([(t['title'], t['assignee'], t['status']) for t in run['tasks']], [('工作1', self.bots['甲']['id'], 'done'), ('工作2', self.bots['主持']['id'], 'done')])
+        self.assertIn('你自己也可以接', plan['prompt'])
+        mine = [r for r in self.runs() if r['match'] == '=== 工作' and '工作2' in r['prompt']][0]
+        self.assertIn('你分給自己的', mine['prompt']); self.assertIn('zook_task_done', mine['tools'])
 
     def test_a_question_goes_to_the_host_and_the_member_goes_on(self):
         self.engine()

@@ -3,15 +3,44 @@
 
 Bots run this to look at what they made: `/usr/bin/python3 pagepics.py <file> <out folder>`.
 PDF pages are drawn with macOS CoreGraphics (standard library only, through ctypes); each slide of a .pptx is cut into
-a one-slide copy that Quick Look (qlmanage, no window) turns into a picture. Other formats get Quick Look's first page.
+a one-slide copy that Quick Look (qlmanage, no window) turns into a picture; a .docx is laid out on A4 pages by macOS's text
+system and drawn like a PDF. Other formats get Quick Look's first page.
 It prints each picture and the page size with its ratio (16:9 slides should say 16:9), and leaves no other files behind:
 the one-slide copies sit in a hidden folder inside the output folder (the Bot's own scratch folder), removed on exit and on SIGTERM.
 Pages that could not be pictured are listed and the exit code is 1, so no page goes unchecked.
 """
-import ctypes, ctypes.util, os, re, shutil, signal, subprocess, sys, tempfile, zipfile
+import ctypes, ctypes.util, os, re, shutil, signal, subprocess, sys, tempfile, threading, time, zipfile
 
 # PresentationML, transitional and strict: the prefix bound to it is whatever the file chose (p:, ps:, or the default namespace).
 PML = ('http://schemas.openxmlformats.org/presentationml/2006/main', 'http://purl.oclc.org/ooxml/presentationml/main')
+
+
+MOST = [0]      # --pages N: picture only the first N pages (Zook's preview); 0 is every page
+SKIPPED = [0]   # pages left out by --pages
+_children = []  # Quick Look or osascript running now: ended with pagepics
+
+
+def _run(command, timeout=120):
+    """One helper program in its own group, ended (with whatever it started) on time-out or when pagepics is stopped."""
+    proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    _children.append(proc)
+    try: proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired: _end(proc)
+    finally:
+        if proc in _children: _children.remove(proc)
+
+
+def _end(proc):
+    try: os.killpg(proc.pid, signal.SIGKILL)
+    except OSError: pass
+    try: proc.wait(timeout=5)
+    except subprocess.TimeoutExpired: pass
+
+
+def _first(count):
+    """How many of count pages to picture."""
+    if MOST[0] and count > MOST[0]: SKIPPED[0] = count - MOST[0]; return MOST[0]
+    return count
 
 
 class _Rect(ctypes.Structure):
@@ -53,7 +82,7 @@ def pdf_pages(path, out, width=1600):
     if not doc: raise SystemExit('讀不到這個 PDF：%s' % path)
     png_type, space, done, missing = cf.CFStringCreateWithCString(None, b'public.png', 0x08000100), cg.CGColorSpaceCreateDeviceRGB(), [], []
     stem = os.path.splitext(os.path.basename(path))[0]
-    for n in range(1, cg.CGPDFDocumentGetNumberOfPages(doc) + 1):
+    for n in range(1, _first(cg.CGPDFDocumentGetNumberOfPages(doc)) + 1):
         page = cg.CGPDFDocumentGetPage(doc, n)
         box, turn = cg.CGPDFPageGetBoxRect(page, 1), cg.CGPDFPageGetRotationAngle(page) % 360  # 1 = crop box
         w, h = (box.h, box.w) if turn in (90, 270) else (box.w, box.h)
@@ -84,7 +113,7 @@ def pdf_pages(path, out, width=1600):
 
 def quicklook(path, out, width=1600):
     """Quick Look's picture of the file's first page (no window). Returns the PNG or None."""
-    subprocess.run(['/usr/bin/qlmanage', '-t', '-s', str(width), '-o', out, path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120)
+    _run(['/usr/bin/qlmanage', '-t', '-s', str(width), '-o', out, path])
     made = os.path.join(out, os.path.basename(path) + '.png')
     return made if os.path.exists(made) else None
 
@@ -103,18 +132,52 @@ def pptx_pages(path, out, width=1600):
     stem, done, missing = os.path.splitext(os.path.basename(path))[0], [], []
     work = tempfile.mkdtemp(prefix='.zook-pagepics-', dir=out)  # inside the scratch folder: cleaning that up removes it too
     try:
-        for n, keep in enumerate(ids, 1):
+        for n, keep in enumerate(ids[:_first(len(ids))], 1):
             one = pres[:listed.start()] + listed.group(1) + keep + listed.group(3) + pres[listed.end():]
             copy = os.path.join(work, '%s-%02d.pptx' % (stem, n))
             with zipfile.ZipFile(copy, 'w', zipfile.ZIP_DEFLATED) as z:
                 for name in names: z.writestr(name, one.encode('utf-8') if name == 'ppt/presentation.xml' else parts[name])
             made = quicklook(copy, work, width)
+            os.remove(copy)  # each one-slide copy holds the whole deck: never keep them all at once
             if made:
                 target = os.path.join(out, '%s-%02d.png' % (stem, n)); shutil.move(made, target); done.append((target, w, h))
             else: missing.append(n)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     return done, missing
+
+
+# A Word file's text laid out on A4 pages by macOS's own text system (no app window), saved as a PDF. Quick Look only pictures
+# the first page of a .docx; this gives every page. Pictures inside the document may be left out: it is a preview, not the file.
+DOCX_TO_PDF = '''ObjC.import('AppKit');
+function run(argv) {
+  var text = $.NSAttributedString.alloc.initWithURLOptionsDocumentAttributesError($.NSURL.fileURLWithPath(argv[0]), $({}), null, null);
+  if (!text || text.isNil()) return 'unreadable';
+  var info = $.NSPrintInfo.sharedPrintInfo.copy;
+  info.paperSize = $.NSMakeSize(595, 842); info.topMargin = 56; info.bottomMargin = 56; info.leftMargin = 56; info.rightMargin = 56;
+  info.horizontalPagination = $.NSFitPagination; info.verticalPagination = $.NSAutoPagination; info.jobDisposition = $.NSPrintSaveJob;
+  info.dictionary.setObjectForKey($.NSURL.fileURLWithPath(argv[1]), $.NSPrintJobSavingURL);
+  var view = $.NSTextView.alloc.initWithFrame($.NSMakeRect(0, 0, 483, 730));
+  view.textStorage.setAttributedString(text);
+  var job = $.NSPrintOperation.printOperationWithViewPrintInfo(view, info);
+  job.showsPrintPanel = false; job.showsProgressPanel = false;
+  return job.runOperation ? 'ok' : 'failed';
+}'''
+
+
+def docx_pages(path, out, width=1600):
+    """Every page of a Word file: laid out as a PDF by macOS, then drawn like any PDF. Returns ([(png, w, h)], [pages not written])."""
+    work = tempfile.mkdtemp(prefix='.zook-pagepics-', dir=out)
+    try:
+        stem = os.path.splitext(os.path.basename(path))[0]
+        script, pdf = os.path.join(work, 'layout.js'), os.path.join(work, stem + '.pdf')
+        with open(script, 'w', encoding='utf-8') as f: f.write(DOCX_TO_PDF)
+        _run(['/usr/bin/osascript', '-l', 'JavaScript', script, os.path.abspath(path), pdf])
+        if not os.path.exists(pdf) or not os.path.getsize(pdf): return [], []
+        try: return pdf_pages(pdf, out, width)
+        except SystemExit: return [], []  # an unreadable layout: Quick Look's first page instead
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
 
 
 def pml_prefix(xml):
@@ -124,23 +187,34 @@ def pml_prefix(xml):
     return 'p:'
 
 
+def _orphaned(parent):
+    """Whoever started this (Zook, a Bot's shell) quit without stopping it: stop too, removing the one-slide copies."""
+    while os.getppid() == parent: time.sleep(2)
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
 def _stop(signum, frame):
+    for proc in list(_children): _end(proc)  # Quick Look or the Word layout it was waiting on goes too
     raise SystemExit(128 + signum)  # Zook stopping the job: unwind so the one-slide copies are removed
 
 
 def main(argv):
-    if len(argv) != 3: raise SystemExit('用法：python3 pagepics.py <檔案> <輸出資料夾>')
+    if len(argv) == 5 and argv[3] == '--pages' and argv[4].isdigit(): MOST[0] = int(argv[4]); argv = argv[:3]
+    if len(argv) != 3: raise SystemExit('用法：python3 pagepics.py <檔案> <輸出資料夾> [--pages 頁數]')
     path, out = argv[1], argv[2]
     for sig in (signal.SIGTERM, signal.SIGHUP): signal.signal(sig, _stop)
+    threading.Thread(target=_orphaned, args=(os.getppid(),), daemon=True).start()
     os.makedirs(out, exist_ok=True)
     kind = os.path.splitext(path)[1].lower()
     if kind == '.pdf': pages, missing = pdf_pages(path, out)
     elif kind in ('.pptx', '.potx', '.ppsx'): pages, missing = pptx_pages(path, out)
-    else:
+    else: pages, missing = docx_pages(path, out) if kind == '.docx' else ([], [])
+    if not pages and kind not in ('.pdf', '.pptx', '.potx', '.ppsx'):  # a Word file macOS could not lay out still gets its first page
         made = quicklook(path, out)
         pages, missing = [(made, 0, 0)] if made else [], []
         if made: print('（這個格式只能轉第一頁；其餘內容請直接讀檔確認）')
     for target, w, h in pages: print('%s\t比例 %s' % (target, ratio(w, h)))
+    if SKIPPED[0]: print('（共 %d 頁，只轉了前 %d 頁）' % (SKIPPED[0] + MOST[0], MOST[0]))
     if missing: raise SystemExit('這幾頁沒有轉出圖片：第 %s 頁（%s）。請改讀這幾頁的內容確認，並告訴使用者哪些版面沒有看到。'
                                  % ('、'.join(map(str, missing)), path))
     if not pages: raise SystemExit('沒有轉出圖片：%s' % path)

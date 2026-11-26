@@ -15,7 +15,7 @@
     else { const root = document.documentElement; root.style.zoom = zoom === 1 ? '' : String(zoom); root.style.setProperty('--zoom', String(zoom)); root.classList.toggle('zoomed', zoom !== 1); }
   }
   systemDark?.addEventListener?.('change', () => { lookApplied = ''; applyLook(); });
-  const lookSection = () => `<h2 class="settings-h">外觀</h2><div class="setting-list">${settingRow('深淺色', '跟隨系統時，Mac 切換深色模式 Zook 也會跟著切換', dropdown('appearance', state.data.settings.appearance || 'system', LOOKS, 'data-look="appearance"'))}${settingRow('字體大小', '所有畫面的文字與按鈕一起放大或縮小', dropdown('textSize', state.data.settings.textSize || 'normal', TEXT_SIZES, 'data-look="textSize"'))}</div>`;
+  const lookSection = () => `<h2 class="settings-h">外觀</h2><div class="setting-list">${settingRow('深淺色', '跟隨系統時，Mac 切換深色模式 Zook 也會跟著切換', dropdown('appearance', state.data.settings.appearance || 'system', LOOKS, 'data-look="appearance"'))}${settingRow('字體大小', '所有畫面的文字與按鈕一起放大或縮小，選了馬上套用。「大」「特大」會讓左側欄變窄，看不習慣隨時改回「標準」', dropdown('textSize', state.data.settings.textSize || 'normal', TEXT_SIZES, 'data-look="textSize"'))}</div>`;
   document.addEventListener('change', async e => {
     const key = e.target.dataset?.look;
     if (!key) return;
@@ -79,23 +79,36 @@
   state.sending = state.sending || [];
   const newId = () => crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2, 12);
   // where: 'bot/chat' or the group's id. path and body are the request, sent again unchanged by 重新傳送.
-  window.sendingAdd = (where, path, body, group) => { const s = {id: newId(), where, path, body: {...body, clientId: newId()}, group, at: Date.now()}; state.sending.push(s); return s; };
+  // A message sent while the one before it to the same Bot is still on its way says so ('after'): two requests can reach the Mac
+  // in either order, and the Mac then takes them in the order they were sent (#142). One the Mac has only said it took in (#289) still
+  // counts as on its way until the conversation shows it.
+  window.sendingAdd = (where, path, body, group) => {
+    state.sending = state.sending.filter(x => !(x.accepted && Date.now() - x.at > 120000));  // long since shown, or said in the conversation as not sent
+    const before = path === 'chat' ? state.sending.filter(x => x.path === 'chat' && x.body.botId === body.botId && (!x.done || x.accepted) && !x.error).pop() : null;
+    const s = {id: newId(), where, path, body: {...body, clientId: newId(), ...(before ? {after: before.body.clientId} : {})}, group, at: Date.now()};
+    state.sending.push(s); return s;
+  };
   const forget = s => { state.sending = state.sending.filter(x => x !== s); };
   // Drawn until the conversation itself has it, so it never blinks out between the answer and the refresh, and never shows twice.
-  const arrived = (s, messages, waiting) => [...messages.filter(m => m.role === 'user'), ...waiting].some(m => m.content === s.body.content && Date.parse(m.createdAt) >= s.at - 2000);
-  window.sendingView = (where, messages, waiting = []) => state.sending.filter(s => s.where === where && !(!s.error && arrived(s, messages, waiting))).map(s => `<div class="message user sending" data-sending="${esc(s.id)}"><div class="bubble">${esc(s.body.content || '（請看附件）')}</div>${s.error ? `<div class="interject-note error-text">沒有送出：${esc(s.error)}<button class="link" data-sending-retry="${esc(s.id)}">重新傳送</button><button class="link" data-sending-drop="${esc(s.id)}">移除</button></div>` : `<div class="interject-note">${s.done ? '已送出' : '傳送中…'}</div>`}</div>`).join('');
+  const arrived = (s, messages, waiting) => [...messages.filter(m => m.role === 'user'), ...waiting].some(m => m.content === (s.body.content && s.body.content.trim() ? s.body.content : '（請看附件）') && Date.parse(m.createdAt) >= s.at - 2000);
+  window.sendingView = (where, messages, waiting = []) => (state.sending = state.sending.filter(s => !(s.accepted && s.where === where && arrived(s, messages, waiting)))).filter(s => s.where === where && !(!s.error && arrived(s, messages, waiting))).map(s => `<div class="message user sending" data-sending="${esc(s.id)}"><div class="bubble">${esc(s.body.content || '（請看附件）')}</div>${s.error ? `<div class="interject-note error-text">沒有送出：${esc(s.error)}<button class="link" data-sending-retry="${esc(s.id)}">重新傳送</button><button class="link" data-sending-drop="${esc(s.id)}">移除</button></div>` : `<div class="interject-note">${s.done ? '已送出' : s.slow ? '已送出，Bot 準備中…' : '傳送中…'}</div>`}</div>`).join('');
+  // #169: the Mac answers once the reply is set up, which can take a while; past a moment the message is on its way, not stuck.
+  const SLOW_AFTER = 1500;
   window.sendingSend = async s => {
-    s.error = ''; s.done = false;
+    s.error = ''; s.done = false; s.slow = false;
+    const timer = setTimeout(() => { if (!s.done && !s.error) { s.slow = true; render(true); } }, SLOW_AFTER);
     let result;
     try { result = await post(s.path, s.body); }
     catch (err) { s.error = err.message || '沒有送出'; render(true); return null; }
-    s.done = true;
-    try { await refresh(); forget(s); } catch (_) { render(true); }  // kept (as 已送出) until a later refresh shows it
+    finally { clearTimeout(timer); }
+    s.done = true; s.accepted = !!result.accepted;  // taken in, still being got ready on the Mac: kept (as 已送出) until the conversation shows it
+    try { await refresh(); if (!s.accepted) forget(s); } catch (_) { render(true); }  // kept (as 已送出) until a later refresh shows it
     if (s.group) pollGroup(s.group);
     else if (result.jobId) poll(result.jobId, s.body.botId);  // a message that is waiting in line has no reply yet; it is picked up when its turn comes
     return result;
   };
-  window.sentNote = m => m.queued ? (m.waiting ? '排在後面・這輪結束後回覆' : '排在後面') : m.interjected ? '已插話' : '';
+  // A group's 插話 (#94) says who takes it: who it went to, then who read it.
+  window.sentNote = m => m.queued ? (m.waiting ? '排在後面・這輪結束後回覆' : '排在後面') : !m.interjected ? '' : m.heardBy ? `已插話・${esc(m.heardBy)} 已讀到` : m.interjectTo ? `已插話・交給 ${esc(m.interjectTo)} 處理` : '已插話';
   document.addEventListener('click', e => {
     const el = e.target.closest?.('[data-sending-retry], [data-sending-drop]');
     const s = el && state.sending.find(x => x.id === (el.dataset.sendingRetry || el.dataset.sendingDrop));

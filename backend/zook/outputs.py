@@ -15,7 +15,7 @@ def scratch_name(name):
 
 def _output_kind(name):
     suffix = pathlib.Path(name).suffix.lower()
-    return 'image' if suffix in IMAGE_TYPES else OUTPUT_PREVIEW.get(suffix, 'file')
+    return 'image' if suffix in IMAGE_TYPES else 'office' if suffix in OFFICE_TYPES else OUTPUT_PREVIEW.get(suffix, 'file')  # office: pictures of its pages (officeview.py)
 
 
 def _inside(path, folder):
@@ -107,6 +107,8 @@ def bot_outputs(store, bot):
         mine = [j for j in store.data['jobs'] if j.get('botId') == bot['id']]
         wrote = [(str((c.get('arguments') or {}).get('path') or ''), j.get('createdAt'), j.get('finishedAt')) for j in mine
                  for c in (j.get('toolCalls') or []) + [dict(name='native_write', arguments={'path': p}) for p in j.get('wrote') or []] if c.get('name') == 'native_write']
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()  # #53: written so far, before the reply ends; changed up to now
+        wrote += [(p, j.get('createdAt'), now) for j in mine if j.get('status') == 'running' for p in list((PROGRESS.get(j['id']) or {}).get('paths') or [])]
         said = [(j.get('content'), j.get('createdAt'), j.get('finishedAt')) for j in mine if j.get('content') and not j.get('plan')][-40:]  # a read-only plan makes nothing
         asked = []  # the folder the user sent the work to
         for j in mine[-40:]:
@@ -131,6 +133,7 @@ def bot_outputs(store, bot):
         # A reply only says it tried to write. The file counts when it really changed during that reply, in a place the Bot may use, and is not Zook's own data.
         real = os.path.realpath(path)
         if _inside(real, data_dir) and not _inside(real, workspace): continue
+        if _inside(real, attached): continue  # the user's own files are not outputs, however a reply reported them
         if scope == 'workspace' and not _inside(real, workspace): continue
         if scope == 'folder' and not (_inside(real, workspace) or (folder and _inside(real, folder))): continue
         add(real, since, until)
@@ -169,7 +172,7 @@ def output_response(item):
     if item['kind'] == 'image': return data, IMAGE_TYPES[suffix]
     if item['kind'] == 'pdf': return data, 'application/pdf'
     if item['kind'] in ('text', 'markdown'): return data, 'text/plain; charset=utf-8'
-    return data, 'application/octet-stream'
+    return data, OFFICE_TYPES.get(suffix, 'application/octet-stream')  # #201: a Word file downloads as one
 
 
 # 這段對話的資料夾 (#241): where a conversation's files go when the user names no place, instead of the real Desktop. Inside the

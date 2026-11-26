@@ -405,7 +405,7 @@ class Handler(BaseHTTPRequestHandler):
                 with store.lock: return self.respond(200, usage_overview(store, span))
             if path == '/api/usage/bots' and self.command == 'GET':
                 with store.lock: return self.respond(200, bot_usage(store))
-            if len(parts) in (4, 5, 6) and parts[:2] == ['api', 'bots'] and parts[3] == 'outputs' and not self.device:
+            if len(parts) in (4, 5, 6, 7) and parts[:2] == ['api', 'bots'] and parts[3] == 'outputs' and not self.device:
                 with store.lock: bot = copy.deepcopy(store.find('bots', parts[2]))
                 if not bot: return self.error(404, '找不到機器人。')
                 if len(parts) == 4 and self.command == 'GET': return self.respond(200, {'outputs': bot_outputs(store, bot)})
@@ -416,6 +416,7 @@ class Handler(BaseHTTPRequestHandler):
                     except ValueError as exc: return self.error(413, str(exc))
                     except OSError: return self.error(404, '找不到這個檔案，可能已經被移走或刪除。')
                     return self.respond(200, data, kind)
+                if len(parts) in (6, 7) and parts[5] == 'pages' and self.command == 'GET': return preview_route(self, store, item['path'], parts[6:], strict=True)  # Office 預覽 (officeview.py)
                 if len(parts) == 6 and parts[5] == 'reveal' and self.command == 'POST':
                     subprocess.run(['/usr/bin/open', '-R', item['path']], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
                     return self.respond(200, {'ok': True})
@@ -608,6 +609,11 @@ class Handler(BaseHTTPRequestHandler):
                 meta = dict(id=upload_id, name=name, origName=upload_original(unquote(self.headers.get('X-File-Name', ''))), size=size, kind='image' if pathlib.Path(name).suffix.lower() in IMAGE_TYPES else 'file', createdAt=NOW())
                 (folder / 'meta.json').write_text(json.dumps(meta, ensure_ascii=False), encoding='utf-8')
                 return self.respond(201, meta)
+            if path == '/api/knowledge/file' and self.command == 'POST' and not self.device: return knowledge_upload(self, store)  # read in the background (knowledge.py)
+            if len(parts) in (6, 7) and parts[:2] == ['api', 'groups'] and parts[3] == 'files' and parts[5] == 'pages' and self.command == 'GET' and not self.device:  # Office 預覽, outside the store lock
+                with store.lock: found = bool(store.find('groups', parts[2]))
+                found = found and group_preview_path(store, parts[2], parts[4])
+                return preview_route(self, store, found, parts[6:], strict=True) if found else self.error(404, '找不到這個檔案。')
             if len(parts) == 4 and parts[:2] == ['api', 'groups'] and parts[3] == 'files' and self.command == 'POST' and not self.device:
                 try: size = int(self.headers.get('Content-Length', '0'))
                 except ValueError: size = 0
@@ -633,10 +639,11 @@ class Handler(BaseHTTPRequestHandler):
                     return self.respond(201, {'name': name})
                 finally:
                     if temp.exists(): temp.unlink()
+            if len(parts) == 3 and parts[:2] == ['api', 'uploads'] and self.command == 'DELETE' and not self.device:
+                with store.lock: return self.respond(200, {'removed': upload_drop(store, parts[2])})  # × in the message box (#153②)
             if len(parts) == 3 and parts[:2] == ['api', 'uploads'] and self.command == 'GET' and not self.device:
                 meta = upload_meta(store, parts[2])
-                if not meta: return self.error(404, '找不到這個檔案。')
-                data = (store.dir / 'uploads' / meta['id'] / 'file').read_bytes()
+                if not meta or (data := upload_bytes(store, meta)) is None: return self.error(404, '找不到這個檔案。')  # #153⑤: a file gone from the disk too
                 kind = IMAGE_TYPES.get(pathlib.Path(meta['name']).suffix.lower())
                 return self.respond(200, data, kind or 'application/octet-stream')
             if path == '/api/team/draft' and self.command == 'POST' and not self.device:  # one model call; never under the store lock
@@ -645,10 +652,12 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/team' and self.command == 'POST' and not self.device:
                 body = self.body()
                 with store.lock: return self.respond(201, self.server.create_team(body))
+            if parts[:2] == ['api', 'backups'] and backup_unlocked(self, store, parts): return  # the folder chooser waits on the user: never under the lock
             if path == '/api/privacy-settings' and self.command == 'POST': return privacy_route(self)  # macOS's own privacy page, for a failed reply (errors.py)
+            if path == '/api/chat' and self.command == 'POST': return chat_intake(self, self.body())  # answered at once, taken in beside it (intake.py, #289)
             inventory = None
-            if (path in ('/api/chat', '/api/chat/redo', '/api/chat/resume') and self.command == 'POST') or (parts[:2] == ['api', 'bots'] and self.command in ('POST', 'PATCH')) or (len(parts) == 4 and parts[:2] == ['api', 'schedules']):
-                inventory = inventory_for(store, tokens=path not in ('/api/chat', '/api/chat/redo', '/api/chat/resume'))  # a message only checks its Bot's choices; the reply signs in to connectors itself
+            if (path in ('/api/chat/redo', '/api/chat/resume') and self.command == 'POST') or (parts[:2] == ['api', 'bots'] and self.command in ('POST', 'PATCH')) or (len(parts) == 4 and parts[:2] == ['api', 'schedules']):
+                inventory = inventory_for(store, tokens=path not in ('/api/chat/redo', '/api/chat/resume'))  # a message only checks its Bot's choices; the reply signs in to connectors itself
             with store.lock:
                 if self.command == 'GET' and path == '/api/state':
                     for b in store.data['bots']: ensure_chats(b)  # Bots added by an import, too
@@ -657,7 +666,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.command == 'GET' and path == '/api/notifications':
                     try: after = int((parse_qs(urlsplit(self.path).query).get('after') or ['0'])[0])
                     except ValueError: after = 0
-                    return self.respond(200, dict(seq=self.server.notice_seq, items=[n for n in self.server.notices if n['seq'] > after]))
+                    return self.respond(200, notices_for(self.server, after, device=bool(self.device)))  # a phone gets only its four kinds (phonenotice.py)
                 if self.command == 'GET' and path == '/api/diagnostics': return self.respond(200, dict(providers=provider_info(), python=__import__('platform').python_version(), system=__import__('platform').system()))
                 if self.command == 'GET' and path == '/api/usage': return self.respond(200, usage())
                 if self.command == 'POST' and path == '/api/export': return self.respond(200, store.data)
@@ -689,37 +698,6 @@ class Handler(BaseHTTPRequestHandler):
                     if not job: return self.error(404, '找不到工作。')
                     self.server.cancel_job(job, progress_asks_force(self))
                     return self.respond(200, job_view(job))
-                if path == '/api/chat' and self.command == 'POST':
-                    body = self.body(); bot = store.find('bots', body.get('botId'))
-                    if not bot: return self.error(404, '找不到機器人。')
-                    if self.device and isinstance(body.get('attachments'), list) and len(body['attachments']) > MOBILE_PHOTOS: return self.error(400, '手機每則訊息最多 %d 張照片。' % MOBILE_PHOTOS)
-                    once = send_key('bot:' + bot['id'], body); sent = send_seen(self.server, once)
-                    if sent: return self.respond(202, dict(sent, duplicate=True))  # the same message again: its answer was lost on the way
-                    notice = ''
-                    busy = any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs'])
-                    if busy and interject_wanted(body.get('content')):  # a correction or addition: into the reply that is running, when its CLI can take it
-                        joined, why = interject_send(self.server, bot, body, by=('手機：' + str(self.device.get('name') or '已配對裝置')) if self.device else '')
-                        if joined:
-                            sent = {'jobId': joined['id'], 'interjected': True}; send_remember(self.server, once, sent)
-                            return self.respond(202, sent)
-                        if why:
-                            if not queue_on(store): return self.error(409, why + '，請等它回覆完再傳。')
-                            notice = why + '，已改成排在後面。'
-                    if queue_on(store) and (bot.get('queue') or notice):  # others are already waiting: this one goes behind them, even in the moment between two replies
-                        waiting = {'queued': True, 'queueId': queue_add(store, bot, body)['id']}
-                        if notice: waiting['notice'] = notice
-                        send_remember(self.server, once, waiting)
-                        threading.Thread(target=self.server.queue_drain, args=(bot['id'],), daemon=True).start()
-                        return self.respond(202, waiting)
-                    try: job = self.server.send_to_bot(bot, body.get('content'), inventory, attachments=attachments_for(store, body.get('attachments')), effort=body.get('effort'),
-                                                         plan=body.get('plan', False), long=body.get('long', False))
-                    except Busy as exc:
-                        if not queue_on(store): return self.error(409, str(exc))
-                        waiting = {'queued': True, 'queueId': queue_add(store, bot, body)['id']}  # it waits in line and is sent when the Bot is free
-                        send_remember(self.server, once, waiting)
-                        return self.respond(202, waiting)
-                    send_remember(self.server, once, {'jobId': job['id']})
-                    return self.respond(202, {'jobId': job['id']})
                 if path == '/api/chat/resume' and self.command == 'POST': return resume_request(self, store, inventory)  # 接著做 (resume.py)
                 if path == '/api/chat/redo' and self.command == 'POST':
                     # Answer the last question again, send an edited version of it, or answer it with another model.
@@ -793,7 +771,7 @@ class Handler(BaseHTTPRequestHandler):
                     if len(parts) == 3 and self.command == 'DELETE':
                         if group['status'] == 'running': return self.error(409, '群組討論進行中，請先停止。')
                         store.data['groups'].remove(group)
-                        shutil.rmtree(str(group_files_dir(store, group['id'])), ignore_errors=True)
+                        drop_group_files(store, self.server, group)  # with Zook's copies in the members' workspaces (#213)
                         store.data['schedules'] = [x for x in store.data['schedules'] if x.get('groupId') != group['id']]
                         store.save(); return self.respond(200, {'ok': True})
                     if len(parts) == 4 and parts[3] == 'messages' and self.command == 'POST':
@@ -828,11 +806,11 @@ class Handler(BaseHTTPRequestHandler):
                         if not found: return self.error(404, '找不到這個檔案。')
                         kind, data = _output_kind(found.name), read_group_file(found)  # shown in the conversation: a picture as a picture, a page or SVG only as text
                         if data is None: return self.error(404, '找不到這個檔案。')
-                        return self.respond(200, data, IMAGE_TYPES[found.suffix.lower()] if kind == 'image' else 'application/pdf' if kind == 'pdf' else 'text/plain; charset=utf-8' if kind in ('text', 'markdown') else 'application/octet-stream')
+                        return self.respond(200, data, IMAGE_TYPES[found.suffix.lower()] if kind == 'image' else 'application/pdf' if kind == 'pdf' else 'text/plain; charset=utf-8' if kind in ('text', 'markdown') else OFFICE_TYPES.get(found.suffix.lower(), 'application/octet-stream'))
                     if len(parts) == 5 and parts[3] == 'files' and self.command == 'DELETE' and not self.device:
                         found = group_file_path(store, group, parts[4])
                         if not found: return self.error(404, '找不到這個檔案。')
-                        found.unlink(); (group.get('fileInfo') or {}).pop(parts[4], None); store.save()
+                        found.unlink(); (group.get('fileInfo') or {}).pop(parts[4], None); store.save(); sweep_previews_later(store, force=True)  # its preview pictures go with it
                         return self.respond(200, {'ok': True})
                     if len(parts) == 4 and parts[3] == 'estimate' and self.command == 'POST':
                         body = self.body(); mode = body.get('mode') or group.get('mode') or 'free'
@@ -840,10 +818,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self.respond(200, group_estimate(store, group, body.get('content', ''), mode))
                     if len(parts) >= 5 and parts[3] in ('tasks', 'gates'): return task_route(self, store, group, parts)  # 任務引擎 (taskcheck.py)
                     if len(parts) == 4 and parts[3] == 'stop' and self.command == 'POST':
-                        ids = group.get('activeJobIds') or ([group['activeJobId']] if group.get('activeJobId') else [])
-                        group.update(status='idle', runId=None, activeJobId=None, activeJobIds=[]); group_stopped(store, group)
-                        for job in [j for j in (store.find('jobs', x) for x in ids) if j]: self.server.cancel_job(job)
-                        store.save(); return self.respond(200, group)
+                        group_stop_now(self.server, store, group); store.save(); return self.respond(200, group)
                     return self.error(404, '找不到資源。')
                 if len(parts) == 3 and parts[:2] == ['api', 'memories'] and self.command == 'DELETE':
                     item = store.find('memories', parts[2])
@@ -903,7 +878,7 @@ class Handler(BaseHTTPRequestHandler):
                     bot = store.find('bots', parts[2])
                     if not bot: return self.error(404, '找不到機器人。')
                     if any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs']): return self.error(409, '此機器人已有執行中的工作。')
-                    if any(item.get('botId') == bot['id'] for item in store.data['knowledge']): return self.error(409, '請先將此 Bot 的知識移至其他 Bot 或共用知識。')
+                    if any(item.get('botId') == bot['id'] for item in store.data['knowledge']): return self.error(409, '這個 Bot 還有只給它用的知識庫項目，請先把「給誰用」改成所有 Bot 或其他 Bot。')
                     if any(g['status'] == 'running' and bot['id'] in g['botIds'] for g in store.data['groups']): return self.error(409, '此機器人正在群組討論中。')
                     bot_leaves_groups(store, bot)
                     store.data['schedules'][:] = [x for x in store.data['schedules'] if x.get('botId') != bot['id']]
@@ -914,15 +889,7 @@ class Handler(BaseHTTPRequestHandler):
                     if 'remote' in body: threading.Thread(target=self.server.sync_remote, daemon=True).start()
                     if 'permissionMode' in body: self.server.release_approvals()
                     return self.respond(200, store.data['settings'])
-                if path == '/api/knowledge' and self.command == 'POST':
-                    item = dict(id=ID(), title='', content='', tags=[], botId='', createdAt=NOW(), updatedAt=NOW()); body = self.body()
-                    if (again := create_seen(self, 'knowledge', body)): return self.respond(200, dict(again, duplicate=True))
-                    update(item, body, 'knowledge'); store.data['knowledge'].append(item); store.save(); return self.respond(201, item)
-                if len(parts) == 3 and parts[:2] == ['api', 'knowledge']:
-                    item = store.find('knowledge', parts[2])
-                    if not item: return self.error(404, '找不到知識項目。')
-                    if self.command == 'DELETE': store.data['knowledge'].remove(item); store.save(); return self.respond(200, {'ok': True})
-                    if self.command == 'PATCH': update(item, self.body(), 'knowledge'); item['updatedAt'] = NOW(); store.save(); return self.respond(200, item)
+                if path == '/api/knowledge' or (len(parts) == 3 and parts[:2] == ['api', 'knowledge']): return knowledge_route(self, store, parts, path)  # 知識庫 (knowledge.py)
             if self.command == 'GET' and not path.startswith('/api/'):
                 relative = unquote(path).lstrip('/') or 'index.html'; target = (self.server.assets / relative).resolve()
                 parts_dir = self.server.assets / 'js'
@@ -950,7 +917,7 @@ def main():
     signal.signal(signal.SIGTERM, stop_server)
     threading.Thread(target=app.sync_remote, daemon=True).start()
     threading.Thread(target=app.schedule_loop, daemon=True).start()
-    trim_jobs(app.store); recover_deleted_bots(app.store)
+    trim_jobs(app.store); recover_deleted_bots(app.store); sweep_uploads(app.store, force=True); sweep_previews(app.store, force=True)
     app.store.save()
     try: app.script_api = ScriptApi(app)  # for scripts on this Mac; every Bot starts with it switched off
     except OSError: app.script_api = None
@@ -958,10 +925,12 @@ def main():
     app.auto_refreshed = time.time()
     live_learn(app); local_migrate(app.store)  # this Mac's own settings for Bots from before (gate.py)
     threading.Thread(target=auto_migrate, args=(app.store,), daemon=True).start()  # Bots on 自動選擇 from before get their model once (routing.py)
+    knowledge_start(app.store)  # files whose reading was cut short (knowledge.py)
     try: app.serve_forever()
     except KeyboardInterrupt: pass
     finally:
         app.closing = True  # replies end now because Zook is closing: what is waiting in line stays there for next time
+        bg_starting(app)  # a CLI still starting is waited for, as the lock once made it (background.py, #290)
         if app.__dict__.get('script_api'):
             try: app.script_api.close()
             except Exception: pass

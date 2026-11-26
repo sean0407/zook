@@ -22,18 +22,3 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     // Also shown while the app is in front, for conversations the user is not looking at.
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions { [.banner, .sound] }
 }
-
-/// What changed between two looks at the home screen that is worth telling the user.
-func homeNews(old: Home, new: Home, open: String?, appActive: Bool, told: Set<String> = []) -> [(String, String)] {
-    var news: [(String, String)] = []
-    for bot in new.bots {
-        guard let before = old.bots.first(where: { $0.id == bot.id }) else { continue }
-        if before.running && !bot.running && !(appActive && open == bot.id) && !told.contains(bot.id) { news.append((bot.name, "回覆完成")) }
-    }
-    for group in new.groups {
-        guard let before = old.groups.first(where: { $0.id == group.id }) else { continue }
-        if before.running && !group.running && !(appActive && open == group.id) && !told.contains(group.id) { news.append((group.name, "討論結束")) }
-    }
-    if new.pending > old.pending { news.append(("需要你核准", "有 \(new.pending) 個動作等你決定")) }
-    return news
-}
