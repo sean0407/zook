@@ -408,7 +408,7 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) in (4, 5, 6, 7) and parts[:2] == ['api', 'bots'] and parts[3] == 'outputs' and not self.device:
                 with store.lock: bot = copy.deepcopy(store.find('bots', parts[2]))
                 if not bot: return self.error(404, '找不到機器人。')
-                if len(parts) == 4 and self.command == 'GET': return self.respond(200, {'outputs': bot_outputs(store, bot)})
+                if len(parts) == 4 and self.command == 'GET': return self.respond(200, {'outputs': bot_outputs_all(store, bot)})
                 item = bot_output(store, bot, parts[4])
                 if not item: return self.error(404, '找不到這個檔案，可能已經被移走或刪除。')
                 if len(parts) == 5 and self.command == 'GET':

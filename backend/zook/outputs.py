@@ -204,11 +204,63 @@ def bot_outputs(store, bot):
         if scope == 'folder' and not (_inside(real, workspace) or (folder and (low == folder.casefold() or _inside(real, folder)))): continue
         for child in _folder_files(real, since, until):
             if not _inside(os.path.realpath(child), attached): add(os.path.realpath(child), since, until)
+    wanted = [p for text, _, _ in asked for p in named_folders(text) + [x.rsplit('/', 1)[0] for x in named_paths(text)]]
+    for item in found.values(): item['stage'] = output_stage(item['path'], wanted, workspace)
     return sorted(found.values(), key=lambda x: x['at'], reverse=True)[:OUTPUT_LIMIT]
 
 
+# #269: 成品 and 中間檔. The script a Bot made its files with, and anything in a scratch place (/tmp, the Mac's temporary folders,
+# a hidden folder such as .zook-scratch) unless the user asked for the files there, are 中間檔. Only a label: nothing is hidden.
+WORK_SCRIPTS = ('.py', '.js', '.mjs', '.cjs', '.ts', '.sh', '.zsh', '.bash', '.swift', '.rb', '.pl', '.applescript', '.scpt')
+
+
+def _tmp_place(path):
+    """/tmp and /private/tmp (and /var) are one place on a Mac."""
+    low = path.rstrip('/').casefold()
+    return low[8:] if low.startswith(('/private/tmp/', '/private/var/')) or low in ('/private/tmp', '/private/var') else low
+
+
+def output_stage(path, asked=(), workspace=''):
+    if pathlib.Path(path).suffix.lower() in WORK_SCRIPTS: return 'work'
+    place = _tmp_place(path)
+    if any(a and _inside(place, _tmp_place(a)) for a in asked): return 'final'  # where the user asked for the files
+    if workspace and _inside(path, workspace): return 'work' if any(x.startswith('.') for x in pathlib.PurePosixPath(os.path.relpath(path, workspace)).parts[:-1]) else 'final'
+    if place.startswith(('/tmp/', '/var/folders/')) or any(x.startswith('.') for x in pathlib.PurePosixPath(path).parts[1:-1]): return 'work'
+    return 'final'
+
+
+def group_outputs(store, bot):
+    """#194: files this Bot saved into a group's shared files, listed under its own 產出 with the group's name. The maker is the
+    Bot's id when it was kept (byId), else its name in a group it is in. Only plain files straight in that group's folder."""
+    with store.lock:
+        picks = []
+        for group in store.data.get('groups') or []:
+            if not isinstance(group, dict): continue
+            mine = [n for n, x in (group.get('fileInfo') or {}).items() if isinstance(x, dict) and ((x.get('byId') == bot['id']) if x.get('byId') else (x.get('by') == bot.get('name') and bot['id'] in (group.get('botIds') or [])))]
+            if mine: picks.append((group.get('id'), str(group.get('name') or '群組'), set(mine)))
+    found = []
+    for group_id, group_name, names in picks:
+        try: folder = group_files_dir(store, group_id)
+        except ValueError: continue
+        for entry in _plain_files(folder):
+            path = group_preview_path(store, group_id, entry.name) if entry.name in names else None  # only straight inside the group's own folder, no link on the way (officeview.py)
+            if not path: continue
+            try: info = os.lstat(path)
+            except OSError: continue
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1: continue
+            found.append(dict(id=hashlib.sha256(path.encode()).hexdigest()[:20], name=entry.name, path=path, size=info.st_size, kind=_output_kind(entry.name), stage='final',
+                              at=datetime.datetime.fromtimestamp(info.st_mtime, datetime.timezone.utc).isoformat(), group=group_name, groupId=group_id))
+    return found
+
+
+def bot_outputs_all(store, bot):
+    """產出 as the panel shows it: the Bot's own outputs and what it made in groups."""
+    mine = bot_outputs(store, bot); seen = {x['path'] for x in mine}
+    return sorted(mine + [x for x in group_outputs(store, bot) if x['path'] not in seen], key=lambda x: x['at'], reverse=True)[:OUTPUT_LIMIT]
+
+
 def bot_output(store, bot, output_id):
-    return next((x for x in bot_outputs(store, bot) if x['id'] == output_id), None)
+    return next((x for x in bot_outputs_all(store, bot) if x['id'] == output_id), None)
 
 
 def output_response(item):
