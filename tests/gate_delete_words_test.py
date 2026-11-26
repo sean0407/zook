@@ -25,7 +25,7 @@ class DeleteWords(unittest.TestCase):
 
     def test_a_variable_reads_as_a_variable(self):
         said = deletes('rm -rf "$OUT/x"')
-        self.assertEqual(len(said), 1); self.assertIn('「$OUT/x」指向的位置', said[0]); self.assertNotIn('/Users/someone/work/$', said[0])
+        self.assertEqual(len(said), 1); self.assertIn('「x」（位置由指令裡的變數決定）', said[0]); self.assertNotIn('$', said[0])  # #234: said plainly, no $; self.assertNotIn('/Users/someone/work/$', said[0])
 
     def test_deleting_is_still_asked_about(self):  # scratch files too: an earlier security review asked for that (gate_test)
         for command in ('rm -rf /tmp/x', 'd=$(mktemp -d); rm -rf "$d"', 'rm -f /tmp/x ~/報告.xlsx'):

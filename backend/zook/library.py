@@ -451,7 +451,7 @@ def model_list(provider):
     if s.get('kind') == 'generic':
         names = s.get('model_names') or {}
         models = [dict(id=m, name=names.get(m, m), source='config') for m in s.get('models', []) if clean_model(m)]
-        note = '常用的型號；要別的可以選「自己輸入型號…」。' if models else '這一家沒有型號清單，會用它建議的；也可以自己輸入型號。'
+        note = '常用的型號。' if models else '這一家沒有型號清單，會用它建議的。'
         return dict(provider=provider, models=models, source='config' if models else 'none', status='available' if models else 'unavailable', note=note, detectedAt=NOW())
     if provider == 'codex':
         if binary:

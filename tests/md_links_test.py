@@ -88,9 +88,10 @@ class MarkdownLinks(unittest.TestCase):
         self.assertEqual(md[4], '<p>純檔名</p>')
         self.assertEqual(md[5], '<p>[1] 與 (2) 不是連結</p>')
 
-    def test_a_link_to_an_output_opens_its_preview(self):
-        out = self.run_js(linked=['[下載](</tmp/zook-inspect/A/上週 客服工單.xlsx>)', '[下載](</private/tmp/zook-inspect/A/上週 客服工單.xlsx>)', '[報告](</elsewhere/報告.docx>)', '[別的](</tmp/不認識.txt>)'])['linked']
-        self.assertIn('data-action="output-open" data-id="o1"', out[0]); self.assertIn('data-action="output-open" data-id="o1"', out[1])
+    def test_a_link_to_an_output_is_left_to_its_card(self):
+        out = self.run_js(linked=['[下載](</tmp/zook-inspect/A/上週 客服工單.xlsx>)', '[下載](</private/tmp/zook-inspect/A/上週 客服工單.xlsx>)', '[報告](</elsewhere/報告.docx>)', '[別的](</tmp/不認識.txt>)', '[下載](/tmp/zook-inspect/A/上週%20客服工單.xlsx)'])['linked']
+        self.assertIn('<span class="file-ref">下載</span>', out[0]); self.assertIn('<span class="file-ref">下載</span>', out[1])  # #280: its card under the reply, not a second link
+        self.assertIn('data-action="output-open" data-id="o1"', out[4])  # written so no card finds it: the link still opens it
         self.assertNotIn('output-open', out[2])  # only the same name somewhere else: a different file, not opened
         self.assertIn('local-link', out[3]); self.assertNotIn('output-open', out[3])
 

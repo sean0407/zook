@@ -240,7 +240,7 @@ class Page(unittest.TestCase):
         self.assertTrue(out['/gone']['missing']); self.assertIn('找不到這個檔案', out['/gone']['body'])
         self.assertIn('是空的', out['/empty']['body'])
         for broken in ('/fake.pdf', '/bad.png'): self.assertIn('這個檔案打不開', out[broken]['body']); self.assertFalse(out[broken].get('missing'))
-        self.assertEqual(out['/real.pdf']['body'], 'PDF:/real.pdf')
+        self.assertIn('data-kind="pdf"', out['/real.pdf']['body']); self.assertIn('正在產生預覽', out['/real.pdf']['body'])  # #334: pictures of its pages
         self.assertIn('hello', out['/a.txt']['body'])
 
 

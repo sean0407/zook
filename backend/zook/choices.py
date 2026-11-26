@@ -84,9 +84,9 @@ def question_tools(app, job_id, runtime, origin='user'):
         gone = bg_await(event, APPROVAL_TIMEOUT)
         with store.lock:
             events.pop(question['id'], None)
-            if gone and question['status'] in ('pending', 'answered'): question['status'] = 'expired'  # the CLI no longer waits for it
-            if question['status'] == 'pending': question['status'] = 'expired'; store.save()
-            if question['status'] != 'answered': bg_mark(question); raise RuntimeError('使用者沒有回答這個問題。不要自己替他選；把問題留在回覆裡，並停在這一步。')
+            if question['status'] == 'pending' or gone and question['status'] == 'answered':  # out of time, or the CLI no longer waits for it (#248: said on the card)
+                question.update(status='expired', expiredWhy='gone' if gone else 'timeout', expiredAt=NOW()); store.save()
+            if question['status'] != 'answered': bg_mark(question); raise RuntimeError('使用者沒有在時間內回答這個問題，這不代表使用者拒絕或同意。不要自己替他選，也不要推定他的意思；把問題留在回覆裡，並停在這一步。')
             return {'answer': question['answer'], 'note': '這是使用者對問題的回答，不是對任何動作的核准。'}
     schema = runtime._schema('zook_ask_user', 'Ask the user one question in the middle of your work and wait for the answer. Give 2-4 short options when you can; the user may also type their own answer. '
                              'The answer is not an approval of any action.',
@@ -99,7 +99,7 @@ def expire_questions(app, job):
     """Lock held. The reply ended or was stopped: nothing is waiting for an answer any more."""
     for question in job.get('questions') or []:
         if question['status'] == 'pending':
-            question['status'] = 'expired'
+            question.update(status='expired', expiredWhy='ended', expiredAt=NOW())
             event = app.__dict__.get('question_events', {}).get(question['id'])
             if event: event.set()
 
