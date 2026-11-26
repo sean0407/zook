@@ -153,13 +153,21 @@ class MemberStallTest(unittest.TestCase):
         self.assertLess(took, 15)
 
     def test_backup_runner_that_never_starts_is_not_said_to_take_over(self):
-        m, seen = self.m, []
-        real = m.bg_ready
-        def ready(app, proc):
-            seen.append(1); real(app, proc)
-            if len(seen) == 2: raise RuntimeError('沒有啟動')  # as bg_ready does when the backup's runner never reports its CLI
-        job, notes, _ = self.run_member(SILENT, backups=['claude'], patches=[('bg_fits', lambda j: True), ('bg_ready', ready)])
-        self.assertEqual(job['status'], 'failed')
+        # The backup's runner ends before it reports its CLI: bg_ready's own failure (it ends the runner and raises).
+        m = self.m
+        real_script = m.RUNNER_SCRIPT
+        with tempfile.TemporaryDirectory() as spare:
+            dud = Path(spare) / 'runner.py'; dud.write_text('import sys\nsys.exit(0)\n')
+            tries = []
+            real_popen = m.bg_popen
+            def popen(*a, **k):
+                tries.append(1)
+                m.RUNNER_SCRIPT = dud if len(tries) == 2 else real_script
+                try: return real_popen(*a, **k)
+                finally: m.RUNNER_SCRIPT = real_script
+            job, notes, _ = self.run_member(SILENT, backups=['claude'], patches=[('bg_fits', lambda j: True), ('bg_popen', popen)])
+        self.assertEqual(len(tries), 2)
+        self.assertEqual(job['status'], 'failed'); self.assertNotIn('runner', job)
         self.assertEqual(len(notes), 1, notes); self.assertNotIn('改用', notes[0]); self.assertIn('沒能接手', notes[0])
 
     def test_reply_taken_up_after_a_restart_is_not_redone(self):
