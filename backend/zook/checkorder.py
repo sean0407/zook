@@ -74,7 +74,7 @@ def checked_present(store, group_id, names, exact=(), owner=''):
     return gone[:10]
 
 
-SAVE_SAID = ('已存', '存到', '存好', '存成', '存進', '另存', '已上傳', '上傳到')  # a reply that says it saved something
+SAVE_SAID = ('已存', '存到', '存好', '存成', '存進', '另存', '已上傳', '上傳到', '交了', '交出', '已交', '交件', '交付', '附上')  # a reply that says it saved or handed over something
 
 
 def _nothing_saved(replies, pool):
@@ -119,6 +119,13 @@ class CheckOrder:
             with _group_files_lock:  # nothing is being saved into the group's files while they are looked at
                 gone = {b: checked_present(store, group_id, names) for b, names in said.items() if names}
                 pool = [e.name for e in _plain_files(group_files_dir(store, group_id))]
+            given = {a.get(k) for x in group['messages'][start:] if x.get('role') == 'user' for a in x.get('attachments') or [] for k in ('name', 'origName')}
+            asked = '\n'.join(x.get('content') or '' for x in group['messages'][start:] if x.get('role') == 'user')
+            for b, m in latest.items():  # a file the reply says it handed over, by its full name, that is not among the shared files (the user's own files aside)
+                text = m.get('content') or ''
+                if any(w in text for w in SAVE_SAID):
+                    named = [n for n in CLAIM_WORD.findall(text) if n not in given and n not in asked and not _same_file(n, pool) and not _claim_present(n, saves(b))]
+                    if named: gone[b] = list(dict.fromkeys((gone.get(b) or []) + named))[:10]
             for b, m in latest.items():
                 if m.get('skippedFiles'): gone[b] = list(dict.fromkeys((gone.get(b) or []) + list(m['skippedFiles'])))  # too big to keep: an older file of that name is not this work
                 replies = [x for x in group['messages'][start:] if x.get('role') == 'assistant' and x.get('botId') == b and not x.get('checkOf')]

@@ -837,6 +837,9 @@ class GroupRuns:
         spent = dict(n=turns); began = turns
         rounds = (resume or {}).get('rounds', 0); blind_next = (resume or {}).get('blind', False); hidden = list((resume or {}).get('hide') or []); hidden_files = list((resume or {}).get('hideFiles') or [])
         gate, gate_step = (resume or {}).get('checkAfter'), (resume or {}).get('checkStep')  # #245: the 查核員 the kickoff named, after the work
+        if not resume and not moderated and not engine and planned is None:  # #245: a 查核員 the message names checks after the others, only reading
+            makers, held = split_checkers(store, [p[0] for p in pending])
+            if held: pending, gate = [p for p in pending if p[0] in makers], dict(bots=held, gate=makers, held=held)
         try:
             if engine or planned is not None:
                 result = self.run_task_engine(group_id, run_id) if engine else self._run_steps(group_id, run_id, planned, limit, spent)

@@ -522,6 +522,8 @@ def task_tools(app, job_id, runtime):
                     if not dep: raise RuntimeError('after 裡的「%s」不是已建立的工作編號。先建立前面的工作。' % key)
                     if dep['n'] not in deps: deps.append(dep['n'])
                 checking = group_is_checker(bot)  # #245: a check waits for all the work there is (later work too, below) and only reads
+                started = [t['n'] for t in run['tasks'] if t['attempts'] and t['status'] not in TASK_SETTLED and group_is_checker(store.find('bots', t['assignee']))]
+                if started and not checking: raise RuntimeError('查核工作 %s 已經開始，現在新增的工作它查不到。等查核結束後再建立，並另建一項查核工作。' % '、'.join(map(str, started)))
                 if checking and any(not group_is_checker(store.find('bots', x)) for x in group['botIds'] if x != bot['id']):
                     work = [t['n'] for t in run['tasks'] if not group_is_checker(store.find('bots', t['assignee'])) and t['status'] not in ('cancelled', 'failed')]
                     if not work: raise RuntimeError('%s 負責查核：先建立它要查的工作，再建立查核工作，等交件後才開始。' % bot['name'])
@@ -550,7 +552,7 @@ def task_tools(app, job_id, runtime):
                             why=moved, basis=basis, kind=kind, depth=1, status='pending' if deps else 'ready', attempts=[], failures=0, question='', answer='', changes=changes, confirmed=confirmed, staged=True, createdAt=NOW())
                 run['tasks'].append(task); run['log'].append(dict(at=NOW(), what='create', task=task['n'])); acted()
                 for t in run['tasks'] if not checking else []:  # work added later: a check that has not started waits for it too
-                    if t is not task and t['status'] in ('pending', 'ready') and not t['attempts'] and t['n'] not in deps and group_is_checker(store.find('bots', t['assignee'])):
+                    if t is not task and t['status'] in ('pending', 'ready', 'waiting') and not t['attempts'] and t['n'] not in deps and group_is_checker(store.find('bots', t['assignee'])):
                         t['deps'] = list(t.get('deps') or []) + [task['n']]; t['status'] = 'pending'
                 task_board_update(store, group); store.save()
             app.task_poke(group_id)

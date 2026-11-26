@@ -23,11 +23,11 @@ role = next((r for r, mark in (('split_check', '輪到你查核'), ('split_resav
 folder = re.search(r'要給群組的產出請存到 (.+?)（只放', s)
 text = name + ' ' + role
 def save(): open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('quote')
-if name == '專員' and role in ('split_work', 'work', 'split_redo'):
+if name == '專員' and role in ('split_work', 'work', 'split_redo', 'free'):
     if flag('fail') or (role == 'split_redo' and flag('redofail')): time.sleep(0.2); sys.exit(3)
     if flag('slow'): time.sleep(3)
-    if not flag('claim') and not flag('vague') and not (role == 'split_redo' and flag('redonosave')) and folder: save() if role != 'split_redo' else open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('quote v2')
-    text = ('已存好了。' if flag('vague') else '已存到群組檔案：報價單.xlsx') + ('\n@查核員 請幫我看' if flag('mention') else '')
+    if not flag('claim') and not flag('vague') and not flag('handed') and not (role == 'split_redo' and flag('redonosave')) and folder: save() if role != 'split_redo' else open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('quote v2')
+    text = ('已存好了。' if flag('vague') else '報價單.xlsx 交了，請查收。' if flag('handed') else '已存到群組檔案：報價單.xlsx') + ('\n@查核員 請幫我看' if flag('mention') else '')
 if name == '設計' and role in ('split_work', 'work') and flag('designfail'): time.sleep(0.2); sys.exit(3)
 if name == '專員' and role == 'split_resave':
     if flag('resave') and folder: open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('quote resaved')
@@ -198,6 +198,20 @@ class CheckAfterDone(unittest.TestCase):
         work = next(r for r in self.runs() if r['name'] == '專員'); check = next(r for r in self.runs() if r['name'] == '查核員')
         self.assertGreaterEqual(check['began'], work['ended'])
 
+    def test_handed_over_without_saving_goes_back_first(self):
+        self.flag('handed')
+        self.say(self.group())
+        self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('專員', 'split_work'), ('專員', 'split_resave'), ('Alpha', 'split_merge')])
+
+    def test_the_user_naming_maker_and_checker_checks_after(self):
+        self.say(self.group(mode='free', host=''), '@專員 做報價單 @查核員 檢查')
+        self.assertEqual(self.order(), [('專員', 'free'), ('查核員', 'split_check')])
+        self.assertIn('read-only', self.runs()[1]['args'])
+
+    def test_the_user_naming_only_the_checker_reads_only(self):
+        self.say(self.group(mode='free', host=''), '@查核員 看一下報價單')
+        self.assertEqual(self.order(), [('查核員', 'split_check')]); self.assertIn('read-only', self.runs()[0]['args'])
+
     def test_nothing_handed_in_means_no_check(self):
         self.flag('fail')
         found = self.say(self.group())
@@ -227,7 +241,7 @@ class CheckAfterDone(unittest.TestCase):
         self.assertEqual(self.order()[0], ('Alpha', 'split_plan')); self.assertEqual({x for x in self.order()[1:3]}, {('專員', 'split_work'), ('設計', 'split_work')})
 
     def test_a_copy_of_a_shared_file_is_not_kept_twice(self):
-        g = self.group(mode='free', names=('專員', '查核員'), host='')
+        g = self.group(mode='free', names=('Alpha', '專員'), host='')
         self.say(g, 'DUPWRITE')
         names = [f['name'] for f in self.req('GET', '/api/groups/%s/files' % g['id'])[1]['files']]
         self.assertEqual(len([n for n in names if n.endswith('-copy.txt')]), 1, names)
