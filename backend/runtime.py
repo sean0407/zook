@@ -202,13 +202,13 @@ class ProtocolClient:
         self.responses = queue.Queue(maxsize=128)
         transport = config.get('transport', config.get('type', 'stdio'))
         if config.get('enabled') is False:
-            raise RuntimeError('This configured server is disabled. Enable it in its owning app first.')
+            raise RuntimeError('這個連接器在原本的 App 裡是關閉的。請先在那個 App 開啟它。')
         if transport == 'sse':
-            raise RuntimeError('Legacy SSE is unsupported. Configure this server with its Streamable HTTP MCP endpoint.')
+            raise RuntimeError('這個連接器用的是舊式連線（SSE），Zook 不支援。請改用連接器說明裡的新版網址。')
         if transport == 'stdio':
             command, args = config.get('command'), config.get('args', [])
             if not isinstance(command, str) or not isinstance(args, list) or not all(isinstance(x, str) for x in args):
-                raise RuntimeError('Invalid configured MCP command or arguments.')
+                raise RuntimeError('連接器的啟動指令格式不對。請按「編輯」檢查。')
             env = _environment(config)
             program = os.path.expanduser(command)
             if '/' not in program:  # look the command up in the widened PATH, not only the app's own
@@ -219,23 +219,23 @@ class ProtocolClient:
                 self.process = subprocess.Popen([program] + args, stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE, stderr=self.errors, env=env, start_new_session=True)
             except (OSError, ValueError):
-                raise RuntimeError('Configured MCP executable could not start. Install or authorize it in its owning app, then retry.')
+                raise RuntimeError('連接器的程式無法啟動。請確認它已經安裝好，或在原本的 App 重新授權後再試。')
             threading.Thread(target=self._reader, daemon=True).start()
         elif transport in ('http', 'streamable-http', 'streamable_http'):
             url = config.get('url', '')
             parsed = urllib.parse.urlparse(url)
             if parsed.scheme not in ('https', 'http') or not parsed.hostname or parsed.username or parsed.password:
-                raise RuntimeError('Configure a valid HTTP MCP endpoint without embedded credentials.')
+                raise RuntimeError('網址格式不對。請貼上完整網址（以 https:// 開頭），帳號密碼不要寫在網址裡。')
             if parsed.scheme == 'http' and parsed.hostname not in ('localhost', '127.0.0.1', '::1'):
-                raise RuntimeError('Remote MCP endpoints require HTTPS; HTTP is allowed only on loopback.')
+                raise RuntimeError('外部網址要用 https:// 開頭；http:// 只能用在這台 Mac 自己（localhost）。')
         else:
-            raise RuntimeError('Unsupported MCP transport. Configure stdio or Streamable HTTP.')
+            raise RuntimeError('不支援這種連接方式。請改成「這台 Mac 上的程式」或「網址」。')
         try:
             initialized = self.request('initialize', {'protocolVersion': PROTOCOL, 'capabilities': {},
                                                     'clientInfo': {'name': 'zook', 'version': '0.2.0'}})
             self.protocol = initialized.get('protocolVersion', PROTOCOL)
             if self.protocol not in ('2024-11-05', '2025-03-26', PROTOCOL, '2025-11-25'):
-                raise RuntimeError('Server negotiated an unsupported MCP protocol version.')
+                raise RuntimeError('這個連接器的版本 Zook 還不支援。請更新連接器後再試。')
             self.notify('notifications/initialized')
         except Exception:
             self.close()
@@ -279,7 +279,7 @@ class ProtocolClient:
             self.process.stdin.write(json.dumps(msg, separators=(',', ':')).encode() + b'\n')
             self.process.stdin.flush()
         except (OSError, ValueError):
-            raise RuntimeError('MCP process disconnected. Check authorization in its owning app and reconnect.')
+            raise RuntimeError('連接器中途斷線了。請確認已在原本的 App 登入授權，再按「測試連線」。')
 
     def _http(self, msg):
         # Some services turn away requests that do not say what program is asking (Python's default name is on their block lists).
@@ -289,12 +289,12 @@ class ProtocolClient:
         headers.update(self.config.get('http_headers', {}))
         for key, envname in self.config.get('env_http_headers', {}).items():
             if _lookup(envname) is None:
-                raise RuntimeError('A configured MCP credential environment variable is unavailable. Authorize it in its owning app.')
+                raise RuntimeError('找不到連接器需要的金鑰。請按「編輯」貼上金鑰，或在原本的 App 重新授權。')
             headers[key] = _lookup(envname)
         token = self.config.get('bearer_token_env_var')
         if token:
             if _lookup(token) is None:
-                raise RuntimeError('MCP bearer credential is unavailable. Authorize it in its owning app.')
+                raise RuntimeError('找不到連接器需要的存取權杖。請按「編輯」貼上，或在原本的 App 重新授權。')
             headers['Authorization'] = 'Bearer ' + _lookup(token)
         if self.session_id:
             headers['Mcp-Session-Id'] = self.session_id
@@ -316,7 +316,7 @@ class ProtocolClient:
                         line = response.readline(MAX_MESSAGE + 1)
                         size += len(line)
                         if size > MAX_MESSAGE:
-                            raise RuntimeError('MCP response exceeds the size limit.')
+                            raise RuntimeError('連接器回傳的資料太大。')
                         if not line:
                             break
                         decoded = line.decode('utf-8').rstrip('\r\n')
@@ -326,18 +326,18 @@ class ProtocolClient:
                             item = json.loads('\n'.join(data)); data = []
                             if item.get('id') == msg['id'] and ('result' in item or 'error' in item):
                                 return item
-                    raise RuntimeError('MCP SSE response ended without a matching result; reconnect and retry.')
+                    raise RuntimeError('連接器的回應中途斷掉了。請稍後再試。')
                 body = response.read(MAX_MESSAGE + 1)
                 if len(body) > MAX_MESSAGE:
-                    raise RuntimeError('MCP response exceeds the size limit.')
+                    raise RuntimeError('連接器回傳的資料太大。')
                 return json.loads(body)
         except urllib.error.HTTPError as exc:
             if exc.code == 401:
                 raise AuthorizationNeeded('這個連接器需要登入。請到連接器頁按「登入」，或在來源 App 重新授權。')
             if exc.code == 403: raise RuntimeError('這個連接器拒絕了連線（403）。可能是帳號沒有權限，或服務不接受這個來源。')
-            raise RuntimeError('MCP HTTP request failed (status %s). Verify the configured MCP endpoint.' % exc.code)
-        except (urllib.error.URLError, OSError, ValueError):
-            raise RuntimeError('MCP endpoint did not return a valid response. Check connectivity and its configured transport.')
+            raise RuntimeError('這個網址回應錯誤（%s）。請確認用的是連接器說明裡給的網址，或稍後再試。' % exc.code)
+        except (urllib.error.URLError, OSError): raise RuntimeError('連不上這個網址。請確認網址沒有打錯、服務已經啟動，網路也正常。')
+        except ValueError: raise RuntimeError('這個網址有回應，但不是連接器。請確認用的是連接器說明裡給的網址。')
 
     def notify(self, method):
         msg = {'jsonrpc': '2.0', 'method': method}
@@ -349,7 +349,7 @@ class ProtocolClient:
     def request(self, method, params):
         with self.lock:
             if self.closed:
-                raise RuntimeError('MCP session is closed.')
+                raise RuntimeError('連接器的連線已經關閉，請再試一次。')
             self.counter += 1
             msg = {'jsonrpc': '2.0', 'id': self.counter, 'method': method, 'params': params}
             if self.process:
@@ -360,7 +360,7 @@ class ProtocolClient:
                         response = self.responses.get(timeout=max(0.01, deadline - time.monotonic()))
                     except queue.Empty:
                         self.close()
-                        raise RuntimeError('MCP request timed out. Check server readiness and reconnect.')
+                        raise RuntimeError('連接器太久沒有回應。請確認它正常啟動後，再按「測試連線」。')
                     if response.get('_closed'):
                         raise RuntimeError('連接器啟動後就結束了。' + (self._last_error() or '請確認它的設定，以及是否已在來源 App 登入授權。'))
                     if response.get('method') and 'id' in response:
@@ -371,18 +371,18 @@ class ProtocolClient:
                     if response.get('id') == msg['id'] and ('result' in response or 'error' in response):
                         break
                     if time.monotonic() > deadline:
-                        raise RuntimeError('MCP request timed out.')
+                        raise RuntimeError('連接器太久沒有回應。')
             else:
                 response = self._http(msg)
             if not isinstance(response, dict) or response.get('id') != msg['id']:
-                raise RuntimeError('MCP response ID did not match the request.')
+                raise RuntimeError('連接器回傳的內容格式不對。')
             if 'error' in response:
                 # Server error text may contain credentials/endpoint internals.
-                raise RuntimeError('MCP server rejected %s (code %s). Check required arguments and server authorization.' %
+                raise RuntimeError('連接器拒絕了這個要求（%s，代碼 %s）。請確認參數，以及是否已登入授權。' %
                                    (method, response.get('error', {}).get('code', 'unknown')))
             result = response.get('result')
             if not isinstance(result, dict):
-                raise RuntimeError('MCP returned an invalid result object.')
+                raise RuntimeError('連接器回傳的內容格式不對。')
             return result
 
     def tools(self):
@@ -391,17 +391,17 @@ class ProtocolClient:
             page = self.request('tools/list', {'cursor': cursor} if cursor else {})
             entries = page.get('tools', [])
             if not isinstance(entries, list):
-                raise RuntimeError('MCP tools/list returned an invalid catalog.')
+                raise RuntimeError('連接器回傳的工具清單格式不對。')
             tools.extend(entries)
             if len(tools) > MAX_TOOLS:
-                raise RuntimeError('MCP catalog exceeds 512 tools. Limit the server tool profile before reconnecting.')
+                raise RuntimeError('這個連接器的工具超過 512 個。請在它的設定裡減少工具。')
             cursor = page.get('nextCursor')
             if not cursor:
                 return tools
             if not isinstance(cursor, str) or cursor in seen:
-                raise RuntimeError('MCP tools/list returned an invalid pagination cursor.')
+                raise RuntimeError('連接器回傳的工具清單格式不對。')
             seen.add(cursor)
-        raise RuntimeError('MCP catalog exceeds the pagination limit. Limit its tool profile.')
+        raise RuntimeError('這個連接器的工具太多。請在它的設定裡減少工具。')
 
     def close(self):
         if self.closed:
@@ -491,7 +491,7 @@ class RuntimeSession:
         self.mcp_ids = set(mcp_ids)
         known = set(private.get('mcp', {})) | {'builtin:workspace'}
         if any(v is None for v in self.skills.values()) or self.mcp_ids - known:
-            raise RuntimeError('A selected integration is unavailable. Refresh integrations and update this Bot selection.')
+            raise RuntimeError('找不到選用的連接器。請重新整理連接器頁再試。')
         self.allow_commands = bool(allow_commands)
         self.workspace = Path(workspace).resolve()
         self.workspace.mkdir(parents=True, exist_ok=True)
@@ -593,12 +593,12 @@ class RuntimeSession:
                 for tool in client.tools():
                     original = tool.get('name')
                     if not isinstance(original, str) or not isinstance(tool.get('inputSchema'), dict):
-                        raise RuntimeError('MCP returned an invalid tool schema.')
+                        raise RuntimeError('連接器回傳的工具格式不對。')
                     prefix = hashlib.sha256(ident.encode()).hexdigest()[:10]
                     suffix = hashlib.sha256(original.encode()).hexdigest()[:8]
                     name = 'zook_' + prefix + '_' + re.sub('[^A-Za-z0-9_]', '_', original)[:36] + '_' + suffix
                     if name in self.routes or name in routes:
-                        raise RuntimeError('MCP returned duplicate tools.')
+                        raise RuntimeError('連接器回傳了重複的工具。')
                     schema = copy.deepcopy(tool)
                     schema['name'] = name
                     schema['description'] = self.redactor.text(tool.get('description', original))[:4000]
@@ -970,13 +970,13 @@ def test_connection(ident, inventory=None):
     try:
         config = inventory.get('_private', {}).get('mcp', {}).get(ident)
         if config is None:
-            raise RuntimeError('Integration is unavailable. Refresh integrations and select a configured server.')
+            raise RuntimeError('找不到這個連接器。請重新整理連接器頁再試。')
         client = ProtocolClient(config)
         tools = client.tools()
         return {'status': 'ready', 'toolCount': len(tools), 'tools': redactor.value([
             {'name': t.get('name', ''), 'description': t.get('description', '')[:1500]} for t in tools])}
     except Exception as exc:
-        return {'status': 'error', 'toolCount': 0, 'error': redactor.text(exc)}
+        return {'status': 'error', 'toolCount': 0, 'error': redactor.text(exc), 'needsLogin': isinstance(exc, AuthorizationNeeded)}
     finally:
         if client:
             client.close()

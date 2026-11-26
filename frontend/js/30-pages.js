@@ -277,6 +277,7 @@
       state.lastRestored = true;
       restoreLastOpen();
       if (location.hash === '#settings') { state.page = 'settings'; setTimeout(() => loadPage('settings')); }  // reloaded on the settings page (#188④)
+      restorePage();
     }
     if (state.groupId && !activeGroup()) state.groupId = null;
     for (const job of state.data.jobs || []) state.jobDetails[job.id] = job;
