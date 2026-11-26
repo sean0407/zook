@@ -515,7 +515,7 @@ class GroupRuns:
             for m in heard:
                 m.setdefault('heardBy', bot['name'])  # the window says who read the 插話 first (a 任務's host: taskrun.py)
                 if bot_id not in m.setdefault('readBy', []): m['readBy'] = (m['readBy'] + [bot_id])[-20:]
-            return dict(job=job, msg=msg, prompt=prompt, provider=provider, model=model, bot=copy.deepcopy(bot), role=role, writable=writable, skipFiles=set(step.get('hideFiles') or ()), saved=[], seen=seen, staged=staged, check=check, heard=bool(named))
+            return dict(job=job, msg=msg, prompt=prompt, provider=provider, model=model, bot=copy.deepcopy(bot), role=role, writable=writable, skipFiles=set(step.get('hideFiles') or ()), saved=[], seen=seen, staged=staged, check=check, heard=bool(named), need=list(step.get('need') or []))
 
     def _group_job(self, group_id, turn):
         """One Bot's turn, with its own copy of the group's files."""
@@ -525,6 +525,8 @@ class GroupRuns:
                 if provider_kind(turn['provider']) == 'antigravity': live_drop_bot(self, bot['id'], turn['job'])  # nothing of the Bot's is copied in while an agy of it still runs
                 if not turn.get('staged', True): raise OSError('attachments')
                 seen = sync_group_files_in(store, group_id, bot['id'], turn['skipFiles'])
+                lost = [n for n in turn.get('need') or [] if n not in seen]  # #245: a file the check is for went away after it was let through
+                if lost: raise RuntimeError('要查核的檔案 %s 在查核開始前不見了（可能被刪掉），這次沒有查核。' % '、'.join(lost))
                 if turn.get('check'): turn['prompt'] += named_check_copy(store, group_id, bot['id'], turn['job'], turn['check'])
             except (OSError, ValueError, RuntimeError) as exc:
                 return self._group_stage_failed(turn['job']['id'], str(exc) if isinstance(exc, RuntimeError) else '')

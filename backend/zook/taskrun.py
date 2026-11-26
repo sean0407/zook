@@ -340,7 +340,7 @@ class TaskRuns:
                     if group: group['messages'].append(dict(id=ID(), role='system', createdAt=NOW(), content='%s 回報交了 %s，但群組檔案裡找不到；%s' % (
                         task_member_name(store, task['assignee']), '、'.join(gone), '先退回給它補存，補好才請別家驗收。' if task['status'] == 'ready' else '沒有請別家驗收。' + (task.get('note') or ''))))
                 elif attempt['state'] == 'reported' and attempt.get('outcome') == 'succeeded':
-                    task['status'] = 'verifying'; task['verify'] = dict(state='waiting'); task.pop('missingFiles', None)  # checked by a member of another vendor next
+                    task['status'] = 'verifying'; task['verify'] = dict(state='waiting', need=task_files_kept(store, group, turn['msg']) if group else []); task.pop('missingFiles', None)  # checked by a member of another vendor next
                 else: task_failed_attempt(task, attempt.get('summary') or '沒有完成', job)
             if group: task_board_update(store, group)
             store.save()

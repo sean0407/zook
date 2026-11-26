@@ -335,7 +335,7 @@ class TaskChecks:
             task = next((t for t in (run or {}).get('tasks') or [] if t['id'] == task_id), None)
             if not task or not task.get('verify'): return
             check, label, origin = task['verify'], '%d. %s（驗收）' % (task['n'], task['title']), run['origin'] if run['origin'] != 'user' else 'bot'
-        step = dict(waitBusy=True, readonly=True, **({'use': check['use']} if check.get('use') else {}),
+        step = dict(waitBusy=True, readonly=True, need=list(check.get('need') or []), **({'use': check['use']} if check.get('use') else {}),  # #245: the files it checks must still be there
                     job=dict(taskRole='verifier', taskRunId=run['id'], taskId=task_id, taskTitle=label, origin=origin), msg=dict(taskId=task_id, taskCheck=True),
                     attachIds=[run.get('goalId')], promptFor=lambda bot, writable: task_verify_prompt(store, store.find('groups', group_id), store.find('groups', group_id)['taskRun'], task, bot))
         turn = self._task_turn(group_id, run_id, check['bot'], step)

@@ -11,6 +11,10 @@
 # before another vendor checks it.
 CHECKER_NAME = re.compile(r'查核|驗收|審核|審查|校對|稽核|覆核|複核|把關|品管|品檢|品保|檢查員|(?<![A-Za-z])(?:QA|reviewer|checker)(?![A-Za-z])', re.I)
 CHECKER_DUTY = re.compile(r'(?:負責|專門|主要|擔任|你是|我是|身為|作為)(?:做|進行|的)?[^，。,.；;\n]{0,6}?(?:查核|驗收|審核|審查|校對|稽核|覆核|複核|把關|檢查)')
+FILE_KINDS = CLAIM_KINDS + ('ai', 'psd', 'eps', 'svg', 'gif', 'webp', 'heic', 'tif', 'tiff', 'bmp', 'key', 'numbers', 'pages', 'rtf', 'odt', 'ods', 'odp', 'xml',
+                            'yaml', 'yml', 'tsv', 'log', 'epub', 'indd', 'sketch', 'fig', 'mp4', 'mov', 'm4a', 'mp3', 'wav', 'py', 'js', 'sql', 'ics', 'vcf', 'xlsm')
+FILE_WORD = re.compile(r'[^\s/\\「」『』【】\[\]，、。：:；！？()（）*`\'"<>|]{1,120}\.(?:%s)(?![A-Za-z0-9])' % '|'.join(FILE_KINDS), re.I)  # a file name in a reply, more kinds than CLAIM_WORD
+CHECKER_NAME_WRITES = re.compile(r'撰寫|寫手|起草|整理|製作')  # 「驗收報告撰寫」 makes a document about checking; 「文件審核員」 checks
 CHECKER_NOT = re.compile(r'[不沒没非無无別]')  # 「不負責查核」「我不是負責查核的」: said not to be its job
 CHECKER_WRITES = re.compile(r'撰寫|寫|整理|製作|起草|報告|文件|紀錄|記錄|表單|清單')  # 「主要撰寫驗收報告」: it makes a document about checking
 MODERATOR_RULES['split_check'] = ['現在輪到你查核。照主持人分派給你的查核工作，實際打開要查的檔案（成員交的，或使用者給的）逐項核對，不要只看別人的說法。',
@@ -25,7 +29,7 @@ MODERATOR_RULES['split_plan'] = MODERATOR_RULES['split_plan'][:-1] + ['負責查
 def group_is_checker(bot):
     """Whether a member's role is checking others' work: its name says so, or its persona starts by saying that is its job."""
     name = str((bot or {}).get('name') or '')
-    if not CHECKER_WRITES.search(name) and any(not CHECKER_NOT.search(re.sub('不只|不僅|不但', '', name[:hit.start()])) for hit in CHECKER_NAME.finditer(name)): return True  # 「非查核員」「不負責查核員」 are not
+    if not CHECKER_NAME_WRITES.search(name) and any(not CHECKER_NOT.search(re.sub('不只|不僅|不但', '', name[:hit.start()])) for hit in CHECKER_NAME.finditer(name)): return True  # 「非查核員」「不負責查核員」 are not
     persona = str((bot or {}).get('persona') or (bot or {}).get('instructions') or '')[:80]
     return any(not CHECKER_NOT.search(re.sub('不只|不僅|不但', '', persona[max(0, hit.start() - 4):hit.end()])) and not CHECKER_WRITES.search(hit.group(0) + re.split(r'[，。,.；;、\n]', persona[hit.end():hit.end() + 4])[0])
                for hit in CHECKER_DUTY.finditer(persona))
@@ -102,7 +106,7 @@ def _nothing_saved(replies, pool):
     not save, such as in 謹慎, is not asked to."""
     looked = [m for m in replies if 'savedFiles' in m]
     if not looked or any(n in pool for m in looked for n in m.get('savedFiles') or []) or not any(w in (m.get('content') or '') for m in looked for w in SAVE_SAID): return False
-    return not any(_in_prose(n, pool) for m in looked for n in CLAIM_WORD.findall(m.get('content') or ''))
+    return not any(_in_prose(n, pool) for m in looked for n in FILE_WORD.findall(m.get('content') or ''))
 
 
 NOTHING_SAVED = '（說存了的檔案）'
@@ -127,7 +131,8 @@ def _work_files(store, group, bot_id):
     out = {}
     with _group_files_lock:
         pool = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
-        names |= {p for p in pool for m in replies for w in CLAIM_WORD.findall(m.get('content') or '') if _in_prose(w, [p])}  # a file its reply says it handed over
+        names |= {p for p in pool for m in replies for w in FILE_WORD.findall(m.get('content') or '') if _in_prose(w, [p])}  # a file its reply says it handed over
+        names |= {v for m in replies for v in (m.get('sameAs') or {}).values() if v in pool}  # saved, kept as the shared file with the same content
         for n in sorted(names)[:40]:
             path = group_files_dir(store, group['id']) / n
             if path.is_file() and not path.is_symlink(): out[n] = _file_hash(path)
@@ -172,7 +177,7 @@ class CheckOrder:
                 text = m.get('content') or ''
                 if any(w in text for w in SAVE_SAID):
                     mine = [n for x in group['messages'][start:] if x.get('botId') == b and x.get('role') == 'assistant' for n in x.get('savedFiles') or [] if n in pool]  # what it really saved and is still there (Zook may have cleaned the name)
-                    named = [n for n in CLAIM_WORD.findall(text) if not _in_prose(n, given, True) and not _in_prose(n, pool) and not _in_prose(n, alias[b]) and not any(_claim_key(s).endswith(_claim_key(n)) or _claim_key(_short_name(n)) == _claim_key(s) for s in mine)]
+                    named = [n for n in FILE_WORD.findall(text) if not _in_prose(n, given, True) and not _in_prose(n, pool) and not _in_prose(n, alias[b]) and not any(_claim_key(s).endswith(_claim_key(n)) or _claim_key(_short_name(n)) == _claim_key(s) for s in mine)]
                     if named: gone[b] = list(dict.fromkeys((gone.get(b) or []) + named))[:10]
             for b, m in latest.items():
                 if m.get('skippedFiles'): gone[b] = list(dict.fromkeys((gone.get(b) or []) + list(m['skippedFiles'])))  # too big to keep: an older file of that name is not this work
@@ -197,6 +202,8 @@ class CheckOrder:
                 note(('%s 沒有補存到（正在忙或沒有回覆），%s 還是找不到；%s 這次不查核。' % (_names(store, idle), files, checkers)) if idle else
                      '%s 補存後還是找不到 %s，%s 這次不查核；請 %s 重新存檔後再請查核。' % (_names(store, list(gone)), files, checkers, _names(store, list(gone))))
                 store.save(); return steps[1:]
+            step['need'] = sorted({n for b in latest for x in group['messages'][start:] if x.get('botId') == b and x.get('role') == 'assistant' and not x.get('checkOf')
+                                   for n in list(x.get('savedFiles') or []) + list((x.get('sameAs') or {}).values()) if n in pool})[:40]  # what the check is for: gone by the time it starts, it does not run
         return steps
 
     def _free_check(self, group_id, run_id, gate):
@@ -252,6 +259,12 @@ def task_check_new_work(run, task):
     run['log'].append(dict(at=NOW(), what='create', task=run['tasks'][-1]['n']))
 
 
+def task_files_kept(store, group, msg):
+    """store.lock and _group_files_lock held. The shared files a task's reply brought in, for its check to find still there."""
+    pool = {e.name for e in _plain_files(group_files_dir(store, group['id']))}
+    return sorted(n for n in list(msg.get('savedFiles') or []) + list((msg.get('sameAs') or {}).values()) if n in pool)[:40]
+
+
 def group_files_given(group):
     """The attachments of the user's messages in a group: the user's own files, never a member's work."""
     return [m.get('attachments') or [] for m in (group or {}).get('messages') or [] if m.get('role') == 'user']
@@ -263,7 +276,7 @@ def task_files_missing(store, group, owner, attempt, msg, spec='', given=()):
     listed = list(attempt.get('files') or [])
     said = str(attempt.get('summary') or '') + '\n' + str(msg.get('content') or '')
     inputs = {p.rsplit('/', 1)[-1] for p in named_paths(str(spec or ''))} | set(given)  # files the work was told to read, or the user gave
-    named = [n for n in CLAIM_WORD.findall(said) if not _in_prose(n, inputs, True)] if any(w in said for w in SAVE_SAID) else []  # 「已存好報價單.xlsx」 without listing it in files
+    named = [n for n in FILE_WORD.findall(said) if not _in_prose(n, inputs, True)] if any(w in said for w in SAVE_SAID) else []  # 「已存好報價單.xlsx」 without listing it in files
     pool = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
     mine = set(msg.get('savedFiles') or []) | {n for n, info in (group.get('fileInfo') or {}).items() if (info or {}).get('by') == owner}
     gone = checked_present(store, group['id'], listed + list(msg.get('missingFiles') or []), exact=listed, owner=owner) + [n for n in named if not _in_prose(n, [p for p in pool if p in mine])]  # named: there, and its own

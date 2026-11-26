@@ -37,6 +37,7 @@ if name == '查核員': text = '【判定】同意\n看過報價單.xlsx'
 if role == 'split_plan' and flag('idlecheck'): text = '本次目標與產出：報價單\n專員：做報價單\n查核員：本次沒有工作'
 if name == '專員' and role == 'split_work' and flag('colon') and folder: open(os.path.join(folder.group(1), 'a:b.xlsx'), 'w').write('c'); text = '已存到群組檔案：a:b.xlsx'
 if name == '專員' and role == 'split_work' and flag('dupsave') and folder: open(os.path.join(folder.group(1), '報價-新版.xlsx'), 'w').write('old'); text = '已存到群組檔案：報價-新版.xlsx'
+if name == '專員' and role == 'split_work' and flag('aimiss'): text = '已存到群組檔案：報價單.xlsx、設計.ai'
 if role == 'kickoff': text = '目標：報價\n@查核員：檢查使用者給的報價單' if flag('onlycheck') else '目標：報價\n@專員：做報價單' + ('' if flag('nocheck') else '\n@查核員：檢查報價單')
 if role in ('split_merge', 'split_remerge', 'final', 'moderate'): text = '【結論】好\n【待你決定】無\n【行動項目】無\n【未解問題】無'
 if role == 'moderate' and flag('modmention'): text = '@查核員 再看一次合計'
@@ -299,6 +300,11 @@ class CheckAfterDone(unittest.TestCase):
         self.flag('mention'); self.bots['設計'] = self.req('POST', '/api/bots', {'name': '設計', 'provider': 'codex'})[1]
         self.say(self.group(mode='free', names=('Alpha', '專員', '設計', '查核員')), '@專員 @設計 做報價單')
         self.assertEqual(self.order(), [('專員', 'free'), ('設計', 'free'), ('查核員', 'split_check')])
+
+    def test_a_file_kind_outside_the_office_list_is_looked_for(self):
+        self.flag('aimiss')
+        self.say(self.group())
+        self.assertIn(('專員', 'split_resave'), self.order()); self.assertNotIn('查核員', [n for n, _ in self.order()])
 
     def test_nothing_handed_in_means_no_check(self):
         self.flag('fail')
