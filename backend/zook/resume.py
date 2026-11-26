@@ -330,7 +330,7 @@ class Resuming:
             if not before or t.get('aborted') or t.get('status') not in ('unknown', 'cancelled', 'stuck'): continue
             last = (t.get('attempts') or [{}])[-1]
             if before == 'verifying' or (before == 'running' and last.get('state') == 'reported' and last.get('outcome') == 'succeeded'):
-                t.update(status='verifying', verify=dict(state='waiting')); t.pop('note', None)  # the work reported done: only its check runs, nothing is done again
+                t.update(status='verifying', verify=verify_again(t)); t.pop('note', None)  # the work reported done: only its check runs, nothing is done again
             elif before == 'running':  # #285: commands it ran are not known until its turn ends, so it is never done again by itself
                 failed = last.get('state') == 'reported'  # it said itself it did not finish: only 重試, nothing to accept
                 t.update(status='stuck', resumed=True, note=TASK_CUT_RETRY if failed else TASK_CUT_NOTE)  # a 重試 is told it was cut off (task_worker_prompt)

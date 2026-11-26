@@ -73,7 +73,7 @@
     // 帳號 and 備用模型 in words (#43): what the menu decides, where other accounts come from, and that the same CLI is never a fallback.
     const accounts = form.querySelector('[data-action="accounts-from-form"]')?.parentElement;
     if (accounts?.firstChild?.nodeType === 3) accounts.firstChild.textContent = '這個 Bot 用哪一家、哪個帳號回覆。同一家的其他帳號要先到「各模型使用量」按「＋ 帳號」加入。';
-    setRowText(form.querySelector('[data-fixed-model] .setting-row'), '額度用完或出錯時，這一則改用哪一家；不會換成同一家');
+    setRowText(form.querySelector('[data-fixed-model] .setting-row'), '額度用完或出錯時，這一則改用哪一家，回覆裡會註明；不會換成同一家');
     setRowText(form.querySelector('input[name="section"]')?.closest('.setting-row'), '放在左側哪一組，只影響排列');
     setRowText(form.querySelector('input[name="effort"]')?.closest('.setting-row'), '回答前想多久；想越久越仔細，也越慢、用量越多');
     form.dataset.firstChoice = form.elements.providerChoice?.value ?? '';
