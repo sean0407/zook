@@ -34,7 +34,8 @@
     if (e.target.name === 'connectorAccount') switchConnectorAccount(e.target);
     if (e.target.name === 'groupMode' && activeGroup()) { state.groupMode[activeGroup().id] = e.target.value; updateGroupEstimate(); }
     if (e.target.name === 'botIds' && e.target.closest('#group-form')) syncGroupHost(e.target.closest('#group-form'));
-    if (['botIds', 'hostId', 'mode'].includes(e.target.name) && e.target.closest('#group-form')) groupFormNote(e.target.closest('#group-form'));
+    if (['botIds', 'hostId', 'checkMode'].includes(e.target.name) && e.target.closest('#group-form')) syncChecker(e.target.closest('#group-form'));  // #296
+    if (['botIds', 'hostId', 'mode', 'checkMode', 'checkerId'].includes(e.target.name) && e.target.closest('#group-form')) groupFormNote(e.target.closest('#group-form'));
     if (e.target.id === 'group-file-input' && activeGroup()) uploadGroupFiles(activeGroup(), [...e.target.files]);
     if (e.target.name === 'access' && e.target.closest('#bot-form')) e.target.closest('form').querySelector('[data-access-folder]').hidden = e.target.value !== 'folder';
     if (e.target.name === 'transport' && e.target.closest('#connector-form')) e.target.closest('form').querySelectorAll('[data-for]').forEach(x => x.hidden = x.dataset.for !== e.target.value);
@@ -286,7 +287,7 @@
           content = input.value.trim();
         if (pendingList().some(f => f.uploading)) { toast('檔案還在上傳，請稍等'); return; }
         const attachments = pendingList().map(f => f.id);
-        if (!content && !attachments.length) return;
+        if (!content && !attachments.length) { toast('請先輸入內容'); input.focus(); return; }  // #263: not a silent nothing
         const g = activeGroup();
         if (g && g.status === 'running' && attachments.length) { toast('討論進行中只能傳文字；附件請等這輪結束或先停止'); return; }
         // Shown at once; the reply, the refresh and anything slow on the Mac come after. Each message has its own id.
@@ -405,7 +406,7 @@
         state.accounts = await api('accounts'); render(true); pollAccounts();
       } else if (form.id === 'group-form') {
         const d = new FormData(form), id = form.dataset.id, keepAuto = groupKeepsAuto(form);  // #223②: not quietly saved as 自由
-        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds'), hostId: d.get('hostId') || '', ...(keepAuto ? {} : {mode: d.get('mode') || 'free'}), turnLimit: Number(d.get('turnLimit')) || 4, ...(id ? {} : {clientId: onceId(form)})}, id ? 'PATCH' : 'POST');
+        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds'), hostId: d.get('hostId') || '', ...(keepAuto ? {} : {mode: d.get('mode') || 'free'}), turnLimit: Number(d.get('turnLimit')) || 4, checkMode: d.get('checkMode') || 'auto', checkerId: d.get('checkMode') === 'pick' ? d.get('checkerId') || '' : '', instructions: String(d.get('instructions') || ''), ...(id ? {} : {clientId: onceId(form)})}, id ? 'PATCH' : 'POST');
         closeModal();
         state.groupId = result.id;
         state.page = 'chat';
@@ -455,6 +456,8 @@
         const next = scheduleNext(saved || {});
         const renamed = !id && saved?.name && saved.name !== data.name ? `已有相同的排程，這筆叫「${saved.name}」。` : '';  // #299
         toast(renamed + (next ? `已儲存排程，下次執行：${nextLabel(next)}` : '已儲存排程'));
+      } else if (form.id === 'know-search-form') {
+        await knowSearch(form);  // 試搜尋 (36c-knowledge.js)
       } else if (form.id === 'note-form') {
         await saveNote(form, form.dataset.id ? '' : onceId(form));  // 36c-knowledge.js; a typed one is made once however often 儲存 is pressed
       } else if (form.id === 'settings-form') {

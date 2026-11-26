@@ -21,15 +21,18 @@
         case 'edit-group':
           groupModal(activeGroup());
           break;
-        case 'delete-group':
+        case 'delete-group': {
+          const groupId = $('#group-form')?.dataset.id;  // read now: the question replaces the form (#317)
+          if (!groupId) break;
           if (await ask({title: '刪除這個群組？', lines: ['群組的對話、任務板、群組檔案和它的排程會一起刪除，無法復原。', '成員 Bot 不會被刪除，它們自己的對話都還在。'],
-                         run: () => api('groups/' + encodeURIComponent($('#group-form').dataset.id), {method: 'DELETE'})})) {
+                         run: () => api('groups/' + encodeURIComponent(groupId), {method: 'DELETE'})})) {
             closeModal();
             state.groupId = null;
             await refresh();
             toast('已刪除群組')
           }
           break;
+        }
         case 'account-detail':
           accountDetail(id, el.dataset.account || '');
           break;

@@ -13,18 +13,23 @@
     render(true);
     if (again !== true) loadOutputs(botId, again === 'again');
   }
-  // #176 (#96②): the script a Bot wrote to make its files (create_report.py) is not what it handed over. Beside other files it goes
-  // under a switch; a Bot that only wrote code keeps its code in the list.
+  // #176 (#96②), #269: 成品 and 中間檔. The script a Bot made its files with (create_report.py) and its scratch files (stage 'work',
+  // outputs.py) are 中間檔, under a switch that starts off; a Bot that only wrote code keeps its code as 成品.
   const BUILD_SCRIPT = /\.(py|js|mjs|cjs|ts|sh|zsh|bash|swift|rb|pl|applescript|scpt)$/i;
-  const splitScripts = list => list.some(o => !BUILD_SCRIPT.test(o.name)) ? [list.filter(o => !BUILD_SCRIPT.test(o.name)), list.filter(o => BUILD_SCRIPT.test(o.name))] : [list, []];
+  const isWork = o => o.stage ? o.stage === 'work' : BUILD_SCRIPT.test(o.name);
+  const splitScripts = list => {
+    const files = list.filter(o => !isWork(o)), work = list.filter(isWork);
+    return files.length ? [files, work] : [work.filter(o => BUILD_SCRIPT.test(o.name)), work.filter(o => !BUILD_SCRIPT.test(o.name))];
+  };
   function outputsPanel(b) {
     const list = state.outputs[b.id];
     if (!list) { setTimeout(() => loadOutputs(b.id), 0); return '<div class="detail-empty">正在讀取產出…</div>'; }
     const icon = {image: '🖼', pdf: '📕', office: '📊', markdown: '📝', text: '📄', file: '📎'};
     const [files, scripts] = splitScripts(list), showScripts = !!state.showScripts?.[b.id];
-    const row = o => `<button class="note-row output-row" data-action="output-open" data-id="${esc(o.id)}" title="${esc(o.path)}"><strong>${icon[o.kind] || '📎'} ${esc(o.name)}</strong><small>${esc(fileSize(o.size))} · ${esc(formatDate(o.at))}</small></button>`;
-    const more = scripts.length ? `<label class="output-scripts">${toggle('data-show-scripts="' + esc(b.id) + '"', showScripts, '顯示製作用的程式')}<span>顯示製作用的程式（${scripts.length}）</span></label>${showScripts ? scripts.map(row).join('') : ''}` : '';
-    return `<div class="detail-title">產出 <button class="link" data-action="outputs-refresh">重新整理</button></div>${list.length ? files.map(row).join('') + more : '<div class="detail-empty">這個 Bot 建立或修改過的檔案會出現在這裡。</div>'}`;
+    const row = o => `<button class="note-row output-row" data-action="output-open" data-id="${esc(o.id)}" title="${esc(o.name)}"><strong>${icon[o.kind] || '📎'} ${esc(o.name)}</strong><small>${esc(fileSize(o.size))} · ${esc(formatDate(o.at))}${o.group ? ' · 來自群組「' + esc(o.group) + '」' : ''}</small></button>`;  // #194: made in a group
+    const head = scripts.length ? `<div class="output-head">成品（${files.length}）</div>` : '';
+    const more = scripts.length ? `<label class="output-scripts">${toggle('data-show-scripts="' + esc(b.id) + '"', showScripts, '顯示中間檔')}<span>顯示中間檔（${scripts.length}）：製作用的程式與暫存檔</span></label>${showScripts ? scripts.map(row).join('') : ''}` : '';
+    return `<div class="detail-title">產出 <button class="link" data-action="outputs-refresh">重新整理</button></div>${list.length ? head + (files.length ? files.map(row).join('') : '<div class="detail-empty">還沒有成品，只有中間檔。</div>') + more : '<div class="detail-empty">這個 Bot 建立或修改過的檔案會出現在這裡。</div>'}`;
   }
   // A PDF opens fitted to the window's width; it stays hidden behind a line of text until it has loaded, instead of a dark box.
   const pdfFrame = (url, name) => `<div class="pdf-wrap"><p class="pdf-loading muted">正在開啟 PDF…</p><iframe class="output-pdf" src="${esc(url)}#view=FitH&zoom=page-width" title="${esc(name)}"></iframe></div>`;
@@ -108,6 +113,7 @@
     if (!a) return;
     e.preventDefault();
     const path = a.dataset.path || '', g = activeGroup();
+    if (a.classList.contains('missing-file')) return toast('檔案找不到：' + path + '。它可能沒有真的存好，或已被移走。');
     const bots = g ? (g.botIds || []) : [activeBot()?.id].filter(Boolean);
     const hit = outputAt(bots.map(id => [id, state.outputs[id]]), path);
     if (hit) return openOutput(hit[0], hit[1].id);
@@ -116,6 +122,14 @@
     navigator.clipboard?.writeText(path).then(() => toast('已複製檔案位置：' + path), () => toast('檔案位置：' + path));
   });
   // File names of this Bot's outputs inside a reply open the preview.
+  // #258: a link to a file that was not on this Mac when the reply finished (missingFiles, outputs.py) says so beside it.
+  function markMissing(html, m, botId) {  // one of its outputs by now (saved later) is there after all
+    const gone = new Set(Array.isArray(m.missingFiles) ? m.missingFiles.filter(x => typeof x === 'string') : []);
+    if (!gone.size) return html;
+    const plain = text => { const t = document.createElement('textarea'); t.innerHTML = text; return t.value; };
+    return html.replace(/<button type="button" class="link local-link" data-path="([^"]*)"([^>]*)>([\s\S]*?)<\/button>/g, (whole, path, rest, label) =>
+      gone.has(plain(path)) && !outputAt([[botId, state.outputs[botId]]], plain(path)) ? `<button type="button" class="link local-link missing-file" data-path="${path}"${rest}>${label}</button><span class="missing-note">（檔案找不到）</span>` : whole);
+  }
   function linkOutputs(html, botId) {
     const list = (state.outputs[botId] || []).filter(o => o.name.length >= 4).slice(0, 80);
     if (!list.length) return html;
