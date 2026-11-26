@@ -5,6 +5,7 @@ missing goes back to that member first; nothing handed in means no check. The ch
 already among the group's files is not kept twice."""
 import http.client, json, os, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
+from urllib.parse import quote
 
 SERVER = Path(__file__).resolve().parents[1] / 'backend/server.py'
 CLI = r'''#!/usr/bin/env python3
@@ -70,6 +71,11 @@ class CheckAfterDone(unittest.TestCase):
         conn.request(method, path, json.dumps(body).encode() if body is not None else None, {'Authorization': 'Bearer ' + self.token})
         resp = conn.getresponse(); data = resp.read(); conn.close()
         return resp.status, json.loads(data)
+
+    def upload(self, group, name, data=b'old'):
+        conn = http.client.HTTPConnection('127.0.0.1', self.port, timeout=20)
+        conn.request('POST', '/api/groups/%s/files' % group['id'], body=data, headers={'Authorization': 'Bearer ' + self.token, 'X-File-Name': quote(name), 'Content-Type': 'application/octet-stream'})
+        resp = conn.getresponse(); resp.read(); conn.close(); self.assertLess(resp.status, 300)
 
     def flag(self, name): Path(str(self.log) + '.' + name).write_text('x')
 
@@ -234,6 +240,17 @@ class CheckAfterDone(unittest.TestCase):
         self.say(self.group(mode='free'))
         again = [r for r in self.runs() if r['name'] == '查核員']
         self.assertGreaterEqual(len(again), 2); self.assertTrue(all('read-only' in r['args'] for r in again))
+
+    def test_an_old_file_is_not_checked_as_the_redo(self):
+        self.flag('claim'); self.flag('sendback'); g = self.group(); self.upload(g, '報價單.xlsx')
+        self.say(g)
+        self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('專員', 'split_work'), ('查核員', 'split_check'), ('Alpha', 'split_merge'),
+                                        ('專員', 'split_redo'), ('專員', 'split_resave'), ('Alpha', 'split_remerge')])
+
+    def test_a_file_named_in_the_ask_is_still_looked_for(self):
+        self.flag('handed')
+        self.say(self.group(), '做一份報價單.xlsx')
+        self.assertIn(('專員', 'split_resave'), self.order()); self.assertNotIn('查核員', [n for n, _ in self.order()])
 
     def test_nothing_handed_in_means_no_check(self):
         self.flag('fail')

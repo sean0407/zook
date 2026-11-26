@@ -24,7 +24,7 @@ MODERATOR_RULES['split_plan'] = MODERATOR_RULES['split_plan'][:-1] + ['負責查
 def group_is_checker(bot):
     """Whether a member's role is checking others' work: its name says so, or its persona starts by saying that is its job."""
     name = str((bot or {}).get('name') or '')
-    if any(not CHECKER_NOT.search(name[max(0, hit.start() - 2):hit.start()]) for hit in CHECKER_NAME.finditer(name)): return True  # 「非查核員」 is not one
+    if any(not CHECKER_NOT.search(re.sub('不只|不僅|不但', '', name[:hit.start()])) for hit in CHECKER_NAME.finditer(name)): return True  # 「非查核員」「不負責查核員」 are not
     persona = str((bot or {}).get('persona') or (bot or {}).get('instructions') or '')[:80]
     return any(not CHECKER_NOT.search(re.sub('不只|不僅|不但', '', persona[max(0, hit.start() - 4):hit.end()])) for hit in CHECKER_DUTY.finditer(persona))
 
@@ -75,6 +75,13 @@ def checked_present(store, group_id, names, exact=(), owner=''):
     return gone[:10]
 
 
+def _in_prose(word, names):
+    """Whether a word picked from prose (Chinese runs words together: 「已存好報價單.xlsx」) is one of these files: it ends with the
+    file's full name."""
+    word = _claim_key(word)
+    return any(n and word.endswith(_claim_key(n)) for n in names)
+
+
 SAVE_SAID = ('已存', '存到', '存好', '存成', '存進', '另存', '已上傳', '上傳到', '交了', '交出', '已交', '交件', '交付', '附上')  # a reply that says it saved or handed over something
 
 
@@ -84,7 +91,7 @@ def _nothing_saved(replies, pool):
     not save, such as in 謹慎, is not asked to."""
     looked = [m for m in replies if 'savedFiles' in m]
     if not looked or any(m.get('savedFiles') for m in looked) or not any(w in (m.get('content') or '') for m in looked for w in SAVE_SAID): return False
-    return not any(_same_file(n, pool) for m in looked for n in CLAIM_WORD.findall(m.get('content') or ''))
+    return not any(_in_prose(n, pool) for m in looked for n in CLAIM_WORD.findall(m.get('content') or ''))
 
 
 NOTHING_SAVED = '（說存了的檔案）'
@@ -120,16 +127,17 @@ class CheckOrder:
                 gone = {b: checked_present(store, group_id, names) for b, names in said.items() if names}
                 pool = [e.name for e in _plain_files(group_files_dir(store, group_id))]
             given = {a.get(k) for x in group['messages'][start:] if x.get('role') == 'user' for a in x.get('attachments') or [] for k in ('name', 'origName')}
-            asked = '\n'.join(x.get('content') or '' for x in group['messages'][start:] if x.get('role') == 'user')
+            given |= {p.rsplit('/', 1)[-1] for x in group['messages'][start:] if x.get('role') == 'user' for p in named_paths(x.get('content') or '')}  # the user's own files, given or named by path
             for b, m in latest.items():  # a file the reply says it handed over, by its full name, that is not among the shared files (the user's own files aside)
                 text = m.get('content') or ''
                 if any(w in text for w in SAVE_SAID):
-                    named = [n for n in CLAIM_WORD.findall(text) if n not in given and n not in asked and not _same_file(n, pool)]
+                    named = [n for n in CLAIM_WORD.findall(text) if not _in_prose(n, given) and not _in_prose(n, pool)]
                     if named: gone[b] = list(dict.fromkeys((gone.get(b) or []) + named))[:10]
             for b, m in latest.items():
                 if m.get('skippedFiles'): gone[b] = list(dict.fromkeys((gone.get(b) or []) + list(m['skippedFiles'])))  # too big to keep: an older file of that name is not this work
                 replies = [x for x in group['messages'][start:] if x.get('role') == 'assistant' and x.get('botId') == b and not x.get('checkOf')]
-                if step.get('fresh') and 'savedFiles' in m and not m.get('savedFiles') and any(x.get('savedFiles') for x in replies): gone.setdefault(b, []).append(NOTHING_SAVED)  # redone work with files: the new version must be saved, not the old one checked
+                had_files = any(x.get('savedFiles') or CLAIM_WORD.search(x.get('content') or '') for x in replies) or any((i or {}).get('by') == (store.find('bots', b) or {}).get('name') for i in (group.get('fileInfo') or {}).values())
+                if step.get('fresh') and 'savedFiles' in m and not m.get('savedFiles') and had_files: gone.setdefault(b, []).append(NOTHING_SAVED)  # redone work with files: the new version must be saved, not the old one checked
                 elif not gone.get(b) and _nothing_saved(replies, pool): gone[b] = [NOTHING_SAVED]
             gone = {b: names for b, names in gone.items() if names}
             note = lambda text: group['messages'].append(dict(id=ID(), role='system', content=text, createdAt=NOW()))
@@ -200,12 +208,21 @@ def task_check_new_work(run, task):
     run['log'].append(dict(at=NOW(), what='create', task=run['tasks'][-1]['n']))
 
 
-def task_files_missing(store, group, owner, attempt, msg):
+def group_files_given(group):
+    """The attachments of the user's messages in a group: the user's own files, never a member's work."""
+    return [m.get('attachments') or [] for m in (group or {}).get('messages') or [] if m.get('role') == 'user']
+
+
+def task_files_missing(store, group, owner, attempt, msg, spec='', given=()):
     """Lock held. The files a task's report lists, or its reply says it saved, that are not there as this member's: saved in this
     reply, or last saved by this member (another member's file of the same name is not its work)."""
     listed = list(attempt.get('files') or [])
+    said = str(attempt.get('summary') or '') + '\n' + str(msg.get('content') or '')
+    inputs = {p.rsplit('/', 1)[-1] for p in named_paths(str(spec or ''))} | set(given)  # files the work was told to read, or the user gave
+    named = [n for n in CLAIM_WORD.findall(said) if not _in_prose(n, inputs)] if any(w in said for w in SAVE_SAID) else []  # 「已存好報價單.xlsx」 without listing it in files
     with _group_files_lock:
-        gone = checked_present(store, group['id'], listed + list(msg.get('missingFiles') or []), exact=listed, owner=owner)
+        pool = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
+        gone = checked_present(store, group['id'], listed + list(msg.get('missingFiles') or []), exact=listed, owner=owner) + [n for n in named if not _in_prose(n, pool)]
         mine = set(msg.get('savedFiles') or []) | {n for n, info in (group.get('fileInfo') or {}).items() if (info or {}).get('by') == owner}
         pool = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
     for raw in listed:
