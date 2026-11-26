@@ -156,7 +156,7 @@ def scratch_tools(store, bot, runtime, scratch):
     a read, so no mode asks; a reply that may only read never has it, see plan_safe); each use is in the activity record."""
     if not scratch: return []
     folder, ident = scratch[:2]
-    since = time.time() - 2  # made before the CLI starts; a little slack for the file system's clock
+    since = scratch[2] if len(scratch) > 2 else time.time()  # from when this reply set the folder up: nothing made before it
     def clean(args):
         deleted, kept = clean_scratch(folder, ident, args.get('names'), since)
         if deleted: log_activity(store, 'tool', '「%s」清理暫存資料夾，刪除 %d 個檔案：%s' % (bot.get('name', 'Bot'), len(deleted), '、'.join(deleted)), by='Zook')

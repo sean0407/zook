@@ -33,8 +33,8 @@ def line_vars(command, depth=0):
     otherwise or only sometimes (if, for, read, ||, && before it, a here-document, braces, a subshell), when it is used before it is set,
     when the name appears as a bare word, when it is set twice to different things, or when a relative value meets a cd: then the
     card says a variable decides. A line that is only sh -c '…' is read through its script; with anything else around it, nothing is known."""
-    text = re.split(r'<<(?!<)', command)[0]  # what follows a here-document marker may be its text, not commands
-    text, scripts = _unquoted(text)
+    text, scripts = _unquoted(command)
+    text = re.split(r'<<(?!<)', text)[0]  # what follows a here-document marker (outside quotes) may be its text, not commands
     if scripts:
         wrapper = re.sub(r'(?:^|(?<=\s))(?:/\S*/)?(?:sh|bash|zsh|dash|ksh)\s+-[A-Za-z]*c\s+_', '', text, count=1).strip()
         return line_vars(scripts[0], depth + 1) if len(scripts) == 1 and not wrapper and depth < 3 else {}
@@ -69,12 +69,13 @@ def mid(text, most=90):
 ATTACHED_ID = re.compile(r'^[0-9A-Za-z]{8}-(?=.)')
 
 
-def place(full, temp, data, scratch_part):
+def place(full, temp, data, scratch_part, own=''):
     """Zook's own folders (and, with temp, the Mac's temporary folder) in words: never the path inside Zook's data or /var/folders."""
     for one in (full,):  # already where it really is (zook_gate._where): never named by a link on the way
         base = next((d for d in dict.fromkeys((data, os.path.realpath(data) if data else '')) if d and under_plain(one, d)), '')
         if base:
             rest = [p for p in os.path.relpath(one, base).split(os.sep) if p and p != '.']
+            if rest[:1] == ['workspaces'] and len(rest) >= 2 and rest[1] != own: return ''  # another Bot's (or not known whose): its full path
             if rest[:1] == ['workspaces'] and len(rest) > 2:
                 inside = rest[2:]
                 if inside[0] == '.zook-scratch': return 'Bot 的暫存資料夾' + ('裡的 %s' % '/'.join(inside[1:]) if inside[1:] else '')
@@ -83,7 +84,7 @@ def place(full, temp, data, scratch_part):
                 return 'Bot 工作資料夾裡的 %s' % '/'.join(inside)
             if rest[:1] == ['workspaces'] and len(rest) == 2: return 'Bot 工作資料夾'
             return 'Zook 的資料' + ('「%s」' % '/'.join(rest) if rest else '')
-        if scratch_part.search(one):
+        if scratch_part.search(one) and own and '/workspaces/%s/.zook-scratch' % own in one:
             inside = one.split('/.zook-scratch', 1)[1].strip('/')
             return 'Bot 的暫存資料夾' + ('裡的 %s' % inside if inside else '')
         m = temp and re.match(r'^(?:/private)?/var/folders/[^/]+/[^/]+/T(?:/(.*))?$', one)
@@ -99,15 +100,18 @@ def under_plain(path, folder):
 
 def resolve(text, known, expand, depth=0):
     """The text with $NAME and ${NAME} put in from the variables of this line (and $HOME, $TMPDIR, ~); None when one is not known."""
-    text = expand(text)
-    def put(m):
-        value = known.get(m.group(1) or m.group(2))
+    def put(m):  # the line's own values first: HOME or TMPDIR set on the line wins over the environment's
+        name = m.group(1) or m.group(2)
+        if name not in known and name in ('HOME', 'TMPDIR'): return m.group(0)  # the environment's: expanded once, at the end
+        value = known.get(name)
         if value is None or depth > 5: raise KeyError
         value = resolve(value, known, expand, depth + 1) if '$' in value else value
         if value is None: raise KeyError
         return value
     try: out = re.sub(r'\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)', put, text)
     except KeyError: return None
+    if depth: return out
+    out = expand(out)
     if '$' in out or '`' in out: return None
     out = out.replace('\0', '$')
     if MADE_TEMP in out[1:]: return None  # a made folder in the middle of a path: not a place

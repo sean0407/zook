@@ -301,7 +301,8 @@ def _resolve(text):
 
 
 def _place(full, temp=False):
-    return gate_words.place(full, temp, os.environ.get('ZOOK_DATA_DIR', ''), SCRATCH_PART)
+    own = os.environ.get('ZOOK_SCRATCH', '')  # <data>/workspaces/<this Bot>/.zook-scratch: only this Bot's own folders are named
+    return gate_words.place(full, temp, os.environ.get('ZOOK_DATA_DIR', ''), SCRATCH_PART, os.path.basename(os.path.dirname(own)) if own.endswith('/.zook-scratch') else '')
 
 
 def _plain_steps(command):
@@ -310,7 +311,7 @@ def _plain_steps(command):
 
 
 def _names(paths):
-    return '、'.join(dict.fromkeys(_where(p) for p in paths if p))
+    return '、'.join(_where(p) for p in dict.fromkeys(p for p in paths if p))  # one line per file named, even when two read alike
 
 
 def _word(text):

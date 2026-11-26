@@ -51,6 +51,14 @@ class QuestionGone(choices_test.ChoicesTest):
         question = self.req('GET', '/api/jobs/' + job_id)[1]['questions'][0]
         self.assertEqual((question['status'], question.get('expiredWhy')), ('expired', 'ended'))
 
+    def test_a_restart_says_why(self):
+        m = choices_test.load(); folder = self.root / 'other'; store = m.Store(folder)
+        store.data['bots'].append(dict(id='b', name='x', messages=[dict(id='m', role='assistant', content='', status='running')]))
+        store.data['jobs'].append(dict(id='j', botId='b', messageId='m', status='running', questions=[dict(id='q', question='?', options=[], status='pending')]))
+        store.save()
+        question = m.Store(folder).data['jobs'][0]['questions'][0]
+        self.assertEqual((question['status'], question.get('expiredWhy')), ('expired', 'restart'))
+
     def test_the_bot_is_told_not_to_answer_for_the_user(self):
         code = (ROOT / 'backend/zook/choices.py').read_text(encoding='utf-8')
         self.assertIn('不代表使用者拒絕', code)

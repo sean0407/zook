@@ -21,7 +21,7 @@ class PlainCards(unittest.TestCase):
     def setUp(self):
         self.cwd, self.env = g._CWD[0], dict(os.environ)
         g._CWD[0] = '/Users/someone/work'
-        os.environ['ZOOK_DATA_DIR'] = DATA; os.environ['TMPDIR'] = TEMP + '/'
+        os.environ['ZOOK_DATA_DIR'] = DATA; os.environ['TMPDIR'] = TEMP + '/'; os.environ['ZOOK_SCRATCH'] = DATA + '/workspaces/b1/.zook-scratch'
 
     def tearDown(self):
         g._CWD[0] = self.cwd; os.environ.clear(); os.environ.update(self.env)
@@ -43,7 +43,7 @@ class PlainCards(unittest.TestCase):
                         'T=/tmp/a | cat; rm -rf "$T/x"', "cat > f.py <<EOF\nT=/tmp/a\nEOF\nrm -rf \"$T/x\"", 'T=/tmp/a; T+=/b; rm -rf "$T/x"',
                         '(T=/tmp/a); rm -rf "$T/x"', 'T=/tmp/a || true; rm -rf "$T/x"', 'printf -v T x; T=/tmp/a; rm -rf "$T/x"',
                         'T="~/Desktop"; rm -rf "$T/x"', 'cd /tmp; T=reports; rm -rf "$T/x"', "cat <<< 'T=/tmp'; rm -rf \"$T/x\"", 'echo "a; T=/tmp/a"; rm -rf "$T/x"',
-                        "bash -c 'T=/tmp/a'; rm -rf \"$T/x\"", "T=/tmp/a; bash -c 'rm -rf \"$T/x\"'"):
+                        "bash -c 'T=/tmp/a'; rm -rf \"$T/x\"", "T=/tmp/a; bash -c 'rm -rf \"$T/x\"'", "T=/tmp/safe; echo '<<EOF'; T=\"$HOME/Documents\"; rm -rf \"$T/x\""):
             self.assertEqual(titles(command, 'delete'), ['刪除檔案 「x」（位置由指令裡的變數決定）'], command)  # set only sometimes, or otherwise: never guessed
 
     def test_the_shell_around_a_command_is_not_shown(self):
@@ -58,6 +58,16 @@ class PlainCards(unittest.TestCase):
         out = titles('echo "unbalanced')
         self.assertEqual(len(out), 1); self.assertNotIn('無法判讀', out[0]); self.assertTrue(out[0].startswith(g.LABELS['unclear']))
         self.assertNotIn('無法判讀', ''.join(g.LABELS.values()))
+
+    def test_home_or_tmpdir_set_on_the_line_wins(self):  # review 2: never the environment's temporary folder for a TMPDIR the line changed
+        self.assertEqual(titles('TMPDIR="$HOME/Documents"; rm -f "$TMPDIR/payroll.xlsx"', 'delete'), ['刪除檔案 ~/Documents/payroll.xlsx'])
+        self.assertEqual(titles('rm -f "$TMPDIR/a.png"', 'delete'), ['刪除檔案 系統暫存資料夾裡的 a.png'])
+
+    def test_two_files_that_read_alike_are_both_listed(self):  # review 2: another Bot's folders are not named, and nothing is merged away
+        out = titles("rm -f '%s/workspaces/b1/.zook-scratch/p.png' '%s/workspaces/b2/.zook-scratch/p.png'" % (DATA, DATA), 'delete')[0]
+        self.assertIn('Bot 的暫存資料夾裡的 p.png', out); self.assertIn('workspaces/b2/.zook-scratch/p.png', out)
+        out = titles("rm -f '%s/workspaces/b1/attachments/1a2b3c4d-x.xlsx' '%s/workspaces/b1/attachments/5e6f7a8b-x.xlsx'" % (DATA, DATA), 'delete')[0]
+        self.assertEqual(out.count('你上傳的附件「x.xlsx」'), 2)
 
     def test_a_linked_folder_is_named_by_where_it_really_is(self):  # review: a link in attachments must not make ~/Documents read as an upload
         import tempfile, shutil

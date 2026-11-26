@@ -350,6 +350,8 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             try: xlsx_after_reply(self.store, job_id)  # read the Excel files it saved; a problem is said under the reply (xlsxcheck.py)
             except Exception: pass  # a check never stands in the way of the reply
             self.finish_session(job_id); agy_release(self, job_id)  # the next agy of this Bot may start
+            swept = self.__dict__.get('scratch_of', {}).pop(job_id, None)
+            if swept: scratch_sweep(self.store, swept[0], swept[1], lambda: scratch_busy(self.store, swept[0]['id'], job_id))  # this reply's scratch files (#331)
             try: bg_stop(self, self.store.find('jobs', job_id) or {}); bg_sweep(self)  # a runner never taken up, then the files of runs that are over (background.py)
             except OSError: pass
             with self.store.lock:
@@ -486,6 +488,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             env['ZOOK_DATA_DIR'] = str(store.dir)  # zook_gate.py asks before a Bot changes Zook's own data
             for key in ('ZOOK_SCRATCH', 'ZOOK_SCRATCH_ID'): env.pop(key, None)  # never one inherited from elsewhere
             scratch = scratch_env(store, bot['id'], env) if native and selected and scope != 'folder' else None  # its own scratch files, cleaned by zook_clean_scratch
+            if scratch: self.__dict__.setdefault('scratch_of', {}).setdefault(job_id, (bot, scratch))  # swept when the whole reply ends, retries included
             features = active_features(bot, kind, native, planning, scope)
             with store.lock: job.update(features=features, nativeAccess=[scope, str(root), permission_mode(store, bot, kind), bool(native)], runKind=kind)
             resume = self.native_session(job, provider, model, account, cli_cwd)
@@ -753,7 +756,6 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 self.expire_job(job_id); store.save()
             if session: session.close()
             with store.lock: busy = any(j['botId'] == bot['id'] and j['id'] != job_id and j['status'] == 'running' for j in store.data['jobs'])
-            if locals().get('scratch'): scratch_sweep(store, bot, scratch, lambda: scratch_busy(store, bot['id'], job_id))  # this reply's scratch files (#331)
             kept_turn = locals().get('kept')
             if isinstance(kept_turn, LiveTurn) and kept_turn.cli.kind == 'antigravity' and agy_touched(store.dir / 'workspaces' / bot['id']): kept_turn.cli.spoil('回覆中動到了 Antigravity 的設定資料夾')
             if provider_kind(provider) == 'antigravity': agy_cleanup(store, bot['id'], job_id, busy)

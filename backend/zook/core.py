@@ -227,7 +227,7 @@ class StoreBase:
         for job in self.data.get('jobs', []):
             job.setdefault('toolCalls', []); job.setdefault('approvals', [])
             for approval in job['approvals'] + (job.get('questions') or []):
-                if approval['status'] == 'pending': approval['status'] = 'expired'
+                if approval['status'] == 'pending': approval.update(status='expired', **({'expiredWhy': 'restart', 'expiredAt': NOW()} if 'question' in approval else {}))  # #248
             if job['status'] == 'running' and finished_before_stop(self, job): continue  # its answer was saved, only the job record was not
             if job['status'] == 'running' and job.get('runner') and bg_alive(self, job): job['reattach'] = True; continue  # went on under its runner (background.py)
             if job['status'] == 'running':

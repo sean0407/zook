@@ -26,8 +26,8 @@
   function goneQuestions(botId) {
     const bot = state.data.bots.find(x => x.id === botId), who = bot?.name || 'Bot';
     // A reply that ended on its own with the question open (not one you stopped) also stopped waiting for it (巡檢 H02).
-    const gone = jobsForBot(botId).filter(j => !j.chatId || !bot?.chatId || j.chatId === bot.chatId).flatMap(j => (j.questions || []).filter(q => q.status === 'expired' && (['timeout', 'gone'].includes(q.expiredWhy) || q.expiredWhy === 'ended' && j.status !== 'cancelled' && j.status !== 'running') && !state.seenQuestions[q.id]));  // until 知道了
-    return gone.map(q => `<section class="question-card stale" role="status"><strong>${esc(q.expiredWhy === 'timeout' ? `${who} 等了 10 分鐘沒等到你的回答，已先停在這一步` : q.expiredWhy === 'gone' ? `${who} 已不再等這個問題的回答（它可能改用別的做法，或已經停下）` : `${who} 沒等到你的回答就結束了這次回覆`)}</strong><p>${esc(q.question)}</p>
+    const gone = jobsForBot(botId).filter(j => !j.chatId || !bot?.chatId || j.chatId === bot.chatId).flatMap(j => (j.questions || []).filter(q => q.status === 'expired' && (['timeout', 'gone', 'restart'].includes(q.expiredWhy) || q.expiredWhy === 'ended' && j.status !== 'cancelled' && j.status !== 'running') && !state.seenQuestions[q.id]));  // until 知道了
+    return gone.map(q => `<section class="question-card stale" role="status"><strong>${esc(q.expiredWhy === 'timeout' ? `${who} 等了 10 分鐘沒等到你的回答，已先停在這一步` : q.expiredWhy === 'gone' ? `${who} 已不再等這個問題的回答（它可能改用別的做法，或已經停下）` : q.expiredWhy === 'restart' ? `Zook 重新啟動，${who} 沒等到你的回答` : `${who} 沒等到你的回答就結束了這次回覆`)}</strong><p>${esc(q.question)}</p>
       <small class="approval-reason">Zook 沒有替你選，Bot 也不會當成你拒絕。要回答的話，直接在下面輸入，Bot 會接著做。</small><div class="actions"><button class="secondary" data-action="dismiss-question" data-id="${esc(q.id)}">知道了</button></div></section>`).join('');
   }
 

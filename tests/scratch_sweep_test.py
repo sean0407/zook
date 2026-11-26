@@ -62,7 +62,9 @@ class Sweep(Base):
 
     def test_the_reply_end_sweeps_only_when_the_bot_is_free(self):
         app = (ROOT / 'backend/zook/app.py').read_text(encoding='utf-8')
-        self.assertIn("if locals().get('scratch'): scratch_sweep(store, bot, scratch, lambda: scratch_busy(store, bot['id'], job_id))", app)
+        self.assertIn("if swept: scratch_sweep(self.store, swept[0], swept[1], lambda: scratch_busy(self.store, swept[0]['id'], job_id))", app)
+        self.assertLess(app.index('def run_job('), app.index('if swept: scratch_sweep'))  # once the whole reply ended, retries included
+        self.assertLess(app.index('if swept: scratch_sweep'), app.index('def _run_job('))
         self.fresh(name='p.png')
         self.assertEqual(self.ns['scratch_sweep'](object(), {'name': 'B'}, (self.scratch, self.ident, time.time() - 2), lambda: True), [])  # another reply is running
         self.assertTrue(os.path.exists(os.path.join(self.scratch, 'p.png')))
