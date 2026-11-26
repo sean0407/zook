@@ -300,7 +300,7 @@ def _hit(kind, what):
 def _opens(text):
     """(where each $( … ), <( … ), >( … ) (process substitution) or zsh's =( … ) starts, whether it is inside quotes read for sure: no
     backslash, $( … ), $'…', backtick, comment or second line; whether it seems in '…', where a shell -c reads it, not this line)."""
-    quote, sure = '', not set(text) & set('\\\n`') and '$(' not in text and "$'" not in text  # a # comment: what follows it never runs
+    quote, sure = '', not set(text) & set('\n`') and '$(' not in text and "$'" not in text and not re.search(r'\\(?:[\'"\\]|$)', text)  # a # comment: what follows it never runs
     for j, c in enumerate(text[:-1]):
         if sure and not quote and c == '#' and text[j - 1:j] in ('', ' ', '\t', ';', '&', '|', '('): return  # a comment, read for sure
         if c in '\'"' and quote in ('', c) and (quote == "'" or text[j - 1:j] != '\\'): quote = '' if quote else c
@@ -662,6 +662,8 @@ def _argv_boundaries(argv, whole, depth):
     elif name in ('tee', 'touch', 'mkdir', 'truncate', 'chmod', 'chown', 'chgrp', 'chflags', 'xattr', 'patch'): targets = plain
     elif name in ('sed', 'gsed', 'perl') and any(a.startswith('-i') or a == '--in-place' or re.fullmatch(r'-[a-zA-Z]*i[a-zA-Z]*', a) for a in args): targets = plain[1:] if name != 'perl' else plain
     elif name == 'dd': targets = [a[3:] for a in args if a.startswith('of=')]
+    if name in TARS or name == 'rsync':  # tar -T FILE, rsync --files-from=FILE: the names to pack come from that file
+        found += [_hit('secret', '讀取 ' + _names(x))] if (x := _listed([v for i, a in enumerate(args) for v in [a.split('=', 1)[1] if a.startswith('--files-from=') else ''.join(args[i + 1:i + 2]) if a == '--files-from' else _short_value(args, i, {'-f', '-C', '-b', '-X', '-s'}, 'T') if name in TARS else None] if v], name)) else []
     letter = {'sort': 'o', 'curl': 'o', 'wget': 'O', 'unzip': 'd'}.get(name, '')  # sort -o FILE, curl -o FILE, wget -O FILE, unzip -d FOLDER
     targets += [v for i in range(len(args)) for v in [_short_value(args, i, set(), letter) if letter else None] if v] + [a.split('=', 1)[1] for a in args if a.startswith(('--output=', '--output-document=')) and name in ('sort', 'curl', 'wget')]
     if name == 'unzip' and not any(a.startswith('-') and 'd' in a for a in args) or name in TARS and any(a in ('--extract', '--get') or re.fullmatch(r'-?[a-zA-Z]*x[a-zA-Z]*', a) for a in args[:1] + [a for a in args if a[:1] == '-']):

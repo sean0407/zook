@@ -33,7 +33,7 @@ def _folders():
 def _values(name):
     """What a variable of the line being read may hold: set on it on its own (NAME=value, export NAME=value) or a for loop's words;
     None when not known (set from outside, by read, by $( … ), or only for one command)."""
-    if name == 'PWD': return _folders()
+    if name == 'PWD': return None if any(re.search(r'\bPWD\+?=', x) for x in _LINES) else _folders()  # set by hand: not where it runs
     found = []
     for line in _LINES:
         temp = re.findall(r'(?:^|[\s;&|(])%s=["\']?\$\(\s*mktemp(?:\s+-[dqu]+|\s+-t\s+[\w.-]+)*\s*\)' % re.escape(name), line)  # a new temporary file
@@ -94,7 +94,7 @@ def _listed(files, prog, words=()):
             with os.fdopen(fd, 'rb') as h: text = h.read(65537).decode('utf-8', 'replace') if stat.S_ISREG(os.fstat(h.fileno()).st_mode) else None
         except (OSError, ValueError, IndexError): text = None
         odd = any(re.fullmatch(r'-[^-]*d.*|--delimiter(=.*)?|--colsep(=.*)?', w) for w in words)  # its own separator: not read here
-        out += ['（%s 列出的檔案）' % f] if text is None or len(text) > 65536 or odd else [x for x in map(_secret_any, re.split(r'[\s\0]+', text)) if x]
+        out += ['（%s 列出的檔案）' % f] if text is None or len(text) > 65536 or odd else [x for x in map(_secret_any, set(text.split('\0') + text.splitlines() + text.split())) if x]  # whole records too
     return out
 
 
