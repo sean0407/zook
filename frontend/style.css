@@ -1249,7 +1249,7 @@ button {
 .catalog-item small { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .catalog-item code { font-size: 11px; background: #f4f4f4; padding: 1px 5px; border-radius: 4px; }
 .modal-sub { font-size: 15px; margin: 18px 0 4px; }
-.field small.muted { display: block; margin-top: 4px; font-size: 11.5px; line-height: 1.5; }
+.field small.muted { display: block; margin-top: 4px; font-size: 12px; line-height: 1.5; color: #6b6b6b; }  /* #253: 11.5px at 2.8:1 was hard to read */
 .catalog-item .secondary { flex: none; white-space: nowrap; }
 
 /* Quota cards v2: aligned columns, account on its own lines, footer pinned to the bottom */
@@ -1650,7 +1650,11 @@ button.group-file-name:hover strong { text-decoration: underline; }
 .output-pdf.ready { opacity: 1; }
 .pdf-wrap { position: relative; }
 .pdf-loading { position: absolute; top: 40%; left: 0; right: 0; text-align: center; margin: 0; }
-.output-path { margin: 10px 0 0; word-break: break-all; }
+.office-note { margin: 0 0 10px; }
+.office-pages { display: flex; flex-direction: column; gap: 14px; }
+.office-page { margin: 0; text-align: center; }
+.office-page img { display: block; max-width: 100%; margin: 0 auto; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.office-page figcaption { margin-top: 4px; font-size: 12px; color: var(--muted); }
 .output-link { font: inherit; text-decoration: underline; text-decoration-style: dotted; }
 .local-link { font: inherit; color: #2563eb; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; text-align: left; }
 .button-link { display: inline-flex; align-items: center; text-decoration: none; }
@@ -1668,14 +1672,8 @@ button.group-file-name:hover strong { text-decoration: underline; }
 .avatar-edit::after { content: '✎'; position: absolute; right: -2px; bottom: -2px; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: #fff; border: 1px solid #e3e3e3; font-size: 12px; color: #666; }
 .avatar-panel { display: grid; gap: 12px; margin: 4px 0 14px; padding: 14px; border: 1px solid #ececec; border-radius: 14px; background: #fafafa; }
 .avatar-panel[hidden] { display: none; }
-.pin-toggle { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; cursor: pointer; flex: none; opacity: 0.35; filter: grayscale(1); }
-.pin-toggle input { position: absolute; opacity: 0; pointer-events: none; }
-.pin-toggle:has(input:checked) { opacity: 1; filter: none; background: #f2f2f2; }
-.pin-toggle:hover { opacity: 0.8; }
 .settings-note { margin: -4px 0 10px; }
 .bot-preview { position: relative; }
-.bot-preview .pin-toggle { position: absolute; top: 30px; left: calc(50% + 62px); }
-.bot-preview .pin-toggle input { width: auto; border: 0; padding: 0; }
 /* Skills, connectors and the catalog as a plain list: rows separated by a hairline, two columns, no filled cards. */
 .dir-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 44px; }
 .dir-card, .dir-card:hover { background: none; border-radius: 0; padding: 14px 0; min-height: 0; border-bottom: 1px solid #ececec; align-items: flex-start; }
@@ -1703,6 +1701,22 @@ button.group-file-name:hover strong { text-decoration: underline; }
 .plain-copy span { font-size: 12.5px; color: #6b6b6b; }
 .plain-actions { display: flex; gap: 14px; flex: none; }
 .plain-actions .link.danger { color: #b55; }
+/* #247: an activity line is a button that opens to its detail; the result sits on the right in words and colour */
+.act-rows { border-top: 0; margin-top: 0; }  /* #61: the filters' last line is its top edge, no second line that looks like an empty row */
+.act-row { width: 100%; border: 0; border-bottom: 1px solid #efefef; border-radius: 0; background: none; font: inherit; text-align: left; color: inherit; cursor: pointer; }
+.act-row:hover { background: #fafafa; }
+.act-row:focus-visible { outline: 2px solid #9cc4ff; outline-offset: -2px; }
+.act-result { flex: none; padding: 2px 9px; border-radius: 99px; font-size: 12px; font-weight: 600; background: #eef6ee; color: #1f6b2c; white-space: nowrap; }
+.act-result.r-failed { background: #fdecea; color: #a1261b; }
+.act-result.r-waiting { background: #fff4dc; color: #8a5300; }
+.act-result.r-denied { background: #f0f0f0; color: #555; }
+.act-result.r-warn { background: #fff4dc; color: #8a5300; }
+.act-detail { display: grid; gap: 6px; padding: 10px 12px 12px; border-bottom: 1px solid #efefef; background: #fafafa; font-size: 13px; }
+.act-line { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 10px; }
+.act-line span { color: #666; }
+.act-line p { margin: 0; color: #222; overflow-wrap: anywhere; }
+.act-go { padding-left: 82px; }
+@media (max-width: 520px) { .act-row { gap: 10px; } .act-line { grid-template-columns: 1fr; gap: 0; } .act-go { padding-left: 0; } }
 .rules-form { max-width: 760px; }
 .rules-form textarea { width: 100%; min-height: 110px; padding: 12px 14px; border: 1px solid #e3e3e3; border-radius: 12px; font: inherit; font-size: 14px; line-height: 1.6; resize: vertical; background: #fff; }
 .backup-actions { margin: 10px 0 4px; }
@@ -2166,6 +2180,19 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .quota-billed { display:flex; flex-direction:column; gap:2px; }
 .quota-billed b { font-size:14px; }
 .quota-billed small { color:var(--muted, #777); }
+
+/* #182 #183 #197: connectors page and the / menu */
+.form-error { margin: 4px 0 12px; padding: 8px 10px; border-radius: 8px; background: #fdecec; color: #b42318; font-size: 13px; line-height: 1.5; }
+.form-error[hidden] { display: none; }
+.connector-panes { display: grid; }
+.connector-panes > [data-for] { grid-area: 1 / 1; }
+.connector-panes > [data-for][hidden] { display: block; visibility: hidden; }  /* both kinds take the same room: switching does not move the buttons */
+.template-card .dir-desc { display: block; -webkit-line-clamp: unset; }
+.dir-card.fresh { outline: 2px solid #2585f6; outline-offset: 4px; border-radius: 10px; }
+.slash-keys { padding: 6px 10px 2px; border-top: 1px solid #eee; margin-top: 4px; font-size: 11.5px; color: #888; }
+.slash-empty { padding: 8px 10px; font-size: 13px; color: #555; line-height: 1.5; }
+.page:has(.dir-bar) { scrollbar-gutter: stable; }
+@media (max-width: 940px) { .dir-search { order: 3; flex: 1 0 100%; width: 100%; margin-left: 0; } }
 /* #176: 產出's switch for the scripts a Bot wrote to make its files */
 .output-scripts { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; padding: 0 2px; font-size: 12px; color: var(--muted); cursor: pointer; }
 /* 知識庫 (#84, #122, #123) */

@@ -22,7 +22,20 @@
       post(`bots/${encodeURIComponent(b.id)}/chats/${encodeURIComponent(mine)}/open`, {}).then(() => refresh()).catch(() => {});
   }
   // On every chat page draw: the first conversation this tab shows of a Bot is its own until it picks another.
+  // A reload of the Skills and connectors page opens that page again instead of the chat (#183). Per window, like the rest.
+  const LAST_PAGE_KEY = 'zook-last-page', KEPT_PAGES = ['skills', 'mcp', 'plugins'];
+  let lastPageSaved = null;
+  function restorePage() {
+    let page = '';
+    try { page = sessionStorage.getItem(LAST_PAGE_KEY) || ''; } catch (_) {}
+    if (KEPT_PAGES.includes(page) && state.page === 'chat') loadPage(page).catch(() => {});
+  }
+  function savePage() {
+    const page = KEPT_PAGES.includes(state.page) ? state.page : '';
+    if (page !== lastPageSaved && state.lastRestored) { try { sessionStorage.setItem(LAST_PAGE_KEY, page); lastPageSaved = page; } catch (_) {} }
+  }
   function saveLastOpen() {
+    savePage();
     if (state.page !== 'chat' || !state.lastRestored || !state.data) return;
     state.ownChats = state.ownChats || {};
     const b = (state.data.bots || []).find(x => x.id === state.selected);

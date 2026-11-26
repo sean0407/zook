@@ -169,7 +169,10 @@
         state.data.settings = await post('settings', {[key]: [...set]}, 'PATCH');
         if (kind === 'plugin') state.integrations = await api('integrations');
         const what = {skill: '這個 Skill', mcp: '這個連接器', plugin: '這個插件'}[kind] || '';
-        render(true); toast(turnOn ? `已開放${what}給所有 Bot` : `已停用${what}，所有 Bot 都不會再用它`);
+        const name = kind === 'skill' ? (state.integrations?.skills || []).find(x => x.id === id)?.name : '';
+        render(true);
+        toast(name ? (turnOn ? `已開啟「${name}」，移到「已開啟」，所有 Bot 都能用` : `已關閉「${name}」，移到「未啟用」，所有 Bot 都不會再用它`)
+          : turnOn ? `已開放${what}給所有 Bot` : `已停用${what}，所有 Bot 都不會再用它`);
       } catch (err) { e.target.checked = !turnOn; e.target.disabled = false; toast(err.message); }
       return;
     }
@@ -326,7 +329,8 @@
           state.page = 'chat';
           render()
         }
-        toast(id ? (result.autoNotice ? '已儲存 Bot。' + result.autoNotice : '已儲存 Bot') : result.autoReason ? '已建立 Bot，自動配好：' + result.autoReason : '已建立 Bot')
+        const made = '已建立「' + (result.name || result.bot?.name || data.name) + '」';  // #253: says which Bot, and stays long enough to be read
+        toast(id ? (result.autoNotice ? '已儲存 Bot。' + result.autoNotice : '已儲存 Bot') : result.autoReason ? made + '，自動配好：' + result.autoReason : made + '，可以開始對話了', id ? 3000 : 6000)
       } else if (form.id === 'mcp-bots-form') {
         const id = form.dataset.id, chosen = new Set(new FormData(form).getAll('bots'));
         for (const b of state.data.bots) {
@@ -368,10 +372,12 @@
         closeModal(); delete state.mcpTests['builtin:gmail'];
         state.integrations = await api('integrations'); await refresh(); toast('Gmail 已連接，所有 Bot 都可以使用');
       } else if (form.id === 'connector-form') {
-        const d = new FormData(form), transport = d.get('transport'), id = form.dataset.id, env = {};
+        const d = new FormData(form), transport = d.get('transport'), id = form.dataset.id, env = {}, err = form.querySelector('.form-error');
+        const problem = (text, field) => { err.textContent = text; err.hidden = !text; if (text) { err.scrollIntoView({block: 'nearest'}); form.elements[field]?.focus(); } };
+        problem('');
         for (const line of (d.get('env') || '').split('\n').map(x => x.trim()).filter(Boolean)) {
           const at = line.indexOf('=');
-          if (at < 1) { toast('環境變數每行要寫成 名稱=值'); return; }
+          if (at < 1) { problem('環境變數每行要寫成「名稱=值」，例如 API_KEY=abc。', 'env'); return; }
           env[line.slice(0, at).trim()] = line.slice(at + 1).trim();
         }
         const secret = (transport === 'http' ? d.get('secretHttp') : d.get('secretStdio')).trim();
@@ -381,10 +387,12 @@
         const more = {};
         for (const [k, v] of d.entries()) if (k.startsWith('more:') && String(v).trim()) more[k.slice(5)] = String(v).trim();
         if (Object.keys(more).length) body.moreSecrets = more;
-        const made = await post(id ? 'connectors/' + encodeURIComponent(id) : 'connectors', body, id ? 'PATCH' : 'POST');
+        let made;
+        try { made = await post(id ? 'connectors/' + encodeURIComponent(id) : 'connectors', body, id ? 'PATCH' : 'POST'); }
+        catch (error) { problem(error.message, /網址/.test(error.message) ? 'url' : /指令/.test(error.message) ? 'command' : 'name'); return; }
         closeModal(); delete state.mcpTests[made.id];
         state.integrations = await api('integrations'); await refresh();
-        toast(id ? '已儲存' : '已新增，所有 Bot 都可以使用。按「測試連線」確認');
+        toast(id ? '已儲存。按「測試連線」確認能不能用' : '已新增。按「測試連線」確認能不能用');
       } else if (form.id === 'profile-form') {
         const d = new FormData(form), type = d.get('accountType');
         if (type === 'key' && !d.get('key').trim()) { toast('請貼上 API 金鑰'); return; }

@@ -39,7 +39,7 @@ done
 <key>CFBundleDisplayName</key><string>Zook</string>
 <key>CFBundleIconFile</key><string>Zook</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.25.19</string>
+<key>CFBundleShortVersionString</key><string>0.25.20</string>
 <key>CFBundleVersion</key><string>4</string>
 <key>LSMinimumSystemVersion</key><string>12.0</string>
 <key>NSHighResolutionCapable</key><true/>

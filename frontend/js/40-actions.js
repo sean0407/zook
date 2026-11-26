@@ -509,6 +509,7 @@
         case 'skill-remove':
           if (!(await ask({title: `從 Zook 移除 Skill「${el.dataset.name}」？`, lines: ['所有 Bot 都不會再用到它。原本工具裡的那一份不受影響。'], ok: '移除'}))) break;
           await api('skills/' + encodeURIComponent(id.split(':')[1]), {method: 'DELETE'});
+          state.templates = null;  // a template's Skill removed is a template again, without reloading the page
           state.integrations = await api('integrations'); await refresh(); toast('已從 Zook 移除');
           break;
         case 'connector-copy': {
@@ -518,7 +519,7 @@
           try { state.mcpTests[made.id] = await post('mcp/' + encodeURIComponent(made.id) + '/test'); }
           catch (error) { state.mcpTests[made.id] = {status: 'error', error: error.message}; }
           render(true);
-          toast(state.mcpTests[made.id].status === 'ready' ? '已加入，連線正常' : '已加入，但連不上。需要登入的話請按「登入」');
+          toast(state.mcpTests[made.id].status === 'ready' ? '已加入，連線正常' : state.mcpTests[made.id].needsLogin ? '已加入，請按「登入」完成連接' : '已加入，但目前無法使用。原因寫在卡片上');
           break;
         }
         case 'pack-export': {
@@ -539,7 +540,7 @@
             const file = input.files[0];
             if (!file) return;
             if (file.size > 150 * 1024 * 1024) { toast('設定包超過 150 MB，無法匯入'); return; }
-            if (!(await ask({title: `匯入「${file.name}」？`, lines: ['設定包可以在這台 Mac 上執行程式，只匯入你自己匯出的檔案。'], ok: '匯入'}))) return;
+            if (!(await ask({title: `匯入「${file.name}」？`, lines: ['會加入裡面的 Skills 和連接器，所有 Bot 共用；已經有的會略過。', '設定包可以在這台 Mac 上執行程式，只匯入你自己匯出的檔案。'], ok: '匯入'}))) return;
             try {
               const text = await new Promise((done, fail) => { const reader = new FileReader(); reader.onload = () => done(reader.result); reader.onerror = fail; reader.readAsDataURL(file); });
               const r = await post('pack', {data: String(text).split(',')[1] || ''});
@@ -551,6 +552,7 @@
           break;
         }
         case 'catalog-why': catalogWhy(id); break;
+        case 'jump-templates': $('#skill-templates')?.scrollIntoView({behavior: 'smooth', block: 'start'}); break;
         case 'found-toggle': state.foundOpen = !state.foundOpen; render(true); break;
         case 'catalog-add': await catalogAdd(id); break;
         case 'connector-login': {

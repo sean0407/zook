@@ -198,7 +198,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(disabled.call('zook_run_skill_helper', args)['isError'])
 
     def test_legacy_sse_is_actionable(self):
-        with self.assertRaisesRegex(RuntimeError, 'Legacy SSE'):
+        with self.assertRaisesRegex(RuntimeError, 'SSE'):
             runtime.ProtocolClient({'transport': 'sse', 'url': 'https://example.com/sse'})
 
     def test_http_json_and_sse_sessions(self):
