@@ -21,7 +21,9 @@ def _unquoted(command):
             scripts.append(re.sub(r'\\([$"`\\])', r'\1', inner) if word[0] == '"' else inner); keep = ' _ '
         elif before.endswith('='): keep = word
         elif word[0] == '"': keep = '"%s"' % ' '.join(re.findall(r'\$\{?[A-Za-z_]\w*\}?', word))
-        else: keep = '_'
+        else:
+            if '$' in word: return command, None  # a $ written inside single quotes is a $, not a variable: nothing is guessed
+            keep = '_'
         out.append(command[pos:m.start()] + keep); pos = m.end()
     out.append(command[pos:])
     return ''.join(out), scripts
@@ -34,6 +36,7 @@ def line_vars(command, depth=0):
     when the name appears as a bare word, when it is set twice to different things, or when a relative value meets a cd: then the
     card says a variable decides. A line that is only sh -c '…' is read through its script; with anything else around it, nothing is known."""
     text, scripts = _unquoted(command)
+    if scripts is None: return {}
     text = re.split(r'<<(?!<)', text)[0]  # what follows a here-document marker (outside quotes) may be its text, not commands
     if scripts:
         wrapper = re.sub(r'(?:^|(?<=\s))(?:/\S*/)?(?:sh|bash|zsh|dash|ksh)\s+-[A-Za-z]*c\s+_', '', text, count=1).strip()
@@ -43,12 +46,13 @@ def line_vars(command, depth=0):
         return {}
     moves = re.search(r'(?:^|[\s;&|])(?:cd|pushd|popd|chdir)\b', rest)
     found, at = {}, {}
-    for m in re.finditer(r'(?:^|[;\n]|&&)\s*(?:(?:export|local|readonly|typeset|declare)(?:\s+-\w+)*\s+)?([A-Za-z_]\w*)=(\$\(\s*mktemp\b[^()`]*\)|"\$\(\s*mktemp\b[^()`"]*\)"|"[^"`]*"|\'[^\']*\'|[^\s;&|()`"\']*)(?=\s*(?:;|&&|\n|$))', text):
+    for m in re.finditer(r'(?:^|[;\n]|&&)\s*(?:(?:export|readonly)\s+)?([A-Za-z_]\w*)=(\$\(\s*mktemp\b[^()`]*\)|"\$\(\s*mktemp\b[^()`"]*\)"|"[^"`]*"|\'[^\']*\'|[^\s;&|()`"\']*)(?=\s*(?:;|&&|\n|$))', text):
         name, value = m.group(1), m.group(2)
-        if re.match(r'"?\$\(\s*mktemp\b', value): value = MADE_TEMP
+        if re.match(r'"?\$\(\s*mktemp\b', value): value = MADE_TEMP if re.fullmatch(r'"?\$\(\s*mktemp(?:\s+-[dq]+)*\s+-[dq]*d[dq]*(?:\s+-[dq]+)*\s*\)"?', value) else None  # only a folder in the Mac's own temporary place
         elif value[:1] in '"\'' and len(value) >= 2:
-            value = value[1:-1] if value[0] == '"' else value[1:-1].replace('$', '\0')  # nothing expands in single quotes
-            if value.startswith('~'): value = None  # ~ in quotes is a folder named ~, not home
+            if value[0] == "'" and '$' in value: value = None  # a literal $: shown as a variable, never expanded later
+            else: value = value[1:-1]
+            if value and value.startswith('~'): value = None  # ~ in quotes is a folder named ~, not home
         if value is not None and ('$(' in value or '`' in value): value = None
         if value is not None and moves and value != MADE_TEMP and not value.startswith(('/', '~', '$HOME', '${HOME}', '$TMPDIR', '${TMPDIR}')): value = None  # relative, after a cd
         found[name] = value if found.get(name, value) == value else None

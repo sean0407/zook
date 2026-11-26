@@ -30,7 +30,8 @@ class PlainCards(unittest.TestCase):
         self.assertEqual(titles('T=$(mktemp -d); rm -rf "$T/a.png"', 'delete'), ['刪除檔案 暫存資料夾裡的 a.png'])
         self.assertEqual(titles('D=~/Desktop/out; rm "$D/rightside.xlsx"', 'delete'), ['刪除檔案 ~/Desktop/out/rightside.xlsx'])
         self.assertEqual(titles('D="$HOME/報告"; OUT="$D/舊" && rm "$OUT/a.txt"', 'delete'), ['刪除檔案 ~/報告/舊/a.txt'])
-        self.assertEqual(titles('M=$(mktemp -d /tmp/pics.XXXX); rm -rf "$M"', 'delete'), ['刪除檔案 暫存資料夾'])
+        self.assertEqual(titles('M=$(mktemp -d -q); rm -rf "$M"', 'delete'), ['刪除檔案 暫存資料夾'])
+        self.assertEqual(titles('M=$(mktemp -d /tmp/pics.XXXX); rm -rf "$M"', 'delete'), ['刪除檔案 指令裡變數指到的位置'])  # a template may be anywhere: not guessed
         for command in ('T=$(mktemp -d); rm -rf "$T/a.png"', 'D=~/x; rm "$D/y"', 'rm "$OUT/x"', 'rm -rf "$T"'):
             for t in titles(command): self.assertNotIn('$', t, command); self.assertNotIn('指向的位置', t, command)
 
@@ -43,6 +44,8 @@ class PlainCards(unittest.TestCase):
                         'T=/tmp/a | cat; rm -rf "$T/x"', "cat > f.py <<EOF\nT=/tmp/a\nEOF\nrm -rf \"$T/x\"", 'T=/tmp/a; T+=/b; rm -rf "$T/x"',
                         '(T=/tmp/a); rm -rf "$T/x"', 'T=/tmp/a || true; rm -rf "$T/x"', 'printf -v T x; T=/tmp/a; rm -rf "$T/x"',
                         'T="~/Desktop"; rm -rf "$T/x"', 'cd /tmp; T=reports; rm -rf "$T/x"', "cat <<< 'T=/tmp'; rm -rf \"$T/x\"", 'echo "a; T=/tmp/a"; rm -rf "$T/x"',
+                        "T=/tmp/a; rm -rf '$T/x'", "T='$HOME'; rm -rf \"$T/x\"", "bash -c 'local T=/tmp/a; rm -rf \"$T/x\"'", 'T=$(mktemp "$HOME/Documents/r.XXXX"); rm -rf "$T/x"',
+                        'T=$(mktemp -d ~/Documents/r.XXXX); rm -rf "$T/x"', 'T=$(mktemp); rm -rf "$T/x"',
                         "bash -c 'T=/tmp/a'; rm -rf \"$T/x\"", "T=/tmp/a; bash -c 'rm -rf \"$T/x\"'", "T=/tmp/safe; echo '<<EOF'; T=\"$HOME/Documents\"; rm -rf \"$T/x\""):
             self.assertEqual(titles(command, 'delete'), ['刪除檔案 「x」（位置由指令裡的變數決定）'], command)  # set only sometimes, or otherwise: never guessed
 
