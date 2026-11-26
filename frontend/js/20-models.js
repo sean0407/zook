@@ -43,7 +43,7 @@
     return html.endsWith('</p>') ? `${html.slice(0, -4)} ${mark}</p>` : `${html}<p class="auto-mark-line">${mark}</p>`;
   };
   const skippedNote = m => (m.skipped || []).length ? '這次沒用到的連接器：' + m.skipped.join('、') : '';
-  const noteLine = m => ((autoInfo(m) && !m.auto ? '' : m.note) || EFFORT_LABEL[m.effort] || skippedNote(m)) ? `<small class="msg-note">${esc([EFFORT_LABEL[m.effort], autoInfo(m) && !m.auto ? '' : m.note, skippedNote(m)].filter(Boolean).join(' · '))}</small>` : '';
+  const noteLine = m => { const parts = [m.status === 'cancelled' ? '已停止回覆' : '', EFFORT_LABEL[m.effort], autoInfo(m) && !m.auto ? '' : m.note, skippedNote(m)].filter(Boolean); return parts.length ? `<small class="msg-note">${esc(parts.join(' · '))}</small>` : ''; };  // #264: the words kept from a stopped reply say it stopped
   // 思考強度 beside the message box: remembered per Bot or group while Zook is open; starts at the Bot's default.
   const EFFORTS = [{id: 'standard', name: '標準', hint: '交給模型自己決定，不另外指定'}, {id: 'fast', name: '快速', hint: '想得少一點，回得快'}, {id: 'medium', name: '中', hint: '比快速仔細，用量比深入少'}, {id: 'deep', name: '深入', hint: '想得更久、更仔細，用量較多'}];
   if (!state.effort) state.effort = {};
@@ -342,7 +342,7 @@
     return [providerShort(p) + (account ? '（' + account + '）' : ''), model, withEffort ? effort : ''].filter(Boolean).join(' · ');
   }
   function detail(b) {
-    return `${detailBackdrop()}<aside class="detail" aria-label="詳情"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatar(b,'big')}<h2>${esc(b.name)}</h2><p>${esc(botModelLine(b))}</p><p>${esc(permText(b))}</p>${b.autoAssigned && b.autoReason ? `<p class="muted small">自動配好：${esc(b.autoReason)}</p>` : ''}<button class="secondary detail-edit" data-action="edit-bot">編輯設定</button></div><div class="tabs"><button data-action="detail" data-id="persona" class="${state.detail==='persona'?'active':''}">人格</button><button data-action="detail" data-id="activity" class="${state.detail==='activity'?'active':''}">動態</button><button data-action="detail" data-id="database" class="${state.detail==='database'?'active':''}">知識庫</button><button data-action="detail" data-id="outputs" class="${state.detail==='outputs'?'active':''}">產出</button></div>${state.detail==='persona'?personaPanel(b):state.detail==='outputs'?outputsPanel(b):state.detail==='database'?`${knowledgeDetail(b)}${memoryNote(b)}`:`<div class="detail-title">最近動態</div>${toolTimeline(b.id)}${(b.messages||[]).length?`<div class="detail-empty">最近對話 ${esc(formatDate(b.messages.at(-1).createdAt))}</div>`:'<div class="detail-empty">這裡會顯示最近的對話動態。</div>'}`}${usageDock()}</aside>`
+    return `${detailBackdrop()}<aside class="detail" aria-label="詳情"><button class="detail-close icon-btn" data-action="toggle-detail" aria-label="關閉詳情">×</button><div class="detail-profile">${avatar(b,'big')}<h2>${esc(b.name)}</h2><p>${esc(botModelLine(b))}${troubleBadge(b)}</p><p>${esc(permText(b))}</p>${b.autoAssigned && b.autoReason ? `<p class="muted small">自動配好：${esc(b.autoReason)}</p>` : ''}<button class="secondary detail-edit" data-action="edit-bot">編輯設定</button></div><div class="tabs"><button data-action="detail" data-id="persona" class="${state.detail==='persona'?'active':''}">人格</button><button data-action="detail" data-id="activity" class="${state.detail==='activity'?'active':''}">動態</button><button data-action="detail" data-id="database" class="${state.detail==='database'?'active':''}">知識庫</button><button data-action="detail" data-id="outputs" class="${state.detail==='outputs'?'active':''}">產出</button></div>${state.detail==='persona'?personaPanel(b):state.detail==='outputs'?outputsPanel(b):state.detail==='database'?`${knowledgeDetail(b)}${memoryNote(b)}`:`<div class="detail-title">最近動態</div>${toolTimeline(b.id)}${(b.messages||[]).length?`<div class="detail-empty">最近對話 ${esc(formatDate(b.messages.at(-1).createdAt))}</div>`:'<div class="detail-empty">這裡會顯示最近的對話動態。</div>'}`}${usageDock()}</aside>`
   }
 
   function formatDate(d) {
@@ -456,12 +456,12 @@
       const q = (state.skillQuery || '').toLowerCase();
       const shown = a.filter(i => !q || (i.name + ' ' + (i.description || '')).toLowerCase().includes(q));
       content = `<p class="muted">Skills 由所有 Bot 共用。關閉的 Skill 不會提供給任何 Bot。目前啟用 ${a.filter(i => !off.has(i.id)).length} / ${a.length} 個。</p><input id="skill-search" class="secondary" style="width:100%;text-align:left;margin-bottom:16px" placeholder="搜尋 Skills" aria-label="搜尋 Skills" value="${esc(state.skillQuery||'')}">${shown.length ? `<div class="cards">${shown.map(i=>`<article class="card"><h3>${esc(i.name)}</h3><p>${esc(i.description||i.source||'')}</p><label class="ability-check"><input type="checkbox" data-shared-skill="${esc(i.id)}" ${off.has(i.id)?'':'checked'}> 所有 Bot 共用</label></article>`).join('')}</div>` : '<div class="blank">目前沒有偵測到項目。</div>'}`;
-    } else if (state.page === 'memory') {
+    } else if (state.page === 'memory') {  // a plain list (#298): the Bots keep it; 刪除 was there before and stays
       const mems = [...(state.data.memories || [])].reverse();
       const who = id => state.data.bots.find(b => b.id === id)?.name;
       // A Bot's own memory outlives the Bot; saying who wrote it would only repeat that the Bot is gone.
       const line = m => m.botId && !who(m.botId) ? '原 Bot 已刪除，沒有 Bot 會用到' : (m.botId ? who(m.botId) : '所有 Bot 共用') + ' · 由 ' + (who(m.createdBy) || '已刪除的 Bot') + ' 記住';
-      content = `<p class="muted">這裡是 Bot 幫你記住的習慣和偏好（例如：回覆用條列）。對 Bot 說「記住…」它就會記下。標「所有 Bot 共用」的每個 Bot 都知道；標 Bot 名稱的只有那個 Bot 知道。</p><p class="muted">每次回覆時，Bot 會帶入「所有 Bot 共用」和它自己的記憶，取最近 40 則。共用記憶不論哪一家的 Bot（Claude、Codex、Grok、Gemini…）都讀得到。</p>${mems.length ? `<div class="cards">${mems.map(m => `<article class="card"><p>${esc(m.content)}</p><span class="status">${esc(line(m))} · ${esc(formatDate(m.createdAt))}</span><div class="actions"><button class="link" data-action="delete-memory" data-id="${esc(m.id)}" style="color:#b55">刪除</button></div></article>`).join('')}</div>` : '<div class="blank">還沒有記憶。和 Bot 聊天時說「記住…」，它就會記下來。</div>'}`;
+      content = `<p class="memory-lead">記憶由 Bot 自己記，這裡只能查看和刪除。要改請直接跟 Bot 說「記住…」或「忘掉…」。</p><p class="muted">這裡是 Bot 幫你記住的習慣和偏好（例如：回覆用條列）。標「所有 Bot 共用」的每個 Bot 都知道；標 Bot 名稱的只有那個 Bot 知道。</p><p class="muted">每次回覆時，Bot 會帶入「所有 Bot 共用」和它自己的記憶，取最近 40 則。共用記憶不論哪一家的 Bot（Claude、Codex、Grok、Gemini…）都讀得到。</p>${mems.length ? `<div class="cards">${mems.map(m => `<article class="card"><p>${esc(m.content)}</p><span class="status">${esc(line(m))} · ${esc(formatDate(m.createdAt))}</span><div class="actions"><button class="link" data-action="delete-memory" data-id="${esc(m.id)}" style="color:#b55">刪除</button></div></article>`).join('')}</div>` : '<div class="blank">還沒有記憶。和 Bot 聊天時說「記住…」，它就會記下來。</div>'}`;
     } else if (state.page === 'mcp-legacy') {
       let a = state.integrations?.[state.page] || [], b = activeBot(), key = state.page === 'skills' ? 'enabledSkills' : 'enabledMcp';
       content = `<label class="field">設定對象<select id="ability-bot"><option value="">請選擇 Bot</option>${state.data.bots.map(x=>`<option value="${esc(x.id)}" ${b?.id===x.id?'selected':''}>${esc(x.name)}</option>`).join('')}</select></label><p class="muted">選擇要讓這個 Bot 使用的項目。</p>${a.length ? `<div class="cards">${a.map(i=>`<article class="card"><h3>${esc(i.name)}</h3><p>${esc(i.description||i.source||'')}</p>${state.page==='mcp'?`<span class="status">${esc(state.mcpTests[i.id]?.status==='ready'?'已驗證 · '+state.mcpTests[i.id].toolCount+' 個工具':state.mcpTests[i.id]?.status==='error'?'連線失敗：'+state.mcpTests[i.id].error:'已偵測設定，尚未驗證')}</span><div class="actions"><button class="link" data-action="test-mcp" data-id="${esc(i.id)}">測試連線</button></div>`:''}<label class="ability-check"><input type="checkbox" data-ability-kind="${key}" data-ability-id="${esc(i.id)}" ${b && (b[key]||[]).includes(i.id)?'checked':''} ${b?'':'disabled'}> 讓此 Bot 使用</label></article>`).join('')}</div>`:'<div class="blank">目前沒有偵測到項目。</div>'}`;
@@ -534,6 +534,7 @@
   function modal(title, body, footer = '', wide = false) {
     state.modal = document.activeElement;
     modalRoot.innerHTML = `<div class="modal-overlay" data-action="overlay"><section class="modal ${wide?'wide':''}" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="modal-head"><h2 id="modal-title">${esc(title)}</h2><button class="icon-btn" data-action="close-modal" aria-label="關閉">×</button></div>${body}${footer}</section></div>`;
+    modalEditsReset();  // 21b-unsaved.js
     setTimeout(() => $('.modal input,.modal textarea,.modal select,.modal button')?.focus(), 0);
     modalRoot.querySelectorAll('form').forEach(f => { f.noValidate = true; });  // an empty field is said in words; the browser's bubble may not show (#209)
     if ($('#bot-form')) syncFeatureRows($('#bot-form'));
@@ -553,7 +554,7 @@
     if (folder) folder.hidden = gated || form.elements.access?.value !== 'folder';
     const hint = form.querySelector('[data-auto-hint]');
     if (hint) hint.hidden = !auto;
-    const warn = form.querySelector('[data-quota-warn]'), said = warn ? quotaWarnText(choice) : '';
+    const warn = form.querySelector('[data-quota-warn]'), said = warn ? formTroubleText(form, choice) || quotaWarnText(choice) : '';  // used up or signed out: what 備用模型 then does (#80① #158②)
     if (warn) { warn.textContent = said; warn.hidden = !said; }
     sameFallback(form, auto ? '' : id);
   }
@@ -565,7 +566,7 @@
     dd.querySelectorAll('.dd-opt').forEach(o => {
       const base = o.dataset.base || (o.dataset.base = o.dataset.label), value = o.dataset.value, same = !!id && value === id, chosen = o.classList.contains('selected');
       o.hidden = same && !chosen;
-      o.dataset.label = value === '' ? fallbackDefaultLabel(id) : same ? base + '（同一家，不會切換）' : value === '__none' ? base : base + levelMark(accountLevel(value, ''));
+      o.dataset.label = value === '' ? fallbackDefaultLabel(id) : same ? base + '（同一家，不會切換）' : value === '__none' ? base : base + (troubleMark(modelTrouble(value, '')) || levelMark(accountLevel(value, '')));  // #80③ #158③
       o.querySelector('strong').textContent = o.dataset.label;
       if (chosen) dd.querySelector('.dd-label').textContent = o.dataset.label;
     });
@@ -573,7 +574,7 @@
 
   function closeModal() {
     $('#bot-form')?.modelRequest?.abort();
-    modalRoot.innerHTML = '';
+    modalRoot.innerHTML = ''; modalEditsReset();
     state.modal?.focus?.();
     state.modal = null
   }
@@ -668,5 +669,5 @@
     const intro = '<p class="muted sched-intro">時間到，或有新檔案、新信件時，自動送出訊息。Mac 和 Zook 要開著。</p>';
     if (!items.length) return intro + '<div class="blank">還沒有排程。</div>';
     const last = x => x.done ? '已完成' : !x.lastStatus ? '尚未執行' : (x.lastStatus === 'sent' ? '上次執行：' : x.lastStatus === 'missed' ? '上次錯過：' : '上次失敗：') + formatDate(x.lastAt) + (x.lastStatus !== 'sent' && x.lastError ? '（' + x.lastError + '）' : '');
-    return intro + `<div class="cards">${items.map(x => `<article class="card sched-card"><div class="sched-head"><h3>${esc(scheduleTitle(x))}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><div class="sched-meta"><span class="sched-state ${x.on ? 'on' : ''}">${x.on ? '已啟用' : x.done ? '已完成' : '已關閉'}</span><span>${esc(scheduleWhen(x))}</span>${scheduleNext(x) ? `<span>下次執行：${esc(nextLabel(scheduleNext(x)))}</span>` : ''}</div><p class="sched-content${longText(x.content) ? ' folded' : ''}">${esc(x.content)}</p>${longText(x.content) ? '<button class="link sched-more" data-action="sched-more" aria-expanded="false">展開</button>' : ''}${scheduleTarget(x)}<span class="status ${x.lastStatus && x.lastStatus !== 'sent' && !x.done ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button>${(x.runs || []).length ? `<button class="link" data-action="schedule-history" data-id="${esc(x.id)}">紀錄</button>` : ''}<button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`).join('')}</div>`;
+    return intro + `<div class="cards">${items.map(x => `<article class="card sched-card"><div class="sched-head"><h3>${esc(scheduleTitle(x))}</h3>${toggle(`data-schedule-switch data-id="${esc(x.id)}"`, x.on, '啟用這個排程')}</div><div class="sched-meta"><span class="sched-state ${x.on ? 'on' : ''}">${x.on ? '已啟用' : x.done ? '已完成' : '已關閉'}</span><span>${esc(scheduleWhen(x))}</span>${scheduleNext(x) ? `<span>下次執行：${esc(nextLabel(scheduleNext(x)))}</span>` : ''}</div><p class="sched-content${longText(x.content) ? ' folded' : ''}">${esc(x.content)}</p>${longText(x.content) ? '<button class="link sched-more" data-action="sched-more" aria-expanded="false">展開</button>' : ''}${scheduleTarget(x)}${x.botId && x.on ? scheduleTroubleLine(x) : ''}<span class="status ${x.lastStatus && x.lastStatus !== 'sent' && !x.done ? 'warn' : ''}">${esc(last(x))}</span><div class="actions"><button class="link" data-action="run-schedule" data-id="${esc(x.id)}">立即執行</button>${(x.runs || []).length ? `<button class="link" data-action="schedule-history" data-id="${esc(x.id)}">紀錄</button>` : ''}<button class="link" data-action="edit-schedule" data-id="${esc(x.id)}">編輯</button><button class="link" data-action="delete-schedule" data-id="${esc(x.id)}">刪除</button></div></article>`).join('')}</div>`;
   }

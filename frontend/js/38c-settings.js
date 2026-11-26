@@ -21,7 +21,7 @@
   // The model row lets its note run under the whole row, so a long note never squeezes the title into one character a line (#75①, #188②).
   function modelSection(s) {
     const fallbacks = s.fallbacks || [];
-    return `<h2 class="settings-h">模型</h2><p class="muted small settings-note">沒有另外指定的 Bot 用這裡的 AI。這兩項改完要按「儲存模型設定」；下面的「備用 AI」一改就存好。</p><form id="settings-form" class="setting-list">${settingRow('預設用哪家 AI', '新的 Bot 和沒有另外指定的 Bot 用這一家', `<select name="provider" class="plain-select" aria-label="預設用哪家 AI">${providerOptions(s.provider || 'codex', false)}</select>`)}<div class="setting-row model-row"><div class="setting-copy"><strong>預設型號</strong><span>同一家 AI 的不同版本。不確定就選「建議的型號」</span></div><div class="setting-control">${modelPicker(s.model || '', true)}</div></div><div class="setting-actions"><button class="primary" data-save>儲存模型設定</button><span class="unsaved-note" data-unsaved hidden>尚未儲存</span></div></form><div class="setting-list">${[0, 1].map(i => settingRow('備用 AI ' + (i + 1), i ? '第一個備用也不能用時，改用這一家' : '預設的 AI 額度用完或連不上時，改用這一家', dropdown('fallback' + i, fallbacks[i] || '', [{id: '', name: '不使用'}, ...providerList()], 'data-fallback-slot'))).join('')}</div>`;
+    return `<h2 class="settings-h">模型</h2><p class="muted small settings-note">沒有另外指定的 Bot 用這裡的 AI。這兩項改完要按「儲存模型設定」；下面的「備用 AI」一改就存好。</p><form id="settings-form" class="setting-list">${settingRow('預設用哪家 AI', '新的 Bot 和沒有另外指定的 Bot 用這一家', `<select name="provider" class="plain-select" aria-label="預設用哪家 AI">${providerOptions(s.provider || 'codex', false)}</select>`)}<div class="setting-row model-row"><div class="setting-copy"><strong>預設型號</strong><span>同一家 AI 的不同版本。不確定就選「建議的型號」</span></div><div class="setting-control">${modelPicker(s.model || '', true)}</div></div><div class="setting-actions"><button class="primary" data-save>儲存模型設定</button><span class="unsaved-note" data-unsaved hidden>尚未儲存</span></div></form><div class="setting-list">${[0, 1].map(i => settingRow('備用 AI ' + (i + 1), i ? '備用 AI 1 也不能用時，改用這一家' : 'Bot 的 AI 額度用完、未登入或連不上時，依序改用備用 AI 1、2，回覆裡會註明改用哪一家', dropdown('fallback' + i, fallbacks[i] || '', [{id: '', name: '不使用'}, ...providerList().map(p => ({...p, name: p.name + troubleMark(modelTrouble(p.id, ''))}))], 'data-fallback-slot'))).join('')}</div>`;
   }
 
   // The settings page draws its two lists of choices (provider, model) like every other menu (#188⑥).
@@ -102,11 +102,12 @@
     showSavedFlash.timer = setTimeout(() => document.querySelectorAll('.saved-flash').forEach(x => x.remove()), left);
   }
 
-  // The settings page has its own address, so reloading stays there (#188④, #76④).
+  // Each page has its own address (#settings, #schedules …), so reloading stays there (#188④, #76④, #168③); a conversation has none.
+  const PAGE_HASHES = ['settings', 'schedules', 'usage', 'skills', 'mcp', 'plugins', 'memory', 'knowledge', 'activity'];
   function syncSettingsHash() {
-    const want = state.page === 'settings', has = location.hash === '#settings';
+    const want = PAGE_HASHES.includes(state.page) ? '#' + state.page : '', has = PAGE_HASHES.includes(location.hash.slice(1)) ? location.hash : '';
     try {
-      if (want && !has) history.replaceState(null, '', '#settings');
+      if (want && want !== has) history.replaceState(null, '', want);
       else if (!want && has) history.replaceState(null, '', location.pathname + location.search);
     } catch (_) {}
   }

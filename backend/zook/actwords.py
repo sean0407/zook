@@ -135,6 +135,7 @@ def _describe(command, depth=0):
             continue  # without a file it reads what came before it in a pipe, or writes a here-document (said by the redirect)
         if name in ('sed', 'perl') and any(a.startswith('-i') for a in args):  # the expression comes first: the file is the last word
             steps.append('修改檔案「%s」' % _file_word(args[-1]) if _file_word(args[-1]) else '修改檔案'); continue
+        if name in ('rg', 'ripgrep') and gate._rg_list_only(args, text, depth): steps.append('尋找檔案'); continue  # names only, no contents (#138)
         phrase = PHRASES.get(name)
         if phrase: steps.append(phrase.replace('「{f}」', '「%s」' % first if first else '').replace('{f}', first)); continue
         steps.append(OTHER)  # a name Zook does not know may be a word of code: not shown

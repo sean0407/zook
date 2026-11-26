@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""The words of an approval card for a CLI's own command (#234), for zook_gate.py: what a variable set on the same line holds, Zook's
+"""Part of zook_gate.py, read into its namespace (_load): the words of an approval card for a CLI's own command (#234): what a variable set on the same line holds, Zook's
 own folders and the Mac's temporary folder by name, and what a command does in the activity list's plain words. Only words: nothing
 here decides what is asked."""
 import os, re
@@ -140,3 +140,50 @@ def plain_steps(command, gate, here):
     try: steps, _ = space['_describe'](space['shell_inner'](command))
     except Exception: return []
     return [x for x in dict.fromkeys(steps) if x not in (space['OTHER'], space['UNREADABLE'])]
+
+
+_PLAIN = [True]  # False only while decide() measures a card as before #234
+_VARS = [{}]  # the variables of the command line being read (line_vars), for the card's words only
+
+
+def _resolve(text):
+    return resolve(text, _VARS[0], _expand)
+
+
+def _place(full, temp=False):
+    own = os.environ.get('ZOOK_SCRATCH', '')  # <data>/workspaces/<this Bot>/.zook-scratch: only this Bot's own folders are named
+    return place(full, temp, os.environ.get('ZOOK_DATA_DIR', ''), SCRATCH_PART, os.path.basename(os.path.dirname(own)) if own.endswith('/.zook-scratch') else '')
+
+
+def _plain_steps(command):
+    return plain_steps(command, type('Gate', (), {k: staticmethod(v) if callable(v) else v for k, v in globals().items() if not k.startswith('__')}), HERE)
+
+
+def _unclear_title(command):
+    """The one line for a command whose every effect cannot be read from it: what it does and which files, in plain words (#234),
+    never 「無法判讀」. Why it is asked is said by the card itself."""
+    steps = _plain_steps(command)
+    shown = '、'.join(steps[:3]) + ('等 %d 個步驟' % len(steps) if len(steps) > 3 else '')
+    return '%s：%s' % (LABELS['unclear'], _short(shown, 150)) if steps else '%s（Zook 看不出它會做什麼）' % LABELS['unclear']
+
+
+def _where_plain(path):
+    """Where a file is, whole, in plain words (#234): a variable set on the same line is shown as what it holds, one set elsewhere says
+    so; this Bot's own folders and the Mac's temporary folder are named, not spelled out; a linked folder on the way is followed."""
+    text = str(path or '').strip('"\'').replace('\\$', '$')  # \$ inside sh -c "…" is a $ once the inner shell reads it
+    if '$' in text or '`' in text:
+        known = None if '$ZOOKSUB' in text else _resolve(text)  # what $( … ) prints is not known here
+        if known is None:
+            tail = text.rstrip('/').split('/')[-1]
+            return '「%s」（位置由指令裡的變數決定）' % mid(tail, 60) if '/' in text and tail and not set(tail) & set('$`{}()') else '指令裡變數指到的位置'
+        if known.startswith(MADE_TEMP):
+            rest = known[len(MADE_TEMP):].strip('/')
+            return '暫存資料夾裡的 %s' % rest if rest else '暫存資料夾'
+        text = known
+    if text.lower().startswith('file://'): text = _file_url(text)
+    elif '://' in text: return _host(text) or '網址'
+    full = os.path.normpath(_abs(text))
+    full = os.path.join(os.path.realpath(os.path.dirname(full)), os.path.basename(full)) if os.path.basename(full) else full
+    home = next((h for h in (HOME, os.path.realpath(HOME)) if full == h or full.startswith(h + os.sep)), '')
+    if home and full == home: return '家目錄'
+    return _place(full) or ('~' + full[len(home):] if home else _place(full, temp=True) or full)  # never cut short: the card shows the whole target

@@ -1,5 +1,6 @@
 # 產出: the files a Bot made or changed, for its detail panel. Listing only; nothing here widens what a Bot can reach.
 # Loaded by backend/server.py into one shared namespace.
+import errno
 OUTPUT_LIMIT = 200
 OUTPUT_SECONDS = 4  # 產出 answers within this, with what it found by then
 OUTPUT_PREVIEW = {'.txt': 'text', '.md': 'markdown', '.markdown': 'markdown', '.csv': 'text', '.json': 'text', '.log': 'text', '.py': 'text', '.js': 'text', '.ts': 'text', '.html': 'text', '.css': 'text',
@@ -51,6 +52,57 @@ def named_folders(text):
         if word.count('/') >= 2 and word not in found and not _folder_never(word):
             found.append(word)
             if len(found) >= 10: break
+    return found
+
+
+# #258: a link in a reply to a file that is not on this Mac is marked 「檔案找不到」. Read the way the window reads links (10-chat.js
+# MD_LINK, mdTarget and the bare file:// links), so the paths noted are the ones its buttons carry.
+LINK_MD = re.compile(r'\[([^\[\]]+)\]\((\s*<[^<>\n]*>[^()\n]*|(?:[^()\n]|\([^()\n]*\))*)\)')
+LINK_FILE = re.compile(r'(?<![A-Za-z0-9+.\-/])file://(?:localhost)?/[^\s<>()（）"\'`*\x00，。、；：！？「」『』【】《》]+', re.I)
+LINK_CODE = re.compile(r'```[\s\S]*?(?:```|$)|`[^`\n]+`')
+MISSING_MAX = 20
+LINK_MOUNTED = ('/Volumes/', '/Network/', '/net/', '/automount/', '/System/Volumes/')
+
+
+def _link_path(target):
+    """The file on this Mac a link target names, as the window's button carries it ('' when it names none)."""
+    t = target.strip()
+    q = t[-1:]
+    at = t.rfind(q, 0, len(t) - 1) if q in ('"', "'") else -1
+    if at > 0 and t[at - 1].isspace(): t = t[:at].strip()  # a title: [a](<b> "title")
+    if t.startswith('<'):
+        t = t[1:]; close = t.find('>')
+        if close >= 0: t = t[:close]
+    t = t.rstrip(' \t\r\n\f\v>').strip()
+    if re.match(r'file:/?/', t, re.I):
+        t = re.sub(r'^file:(//(localhost)?)?', '', t, flags=re.I)
+        try: t = unquote(t, errors='strict')
+        except (UnicodeDecodeError, ValueError): pass
+    elif not re.match(r'(/(?!/)|~/)', t): return ''
+    return t if (t.startswith('/') and not t.startswith('//')) or t.startswith('~/') else ''
+
+
+def _link_there(path):
+    """False only when the file is certainly not there; a folder it may not look into, or any other doubt, counts as there."""
+    try: os.stat(path); return True
+    except OSError as exc: return exc.errno not in (errno.ENOENT, errno.ENOTDIR)
+    except ValueError: return True
+
+
+def reply_missing_links(text):
+    """Paths a reply links to (Markdown links and bare file:// links) that are not on this Mac, as written, in order. Outside the store lock."""
+    text = LINK_CODE.sub(' ', str(text or '')[:50000])  # what is shown as code is not a link
+    targets = [m.group(2) for m in LINK_MD.finditer(text)]
+    targets += [m.group(0)[:len(m.group(0).rstrip('.,;:!?'))] for m in LINK_FILE.finditer(LINK_MD.sub(' ', text))]
+    found = []
+    for target in targets:
+        path = _link_path(target)
+        if not path or len(path) > 1024 or path in found: continue
+        if os.path.normpath(os.path.expanduser(path)).startswith(LINK_MOUNTED): continue  # another disk or a network share may not answer quickly: not checked
+        there = any(_link_there(os.path.expanduser(p)) for p in (path, unquote(path)))
+        if not there:
+            found.append(path)
+            if len(found) >= MISSING_MAX: break
     return found
 
 
@@ -152,11 +204,63 @@ def bot_outputs(store, bot):
         if scope == 'folder' and not (_inside(real, workspace) or (folder and (low == folder.casefold() or _inside(real, folder)))): continue
         for child in _folder_files(real, since, until):
             if not _inside(os.path.realpath(child), attached): add(os.path.realpath(child), since, until)
+    wanted = [p for text, _, _ in asked for p in named_folders(text) + [x.rsplit('/', 1)[0] for x in named_paths(text)]]
+    for item in found.values(): item['stage'] = output_stage(item['path'], wanted, workspace)
     return sorted(found.values(), key=lambda x: x['at'], reverse=True)[:OUTPUT_LIMIT]
 
 
+# #269: 成品 and 中間檔. The script a Bot made its files with, and anything in a scratch place (/tmp, the Mac's temporary folders,
+# a hidden folder such as .zook-scratch) unless the user asked for the files there, are 中間檔. Only a label: nothing is hidden.
+WORK_SCRIPTS = ('.py', '.js', '.mjs', '.cjs', '.ts', '.sh', '.zsh', '.bash', '.swift', '.rb', '.pl', '.applescript', '.scpt')
+
+
+def _tmp_place(path):
+    """/tmp and /private/tmp (and /var) are one place on a Mac."""
+    low = path.rstrip('/').casefold()
+    return low[8:] if low.startswith(('/private/tmp/', '/private/var/')) or low in ('/private/tmp', '/private/var') else low
+
+
+def output_stage(path, asked=(), workspace=''):
+    if pathlib.Path(path).suffix.lower() in WORK_SCRIPTS: return 'work'
+    place = _tmp_place(path)
+    if any(a and _inside(place, _tmp_place(a)) for a in asked): return 'final'  # where the user asked for the files
+    if workspace and _inside(path, workspace): return 'work' if any(x.startswith('.') for x in pathlib.PurePosixPath(os.path.relpath(path, workspace)).parts[:-1]) else 'final'
+    if place.startswith(('/tmp/', '/var/folders/')) or any(x.startswith('.') for x in pathlib.PurePosixPath(path).parts[1:-1]): return 'work'
+    return 'final'
+
+
+def group_outputs(store, bot):
+    """#194: files this Bot saved into a group's shared files, listed under its own 產出 with the group's name. The maker is the
+    Bot's id when it was kept (byId), else its name in a group it is in. Only plain files straight in that group's folder."""
+    with store.lock:
+        picks = []
+        for group in store.data.get('groups') or []:
+            if not isinstance(group, dict): continue
+            mine = [n for n, x in (group.get('fileInfo') or {}).items() if isinstance(x, dict) and ((x.get('byId') == bot['id']) if x.get('byId') else (x.get('by') == bot.get('name') and bot['id'] in (group.get('botIds') or [])))]
+            if mine: picks.append((group.get('id'), str(group.get('name') or '群組'), set(mine)))
+    found = []
+    for group_id, group_name, names in picks:
+        try: folder = group_files_dir(store, group_id)
+        except ValueError: continue
+        for entry in _plain_files(folder):
+            path = group_preview_path(store, group_id, entry.name) if entry.name in names else None  # only straight inside the group's own folder, no link on the way (officeview.py)
+            if not path: continue
+            try: info = os.lstat(path)
+            except OSError: continue
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1: continue
+            found.append(dict(id=hashlib.sha256(path.encode()).hexdigest()[:20], name=entry.name, path=path, size=info.st_size, kind=_output_kind(entry.name), stage='final',
+                              at=datetime.datetime.fromtimestamp(info.st_mtime, datetime.timezone.utc).isoformat(), group=group_name, groupId=group_id))
+    return found
+
+
+def bot_outputs_all(store, bot):
+    """產出 as the panel shows it: the Bot's own outputs and what it made in groups."""
+    mine = bot_outputs(store, bot); seen = {x['path'] for x in mine}
+    return sorted(mine + [x for x in group_outputs(store, bot) if x['path'] not in seen], key=lambda x: x['at'], reverse=True)[:OUTPUT_LIMIT]
+
+
 def bot_output(store, bot, output_id):
-    return next((x for x in bot_outputs(store, bot) if x['id'] == output_id), None)
+    return next((x for x in bot_outputs_all(store, bot) if x['id'] == output_id), None)
 
 
 def output_response(item):

@@ -798,7 +798,7 @@ def describe_call(call):
              'zook_run_skill_helper': '執行 Skill 附帶的小程式', 'zook_native_gate': str(a.get('title') or '做需要核准的動作')[:200], 'zook_workspace_list': '查看工作區裡有哪些檔案', 'zook_group_file_read': '讀取群組共用檔案「%s」' % (a.get('name') or ''), 'zook_workspace_read': '讀取檔案「%s」' % base(a.get('path')),
              'zook_workspace_write': '把內容存成檔案「%s」' % base(a.get('path')), 'zook_list_team': '查看團隊裡有哪些 Bot 和群組', 'zook_create_bot': '新增 Bot「%s」' % (a.get('name') or ''),
              'zook_create_group': '建立群組「%s」' % (a.get('name') or '、'.join(a.get('bot_names') or [])), 'zook_start_group_discussion': '在群組「%s」發起討論' % (a.get('group_name') or ''),
-             'zook_feature': '使用%s' % str(a.get('feature') or '特色功能'), 'zook_remember': '記住一件事：「%s」' % str(a.get('content') or '')[:60], 'zook_ask_user': '問你：「%s」' % str(a.get('question') or '')[:60], 'zook_list_schedules': '查看排程',
+             'zook_feature': '使用%s' % str(a.get('feature') or '特色功能'), 'zook_remember': '記住一件事：「%s」' % str(a.get('content') or '')[:60], 'zook_forget': '忘掉一則記憶：「%s」' % str(a.get('content') or '')[:60], 'zook_ask_user': '問你：「%s」' % str(a.get('question') or '')[:60], 'zook_list_schedules': '查看排程',
              'zook_create_schedule': '建立排程「%s」' % str(a.get('content') or '')[:40], 'zook_update_schedule': '修改排程', 'zook_delete_schedule': '刪除排程',
              'zook_browser_open': '用內建瀏覽器開啟 %s' % str(a.get('url') or '')[:80], 'zook_browser_click': '在網頁上點第 %s 個連結' % str(a.get('number') or '')[:6],
              'zook_browser_scroll': '把網頁往上捲' if a.get('direction') == 'up' else '把網頁往下捲', 'zook_browser_read': '讀網頁的下一段', 'zook_browser_links': '看網頁上的更多連結',
