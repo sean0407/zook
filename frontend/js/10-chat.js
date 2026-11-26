@@ -172,12 +172,12 @@
     body: JSON.stringify(body)
   }).then(r => { if (path === 'settings' && method === 'PATCH') settingSaved(); return r; }, e => { if (path === 'settings' && method === 'PATCH') settingFailed(); throw e; });  // 設定頁 shows 「已儲存」 beside what changed (38c-settings.js)
 
-  function toast(message) {
+  function toast(message, ms = 3000) {
     const el = $('#toast');
     el.textContent = message;
     el.classList.add('show');
     clearTimeout(toast.timer);
-    toast.timer = setTimeout(() => el.classList.remove('show'), 3000)
+    toast.timer = setTimeout(() => el.classList.remove('show'), ms)
   }
 
   function shapeIndex(shape) {

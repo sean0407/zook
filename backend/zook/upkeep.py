@@ -209,16 +209,20 @@ def log_activity(store, kind, text, by=''):
     except OSError: pass
 
 
-def activity_list(store, kind=''):
+def activity_list(store, kind='', result=''):
+    """Newest first: approvals a Bot waits for now, then the saved lines; each says how it ended (actlog.py). Lock held."""
     try:
         with _activity_lock: lines = activity_path(store).read_text(encoding='utf-8').splitlines()[-ACTIVITY_KEEP:]
     except OSError: lines = []
-    out = []
+    result = result if result in ACTIVITY_RESULTS else ''
+    out = [x for x in activity_waiting(store) if kind in ('', 'approval') and result in ('', 'waiting')]
     for line in reversed(lines):
         try: item = json.loads(line)
         except ValueError: continue
-        if isinstance(item, dict) and (not kind or item.get('kind') == kind): out.append(item)
-    return dict(items=out, kinds=[dict(id=k, name=v) for k, v in ACTIVITY_KINDS.items()])
+        if not isinstance(item, dict) or (kind and item.get('kind') != kind): continue
+        item.update(activity_outcome(item))
+        if not result or item['result'] == result: out.append(item)
+    return dict(items=out, kinds=[dict(id=k, name=v) for k, v in ACTIVITY_KINDS.items()], results=[dict(id=k, name=v) for k, v in ACTIVITY_RESULTS.items()])
 
 
 # ---- CLIs Zook no longer supports. Data from before (or a restored backup) may still name them.
@@ -460,8 +464,8 @@ def upkeep_route(handler, store, parts, path):
     if handler.device: return handler.error(403, '這項功能只能在 Mac 上使用。')
     method, n = handler.command, len(parts)
     if path == '/api/activity' and method == 'GET':
-        kind = (parse_qs(urlsplit(handler.path).query).get('kind') or [''])[0]
-        return handler.respond(200, activity_list(store, kind if kind in ACTIVITY_KINDS else ''))
+        query = parse_qs(urlsplit(handler.path).query); kind = (query.get('kind') or [''])[0]
+        return handler.respond(200, activity_list(store, kind if kind in ACTIVITY_KINDS else '', (query.get('result') or [''])[0]))
     if path == '/api/budget' and method == 'GET': return handler.respond(200, budget_view(store))
     if parts[:2] == ['api', 'backups']:
         if backup_route(handler, store, parts, path): return
