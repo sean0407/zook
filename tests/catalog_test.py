@@ -56,7 +56,7 @@ class CatalogTest(unittest.TestCase):
         z, app, store = self.load()
         first, _ = z.catalog_add(app, 'svc', 'good-key-12345'); again, _ = z.catalog_add(app, 'svc', 'good-key-12345')
         self.assertEqual((len(store.data['connectors']), first['id']), (1, again['id'])); self.assertEqual(len(list((self.root / 'secrets2').iterdir())), 1)
-        self.assertEqual(z.secret_get(first['secretId']), 'good-key-12345'); self.assertNotIn('good-key-12345', json.dumps(store.data))
+        self.assertEqual(z.secret_get(store.data['connectors'][0]['secretId']), 'good-key-12345'); self.assertEqual(z.secret_get(first['secretId']), '')  # the new key under a new id, the old one gone; self.assertNotIn('good-key-12345', json.dumps(store.data))
 
     def test_a_failed_save_leaves_no_key_behind(self):
         z, app, store = self.load()

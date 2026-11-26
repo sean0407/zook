@@ -185,7 +185,7 @@ def oauth_finish(app, state, code):
             elif now: new['name'] = '帳號 %d' % (len(others) + 2); others.append(new)  # another account; the default stays as it is
             else: new['name'] = '帳號 1'; record['oauth'] = new
             if not others: record.pop('otherAccounts', None)
-            store.save()
+            connector_touch(record['id'], signed_in=True); store.save()
     if not fits: blob_delete(blob_id); raise ValueError(changed)
     if old: blob_delete(old)
 
@@ -229,7 +229,7 @@ def _mark_lost(accounts, secret_id):
 def _oauth_lost(store, connector_id, secret_id):
     with store.lock:
         record = next((c for c in store.data['connectors'] if c['id'] == connector_id), None) or {}
-        if _mark_lost([record.get('oauth')] + list(record.get('otherAccounts') or []), secret_id): store.save()
+        if _mark_lost([record.get('oauth')] + list(record.get('otherAccounts') or []), secret_id): connector_touch(connector_id); store.save()  # it can no longer be used as tested
     return ''
 
 
@@ -279,7 +279,7 @@ def oauth_switch(store, connector_id, account_id, name=None):
             if not pick: raise LookupError('找不到這個帳號。')
             pick['name'] = name.strip()
         elif not _switch(record, 'oauth', 'otherAccounts', account_id): raise LookupError('找不到這個帳號。')
-        store.save()
+        connector_touch(record['id']); store.save()
 
 
 def oauth_logout(store, connector_id, account_id=None, everything=False):
@@ -290,6 +290,7 @@ def oauth_logout(store, connector_id, account_id=None, everything=False):
         while record and (record.get('oauth') or record.get('otherAccounts')):
             removed = _remove(record, 'oauth', 'otherAccounts', account_id); gone.append(removed)
             if not everything or not removed: break
+        if record: connector_touch(record['id'])
         store.save()
     for blob_id in gone:
         if blob_id: blob_delete(blob_id)

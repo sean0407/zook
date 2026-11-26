@@ -467,6 +467,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.respond(200, bot)
             if path == '/api/skill-templates' and self.command == 'GET': return self.respond(200, dict(items=template_view(store)))
             if path == '/api/skills/template' and self.command == 'POST' and not self.device: return self.respond(201, template_add(store, self.body().get('id')))
+            if parts[:2] == ['api', 'skills'] and ((len(parts) == 2 and self.command == 'POST') or (len(parts) == 3 and self.command in ('GET', 'PATCH'))) and not self.device: return self.respond(*custom_skill_route(store, self.command, parts[2:], self.body() if self.command != 'GET' else {}))
             if path == '/api/skills/import' and self.command == 'POST':
                 ids = self.body().get('ids')
                 if not isinstance(ids, list) or len(ids) > 1024 or any(not isinstance(x, str) for x in ids): return self.error(400, '請選擇要匯入的 Skill。')
@@ -507,9 +508,10 @@ class Handler(BaseHTTPRequestHandler):
                 with store.lock:
                     store.data['connectors'].append(record)
                     st = store.data['settings']; shared = st.get('sharedMcp') or []; was_on = ident in shared
-                    st['sharedMcp'] = [x for x in shared if x != ident] + (['zook:' + record['id']] if was_on else [])
+                    st['sharedMcp'] = [x for x in shared if x != ident]
                     store.save()
-                return self.respond(201, dict(id='zook:' + record['id'], name=record['name'], on=was_on))
+                on, test = connector_first_test(store, 'zook:' + record['id'], was_on)
+                return self.respond(201, dict(id='zook:' + record['id'], name=record['name'], on=on, test=test))
             if path == '/api/pack' and self.command == 'GET':
                 try: raw, skill_count, connector_count = pack_export(store)
                 except ValueError as exc: return self.error(400, str(exc))
@@ -539,6 +541,8 @@ class Handler(BaseHTTPRequestHandler):
                 try: google_switch(store, self.body().get('account'))
                 except LookupError as exc: return self.error(404, str(exc))
                 return self.respond(200, {'ok': True})
+            if len(parts) == 4 and parts[:2] == ['api', 'connectors'] and parts[3] == 'turn-on' and self.command == 'POST' and not self.device:  # after its sign-in: tested again here, on only if what was tested is what is saved (#303)
+                self.body(); on, test = connector_first_test(store, 'zook:' + parts[2], 'if-waiting', waiting=True); return self.respond(200, dict(on=on, test=test))
             if len(parts) == 4 and parts[:2] == ['api', 'connectors'] and parts[3] in ('login', 'logout') and self.command == 'POST' and not self.device:
                 with store.lock: record = copy.deepcopy(next((c for c in store.data['connectors'] if c['id'] == parts[2]), None))
                 if not record: return self.error(404, '找不到這個連接器。')
@@ -557,31 +561,18 @@ class Handler(BaseHTTPRequestHandler):
                     if (len(parts) == 2 and self.command == 'POST') or (existing and self.command == 'PATCH'):
                         record, secret = connector_fields(body, existing)
                         with store.lock:
-                            if any(c['name'] == record['name'] and c['id'] != record['id'] for c in store.data['connectors']): raise ValueError('已經有同名的連接器。')
-                        if secret:
-                            record['secretId'] = record['secretId'] or ID(); secret_set(record['secretId'], secret)
-                        elif not record['secretName'] and record['secretId']:
-                            secret_delete(record['secretId']); record['secretId'] = ''
+                            if any(same_name(c['name']) == same_name(record['name']) and c['id'] != record['id'] for c in store.data['connectors']): raise ValueError('已經有同名的連接器（大小寫不同也算同名）。')
                         more = body.get('moreSecrets') if isinstance(body.get('moreSecrets'), dict) else {}
-                        for key, value in more.items():  # keys a copied or imported connector carries besides the main one
-                            if key in record['moreSecrets'] and isinstance(value, str) and value.strip():
-                                record['moreSecrets'][key] = record['moreSecrets'][key] or ID(); secret_set(record['moreSecrets'][key], value.strip())
-                        with store.lock:
-                            current = next((c for c in store.data['connectors'] if c['id'] == record['id']), None) or {}
-                            stale = current.get('oauth')  # read now, so a sign-in that just finished is not lost
-                            drop = connector_blob_ids(current)
-                            if stale and record['transport'] == 'http' and record['url'] == current.get('url') and not secret:  # still the same sign-ins
-                                record['oauth'] = stale; drop = []
-                                if current.get('otherAccounts'): record['otherAccounts'] = current['otherAccounts']
-                            store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]
-                            for blob in drop: blob_delete(blob)  # the address or the way to sign in changed
-                            if not existing:  # a connector you just added is switched on for every Bot
-                                st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + ['zook:' + record['id']]))
-                            store.save()
-                        return self.respond(200 if existing else 201, dict(id='zook:' + record['id'], name=record['name']))
+                        written = connector_keys_write(record, secret, {k: v.strip() for k, v in more.items() if k in record['moreSecrets'] and isinstance(v, str) and v.strip()})  # new Keychain items; nothing changed if one fails
+                        old_keys, drop = connector_publish(store, record, written)  # saved with its keys as one change (myskills.py)
+                        for blob in drop: blob_delete(blob)  # the address or the way to sign in changed
+                        for old in old_keys: secret_drop(old)  # the keys these replaced
+                        if existing: return self.respond(200, dict(id='zook:' + record['id'], name=record['name']))
+                        on, test = connector_first_test(store, 'zook:' + record['id'], waiting=True)  # on for every Bot only once it worked (#303)
+                        return self.respond(201, dict(id='zook:' + record['id'], name=record['name'], on=on, test=test))
                     if existing and self.command == 'DELETE':
                         with store.lock:
-                            store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != existing['id']]
+                            store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != existing['id']]; connector_touch(existing['id'])
                             st = store.data['settings']; st['sharedMcp'] = [x for x in st.get('sharedMcp') or [] if x != 'zook:' + existing['id']]
                             store.save()
                         for secret_id in connector_secret_ids(existing): secret_delete(secret_id)
@@ -592,7 +583,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.error(404, '找不到資源。')
             if len(parts) == 4 and parts[:2] == ['api', 'mcp'] and parts[3] == 'test' and self.command == 'POST':
                 self.body()
-                return self.respond(200, runtime_module().test_connection(parts[2], inventory_for(self.server.store)))
+                return self.respond(200, runtime_module().test_connection(parts[2], inventory_for(self.server.store, testing=parts[2])))
             if path == '/api/uploads/path' and self.command == 'POST' and not self.device: return self.respond(201, upload_from_path(store, self.body().get('path')))  # 附上 a file the user named, after they clicked
             if path == '/api/uploads' and self.command == 'POST' and not self.device:
                 # One attached file, sent as the raw request body; the name comes in X-File-Name.
@@ -810,7 +801,7 @@ class Handler(BaseHTTPRequestHandler):
                         if not found: return self.error(404, '找不到這個檔案。')
                         kind, data = _output_kind(found.name), read_group_file(found)  # shown in the conversation: a picture as a picture, a page or SVG only as text
                         if data is None: return self.error(404, '找不到這個檔案。')
-                        return self.respond(200, data, IMAGE_TYPES[found.suffix.lower()] if kind == 'image' else 'application/pdf' if kind == 'pdf' else 'text/plain; charset=utf-8' if kind in ('text', 'markdown') else OFFICE_TYPES.get(found.suffix.lower(), 'application/octet-stream'))
+                        return self.respond(200, data, IMAGE_TYPES[found.suffix.lower()] if kind == 'image' else 'application/pdf' if kind == 'pdf' else 'text/plain; charset=utf-8' if kind in ('text', 'markdown', 'html') else OFFICE_TYPES.get(found.suffix.lower(), 'application/octet-stream'))
                     if len(parts) == 5 and parts[3] == 'files' and self.command == 'DELETE' and not self.device:
                         found = group_file_path(store, group, parts[4])
                         if not found: return self.error(404, '找不到這個檔案。')
@@ -875,7 +866,9 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) == 3 and parts[:2] == ['api', 'bots'] and self.command == 'PATCH':
                     bot = store.find('bots', parts[2])
                     if not bot: return self.error(404, '找不到機器人。')
-                    body = self.body(); candidate = copy.deepcopy(bot); update(candidate, body, 'bot'); validate_selection(candidate, inventory); local_choice(bot, candidate, body, local=not self.via_bridge and self.device is None); notice = auto_on_edit(store, bot, candidate, body); bot.clear(); bot.update(candidate); store.save(); watch_auto_status(store, bot)
+                    body = self.body()
+                    if edit_conflict(bot, body): return self.error(409, EDIT_CONFLICT)  # #162: changed elsewhere since the form opened
+                    candidate = copy.deepcopy(bot); update(candidate, body, 'bot'); validate_selection(candidate, inventory); local_choice(bot, candidate, body, local=not self.via_bridge and self.device is None); notice = auto_on_edit(store, bot, candidate, body); bot.clear(); bot.update(candidate); store.save(); watch_auto_status(store, bot)
                     if 'permissionMode' in body: self.server.release_approvals()
                     if (bot.get('intro') or {}).get('source') != intro_source(bot): bot.pop('intro', None); store.save(); self.server.want_intro(bot['id'])  # what it is changed: a new greeting
                     return self.respond(200, dict(bot, **({'autoNotice': notice} if notice else {})))
@@ -890,7 +883,7 @@ class Handler(BaseHTTPRequestHandler):
                     trash_bot(store, bot)  # kept aside, so it can be brought back
                     store.data['bots'].remove(bot); store.save(); return self.respond(200, {'ok': True})
                 if path == '/api/settings' and self.command == 'PATCH':
-                    body = self.body(); update(store.data['settings'], body, 'settings'); store.save()
+                    body = self.body(); settings_patch(store, body)  # with the change count of a connector switched on or off (myskills.py)
                     if 'remote' in body: threading.Thread(target=self.server.sync_remote, daemon=True).start()
                     if 'permissionMode' in body: self.server.release_approvals()
                     return self.respond(200, store.data['settings'])

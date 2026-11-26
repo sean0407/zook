@@ -38,6 +38,7 @@
     if (['botIds', 'hostId', 'checkMode'].includes(e.target.name) && e.target.closest('#group-form')) syncChecker(e.target.closest('#group-form'));  // #296
     if (['botIds', 'hostId', 'mode', 'checkMode', 'checkerId'].includes(e.target.name) && e.target.closest('#group-form')) groupFormNote(e.target.closest('#group-form'));
     if (e.target.id === 'group-file-input' && activeGroup()) uploadGroupFiles(activeGroup(), [...e.target.files]);
+    if (e.target.id === 'attach-input') { addFiles([...e.target.files]); e.target.value = ''; }
     if (e.target.name === 'access' && e.target.closest('#bot-form')) e.target.closest('form').querySelector('[data-access-folder]').hidden = e.target.value !== 'folder';
     if (e.target.name === 'transport' && e.target.closest('#connector-form')) e.target.closest('form').querySelectorAll('[data-for]').forEach(x => x.hidden = x.dataset.for !== e.target.value);
     if (e.target.name === 'accountType' && e.target.closest('#profile-form')) e.target.closest('form').querySelector('[data-key-field]').hidden = e.target.value !== 'key';
@@ -172,7 +173,7 @@
         const what = {skill: '這個 Skill', mcp: '這個連接器', plugin: '這個插件'}[kind] || '';
         const name = kind === 'skill' ? (state.integrations?.skills || []).find(x => x.id === id)?.name : '';
         render(true);
-        toast(name ? (turnOn ? `已開啟「${name}」，移到「已開啟」，所有 Bot 都能用` : `已關閉「${name}」，移到「未啟用」，所有 Bot 都不會再用它`)
+        toast(name ? (turnOn ? `已開啟「${name}」，移到「已開啟」，所有 Bot 都能用` : `已關閉「${name}」，移到「已關閉」，所有 Bot 都不會再用它`)
           : turnOn ? `已開放${what}給所有 Bot` : `已停用${what}，所有 Bot 都不會再用它`);
       } catch (err) { e.target.checked = !turnOn; e.target.disabled = false; toast(err.message); }
       return;
@@ -243,15 +244,15 @@
       }
       form.elements.model.value = '';
       form.elements.modelSelect.value = '';
-      form.elements.modelCustom.value = '';
-      form.elements.modelCustom.hidden = true;
+      if (form.elements.modelCustom) { form.elements.modelCustom.value = ''; form.elements.modelCustom.hidden = true; }
+      if (form.id === 'bot-form') setDropdown(form, 'effort', '');  // G44 (#159②): another CLI's 深入 is not carried over
       form.dataset.providerChanged = '1';
-      form.querySelector('.model-note').textContent = '換了一家，型號已改回它建議的版本，正在讀取能選的型號…';
+      form.querySelector('.model-note').textContent = '換了一家，型號和思考強度已改回預設，正在讀取能選的型號…';
       loadModels(form);
     } else if (e.target.name === 'modelSelect') {
       const custom = form.elements.modelCustom;
-      const isCustom = e.target.value === '__custom__';
-      custom.hidden = !isCustom;
+      const isCustom = !!custom && e.target.value === '__custom__';
+      if (custom) custom.hidden = !isCustom;
       form.elements.model.value = isCustom ? custom.value : e.target.value;
       if (isCustom) custom.focus();
     }
@@ -315,13 +316,18 @@
           section: d.get('section'),
           pinned: d.has('pinned'),
           fallbacks: d.get('fallbackChoice') === '__none' ? [] : !d.get('fallbackChoice') || d.get('fallbackChoice') === '__default' ? null : [d.get('fallbackChoice')], effort: d.get('effort') || '', features: Object.fromEntries([['multi', d.get('featureMulti')], ['image', d.get('featureImage')], ['browser', d.get('featureBrowser')]].filter(x => x[1]).map(x => [x[0], x[1] === 'on'])),
-          account: d.has('providerChoice') ? String(d.get('providerChoice')).split('::')[1] || '' : d.get('account') || '',
-          access: d.get('access') || '', accessFolder: d.get('access') === 'folder' ? d.get('accessFolder') || '' : ''
+          account: d.has('providerChoice') ? String(d.get('providerChoice')).split('::')[1] || '' : d.get('account') || ''
         };
+        // G45 (#256 #332①): Claude and Cursor hide 存取範圍. What that menu still holds is not sent and stops nothing.
+        const accessShown = !form.querySelector('[data-access-row]')?.hidden;
+        if (accessShown) Object.assign(data, {access: d.get('access') || '', accessFolder: d.get('access') === 'folder' ? d.get('accessFolder') || '' : ''});
         if (d.get('heldAccess') === 'full' && !form.querySelector('[data-held-access]').hidden) Object.assign(data, {access: 'full', accessFolder: ''});  // #284: back behind the gate
         if (!id) data.clientId = onceId(form);
-        if (data.access === 'folder' && !data.accessFolder) { if (form.querySelector('[data-access-row]')?.hidden) toast('請先選擇資料夾'); else needFolder(form); return; }
-        let result = await post(id ? 'bots/' + encodeURIComponent(id) : 'bots', data, id ? 'PATCH' : 'POST');
+        if (accessShown && data.access === 'folder' && !data.accessFolder) { needFolder(form); return; }
+        if (id && form.botBase) data.base = form.botBase;  // G46 (#162)
+        let result;
+        try { result = await post(id ? 'bots/' + encodeURIComponent(id) : 'bots', data, id ? 'PATCH' : 'POST'); }
+        catch (error) { if (error.status === 409 && id) { formNote(form, error.message, 'conflict'); return; } throw error; }  // stays open; nothing is overwritten
         if (!id) { try { sessionStorage.removeItem('swarmr-new-bot-draft'); } catch (_) {} }
         closeModal();
         await refresh();
@@ -389,11 +395,13 @@
         for (const [k, v] of d.entries()) if (k.startsWith('more:') && String(v).trim()) more[k.slice(5)] = String(v).trim();
         if (Object.keys(more).length) body.moreSecrets = more;
         let made;
+        const button = form.querySelector('.primary'); button.disabled = true; if (!id) button.textContent = '正在測試連線…';
         try { made = await post(id ? 'connectors/' + encodeURIComponent(id) : 'connectors', body, id ? 'PATCH' : 'POST'); }
-        catch (error) { problem(error.message, /網址/.test(error.message) ? 'url' : /指令/.test(error.message) ? 'command' : 'name'); return; }
+        catch (error) { button.disabled = false; button.textContent = id ? '儲存' : '新增'; problem(error.message, /網址/.test(error.message) ? 'url' : /指令/.test(error.message) ? 'command' : 'name'); return; }
         closeModal(); delete state.mcpTests[made.id];
+        if (made.test) state.mcpTests[made.id] = made.test;  // a new one is tested at once and switched on only when it worked (#303)
         state.integrations = await api('integrations'); await refresh();
-        toast(id ? '已儲存。按「測試連線」確認能不能用' : '已新增。按「測試連線」確認能不能用');
+        toast(id ? '已儲存。按「測試連線」確認能不能用' : connectorAddedNote(made), id ? 3000 : 6000);
       } else if (form.id === 'profile-form') {
         const d = new FormData(form), type = d.get('accountType');
         if (type === 'key' && !d.get('key').trim()) { toast('請貼上 API 金鑰'); return; }
@@ -478,6 +486,7 @@
     }
   });
   document.addEventListener('keydown', e => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.classList?.contains('attach-btn')) { e.preventDefault(); e.target.querySelector('input')?.click(); return; }
     if (e.target.id === 'chat-input' && mention.items.length && !$('#mention-menu')?.hidden && !e.isComposing && e.keyCode !== 229) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();

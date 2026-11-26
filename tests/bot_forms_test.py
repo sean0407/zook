@@ -76,7 +76,7 @@ class FormWords(unittest.TestCase):
         self.assertIn('先換同一家其他帳號，再依剩餘額度換', code)  # the 預設 line: the same CLI's accounts, then by what is left (#43② #33)
         self.assertIn("levelMark(accountLevel(value, ''))", code)  # 已用完 beside a fallback, as beside an account (#43③)
         self.assertIn("[data-auto-reason]')?.toggleAttribute('hidden'", code)  # 自動配好… goes once another model is picked (#205③)
-        self.assertIn('正在讀取這一家的模型…', code)  # the last CLI's model is not shown while the new list loads (#43⑥)
+        self.assertIn('正在讀取這一家的型號…', code)  # the last CLI's model is not shown while the new list loads (#43⑥)
         self.assertIn("replace(/^換了一家[^。]*。/, '')", code)  # a model picked by hand ends that line (#43⑤)
 
     def test_quota_line_names_the_kind_of_model(self):

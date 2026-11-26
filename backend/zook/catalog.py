@@ -62,6 +62,15 @@ def catalog_icon_for_url(url):
     return catalog_icon(item['id']) if item else None
 
 
+def catalog_about(name, url=''):
+    """What a connector can do, in plain words, when it is one the catalog knows: by its address, else by the company's name (#181)."""
+    item = next((x for x in CONNECTOR_CATALOG if url and x['url'] == url), None)
+    if not item:
+        words = same_name(name)
+        item = next((x for x in CONNECTOR_CATALOG if len(x['id']) >= 4 and re.search(r'(^|[^a-z0-9])%s([^a-z0-9]|$)' % re.escape(same_name(x['name'].split('（')[0])), words)), None)
+    return item['about'] if item else ''
+
+
 def catalog_view(store):
     """The catalog, with which entries are already in Zook."""
     with store.lock: have = {c.get('url'): c['id'] for c in store.data.get('connectors') or []}
@@ -93,10 +102,10 @@ def catalog_add(app, item_id, key=None):
     key = key.strip() if item['auth'] == 'key' and isinstance(key, str) else ''
     if item['auth'] == 'key' and not key: raise ValueError('請貼上金鑰。')
     with _catalog_lock:
-        with store.lock: existing = copy.deepcopy(next((c for c in store.data['connectors'] if c.get('url') == item['url']), None))
+        with store.lock: existing = copy.deepcopy(next((c for c in store.data['connectors'] if c.get('url') == item['url']), None)); rev = connector_rev(existing['id']) if existing else 0
         if existing and existing.get('oauth'): return existing, ''
         if existing and item['auth'] == 'open': return existing, ''
-        record = existing
+        record = copy.deepcopy(existing)  # a copy: a failed save puts back the connector exactly as it was
         if not record: record, _ = connector_fields(dict(name=item['name'], transport='http', url=item['url'], **({'secret': key} if key else {})))
         url, auth = '', item['auth']
         if auth == 'login':
@@ -105,19 +114,30 @@ def catalog_add(app, item_id, key=None):
                 if '不需要登入' not in str(exc): raise RuntimeError('%s 目前無法登入：%s' % (item['name'], exc))
                 auth = 'open'  # the service turned out to need no sign-in
         if auth != 'login': _catalog_check(item, key)
-        made = ''
+        made, replaced, ident, added, current = '', '', 'zook:' + record['id'], False, None
         try:
-            if key:
-                if not record.get('secretId'): record['secretId'] = made = ID()
-                record['secretName'] = 'Authorization'; secret_set(record['secretId'], key)
+            if key:  # under a new Keychain id: the one it replaces is deleted once this is saved
+                record['secretId'] = made = ID()
+                record['secretName'] = 'Authorization'; secret_set(made, key)
             with store.lock:
-                taken = {c['name'] for c in store.data['connectors'] if c['id'] != record['id']}
-                record['name'] = next((n for n in [record['name']] + ['%s %d' % (item['name'], i) for i in range(2, 200)] if n not in taken), '%s %s' % (item['name'], record['id'][:6]))
-                store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]
-                st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + ['zook:' + record['id']]))
+                current = next((c for c in store.data['connectors'] if c['id'] == record['id']), None)
+                if existing and not current: raise RuntimeError('%s 在加入期間被移除了，請再加入一次。' % item['name'])  # not brought back
+                if existing and connector_rev(record['id']) != rev: raise RuntimeError('%s 在加入期間被修改或開關過，沒有覆蓋，請再加入一次。' % item['name'])  # nothing overwritten, nothing switched on
+                replaced = (current or {}).get('secretId') if made and (current or {}).get('secretId') != made else ''
+                taken = {same_name(c['name']) for c in store.data['connectors'] if c['id'] != record['id']}
+                record['name'] = next((n for n in [record['name']] + ['%s %d' % (item['name'], i) for i in range(2, 200)] if same_name(n) not in taken), '%s %s' % (item['name'], record['id'][:6]))
+                store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]; connector_touch(record['id'])  # a new key for one already there
+                st = store.data['settings']
+                if auth != 'login' and ident not in (st.get('sharedMcp') or []):  # checked above; one that needs a sign-in is switched on once signed in and tested (#303)
+                    st['sharedMcp'] = (st.get('sharedMcp') or []) + [ident]; added = True
                 store.save()
+                if auth == 'login': connector_wait_sign_in(record['id'], connector_rev(record['id']))  # on once signed in and tested, if nothing changes before
         except Exception:
             if made: secret_delete(made)  # the connector was not saved, so its key does not stay behind
-            with store.lock: store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + ([existing] if existing else [])
+            with store.lock:
+                if any(c is record for c in store.data['connectors']):  # still this attempt's: put back what was there, unless another change came since
+                    store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + ([current] if current else []); connector_touch(record['id'])
+                if added: st = store.data['settings']; st['sharedMcp'] = [x for x in st.get('sharedMcp') or [] if x != ident]  # nor left on
             raise
+        if replaced: secret_drop(replaced)
         return record, url

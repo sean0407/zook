@@ -206,9 +206,19 @@ def _secret_file(account_id):
     return pathlib.Path(folder) / account_id if folder and ACCOUNT_ID.fullmatch(account_id or '') else None
 
 
+def _secret_forget(account_id):
+    """Drop a cached value, and keep a read that started before this from putting the old value back (secret_get)."""
+    with _secret_lock: _secret_cache.pop(account_id, None); _secret_gen[account_id] = _secret_gen.get(account_id, 0) + 1
+
+
 def secret_set(account_id, value):
     """Store an API key in the macOS Keychain. The key travels on stdin, never on a command line."""
-    _secret_cache.pop(account_id, None)
+    _secret_forget(account_id)
+    try: _secret_write(account_id, value)
+    finally: _secret_forget(account_id)  # again once written: a read made while it was being written may hold the old value
+
+
+def _secret_write(account_id, value):
     if not ACCOUNT_ID.fullmatch(account_id or '') or not re.fullmatch(r'[A-Za-z0-9._~+/=:@-]{8,500}', value or ''): raise ValueError('API 金鑰無效：長度需為 8 到 500 個字元，且只能包含英數字與 . _ ~ + / = : @ -。')
     file = _secret_file(account_id)
     if file:
@@ -221,12 +231,17 @@ def secret_set(account_id, value):
         secret_delete(account_id); raise RuntimeError('無法把 API 金鑰存進鑰匙圈。')
 
 
-_secret_cache = {}  # Keychain lookups are slow; a value is read once per run and refreshed when it changes.
+_secret_cache, _secret_gen, _secret_lock = {}, {}, threading.Lock()  # Keychain lookups are slow; a value is read once per run and refreshed when it changes.
 
 
 def secret_get(account_id):
-    if account_id not in _secret_cache: _secret_cache[account_id] = _secret_read(account_id)
-    return _secret_cache[account_id]
+    with _secret_lock:
+        if account_id in _secret_cache: return _secret_cache[account_id]
+        gen = _secret_gen.get(account_id, 0)
+    value = _secret_read(account_id)
+    with _secret_lock:
+        if _secret_gen.get(account_id, 0) == gen: _secret_cache[account_id] = value  # not changed while it was read
+    return value
 
 
 def _secret_read(account_id):
@@ -243,16 +258,19 @@ def _secret_read(account_id):
 
 
 def secret_delete(account_id):
-    _secret_cache.pop(account_id, None)
-    if not ACCOUNT_ID.fullmatch(account_id or ''): return
+    """True when the key is gone (or was never there)."""
+    _secret_forget(account_id)
+    if not ACCOUNT_ID.fullmatch(account_id or ''): return True
     file = _secret_file(account_id)
     if file:
         try: file.unlink()
-        except OSError: pass
-        return
-    try: subprocess.run(['/usr/bin/security', 'delete-generic-password', '-s', KEYCHAIN_SERVICE, '-a', account_id],
-                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
-    except (OSError, subprocess.TimeoutExpired): pass
+        except FileNotFoundError: pass
+        except OSError: return False
+        return True
+    try: p = subprocess.run(['/usr/bin/security', 'delete-generic-password', '-s', KEYCHAIN_SERVICE, '-a', account_id],
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+    except (OSError, subprocess.TimeoutExpired): return False
+    return p.returncode in (0, 44)  # 44: no such item
 
 
 def provider_env(provider, account=None):

@@ -134,8 +134,9 @@ def knowledge_upload(handler, store):
         if why: shutil.rmtree(str(folder), ignore_errors=True); return handler.error(400, why)  # never widened to every Bot; two uploads at once do not pass the limit
         item = dict(id=item_id, title=title, content='', tags=[], botId=bot_id, source=name, size=size, status='processing', createdAt=NOW(), updatedAt=NOW())
         store.data['knowledge'].append(item); store.save()
+        answer = dict(item)  # #352: a copy taken now; the reader changes the stored item from another thread, maybe before this is sent
     knowledge_queue(store, item_id)
-    return handler.respond(201, item)
+    return handler.respond(201, answer)
 
 
 def knowledge_queue(store, item_id):
