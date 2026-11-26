@@ -23,7 +23,7 @@ MAX_INPUT = 4 * 1024 * 1024
 HOME = os.path.expanduser('~')
 HERE = os.path.dirname(os.path.realpath(__file__))
 LABELS = {'split': '一次做了好幾次傳送', 'delete': '刪除檔案', 'send': '對外送出', 'secret': '動到金鑰或密碼', 'install': '安裝軟體', 'system': '改系統設定',
-          'guard': '改動 Zook 的安全檢查', 'unclear': '執行無法判讀的指令'}
+          'guard': '改動 Zook 的安全檢查', 'unclear': '執行一段指令'}
 KINDS = tuple(LABELS)
 MAX_ACTIONS = 10   # what one card shows in full; more than this, or a line too long to show whole, is refused: the Bot does them one at a time
 MAX_TITLE = 200
@@ -36,6 +36,7 @@ def _load(name):
 
 
 _load('zook_gate_words.py')
+_load('zook_gate_plain.py')  # the card's plain words (#234): only words, nothing here decides what is asked
 
 
 # ---- the Bot's own scratch folder (queue #261): its files are deleted by Zook's zook_clean_scratch tool (scratch.py), never by a
@@ -232,6 +233,12 @@ def _short(text, most=60):
 
 
 def _where(path):
+    """Where a file is, whole, for the card: in plain words (zook_gate_plain.py, #234); while decide() measures a card as before #234,
+    the words of before."""
+    return _where_plain(path) if _PLAIN[0] else _where_before(path)
+
+
+def _where_before(path):
     """Where a file is, whole, so two files of the same name are told apart: ~/… inside the home folder. A web address: its site only."""
     if '$' in str(path) or '`' in str(path): return '「%s」指向的位置' % _short(str(path).strip('"\'').replace('$ZOOKSUB', '$( … )'), 40)  # a variable: where it points is not known here
     if str(path).lower().startswith('file://'): path = _file_url(str(path))
@@ -242,7 +249,8 @@ def _where(path):
 
 
 def _names(paths):
-    return '、'.join(dict.fromkeys(_where(p) for p in paths if p))
+    if not _PLAIN[0]: return '、'.join(dict.fromkeys(_where(p) for p in paths if p))
+    return '、'.join(_where(p) for p in dict.fromkeys(p for p in paths if p))  # one line per file named, even when two read alike
 
 
 def _word(text):
@@ -294,7 +302,7 @@ def _url_hosts(args):
 
 
 def _hit(kind, what):
-    return (kind, ('%s %s' % (LABELS[kind], what)).strip())
+    return (kind, ('%s %s' % (LABELS[kind] if _PLAIN[0] or kind != 'unclear' else '執行無法判讀的指令', what)).strip())
 
 
 # ---- reading a shell command
@@ -413,7 +421,18 @@ def _remote(arg):
 
 
 def command_boundaries(command, depth=0):
-    """Every boundary in a shell command line, in order, as (kind, title)."""
+    """Every boundary in a shell command line, in order, as (kind, title). The line as a whole (depth 0) gets the card's plain words:
+    what its variables hold, and one plain line for what cannot be read through (zook_gate_plain.py); only the words, never the kinds."""
+    if depth or not isinstance(command, str) or not _PLAIN[0]: return _command_boundaries(command, depth)
+    _VARS[0] = line_vars(command)
+    try:
+        found = _command_boundaries(command, 0)
+        plain = _unclear_title(command) if any(k == 'unclear' for k, _ in found) else ''
+    finally: _VARS[0] = {}
+    return [(k, plain if k == 'unclear' else t) for k, t in found]
+
+
+def _command_boundaries(command, depth=0):
     if not isinstance(command, str): return []
     if depth > 4: return [_hit('unclear', '（指令包了太多層）')]
     found, command = [], re.sub(r'\\\r?\n', lambda m: m.group() if '#' in command[command.rfind('\n', 0, m.start()) + 1:m.start()] else '', command)  # a backslash at the end of a line joins it to the next (r\⏎m is rm)
@@ -456,7 +475,7 @@ def merged(found):
     """One line for each different action, and how many times one is done: two uploads of the same file to the same site are 「共 2 次」."""
     counts = {}
     for hit in found: counts[hit] = counts.get(hit, 0) + 1
-    return [(k, t if n == 1 else '%s（共 %d 次）' % (t, n)) for (k, t), n in counts.items()]
+    return [(k, t if n == 1 or k == 'unclear' and _PLAIN[0] else '%s（共 %d 次）' % (t, n)) for (k, t), n in counts.items()]
 
 
 def command_boundary(command, depth=0):
@@ -878,7 +897,11 @@ def decide(tool, data, home=''):
     split = [t for k, t in raw if k == 'split']
     if split: return False, '%s。請拆成幾個指令，每次一個檔案、一個目的地，讓使用者逐一確認。' % split[0]
     found = merged(raw)
-    if len(raw) > MAX_ACTIONS or any(len(t) > MAX_TITLE for _, t in found):  # one card could not show all of it: never approved as a batch
+    _PLAIN[0] = False  # a card too long is measured exactly as before #234: the new words never turn a refusal into a card
+    try: measured = boundaries(tool, data, home)
+    finally: _PLAIN[0] = True
+    if [k for k, _ in measured] != [k for k, _ in raw]: return False, '檔案在檢查時變動了，請再試一次。'  # the two readings differ: nothing is asked
+    if len(raw) > MAX_ACTIONS or any(len(t) > MAX_TITLE for _, t in merged(measured)):  # one card could not show all of it: never approved as a batch
         return False, '這一步同時要做 %d 件需要核准的事，或目標太長，一張核准卡放不下。請分成幾個較小的步驟，一次一件，讓使用者逐一確認。' % len(raw)
     if ask(found): return True, ''
     return False, '使用者沒有允許：%s。不要改用其他方法做這件事，直接告訴使用者沒有做。' % '；'.join(t for _, t in found)
