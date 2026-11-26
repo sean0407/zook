@@ -18,10 +18,13 @@ timeout) is a refusal.
 This is a careful reading of what the CLI asked for, not a sandbox: a program written to a file and run later is not read.
 """
 import hmac, json, os, re, shlex, shutil, stat, sys, time, urllib.error, urllib.parse, urllib.request
+import importlib.util
 
 MAX_INPUT = 4 * 1024 * 1024
 HOME = os.path.expanduser('~')
 HERE = os.path.dirname(os.path.realpath(__file__))
+_spec = importlib.util.spec_from_file_location('zook_gate_words', os.path.join(HERE, 'gate_words.py'))  # the card's words (#234), next to this file
+gate_words = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(gate_words)
 LABELS = {'split': '一次做了好幾次傳送', 'delete': '刪除檔案', 'send': '對外送出', 'secret': '動到金鑰或密碼', 'install': '安裝軟體', 'system': '改系統設定',
           'guard': '改動 Zook 的安全檢查', 'unclear': '執行一段指令'}
 KINDS = tuple(LABELS)
@@ -276,99 +279,34 @@ def _where(path):
         known = _resolve(text)
         if known is None:
             tail = text.rstrip('/').split('/')[-1]
-            return '「%s」（位置由指令裡的變數決定）' % _mid(tail, 60) if '/' in text and tail and not set(tail) & set('$`{}()') else '指令裡變數指到的位置'
-        if known.startswith(MADE_TEMP):
-            rest = known[len(MADE_TEMP):].strip('/')
+            return '「%s」（位置由指令裡的變數決定）' % gate_words.mid(tail, 60) if '/' in text and tail and not set(tail) & set('$`{}()') else '指令裡變數指到的位置'
+        if known.startswith(gate_words.MADE_TEMP):
+            rest = known[len(gate_words.MADE_TEMP):].strip('/')
             return '暫存資料夾裡的 %s' % rest if rest else '暫存資料夾'
         text = known
     if text.lower().startswith('file://'): text = _file_url(text)
     elif '://' in text: return _host(text) or '網址'
     full = os.path.normpath(_abs(text))
-    if full == HOME: return '家目錄'
-    return _place(full) or ('~' + full[len(HOME):] if full.startswith(HOME + os.sep) else _place(full, temp=True) or full)  # never cut short: the card shows the whole target
+    full = os.path.join(os.path.realpath(os.path.dirname(full)), os.path.basename(full)) if os.path.basename(full) else full  # where it really is (a linked folder on the way)
+    home = next((h for h in (HOME, os.path.realpath(HOME)) if full == h or full.startswith(h + os.sep)), '')
+    if home and full == home: return '家目錄'
+    return _place(full) or ('~' + full[len(home):] if home else _place(full, temp=True) or full)  # never cut short: the card shows the whole target
 
 
-MADE_TEMP = '\x01temp'  # a variable that holds what mktemp made on the same line
-_VARS = [{}]
+_VARS = [{}]  # the variables of the command line being read (gate_words.line_vars), for the card's words only
 
 
-def _line_vars(command):
-    """The variables a command line plainly sets to something readable, for the card's words only: a statement of its own NAME=value
-    (also after export/local …), a value made of other such variables, or $(mktemp …). Nothing is known when the line could set it
-    otherwise or only sometimes (if, for, read, ||, && before it, a here-document, braces, a subshell), when it is used before it is set,
-    when the name appears as a bare word, or when it is set twice to different things: then the card says a variable decides."""
-    text = re.split(r'<<(?!<)', command)[0]  # what follows a here-document marker may be its text, not commands
-    rest = re.sub(r'\$\(\s*mktemp\b[^()`]*\)|\$\{[A-Za-z_]\w*\}', '', text)
-    if re.search(r'\b(?:if|then|else|elif|fi|for|while|until|do|done|case|esac|select|function|coproc|read|unset|mapfile|readarray|getopts|eval|source|let)\b|\|\||[(){}`]|&&\s*(?:export\s+|local\s+)?[A-Za-z_]\w*=', rest):
-        return {}
-    found, at = {}, {}
-    for m in re.finditer(r'(?:^|[;\n\'"]|&&)\s*(?:(?:export|local|readonly|typeset|declare)(?:\s+-\w+)*\s+)?([A-Za-z_]\w*)=(\$\(\s*mktemp\b[^()`]*\)|"\$\(\s*mktemp\b[^()`"]*\)"|"[^"`]*"|\'[^\']*\'|[^\s;&|()`"\']*)(?=\s*(?:;|&&|\n|$|[\'"]\s*(?:;|&&|\n|$)))', text):
-        name, value = m.group(1), m.group(2)
-        if re.match(r'"?\$\(\s*mktemp\b', value): value = MADE_TEMP
-        elif value[:1] in '"\'' and len(value) >= 2: value = value[1:-1] if value[0] == '"' else value[1:-1].replace('$', '\0')  # nothing expands in single quotes
-        if '$(' in value or '`' in value: value = None
-        found[name] = value if found.get(name, value) == value else None
-        at.setdefault(name, []).append((m.start(1), m.end()))
-    for name in list(found):
-        used = [u.start() for u in re.finditer(r'\$(?:\{%s\}|%s(?!\w))' % (name, name), text)]
-        bare = [b.start() for b in re.finditer(r'(?<![\w$])%s(?!\w)' % name, text) if not (b.start() > 0 and text[b.start() - 1] == '{' and text[b.start() - 2:b.start()] == '${')]
-        if (used and min(used) < at[name][0][0]) or any(not any(a <= b < e for a, e in at[name]) for b in bare): found[name] = None
-    return found
-
-
-def _resolve(text, depth=0):
-    """The text with $NAME and ${NAME} put in from the variables of this line (and $HOME, $TMPDIR, ~); None when one is not known."""
-    text = _expand(text)
-    def put(m):
-        value = _VARS[0].get(m.group(1) or m.group(2))
-        if value is None or depth > 5: raise KeyError
-        value = _resolve(value, depth + 1) if '$' in value else value
-        if value is None: raise KeyError
-        return value
-    try: out = re.sub(r'\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)', put, text)
-    except KeyError: return None
-    if '$' in out or '`' in out: return None
-    out = out.replace('\0', '$')
-    if MADE_TEMP in out[1:]: return None  # a made folder in the middle of a path: not a place
-    return out
-
-
-def _mid(text, most=90):
-    """Long text with its middle left out, so the start and the file name both stay."""
-    text = str(text)
-    return text if len(text) <= most else text[:most // 2 - 1] + '…' + text[-(most - most // 2):]
-
-
-ATTACHED_ID = re.compile(r'^[0-9A-Za-z]{8}-(?=.)')
+def _resolve(text):
+    return gate_words.resolve(text, _VARS[0], _expand)
 
 
 def _place(full, temp=False):
-    """Zook's own folders (and, with temp, the Mac's temporary folder) in words: never the path inside Zook's data or /var/folders."""
-    real = os.path.realpath(full)
-    data = os.environ.get('ZOOK_DATA_DIR', '')
-    for one in dict.fromkeys((full, real)):
-        if data and _under_plain(one, data):
-            rest = [p for p in os.path.relpath(one, os.path.realpath(data) if _under_plain(one, os.path.realpath(data)) else data).split(os.sep) if p and p != '.']
-            if rest[:1] == ['workspaces'] and len(rest) > 2:
-                inside = rest[2:]
-                if inside[0] == '.zook-scratch': return 'Bot 的暫存資料夾' + ('裡的 %s' % '/'.join(inside[1:]) if inside[1:] else '')
-                if inside[:2] == ['attachments', 'group-files'] and inside[2:]: return '群組共用檔案「%s」' % '/'.join(inside[2:])
-                if inside[0] == 'attachments' and inside[1:]: return '你上傳的附件「%s」' % ATTACHED_ID.sub('', '/'.join(inside[1:]))
-                return 'Bot 工作資料夾裡的 %s' % '/'.join(inside)
-            if rest[:1] == ['workspaces'] and len(rest) == 2: return 'Bot 工作資料夾'
-            return 'Zook 的資料' + ('「%s」' % '/'.join(rest) if rest else '')
-        if SCRATCH_PART.search(one):
-            inside = one.split('/.zook-scratch', 1)[1].strip('/')
-            return 'Bot 的暫存資料夾' + ('裡的 %s' % inside if inside else '')
-        m = temp and re.match(r'^(?:/private)?/var/folders/[^/]+/[^/]+/T(?:/(.*))?$', one)
-        if m: return '系統暫存資料夾' + ('裡的 %s' % m.group(1) if m.group(1) else '')
-        if temp and (one == '/private/tmp' or one.startswith('/private/tmp/')): return one[len('/private'):]
-    return ''
+    return gate_words.place(full, temp, os.environ.get('ZOOK_DATA_DIR', ''), SCRATCH_PART)
 
 
-def _under_plain(path, folder):
-    folder = folder.rstrip('/')
-    return bool(folder) and (path == folder or path.startswith(folder + '/'))
+def _plain_steps(command):
+    here = sys.modules.get(__name__)
+    return gate_words.plain_steps(command, here if getattr(here, '_split', None) is _split else type('Gate', (), {k: staticmethod(v) if callable(v) else v for k, v in globals().items() if not k.startswith('__')}), HERE)
 
 
 def _names(paths):
@@ -515,7 +453,7 @@ def command_boundaries(command, depth=0):
     """Every boundary in a shell command line, in order, as (kind, title)."""
     if not isinstance(command, str): return []
     if depth == 0:  # the variables of this line, for the words on the card only
-        _VARS[0] = _line_vars(re.sub(r'\\([$"`\\])', r'\1', command))  # also inside sh -c '…', written with or without \\
+        _VARS[0] = gate_words.line_vars(command)  # also inside sh -c '…'
         found = command_boundaries(command, 1)
         plain = _unclear_title(command) if any(k == 'unclear' for k, _ in found) else ''
         _VARS[0] = {}
@@ -546,28 +484,6 @@ def _without_inner(command):
         while j < len(out) and depth:
             depth += {'(': 1, ')': -1}.get(out[j], 0); j += 1
         out = out[:start] + instead(out, start) + out[j:]; i = start
-
-
-_WORDS = {}
-
-
-def _plain_steps(command):
-    """What a command does, in the activity list's plain words (actwords.py: fixed words, a file's own name, the kind of program; never
-    the command or code). Loaded from Zook's backend next to this file; [] when it is not there."""
-    if 'describe' not in _WORDS:
-        _WORDS['describe'] = None
-        try:
-            here = sys.modules.get(__name__)
-            me = here if getattr(here, '_split', None) is _split else type('Gate', (), {k: staticmethod(v) if callable(v) else v for k, v in globals().items() if not k.startswith('__')})
-            space = {'gate_module': lambda: me, '__name__': 'zook_gate_words'}
-            with open(os.path.join(HERE, 'zook', 'actwords.py'), encoding='utf-8') as f: exec(compile(f.read(), 'actwords.py', 'exec'), space)
-            _WORDS['describe'] = space
-        except Exception: pass
-    space = _WORDS['describe']
-    if not space: return []
-    try: steps, _ = space['_describe'](space['shell_inner'](command))
-    except Exception: return []
-    return [x for x in dict.fromkeys(steps) if x not in (space['OTHER'], space['UNREADABLE'])]
 
 
 def _unclear_title(command):

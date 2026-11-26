@@ -753,7 +753,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 self.expire_job(job_id); store.save()
             if session: session.close()
             with store.lock: busy = any(j['botId'] == bot['id'] and j['id'] != job_id and j['status'] == 'running' for j in store.data['jobs'])
-            if not busy and locals().get('scratch'): scratch_sweep(store, bot, scratch)  # the Bot's own scratch files of this reply (scratch.py, #331)
+            if locals().get('scratch'): scratch_sweep(store, bot, scratch, lambda: scratch_busy(store, bot['id'], job_id))  # this reply's scratch files (#331)
             kept_turn = locals().get('kept')
             if isinstance(kept_turn, LiveTurn) and kept_turn.cli.kind == 'antigravity' and agy_touched(store.dir / 'workspaces' / bot['id']): kept_turn.cli.spoil('回覆中動到了 Antigravity 的設定資料夾')
             if provider_kind(provider) == 'antigravity': agy_cleanup(store, bot['id'], job_id, busy)

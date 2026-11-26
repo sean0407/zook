@@ -64,7 +64,7 @@ def scratch_env(store, bot_id, env):
                 log_activity(store, 'tool', 'Bot 暫存資料夾的紀錄損壞（%s），這次不提供清理工具；刪掉這個紀錄檔就會重建。' % record, by='Zook')
             return None
     env['ZOOK_SCRATCH'], env['ZOOK_SCRATCH_ID'] = folder, ident
-    return folder, ident, time.time() - 2  # since when files there are this reply's (a little slack for the file system's clock)
+    return folder, ident, time.time()  # since when files there are this reply's: Zook's sweep at its end takes nothing made before
 
 
 def scratch_note(scratch):
@@ -92,6 +92,9 @@ def clean_scratch(folder, ident, names, since):
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or _scratch_id(info) != ident:
             raise RuntimeError('暫存資料夾已經不是 Zook 建立的那一個，沒有刪除任何檔案。')
         for name in dict.fromkeys(names):
+            try: still = _scratch_id(os.lstat(folder)) == ident
+            except OSError: still = False
+            if not still: kept.append('%s（暫存資料夾被換掉了，沒有刪）' % name); continue  # moved away meanwhile: what is in it is no longer only the Bot's
             try: own = os.stat(name, dir_fd=fd, follow_symlinks=False)
             except FileNotFoundError: kept.append('%s（不存在）' % name); continue
             except OSError: kept.append('%s（讀不到）' % name); continue
@@ -105,18 +108,26 @@ def clean_scratch(folder, ident, names, since):
     return deleted, kept
 
 
-def scratch_sweep(store, bot, scratch):
+def scratch_busy(store, bot_id, job_id):
+    """Another reply of this Bot is running (it may be using the scratch folder)."""
+    with store.lock: return any(j.get('botId') == bot_id and j.get('id') != job_id and j.get('status') == 'running' for j in store.data['jobs'])
+
+
+def scratch_sweep(store, bot, scratch, busy=lambda: False):
     """When a reply ends (#331 #249): Zook clears what the Bot left right in its scratch folder during this reply (preview pictures,
     one-off scripts), with the same checks as zook_clean_scratch, so no rm and no approval card is needed. Only when no other reply of
-    the Bot is running (its files would be this reply's too by their time). Returns the names deleted."""
+    the Bot is running (its files would be this reply's too by their time): busy() is asked under the same lock that a new reply's
+    scratch_env waits for, so none starts using the folder while it is swept. Returns the names deleted."""
     if not scratch or len(scratch) < 3: return []
     folder, ident, since = scratch[:3]
-    try: names = sorted(n for n in os.listdir(folder) if scratch_file_name(n))
-    except OSError: return []
     deleted = []
-    for i in range(0, len(names), SCRATCH_MOST):
-        try: deleted += clean_scratch(folder, ident, names[i:i + SCRATCH_MOST], since)[0]
-        except RuntimeError: break  # not the folder Zook made any more: nothing more is touched
+    with _SCRATCH_LOCK:
+        if busy(): return []
+        try: names = sorted(n for n in os.listdir(folder) if scratch_file_name(n))
+        except OSError: return []
+        for i in range(0, len(names), SCRATCH_MOST):
+            try: deleted += clean_scratch(folder, ident, names[i:i + SCRATCH_MOST], since)[0]
+            except RuntimeError: break  # not the folder Zook made any more: nothing more is touched
     if deleted: log_activity(store, 'tool', 'Zook 在回覆結束後清掉「%s」暫存資料夾裡這次回覆留下的 %d 個檔案' % (bot.get('name', 'Bot'), len(deleted)), by='Zook')
     return deleted
 

@@ -2,7 +2,7 @@
 """#331 #249: preview pictures and other scratch files a Bot made in its own scratch folder (the one Zook made, #261) are cleared by
 Zook when the reply ends, without an approval card, under the same rules as zook_clean_scratch: plain files right in that folder, made
 during this reply, never a link, a folder or a hard link, never when the folder is not the one Zook made. A shell rm is still asked."""
-import os, sys, time, types, unittest
+import os, sys, time, types, unittest, unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -62,7 +62,27 @@ class Sweep(Base):
 
     def test_the_reply_end_sweeps_only_when_the_bot_is_free(self):
         app = (ROOT / 'backend/zook/app.py').read_text(encoding='utf-8')
-        self.assertRegex(app, r"if not busy and locals\(\)\.get\('scratch'\): scratch_sweep\(store, bot, scratch\)")
+        self.assertIn("if locals().get('scratch'): scratch_sweep(store, bot, scratch, lambda: scratch_busy(store, bot['id'], job_id))", app)
+        self.fresh(name='p.png')
+        self.assertEqual(self.ns['scratch_sweep'](object(), {'name': 'B'}, (self.scratch, self.ident, time.time() - 2), lambda: True), [])  # another reply is running
+        self.assertTrue(os.path.exists(os.path.join(self.scratch, 'p.png')))
+        held = []
+        self.ns['scratch_sweep'](object(), {'name': 'B'}, (self.scratch, self.ident, time.time() - 2), lambda: held.append(self.ns['_SCRATCH_LOCK'].locked()) or False)
+        self.assertEqual(held, [True])  # asked under the lock a new reply's scratch_env waits for
+
+    def test_a_file_made_just_before_the_reply_is_kept(self):
+        user = self.fresh(name='user-note.txt'); time.sleep(0.05)
+        self.assertEqual(self.sweep(time.time()), []); self.assertTrue(os.path.exists(user))
+
+    def test_a_folder_moved_away_while_cleaning_stops_it(self):
+        self.fresh(name='a.png'); self.fresh(name='b.png')
+        real = os.lstat; moved = []
+        def lstat(path, *a, **k):
+            if path == self.scratch and not moved: moved.append(1); os.rename(self.scratch, self.scratch + '-away'); os.mkdir(self.scratch)
+            return real(path, *a, **k)
+        with unittest.mock.patch.object(self.ns['os'], 'lstat', side_effect=lstat):
+            deleted, kept = self.ns['clean_scratch'](self.scratch, self.ident, ['a.png', 'b.png'], time.time() - 2)
+        self.assertEqual(deleted, []); self.assertTrue(os.path.exists(self.scratch + '-away/a.png'))
 
 
 if __name__ == '__main__': unittest.main()

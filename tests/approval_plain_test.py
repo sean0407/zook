@@ -41,7 +41,9 @@ class PlainCards(unittest.TestCase):
         for command in ('T=$(mktemp -d); for T in ~/Documents/*; do rm -rf "$T/x"; done', 'rm -rf "$T/x"; T=$(mktemp -d)', 'T=/tmp/a rm -rf "$T/x"',
                         'test -d ~/a && T=/tmp/a; rm -rf "$T/x"', 'T=/tmp/a; read T; rm -rf "$T/x"', 'if true; then T=/tmp/a; fi; rm -rf "$T/x"',
                         'T=/tmp/a | cat; rm -rf "$T/x"', "cat > f.py <<EOF\nT=/tmp/a\nEOF\nrm -rf \"$T/x\"", 'T=/tmp/a; T+=/b; rm -rf "$T/x"',
-                        '(T=/tmp/a); rm -rf "$T/x"', 'T=/tmp/a || true; rm -rf "$T/x"', 'printf -v T x; T=/tmp/a; rm -rf "$T/x"'):
+                        '(T=/tmp/a); rm -rf "$T/x"', 'T=/tmp/a || true; rm -rf "$T/x"', 'printf -v T x; T=/tmp/a; rm -rf "$T/x"',
+                        'T="~/Desktop"; rm -rf "$T/x"', 'cd /tmp; T=reports; rm -rf "$T/x"', "cat <<< 'T=/tmp'; rm -rf \"$T/x\"", 'echo "a; T=/tmp/a"; rm -rf "$T/x"',
+                        "bash -c 'T=/tmp/a'; rm -rf \"$T/x\"", "T=/tmp/a; bash -c 'rm -rf \"$T/x\"'"):
             self.assertEqual(titles(command, 'delete'), ['刪除檔案 「x」（位置由指令裡的變數決定）'], command)  # set only sometimes, or otherwise: never guessed
 
     def test_the_shell_around_a_command_is_not_shown(self):
@@ -56,6 +58,14 @@ class PlainCards(unittest.TestCase):
         out = titles('echo "unbalanced')
         self.assertEqual(len(out), 1); self.assertNotIn('無法判讀', out[0]); self.assertTrue(out[0].startswith(g.LABELS['unclear']))
         self.assertNotIn('無法判讀', ''.join(g.LABELS.values()))
+
+    def test_a_linked_folder_is_named_by_where_it_really_is(self):  # review: a link in attachments must not make ~/Documents read as an upload
+        import tempfile, shutil
+        base = os.path.realpath(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, base, True)
+        os.environ['ZOOK_DATA_DIR'] = base + '/data'; os.makedirs(base + '/data/workspaces/b1/attachments'); os.makedirs(base + '/docs')
+        os.symlink(base + '/docs', base + '/data/workspaces/b1/attachments/alias')
+        out = titles('rm %s/data/workspaces/b1/attachments/alias/report.xlsx' % base, 'delete')
+        self.assertEqual(len(out), 1); self.assertTrue(out[0].endswith(base.replace('/private/tmp/', '/tmp/') + '/docs/report.xlsx'), out); self.assertNotIn('附件', out[0])
 
     def test_zook_internal_folders_are_named_not_shown(self):
         cases = {DATA + '/workspaces/b1/attachments/group-files/圖.png': '群組共用檔案「圖.png」',
