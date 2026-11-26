@@ -454,7 +454,8 @@
         closeModal();
         await refresh();
         const next = scheduleNext(saved || {});
-        toast(next ? `已儲存排程，下次執行：${nextLabel(next)}` : '已儲存排程');
+        const renamed = !id && saved?.name && saved.name !== data.name ? `已有相同的排程，這筆叫「${saved.name}」。` : '';  // #299
+        toast(renamed + (next ? `已儲存排程，下次執行：${nextLabel(next)}` : '已儲存排程'));
       } else if (form.id === 'know-search-form') {
         await knowSearch(form);  // 試搜尋 (36c-knowledge.js)
       } else if (form.id === 'note-form') {
@@ -487,7 +488,7 @@
     }
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
       e.preventDefault();
-      if (state.data.bots.length >= 2) groupModal(); else toast('至少需要 2 個 Bot 才能建立群組');
+      if (state.data.bots.length < 2) toast('至少需要 2 個 Bot 才能建立群組'); else leaveModalForm().then(go => { if (go) groupModal(); });  // a form with changes asks first (#297)
       return
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
@@ -495,7 +496,7 @@
       $('#side-search')?.focus()
     }
     if (e.key === 'Escape' && state.modal) {
-      closeModal();
+      requestCloseModal();
       return
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && e.target.id === 'chat-input') {

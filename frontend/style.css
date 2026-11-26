@@ -2252,6 +2252,9 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .uc-bot-list { display:flex; flex-wrap:wrap; gap:4px 10px; padding-top:4px; }
 .detail-issue { margin:8px 0 0; padding:8px 10px; border-radius:8px; background:#fff4e5; color:#7a3d00; font-size:13px; line-height:1.5; }
 @media (max-width: 640px) { .usage-grid { grid-template-columns:1fr; } }
+
+/* #298: the memory page says first who keeps it */
+.memory-lead { font-weight: 600; margin: 0 0 8px; }
 /* #307: a group member's own page while it answers there */
 .member-busy { margin:8px 16px 0; padding:10px 12px; border:1px solid var(--line, #e5e5e5); border-radius:10px; background:var(--soft, rgba(0,0,0,.02)); }
 .member-busy-head { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:13px; }
