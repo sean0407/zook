@@ -356,6 +356,7 @@
           state.query = ''; await openConversation('bot', el.dataset.bot, id);
           break;
         case 'chats':
+          if (modalDirty()) { await requestCloseModal(); if (state.modal) break; }  // 返回 from 對話名稱 with changes asks first (#297)
           chatsModal(activeBot());
           break;
         case 'new-chat': {

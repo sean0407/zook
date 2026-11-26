@@ -102,12 +102,11 @@ class Scheduling:
 
 def number_same_schedule(store, record):
     """#299 (#166③): a new schedule for the same Bot or group, at the same time and with the same content as one already there is
-    called 「整理信件（2）」、「（3）」…, as a group with a name already in use is. One with a name of its own keeps it. Lock held."""
+    called 「整理信件（2）」、「（3）」…, as a group with a name already in use is; a name of its own gets the number too. Lock held."""
     key = lambda x: (x.get('botId') or '', x.get('groupId') or '', x.get('content') or '', schedule_when(x))
     others = [x for x in store.data['schedules'] if x is not record and x.get('id') != record.get('id')]
     if not any(key(x) == key(record) for x in others): return record
     title, taken = schedule_title(record), {schedule_title(x) for x in others}
-    if title not in taken: return record
     base = title.rstrip('…')  # unnamed and long: the first words, without the 「…」
     n = 2
     while (base[:SCHEDULE_NAME_MAX - len('（%d）' % n)] + '（%d）' % n) in taken: n += 1

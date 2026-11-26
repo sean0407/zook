@@ -59,7 +59,9 @@ class UnsavedChanges(unittest.TestCase):
     def test_enter_does_not_save_a_longer_form(self):
         unsaved = source('21b-unsaved.js')
         self.assertIn("e.key !== 'Enter'", unsaved); self.assertIn("closest?.('.modal form')", unsaved)
-        self.assertIn('fill.length > 1', unsaved)  # a one-field window (對話名稱) still saves with Enter
+        self.assertIn('|password)$/', unsaved)  # a password still goes in with Enter
+        self.assertIn("querySelector('form[data-busy]')", unsaved)  # while it is being saved, closing waits
+        self.assertIn('requestCloseModal()', case(source('40-actions.js'), 'chats'))  # 返回 from 對話名稱
 
 
 class MemoryPage(unittest.TestCase):
@@ -131,8 +133,8 @@ class SameSchedule(unittest.TestCase):
         body = {'botId': bot, 'content': '整理信件', 'time': '09:00', 'repeat': 'daily', 'on': False}
         names = [self.req('POST', '/api/schedules', body)[1].get('name', '') for _ in range(3)]
         self.assertEqual(names, ['', '整理信件（2）', '整理信件（3）'])  # unnamed: named after what it does
-        self.assertEqual(self.req('POST', '/api/schedules', dict(body, name='早上'))[1]['name'], '早上')  # its own name already tells it apart
-        self.assertEqual(self.req('POST', '/api/schedules', dict(body, name='早上'))[1]['name'], '早上（2）')
+        self.assertEqual(self.req('POST', '/api/schedules', dict(body, name='早上'))[1]['name'], '早上（2）')  # a name of its own is numbered too
+        self.assertEqual(self.req('POST', '/api/schedules', dict(body, name='早上'))[1]['name'], '早上（3）')
         self.assertEqual(self.req('POST', '/api/schedules', dict(body, time='10:00'))[1].get('name', ''), '')  # another time is another schedule
         self.assertEqual(self.req('POST', '/api/schedules', dict(body, content='整理檔案'))[1].get('name', ''), '')
         first = self.req('GET', '/api/state')[1]['schedules'][0]
@@ -149,10 +151,12 @@ class ExportFiles(unittest.TestCase):
                    messages=[dict(id='u1', role='user', content='做報表', createdAt='2026-11-23T06:00:00+00:00'),
                              dict(id='a1', role='assistant', status='completed', content='好了', createdAt='2026-11-23T06:01:00+00:00')])
         job = dict(id='j1', botId='b1', messageId='a1', status='completed', usage=dict(provider='claude', model='claude-x'),
-                   toolCalls=[dict(name='native_write', arguments=dict(path='/Users/x/報表.xlsx')), dict(name='zook_workspace_write', arguments=dict(path='說明.md'))],
+                   toolCalls=[dict(name='native_write', arguments=dict(path='/Users/x/報表.xlsx')), dict(name='zook_workspace_write', arguments=dict(path='說明.md')),
+                              dict(name='zook_workspace_write', arguments=dict(path='沒存成.md'), status='denied')],
                    wrote=['/Users/x/報表.xlsx', '/Users/x/圖.png'])
         text = server.export_chat(dict(bots=[bot], jobs=[job]), bot, 'c1')['markdown']
         self.assertIn('這則回覆存的檔案：報表.xlsx、說明.md、圖.png', text)
+        self.assertNotIn('沒存成.md', text)  # turned down: not saved
         self.assertNotIn('/Users/x', text)  # names only, never where on this Mac
 
 

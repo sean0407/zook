@@ -21,6 +21,7 @@
   }, true);
   let closeAsking = false;
   async function requestCloseModal() {
+    if (modalRoot.querySelector('form[data-busy]')) return;  // being saved: it closes by itself, and giving it up now could not stop it
     if (!modalDirty()) return closeModal();
     if (closeAsking) return;
     closeAsking = true;
@@ -32,11 +33,11 @@
       closeModal();
     } finally { closeAsking = false; }
   }
-  // Enter in a field of a longer form (a Bot's name, a schedule) does not save and close it (#20); a window with one field still does.
+  // Enter in a field (a Bot's name, a schedule, a conversation's name) does not save and close the window (#20): 儲存 does.
+  // A password still goes in with Enter, as a sign-in would.
   document.addEventListener('keydown', e => {
     if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229 || e.defaultPrevented) return;
     const el = e.target, form = el.closest?.('.modal form');
-    if (!form || el.tagName !== 'INPUT' || /^(checkbox|radio|button|submit|file|range|color)$/.test(el.type)) return;
-    const fill = [...form.elements].filter(x => x.offsetParent !== null && (x.tagName === 'TEXTAREA' || (x.tagName === 'INPUT' && /^(text|search|email|url|number|tel|password|time|date)$/.test(x.type))));
-    if (fill.length > 1) e.preventDefault();
+    if (!form || el.tagName !== 'INPUT' || /^(checkbox|radio|button|submit|file|range|color|password)$/.test(el.type)) return;
+    e.preventDefault();
   });
