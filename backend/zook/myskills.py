@@ -94,11 +94,13 @@ def custom_skill_route(store, method, rest, body):
 def connector_first_test(store, ident, turn_on=True):
     """Test a connector just added. It is switched on for every Bot only when it worked (#303); otherwise it stays off and the
     reason goes back with the answer. Never called with store.lock held: starting a program or reaching a service takes time."""
+    find = lambda: copy.deepcopy(next((c for c in store.data['connectors'] if 'zook:' + c['id'] == ident), None))
+    with store.lock: tested = find()
     try: test = runtime_module().test_connection(ident, inventory_for(store, testing=ident))
     except Exception as exc: test = {'status': 'error', 'toolCount': 0, 'error': str(exc)[:300] or '連線失敗。'}
     on = bool(turn_on) and test.get('status') == 'ready'
     if on:
         with store.lock:
-            on = any('zook:' + c['id'] == ident for c in store.data['connectors'])  # not removed while it was being tested
+            on = tested is not None and find() == tested  # not removed or edited while it was being tested: what is switched on is what was tested
             if on: st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + [ident])); store.save()
     return on, test

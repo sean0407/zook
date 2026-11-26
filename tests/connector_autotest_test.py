@@ -74,5 +74,21 @@ class CatalogSignIn(unittest.TestCase):
             self.assertEqual([c['id'] for c in store.data['connectors']], [record['id']])
             self.assertNotIn('zook:' + record['id'], store.data['settings'].get('sharedMcp') or [])  # on once signed in and tested
 
+    def test_one_edited_while_it_was_tested_stays_off(self):
+        with tempfile.TemporaryDirectory() as temp:
+            spec = importlib.util.spec_from_file_location('zook_first_test_race', SERVER); z = importlib.util.module_from_spec(spec); spec.loader.exec_module(z)
+            store = z.Store(Path(temp) / 'data')
+            store.data['connectors'].append(dict(id='c1', name='C', transport='stdio', command='old', url='', env={}, secretName='', secretId='', headers={}, moreSecrets={}, origin=''))
+            edited = []
+            def tested(ident, inventory):
+                if edited: return {'status': 'ready', 'toolCount': 1}
+                store.data['connectors'][0]['command'] = 'new'; edited.append(1)  # another request saved a change meanwhile
+                return {'status': 'ready', 'toolCount': 1}
+            z.runtime_module = lambda: type('R', (), {'test_connection': staticmethod(tested)})
+            z.inventory_for = lambda store, **kw: {}
+            self.assertEqual(z.connector_first_test(store, 'zook:c1')[0], False)
+            self.assertNotIn('zook:c1', store.data['settings'].get('sharedMcp') or [])
+            self.assertEqual(z.connector_first_test(store, 'zook:c1')[0], True)  # tested as it is now: on
+
 
 if __name__ == '__main__': unittest.main()

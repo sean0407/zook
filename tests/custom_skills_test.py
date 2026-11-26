@@ -113,8 +113,8 @@ class EveryCliGetsIt(unittest.TestCase):
             self.assertNotIn('allowed-tools', text); self.assertTrue(text.startswith('---\nname: Packed\ndescription: d2\n---\n'))
 
     def test_the_phone_does_not_sign_in_to_a_connector_that_is_off(self):
-        handler = (Path(__file__).resolve().parents[1] / 'backend/zook/handler.py').read_text(encoding='utf-8')
-        self.assertIn("testing='' if self.device else parts[2]", handler)
+        spec = importlib.util.spec_from_file_location('zook_custom_skills_phone', SERVER); z = importlib.util.module_from_spec(spec); spec.loader.exec_module(z)
+        self.assertFalse(z.device_may('POST', '/api/mcp/zook:abc/test'))  # testing (which may sign in to one that is off) is Mac only
 
 
 if __name__ == '__main__': unittest.main()
