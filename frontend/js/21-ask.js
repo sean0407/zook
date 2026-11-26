@@ -2,14 +2,15 @@
   // embedded views, so pressing 刪除 there did nothing at all (#175, #192). It sits above any open window (the Bot form stays as it was),
   // and Esc, a click outside it and 取消 all mean no.
   //   lines: what goes away, whether it can be brought back, what else changes; each a line of plain text.
+  //   keep:  the other button (取消; 「繼續編輯」 when a window with changes is about to close).
   //   run:   the work itself, done while the dialog shows 刪除中… (working) with both buttons off, so a second press sends nothing twice.
   //          It closes afterwards either way; a failure is passed on to the caller (which shows it).
   // Resolves true when the person said yes (after run, when given), false otherwise.
-  function ask({title, lines = [], ok = '刪除', danger = true, run = null, working = ok + '中…'}) {
+  function ask({title, lines = [], ok = '刪除', keep = '取消', danger = true, run = null, working = ok + '中…'}) {
     $('#ask-root')?.dispatchEvent(new Event('ask-cancel'));  // only one question at a time; an older one counts as no
     const back = document.activeElement, root = document.createElement('div');
     root.id = 'ask-root';
-    root.innerHTML = `<div class="modal-overlay ask-overlay"><section class="modal ask" role="alertdialog" aria-modal="true" aria-labelledby="ask-title" aria-describedby="ask-body"><div class="modal-head"><h2 id="ask-title">${esc(title)}</h2></div><div class="modal-body" id="ask-body">${lines.filter(Boolean).map(x => `<p>${esc(x)}</p>`).join('')}</div><div class="modal-foot"><button type="button" class="secondary" data-ask="no">取消</button><button type="button" class="${danger ? 'danger-btn' : 'primary'}" data-ask="yes">${esc(ok)}</button></div></section></div>`;
+    root.innerHTML = `<div class="modal-overlay ask-overlay"><section class="modal ask" role="alertdialog" aria-modal="true" aria-labelledby="ask-title" aria-describedby="ask-body"><div class="modal-head"><h2 id="ask-title">${esc(title)}</h2></div><div class="modal-body" id="ask-body">${lines.filter(Boolean).map(x => `<p>${esc(x)}</p>`).join('')}</div><div class="modal-foot"><button type="button" class="secondary" data-ask="no">${esc(keep)}</button><button type="button" class="${danger ? 'danger-btn' : 'primary'}" data-ask="yes">${esc(ok)}</button></div></section></div>`;
     document.body.appendChild(root);
     const yes = root.querySelector('[data-ask="yes"]'), no = root.querySelector('[data-ask="no"]');
     (danger ? no : yes).focus();  // Enter on a delete question keeps things as they are

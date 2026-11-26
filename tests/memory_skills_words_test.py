@@ -14,7 +14,8 @@ class MemoryPage(unittest.TestCase):
         self.models, self.actions = JS('20-models.js'), JS('40-actions.js')
 
     def test_the_page_says_what_memory_is(self):
-        self.assertIn('這裡是 Bot 幫你記住的習慣和偏好（例如：回覆用條列）。對 Bot 說「記住…」它就會記下。標「所有 Bot 共用」的每個 Bot 都知道；標 Bot 名稱的只有那個 Bot 知道。', self.models)
+        self.assertIn('這裡是 Bot 幫你記住的習慣和偏好（例如：回覆用條列）。標「所有 Bot 共用」的每個 Bot 都知道；標 Bot 名稱的只有那個 Bot 知道。', self.models)
+        self.assertIn('要改請直接跟 Bot 說「記住…」或「忘掉…」', self.models)  # #298: told first, in the lead line
         self.assertNotIn('Bot 記下的長期記憶', self.models)
         self.assertIn("'所有 Bot 共用'", self.models)
         self.assertIn('原 Bot 已刪除，沒有 Bot 會用到', self.models)

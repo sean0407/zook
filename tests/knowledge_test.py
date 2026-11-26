@@ -112,8 +112,8 @@ class KnowledgeFiles(unittest.TestCase):
             if self.request('GET', '/api/jobs/' + reply['jobId'])[1]['status'] != 'running': break
             time.sleep(.05)
         prompt = self.prompt.read_text(encoding='utf-8')
-        self.assertIn('產品: 旗艦款保固兩年', prompt); self.assertIn('地址: 台北市信義路一段', prompt)
-        self.assertNotIn('這段只給另一個 Bot', prompt); self.assertNotIn(failed['title'] + ':', prompt)
+        self.assertIn('【出處：產品（檔案：產品.txt）】\n旗艦款保固兩年', prompt); self.assertIn('【出處：地址】\n台北市信義路一段', prompt)
+        self.assertNotIn('這段只給另一個 Bot', prompt); self.assertNotIn(failed['title'], prompt)
         # Older tags stay when an item is changed without them; a file's text cannot be overwritten; a Bot that is not there is refused.
         self.assertEqual(self.request('PATCH', '/api/knowledge/' + typed['id'], {'title': '公司地址', 'botId': ''})[0], 200)
         self.assertEqual(self.item(typed['id'])['tags'], ['舊標籤'])
@@ -141,16 +141,18 @@ class KnowledgeFiles(unittest.TestCase):
 class KnowledgeUnits(unittest.TestCase):
     def setUp(self):
         self.ns = {'__file__': str(ROOT / 'backend/server.py')}
-        for part in ('core', 'knowledge'):
+        for part in ('core', 'knowledge', 'knowsearch'):
             f = ROOT / 'backend/zook' / (part + '.py'); exec(compile(f.read_text(encoding='utf-8'), str(f), 'exec'), self.ns)
 
-    def test_only_ready_items_newest_ten(self):
+    def test_only_ready_items_newest_ten_when_nothing_matches(self):
         class S: data = {'knowledge': [dict(id=str(i), title='t%d' % i, content='c' * 5000, botId='') for i in range(12)]
                                        + [dict(id='p', title='p', content='', status='processing', botId=''), dict(id='f', title='f', content='', status='failed', botId=''),
                                           dict(id='o', title='o', content='x', botId='other')]}
-        picked = self.ns['knowledge_for'](S, {'id': 'me'})
-        self.assertEqual([x['id'] for x in picked], [str(i) for i in range(2, 12)])
-        self.assertEqual(len(self.ns['knowledge_lines'](picked[:1])), len('t2: ') + 4000)
+        S.find = lambda kind, item_id: None
+        picked = self.ns['knowledge_for'](S, {'id': 'me'}, '你好')  # #295: nothing matches → the newest items in short, within the budget
+        self.assertEqual([x['id'] for x in picked], [str(i) for i in range(11, 4, -1)])  # labels count against the budget too
+        self.assertLessEqual(sum(len(x['text']) for x in picked), self.ns['KNOWLEDGE_BUDGET'])
+        self.assertIn('【出處：t11】\n' + 'c' * 1500, self.ns['knowledge_lines'](picked[:1]))
 
     def test_review_findings(self):
         import tempfile as _t
@@ -182,7 +184,7 @@ class KnowledgeUnits(unittest.TestCase):
     def test_prompts_use_the_shared_choice(self):
         for name in ('app.py', 'groups.py'):
             text = (ROOT / 'backend/zook' / name).read_text(encoding='utf-8')
-            self.assertIn('knowledge_for(store, bot)', text); self.assertIn('knowledge_lines(knowledge)', text)
+            self.assertIn('knowledge_for(store, bot, ', text); self.assertIn('knowledge_lines(knowledge)', text)
             self.assertNotIn("store.data['knowledge'] if", text)
 
 
@@ -204,8 +206,8 @@ class KnowledgePage(unittest.TestCase):
 
     def test_card_and_delete(self):
         self.assertIn('Bot 可使用', self.js); self.assertIn('處理中', self.js); self.assertIn('失敗：', self.js)
-        self.assertIn('KNOW_SHOWN = 4000', self.js); self.assertIn('Bot 只會讀前', self.js)  # the same cut as the reply (knowledge.py)
-        self.assertIn('KNOWLEDGE_SHOWN = 4000', (ROOT / 'backend/zook/knowledge.py').read_text(encoding='utf-8'))
+        self.assertIn('KNOW_BUDGET = 12000', self.js); self.assertNotIn('Bot 只會讀前', self.js)  # #295: the same budget as the reply (knowsearch.py)
+        self.assertIn('KNOWLEDGE_BUDGET = 12000', (ROOT / 'backend/zook/knowsearch.py').read_text(encoding='utf-8'))
         start = self.js.index("case 'delete-note':"); body = self.js[start:self.js.index('break;', start)]
         self.assertIn('ask(', body); self.assertIn('.title', body)
 
