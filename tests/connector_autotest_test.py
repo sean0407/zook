@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """#303 (#22): a connector you add is tested once at once. Only one that works is switched on for every Bot; one that does not
 stays off with the reason. #288③: connector names that differ only in upper/lower case clash."""
-import http.client, importlib.util, json, os, subprocess, sys, tempfile, unittest
+import http.client, importlib.util, json, os, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 
 SERVER = Path(__file__).resolve().parents[1] / 'backend/server.py'
@@ -21,7 +21,7 @@ class ConnectorAddTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name)
         (self.root / 'assets').mkdir(); (self.root / 'assets/index.html').write_text('x'); (self.root / 'home').mkdir()
-        (self.root / 'mcp.py').write_text(MCP); (self.root / 'broken.py').write_text('import sys\nsys.stderr.write("no token\\n"); sys.exit(3)\n')
+        (self.root / 'mcp.py').write_text(MCP); (self.root / 'slow.py').write_text('import time\ntime.sleep(1.5)\n' + MCP); (self.root / 'broken.py').write_text('import sys\nsys.stderr.write("no token\\n"); sys.exit(3)\n')
         env = dict(os.environ, HOME=str(self.root / 'home'), ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', ZOOK_SECRETS_DIR=str(self.root))
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')],
                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
@@ -57,6 +57,30 @@ class ConnectorAddTest(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('zook_turn_on_phone', SERVER); z = importlib.util.module_from_spec(spec); spec.loader.exec_module(z)
         self.assertFalse(z.device_may('POST', '/api/connectors/abc/turn-on'))
 
+    def race(self, change, **extra):
+        """Add a slow connector that works, switch it off, ask for turn-on and make a change while it is being tested."""
+        import threading
+        body = dict({'name': 'Slow', 'transport': 'stdio', 'command': '%s %s' % (sys.executable, self.root / 'slow.py')}, **extra)
+        made = self.req('POST', '/api/connectors', body)[1]; ident = made['id'].split(':')[1]
+        self.assertTrue(made['on']); self.assertEqual(self.req('PATCH', '/api/settings', {'sharedMcp': []})[0], 200)
+        out = {}
+        worker = threading.Thread(target=lambda: out.update(self.req('POST', '/api/connectors/%s/turn-on' % ident, {})[1])); worker.start()
+        time.sleep(0.6); change(ident); worker.join(30)
+        return made['id'], ident, out
+
+    def test_a_change_made_and_undone_during_the_test_keeps_it_off(self):
+        def change(ident):
+            self.assertEqual(self.req('PATCH', '/api/connectors/' + ident, {'env': {'MODE': 'b'}})[0], 200)
+            self.assertEqual(self.req('PATCH', '/api/connectors/' + ident, {'env': {}})[0], 200)  # A -> B -> A
+        made, ident, out = self.race(change)
+        self.assertEqual((out['on'], out['test'].get('changed')), (False, True)); self.assertNotIn(made, self.shared())
+        self.assertTrue(self.req('POST', '/api/connectors/%s/turn-on' % ident, {})[1]['on'])  # nothing changes now: on
+
+    def test_a_key_replaced_under_the_same_id_during_the_test_keeps_it_off(self):
+        change = lambda ident: self.assertEqual(self.req('PATCH', '/api/connectors/' + ident, {'secret': 'second-key-12345'})[0], 200)
+        made, ident, out = self.race(change, secretName='FAKE_KEY', secret='first-key-12345')
+        self.assertFalse(out['on']); self.assertTrue(out['test']['changed']); self.assertNotIn(made, self.shared())
+
     def test_names_that_differ_only_in_case_clash(self):
         command = '%s %s' % (sys.executable, self.root / 'mcp.py')
         self.assertEqual(self.req('POST', '/api/connectors', {'name': 'GitHub', 'transport': 'stdio', 'command': command})[0], 201)
@@ -89,14 +113,29 @@ class CatalogSignIn(unittest.TestCase):
             edited = []
             def tested(ident, inventory):
                 if edited: return {'status': 'ready', 'toolCount': 1}
-                store.data['connectors'][0]['command'] = 'new'; edited.append(1)  # another request saved a change meanwhile
-                return {'status': 'ready', 'toolCount': 1}
+                for command in ('new', 'old'):  # another request changed it, and back again (A -> B -> A), while it was tested
+                    with store.lock: store.data['connectors'][0]['command'] = command; z.connector_touch('c1')
+                edited.append(1); return {'status': 'ready', 'toolCount': 1}
             z.runtime_module = lambda: type('R', (), {'test_connection': staticmethod(tested)})
             z.inventory_for = lambda store, **kw: {}
             on, test = z.connector_first_test(store, 'zook:c1')
             self.assertFalse(on); self.assertTrue(test['changed']); self.assertIn('設定已經被修改', test['error'])
             self.assertNotIn('zook:c1', store.data['settings'].get('sharedMcp') or [])
             self.assertEqual(z.connector_first_test(store, 'zook:c1')[0], True)  # tested as it is now: on
+
+    def test_switching_or_signing_out_an_account_counts_as_a_change(self):
+        with tempfile.TemporaryDirectory() as temp:
+            os.environ['ZOOK_SECRETS_DIR'] = str(Path(temp) / 'secrets'); (Path(temp) / 'secrets').mkdir(); self.addCleanup(os.environ.pop, 'ZOOK_SECRETS_DIR', None)
+            spec = importlib.util.spec_from_file_location('zook_first_test_accounts', SERVER); z = importlib.util.module_from_spec(spec); spec.loader.exec_module(z)
+            store = z.Store(Path(temp) / 'data')
+            store.data['connectors'].append(dict(id='c1', name='C', transport='http', command='', url='https://x.example/mcp', env={}, secretName='', secretId='', headers={}, moreSecrets={}, origin='',
+                                                 oauth={'secretId': 'a1', 'name': '帳號 1'}, otherAccounts=[{'secretId': 'a2', 'name': '帳號 2'}]))
+            before = z.connector_rev('c1'); z.oauth_switch(store, 'c1', 'a2'); self.assertEqual(z.connector_rev('c1'), before + 1)
+            z.oauth_logout(store, 'c1'); self.assertEqual(z.connector_rev('c1'), before + 2)
+            # and so a test that overlaps one of them does not switch the connector on
+            def tested(ident, inventory): z.oauth_logout(store, 'c1'); return {'status': 'ready', 'toolCount': 1}
+            z.runtime_module = lambda: type('R', (), {'test_connection': staticmethod(tested)}); z.inventory_for = lambda store, **kw: {}
+            self.assertFalse(z.connector_first_test(store, 'zook:c1')[0])
 
     def test_a_sign_in_renewed_by_the_test_is_not_a_change(self):
         with tempfile.TemporaryDirectory() as temp:

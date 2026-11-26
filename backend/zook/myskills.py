@@ -91,21 +91,32 @@ def custom_skill_route(store, method, rest, body):
     return 404, {'error': '找不到資源。'}
 
 
-CONNECTOR_SETTINGS = ('name', 'transport', 'command', 'url', 'env', 'headers', 'secretName', 'secretId', 'moreSecrets')
+_connector_revs, _revs_lock = {}, threading.Lock()
+
+
+def connector_touch(connector_id):
+    """Count a change to what a connector connects with: its settings, a key replaced in the Keychain (same id), an account signed
+    in, switched or signed out, removal. A sign-in renewed while the connector is being used or tested is not counted."""
+    with _revs_lock: _connector_revs[connector_id] = _connector_revs.get(connector_id, 0) + 1
+
+
+def connector_rev(connector_id):
+    with _revs_lock: return _connector_revs.get(connector_id, 0)
 
 
 def connector_first_test(store, ident, turn_on=True):
-    """Test a connector just added. It is switched on for every Bot only when it worked (#303); otherwise it stays off and the
-    reason goes back with the answer. Never called with store.lock held: starting a program or reaching a service takes time."""
-    # What decides where it connects and with which key. A sign-in renewed by the test itself is not a change of settings.
-    find = lambda: next(({k: copy.deepcopy(c.get(k)) for k in CONNECTOR_SETTINGS} for c in store.data['connectors'] if 'zook:' + c['id'] == ident), None)
-    with store.lock: tested = find()
+    """Test a connector just added, or just signed in to. It is switched on for every Bot only when it worked and nothing about it
+    changed while it was tested (#303); otherwise it stays off and the reason goes back with the answer.
+    Never called with store.lock held: starting a program or reaching a service takes time."""
+    cid = ident.split(':', 1)[1] if ident.startswith('zook:') else ''
+    exists = lambda: any(c['id'] == cid for c in store.data['connectors'])
+    with store.lock: rev = connector_rev(cid); there = exists()  # read before the test reads its settings and keys
     try: test = runtime_module().test_connection(ident, inventory_for(store, testing=ident))
     except Exception as exc: test = {'status': 'error', 'toolCount': 0, 'error': str(exc)[:300] or '連線失敗。'}
     on = bool(turn_on) and test.get('status') == 'ready'
     if on:
         with store.lock:
-            on = tested is not None and find() == tested  # not removed or edited while it was being tested: what is switched on is what was tested
+            on = there and exists() and connector_rev(cid) == rev  # any change in between, even one changed back, means it was not what was tested
             if on: st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + [ident])); store.save()
         if not on: test = dict(test, changed=True, error='測試時的設定已經被修改或移除，先維持關閉。請再測試一次。')
     return on, test

@@ -122,7 +122,7 @@ def catalog_add(app, item_id, key=None):
             with store.lock:
                 taken = {same_name(c['name']) for c in store.data['connectors'] if c['id'] != record['id']}
                 record['name'] = next((n for n in [record['name']] + ['%s %d' % (item['name'], i) for i in range(2, 200)] if same_name(n) not in taken), '%s %s' % (item['name'], record['id'][:6]))
-                store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]
+                store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]; connector_touch(record['id'])  # a new key for one already there
                 if auth != 'login':  # checked above; one that needs a sign-in is switched on once signed in and tested (#303)
                     st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + ['zook:' + record['id']]))
                 store.save()

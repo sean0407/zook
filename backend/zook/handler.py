@@ -574,7 +574,7 @@ class Handler(BaseHTTPRequestHandler):
                             if stale and record['transport'] == 'http' and record['url'] == current.get('url') and not secret:  # still the same sign-ins
                                 record['oauth'] = stale; drop = []
                                 if current.get('otherAccounts'): record['otherAccounts'] = current['otherAccounts']
-                            store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]
+                            store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]; connector_touch(record['id'])  # a key replaced under the same id counts too
                             for blob in drop: blob_delete(blob)  # the address or the way to sign in changed
                             store.save()
                         if existing: return self.respond(200, dict(id='zook:' + record['id'], name=record['name']))
@@ -582,7 +582,7 @@ class Handler(BaseHTTPRequestHandler):
                         return self.respond(201, dict(id='zook:' + record['id'], name=record['name'], on=on, test=test))
                     if existing and self.command == 'DELETE':
                         with store.lock:
-                            store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != existing['id']]
+                            store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != existing['id']]; connector_touch(existing['id'])
                             st = store.data['settings']; st['sharedMcp'] = [x for x in st.get('sharedMcp') or [] if x != 'zook:' + existing['id']]
                             store.save()
                         for secret_id in connector_secret_ids(existing): secret_delete(secret_id)
