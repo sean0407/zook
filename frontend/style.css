@@ -128,7 +128,7 @@ button {
   position: absolute;
   left: 10px;
   top: 9px;
-  color: #999
+  color: var(--muted)
 }
 
 .side-scroll {
@@ -1208,7 +1208,7 @@ button {
 .bot-usage { border: 1px solid #ececec; border-radius: 14px; overflow: hidden; background: #fff; }
 .bot-usage-row { display: grid; grid-template-columns: minmax(170px, 2fr) 70px 1fr 1fr 100px 150px; gap: 12px; align-items: center; padding: 11px 16px; border-top: 1px solid #f2f2f2; font-size: 13px; font-variant-numeric: tabular-nums; }
 .bot-usage-row.head { border-top: 0; background: #fafafa; color: #888; font-size: 12px; }
-.bot-usage-row > span small { display: block; color: #999; font-size: 11px; }
+.bot-usage-row > span small { display: block; color: var(--muted); font-size: 11px; }
 .bot-cell { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .bot-cell .avatar { width: 28px; height: 28px; }
 .bot-cell > span { min-width: 0; }
@@ -2195,6 +2195,11 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .know-meta small { color: #777; font-size: 11px; overflow-wrap: anywhere; }
 .know-who.all { color: #2d5f8a; background: #eaf2fa; }
 .know-who.one { color: #6a4a8c; background: #f2ecf8; }
+/* #80④ #158 #166②: a Bot whose model cannot answer now (額度用完、尚未登入) */
+.trouble-badge { color:#a33a00; background:#ffe6d9; border-radius:8px; padding:2px 5px; font-size:10px; font-weight:500; white-space:nowrap; }
+.detail-profile .trouble-badge { margin-left:6px; }
+.trouble-banner { margin:0 16px 4px; padding:8px 12px; border-radius:10px; background:#fff4e5; color:#7a3d00; font-size:13px; line-height:1.5; }
+.sched-trouble { margin:2px 0 0; }
 /* #295 試搜尋 on the 知識庫 page */
 .know-search { margin: 0 0 18px; }
 .know-search-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

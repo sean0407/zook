@@ -52,7 +52,7 @@ class Handler(BaseHTTPRequestHandler):
             result.append(dict(id=provider, name=account['name'], vendor=(P.spec(store.data, provider) or {}).get('vendor', ''), zookUsage=zook,
                                status=account['status'], method=account['method'], noQuotaApi=provider not in ('codex', 'claude', 'antigravity', 'grok'), quotaUnread=provider == 'grok' and not snap,
                                plan=(snap or {}).get('plan') or account['plan'], email=account['email'], workspace=account.get('workspace', ''), quota=snap,
-                               apiBilling=api_billed_method(account['method']), profiles=profiles))
+                               apiBilling=api_billed_method(account['method']), profiles=profiles, issue=((store.data.get('providerIssues') or {}).get(provider) or {}).get('issue', '') if account['status'] == 'logged_in' else ''))  # #158②
         with store.lock:
             known = store.data.setdefault('autoStatus', {}); known.update(merge_auto_status(known, {x['id']: auto_state(x['id'], x['status'], x['method']) for x in result if x['id'] in AUTO_MODELS}))
             known.update(merge_auto_status(known, {auto_account_key(a['_account']): auto_state(x['id'], a['status'], a['method'], a['_account']) for x in result if x['id'] in AUTO_MODELS for a in x['profiles']}))
