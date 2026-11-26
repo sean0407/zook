@@ -274,6 +274,7 @@ def _where(path):
     """Where a file is, whole, so two files of the same name are told apart: ~/… inside the home folder. A web address: its site only.
     Only words for the card (#234): a variable set on the same line is shown as what it holds, one set elsewhere says so; Zook's own
     folders and the Mac's temporary folder are named, not spelled out. What is asked never depends on these words."""
+    if not _PLAIN[0]: return _where_before(path)
     text = str(path or '').strip('"\'').replace('\\$', '$')  # \$ inside sh -c "…" is a $ once the inner shell reads it
     if '$' in text or '`' in text:
         known = _resolve(text)
@@ -293,6 +294,17 @@ def _where(path):
     return _place(full) or ('~' + full[len(home):] if home else _place(full, temp=True) or full)  # never cut short: the card shows the whole target
 
 
+def _where_before(path):
+    """The words before #234, kept only to measure a card the way main did (decide: a target too long for one card is refused as before)."""
+    if '$' in str(path) or '`' in str(path): return '「%s」指向的位置' % _short(str(path).strip('"\''), 40)
+    if str(path).lower().startswith('file://'): path = _file_url(str(path))
+    elif '://' in str(path): return _host(path) or '網址'
+    full = os.path.normpath(_abs(path))
+    if full == HOME: return '家目錄'
+    return '~' + full[len(HOME):] if full.startswith(HOME + os.sep) else full
+
+
+_PLAIN = [True]  # False only while decide() measures the card as main did
 _VARS = [{}]  # the variables of the command line being read (gate_words.line_vars), for the card's words only
 
 
@@ -311,6 +323,7 @@ def _plain_steps(command):
 
 
 def _names(paths):
+    if not _PLAIN[0]: return '、'.join(dict.fromkeys(_where(p) for p in paths if p))
     return '、'.join(_where(p) for p in dict.fromkeys(p for p in paths if p))  # one line per file named, even when two read alike
 
 
@@ -369,7 +382,7 @@ def _url_hosts(args):
 
 
 def _hit(kind, what):
-    return (kind, ('%s %s' % (LABELS[kind], what)).strip())
+    return (kind, ('%s %s' % (LABELS[kind] if _PLAIN[0] or kind != 'unclear' else '執行無法判讀的指令', what)).strip())
 
 
 # ---- reading a shell command
@@ -454,8 +467,9 @@ def command_boundaries(command, depth=0):
     """Every boundary in a shell command line, in order, as (kind, title)."""
     if not isinstance(command, str): return []
     if depth == 0:  # the variables of this line, for the words on the card only
-        _VARS[0] = gate_words.line_vars(command)  # also inside sh -c '…'
+        _VARS[0] = gate_words.line_vars(command) if _PLAIN[0] else {}  # also inside sh -c '…'
         found = command_boundaries(command, 1)
+        if not _PLAIN[0]: _VARS[0] = {}; return found
         plain = _unclear_title(command) if any(k == 'unclear' for k, _ in found) else ''
         _VARS[0] = {}
         return [(k, plain if k == 'unclear' else t) for k, t in found]
@@ -499,7 +513,7 @@ def merged(found):
     """One line for each different action, and how many times one is done: two uploads of the same file to the same site are 「共 2 次」."""
     counts = {}
     for hit in found: counts[hit] = counts.get(hit, 0) + 1
-    return [(k, t if n == 1 or k == 'unclear' else '%s（共 %d 次）' % (t, n)) for (k, t), n in counts.items()]
+    return [(k, t if n == 1 or k == 'unclear' and _PLAIN[0] else '%s（共 %d 次）' % (t, n)) for (k, t), n in counts.items()]
 
 
 def command_boundary(command, depth=0):
@@ -871,7 +885,10 @@ def decide(tool, data, home=''):
     split = [t for k, t in raw if k == 'split']
     if split: return False, '%s。請拆成幾個指令，每次一個檔案、一個目的地，讓使用者逐一確認。' % split[0]
     found = merged(raw)
-    if len(raw) > MAX_ACTIONS or any(len(t) > MAX_TITLE for _, t in found):  # one card could not show all of it: never approved as a batch
+    _PLAIN[0] = False  # a card too long is measured exactly as before #234: the new words never turn a refusal into a card
+    try: before = merged(boundaries(tool, data, home))
+    finally: _PLAIN[0] = True
+    if len(raw) > MAX_ACTIONS or any(len(t) > MAX_TITLE for _, t in before):  # one card could not show all of it: never approved as a batch
         return False, '這一步同時要做 %d 件需要核准的事，或目標太長，一張核准卡放不下。請分成幾個較小的步驟，一次一件，讓使用者逐一確認。' % len(raw)
     if ask(found): return True, ''
     return False, '使用者沒有允許：%s。不要改用其他方法做這件事，直接告訴使用者沒有做。' % '；'.join(t for _, t in found)

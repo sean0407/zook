@@ -106,10 +106,20 @@ class PlainCards(unittest.TestCase):
         self.assertEqual(said(command), first); self.assertEqual(g.boundaries('Bash', {'command': command}, '/Users/someone/work'), g.command_boundaries(command))
         self.assertEqual(g.boundaries('Bash', {'command': "/bin/zsh -lc '%s'" % command.replace("'", '')}, '/Users/someone/work'), g.command_boundaries(command))
 
+    def test_too_long_is_decided_exactly_as_before(self):  # user 11-26: a target main refused as too long is still refused, never a card
+        deep = DATA + '/workspaces/b1/attachments/group-files/' + '資料夾/' * 40 + 'p.png'
+        self.assertLess(len(titles('rm "%s"' % deep)[0]), g.MAX_TITLE)  # the new words are short …
+        with unittest.mock.patch.object(g, 'ask', return_value=True) as asked:
+            self.assertFalse(g.decide('Bash', {'command': 'rm "%s"' % deep})[0])  # … but main measured the full path: refused, no card
+            self.assertTrue(g.decide('Bash', {'command': 'rm -rf "$OUT/%s"' % ('x' * 300)})[0])  # main showed a variable path cut short: asked
+            self.assertTrue(g.decide('Bash', {'command': 'rm "%s/workspaces/b1/.zook-scratch/p.png"' % DATA})[0])
+        self.assertEqual(asked.call_count, 2)
+        self.assertTrue(g._PLAIN[0])
+
     def test_a_target_too_long_for_one_card_is_still_refused(self):  # never cut short: a card shows the whole target or is not asked
         folder = '/Users/someone/' + '很長的資料夾/' * 30
         with unittest.mock.patch.object(g, 'ask', return_value=True):
-            self.assertFalse(g.decide('Bash', {'command': 'D=%s; rm "$D/a.txt"' % folder})[0])
+            self.assertTrue(g.decide('Bash', {'command': 'D=%s; rm "$D/a.txt"' % folder})[0])  # as on main, where a variable was measured short
             self.assertFalse(g.decide('Bash', {'command': 'rm %sa.txt' % folder})[0])
 
 
