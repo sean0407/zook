@@ -1,4 +1,5 @@
 # Files a group shares. Each Bot gets its own copy for a turn, so no Bot's access is widened. Loaded by backend/server.py into one shared namespace.
+import io
 GROUP_FILES_TOTAL = 200 * 1024 * 1024
 GROUP_FILES_FOLDER = 'group-files'  # inside a Bot's workspace attachments folder
 _group_files_lock = threading.Lock()  # choosing a name and saving a file happen as one step
@@ -200,8 +201,8 @@ def sync_group_files_in(store, group_id, bot_id, skip=()):
         clear_folder(fd)
         for entry in _plain_files(group_files_dir(store, group_id)):
             if entry.name in skip: continue
-            with open(entry.path, 'rb') as source: write_into_folder(fd, entry.name, source)
-            seen[entry.name] = _file_hash(entry.path)
+            with open(entry.path, 'rb') as source: data = source.read()  # one read: the copy and its hash are the same content (#240)
+            write_into_folder(fd, entry.name, io.BytesIO(data)); seen[entry.name] = hashlib.sha256(data).hexdigest()
     remember_uploaded_names(store, bot_id, {n: group_original(store, group_id, n) for n in seen if group_original(store, group_id, n)})  # for the key-file check
     return seen
 

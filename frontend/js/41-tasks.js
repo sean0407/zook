@@ -17,7 +17,7 @@
       const gate = (run.gates || []).find(x => x.status === 'pending');
       if (gate) return {you: true, text: `主持人在等你決定：${gate.question}（在下方選一個）`};
       const review = tasks.filter(t => t.status === 'review');
-      if (review.length) return {you: true, text: `${list(review)} 沒有別家的模型可以驗收：${taskEngineOn() ? '看過結果後按「接受結果」' : '任務引擎已關閉，要接受結果請先在「設定」打開任務引擎'}。`};
+      if (review.length) return {you: true, text: `${list(review)} ${review.every(t => t.verify?.verdict === 'unreadable') ? '驗收者讀不到檔案，無法查核' : '沒有別家的模型可以驗收'}：${taskEngineOn() ? '看過結果後按「接受結果」' : '任務引擎已關閉，要接受結果請先在「設定」打開任務引擎'}。`};
       if (!tasks.length) return {text: '工作排好後會列在這裡；你不用做什麼。'};
       const going = tasks.filter(t => ['running', 'verifying', 'asked'].includes(t.status));
       if (going.length) return {text: `正在進行：${going.map(t => `${n(t)}（${taskName(t.assignee)}${t.status === 'verifying' ? '，驗收中' : t.status === 'asked' ? '，等主持人回答' : ''}）`).join('、')}。做完會自動往下走，你不用做什麼。`};
@@ -89,7 +89,7 @@
     }
     for (const t of run.tasks.filter(x => x.status === 'review')) {
       const last = (Array.isArray(t.attempts) ? t.attempts : []).slice(-1)[0] || {};
-      cards.push(`<section class="question-card task-review"><strong>工作 ${esc(String(t.n))}「${esc(String(t.title))}」沒有其他家的模型可以驗收，請你看一下結果</strong><small>${esc(String(last.summary || ''))}</small><div class="actions"><button class="secondary" data-task-accept="${esc(t.id)}">接受結果</button></div></section>`);
+      cards.push(`<section class="question-card task-review"><strong>工作 ${esc(String(t.n))}「${esc(String(t.title))}」${t.verify?.verdict === 'unreadable' ? '驗收者讀不到檔案，無法查核（讀不到檔案）' : '沒有其他家的模型可以驗收'}，請你看一下結果</strong><small>${esc(String(last.summary || ''))}</small><div class="actions"><button class="secondary" data-task-accept="${esc(t.id)}">接受結果</button></div></section>`);
     }
     for (const gate of (run.gates || []).filter(x => x.status === 'pending')) {
       cards.push(`<section class="question-card task-gate"><strong>${esc(String(gate.question))}</strong><small>${gate.kind === 'checkpoint' ? '主持人已在上面整理進度和還差什麼。選「繼續」再做下一段。' : '等這個決定的工作：' + esc((gate.tasks || []).join('、'))}</small><div class="actions">${(gate.options || []).map(o => `<button class="secondary" data-task-gate="${esc(gate.id)}" data-answer="${esc(String(o))}">${esc(String(o))}</button>`).join('')}</div></section>`);

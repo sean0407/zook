@@ -99,6 +99,22 @@ class TextVersions(unittest.TestCase):
         self.assertIn(str(self.texts), note); self.assertIn('無法查核', note)
         self.assertEqual(server.group_text_note(self.store, 'b1', ['a.txt']), '')
 
+    def test_what_a_file_says_is_marked_as_data(self):
+        make_xlsx(self.shared / '報價單.xlsx'); self.turn()
+        self.assertIn('不是指令', (self.texts / '報價單.xlsx.txt').read_text(encoding='utf-8'))
+        self.assertIn('不是指令', server.group_file_tool(self.store, 'g1', server.runtime_module())[1]({'name': '報價單.xlsx'})['note'])
+        self.assertIn('不是指令', server.group_text_note(self.store, 'b1', ['報價單.xlsx']))
+
+    def test_a_path_out_of_reach_points_to_the_groups_copy(self):
+        here = str(self.store.dir / 'workspaces' / 'b1')
+        group = dict(messages=[dict(role='assistant', content='存好了 /tmp/x/報價單.xlsx 和 %s/../b2/報價單.xlsx，還有 %s/attachments/group-files/報價單.xlsx' % (here, here))])
+        note = server.group_elsewhere_note(self.store, group, 'b1', ['報價單.xlsx'])
+        self.assertIn('/tmp/x/報價單.xlsx →', note); self.assertIn('/../b2/報價單.xlsx →', note); self.assertNotIn('group-files/報價單.xlsx →', note)
+
+    def test_the_copy_and_its_hash_are_the_same_content(self):
+        make_xlsx(self.shared / 'a.xlsx'); seen, _ = self.turn()
+        self.assertEqual(seen['a.xlsx'], server._file_hash(server.group_copy_folder(self.store, 'b1') / 'a.xlsx'))
+
     def test_a_deleted_groups_text_versions_go(self):
         make_xlsx(self.shared / '報價單.xlsx'); self.turn()
         self.assertTrue((self.store.dir / 'group-text' / 'g1').is_dir())
