@@ -27,10 +27,11 @@ MODERATOR_RULES['split_plan'] = MODERATOR_RULES['split_plan'][:-1] + ['負責查
 
 
 def group_is_checker(bot):
-    """Whether a member's role is checking others' work: its name says so, or its persona starts by saying that is its job."""
+    """Whether a member's role is checking others' work: its name says so, or the first clause of its persona says that is its job now."""
     name = str((bot or {}).get('name') or '')
     if not CHECKER_NAME_WRITES.search(name) and any(not CHECKER_NOT.search(re.sub('不只|不僅|不但', '', name[:hit.start()])) for hit in CHECKER_NAME.finditer(name)): return True  # 「非查核員」「不負責查核員」 are not
-    persona = str((bot or {}).get('persona') or (bot or {}).get('instructions') or '')[:80]
+    persona = re.split(r'[，,。.；;！!？?\n]', str((bot or {}).get('persona') or (bot or {}).get('instructions') or '').strip())[0][:80]  # its first clause says what it is now
+    if re.search(r'曾|以前|過去|原本|之前|前任', persona): return False
     return any(not CHECKER_NOT.search(re.sub('不只|不僅|不但', '', persona[max(0, hit.start() - 4):hit.end()])) and not CHECKER_WRITES.search(hit.group(0) + re.split(r'[，。,.；;、\n]', persona[hit.end():hit.end() + 4])[0])
                for hit in CHECKER_DUTY.finditer(persona))
 
