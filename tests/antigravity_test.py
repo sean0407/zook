@@ -99,7 +99,7 @@ class Units(unittest.TestCase):
             job = dict(id='j1', attachments=[str(x) for x in placed], attachmentIds=[mine['id'], key['id'], env['id']], groupFiles=True, groupId='g1')
             rules, note, blocked = server.agy_read_paths(store, 'b1', job)
             turn = Path(tempfile.gettempdir()) / 'zook-agy-turns/b1/j1'
-            self.assertEqual(self.rules_files(rules), ['1-報告 _2_.pdf', '2-a_1___.pdf', '3-預算.pdf'])  # keys (by either name), hidden files and other chats left out
+            self.assertEqual(self.rules_files(rules), ['1-報告 _2_.pdf', '2-a_1___.pdf', '3-預算.pdf', '4-a_1___.pdf.txt', '5-預算.pdf.txt'])  # keys (by either name), hidden files and other chats left out; the shared PDFs' text versions (#240)
             self.assertTrue(all(r.startswith((str(turn), os.path.realpath(str(turn)))) for r in rules))  # never the folder, never the Bot's own copies
             self.assertFalse([r for r in rules if set(r) & set('()[]*?')])
             self.assertEqual((turn / '1-報告 _2_.pdf').read_bytes(), b'mine'); self.assertIn('報告 (2).pdf', note)

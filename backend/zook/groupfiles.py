@@ -269,6 +269,7 @@ def drop_group_files(store, server, group):
                 finally: lock.release()
         finally:
             shutil.rmtree(str(aside), ignore_errors=True)
+            shutil.rmtree(str(group_text_root(store, group['id'])), ignore_errors=True)  # its text versions (checkread.py)
             for old in aside.parent.glob('.deleting-*'):  # left by an earlier deletion that Zook quit in the middle of
                 try:
                     if old.is_dir() and not old.is_symlink() and time.time() - old.stat().st_mtime > 3600: shutil.rmtree(str(old), ignore_errors=True)
@@ -354,6 +355,7 @@ def group_file_tool(store, group_id, runtime):
             group = store.find('groups', group_id)
             found = group_file_path(store, group, args['name']) if group else None
         if not found: raise RuntimeError('找不到這個共用檔案。')
+        if found.suffix.lower() in GROUP_TEXT_KINDS: return group_text_read(store, group_id, found.name)  # #240: Excel, Word, PowerPoint, PDF as their text version
         if found.stat().st_size > runtime.MAX_TEXT: raise RuntimeError('這個檔案超過 128 KB。謹慎模式讀不到，請把這個 Bot 的主動性改成自動後再試。')
         try: return {'name': args['name'], 'content': found.read_text(encoding='utf-8')}
         except UnicodeDecodeError: raise RuntimeError('這個檔案不是文字檔。謹慎模式讀不到，請把這個 Bot 的主動性改成自動後再試。')

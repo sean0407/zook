@@ -496,7 +496,7 @@ def agy_read_paths(store, bot_id, job):
             here = {e.name for e in _plain_files(group_copy_folder(store, bot_id))}
             try: shared = [(group_original(store, group_id, e.name) or e.name, e.name, pathlib.Path(e.path)) for e in _plain_files(group_files_dir(store, group_id)) if e.name in here]
             except ValueError: shared = []
-    sources = [(m.get('origName') or m['name'], m['name'], store.dir / 'uploads' / m['id'] / 'file') for m in metas] + shared
+    sources = [(m.get('origName') or m['name'], m['name'], store.dir / 'uploads' / m['id'] / 'file') for m in metas] + shared + [(n, n, path) for n, path in (group_text_sources(store, group_id, [x[1] for x in shared]) if group_id else [])]  # #240: their text versions
     secret = runtime_module().secret_name
     sources = [s for s in dict((x[2], x) for x in sources).values() if not secret(s[1], s[0])][:AGY_READ_MAX]  # this turn's attachments first
     blocked = agy_blocked(store, bot_id)
@@ -514,7 +514,7 @@ def agy_read_paths(store, bot_id, job):
             path = str(folder / safe); lines.append('- %s：%s' % (name, path))
             rules += [p for p in dict.fromkeys((path, os.path.realpath(path))) if not set(p) & AGY_UNSAFE]
     finally: os.close(fd)
-    return rules, ('\n這一輪只能讀下面這些副本（內容和附件或群組檔案相同，請讀這些路徑）：\n' + '\n'.join(lines)) if lines else '', blocked
+    return rules, ('\n這一輪只能讀下面這些副本（內容和附件或群組檔案相同，請讀這些路徑；group-files 資料夾和其他位置這一輪讀不到）：\n' + '\n'.join(lines)) if lines else '', blocked
 
 
 def agy_turn_folder(store, bot_id, job_id):

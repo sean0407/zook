@@ -336,7 +336,7 @@ def task_line(store, t):
     if t.get('note', '').startswith(TASK_OUTWARD_NOTES): out += '（Zook 的保守提醒，不是事實：只因為這次用過指令或可能對外的步驟才這樣提醒，沒有確認真的寄出或改了什麼。%s）' % t['note']
     elif t.get('note'): out += '（%s）' % t['note']
     check = t.get('verify') or {}
-    if check.get('verdict'): out += '（%s 驗收：%s）' % (task_member_name(store, check.get('bot')), '通過' if check['verdict'] == 'pass' else '沒有通過，' + (check.get('reasons') or ''))
+    if check.get('verdict'): out += '（%s 驗收：%s）' % (task_member_name(store, check.get('bot')), '通過' if check['verdict'] == 'pass' else '無法查核（讀不到檔案），' + (check.get('reasons') or '') if check['verdict'] == 'unreadable' else '沒有通過，' + (check.get('reasons') or ''))
     if t.get('failures'): out += '（已經 %d 次沒完成）' % t['failures']
     if t.get('sentBack'): out += '（主持人退回過 %d 次，不能再退回）' % t['sentBack']
     if t['status'] == 'waiting': out += '（等使用者決定）'
@@ -437,7 +437,7 @@ def task_worker_prompt(store, group, run, task, bot, writable):
              '你的回覆文字會顯示在群組裡，保持簡短；重點寫進 zook_task_done。']
     shared = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
     copy_folder = group_copy_folder(store, bot['id'])
-    if shared: rules.append('群組共用檔案在 %s：%s。用你的讀檔工具查看；讀不到時改用 zook_group_file_read。' % (copy_folder, '、'.join(shared[:40])))
+    if shared: rules.append('群組共用檔案在 %s：%s。用你的讀檔工具查看；讀不到時改用 zook_group_file_read。' % (copy_folder, '、'.join(shared[:40])) + group_text_note(store, bot['id'], shared))
     rules.append('要交給群組的檔案請存到 %s（只放在這一層）；工作說明指定的存放位置也要存一份。' % copy_folder if writable else '這次不能修改或新增群組共用檔案。')
     if group_standing(group): rules.append(group_standing(group))  # #294
     parts = [identity_block(bot) + memory_block(store, bot), '\n規則：\n' + '\n'.join('- ' + r for r in rules),

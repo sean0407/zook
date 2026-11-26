@@ -124,10 +124,11 @@ def task_verify_prompt(store, group, run, task, bot):
     attempt = next((a for a in reversed(task['attempts']) if a.get('state') == 'reported'), {})
     rules = ['你負責驗收群組「%s」裡的一項工作。依「怎樣算完成」檢查成員交回的結果，只檢查，不要修改任何檔案，也不要自己重做。' % group['name'],
              '檢查完呼叫 zook_task_verdict 一次：result 寫 pass（符合）或 fail（不符合）；reasons 用三句以內寫依據，不符合時寫清楚要改什麼。',
-             '沒有把握就寫 fail 並說明缺什麼；不要因為看不到檔案就當成通過。呼叫後直接結束這一輪，不要 @ 任何人。',
+             '沒有把握就寫 fail 並說明缺什麼；不要因為看不到檔案就當成通過。要驗收的檔案原檔和文字版都讀不到時，result 寫 unreadable（無法查核）並寫明哪個沒讀到，不要因為讀不到就寫 fail。呼叫後直接結束這一輪，不要 @ 任何人。',
              'reasons 和回覆一律用繁體中文，不要用簡體字。']
     shared = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
     if shared: rules.append('群組共用檔案在 %s：%s。用你的讀檔工具查看；讀不到時改用 zook_group_file_read。' % (group_copy_folder(store, bot['id']), '、'.join(shared[:40])))
+    if shared: rules += group_read_notes(store, group, bot['id'], shared)  # #240
     if task_layout_rule(attempt): rules.append(task_layout_rule(attempt))
     if group_standing(group): rules.append(group_standing(group))  # #294
     known = ['使用者的決定：%s → %s' % (q, a) for q, a in task.get('decisions') or []]
@@ -149,7 +150,7 @@ def task_check_tools(app, store, job_id, role, group_id, run_id, task_id, schema
     if role != 'verifier': return []
     def verdict(args):
         result = str(args.get('result') or '').strip().lower()
-        if result not in ('pass', 'fail'): raise RuntimeError('result 只能是 pass 或 fail。')
+        if result not in ('pass', 'fail', 'unreadable'): raise RuntimeError('result 只能是 pass、fail 或 unreadable。')
         reasons = text(args.get('reasons'), 'reasons', 2, 1200)
         with store.lock:
             group = store.find('groups', group_id); run = (group or {}).get('taskRun')
@@ -163,8 +164,8 @@ def task_check_tools(app, store, job_id, role, group_id, run_id, task_id, schema
             store.save()
         app.task_poke(group_id)
         return dict(received=True, next='判定已收到，直接結束這一輪。')
-    return [(schema('zook_task_verdict', 'Give your verdict on the task you check: pass or fail, with reasons. Call once, then end your turn.',
-                    {'result': S('pass or fail'), 'reasons': S('Up to three sentences; when it fails, what must change')}, ['result', 'reasons']), verdict, False)]
+    return [(schema('zook_task_verdict', 'Give your verdict on the task you check: pass, fail, or unreadable (the files could not be read at all), with reasons. Call once, then end your turn.',
+                    {'result': S('pass, fail, or unreadable'), 'reasons': S('Up to three sentences; when it fails, what must change')}, ['result', 'reasons']), verdict, False)]
 
 
 def task_gate_tool(app, store, group_id, locate, acted, schema, S, text):
@@ -362,6 +363,7 @@ class TaskChecks:
                     task_failed_attempt(task, '交給驗收前，%s 從群組檔案裡不見了。把檔案存回群組檔案後再回報。' % '、'.join(lost), store.find('jobs', work.get('jobId')) if work.get('jobId') else None)
                     group['messages'].append(dict(id=ID(), role='system', createdAt=NOW(), content='%s 要驗收的 %s 在驗收開始前不見了；%s' % (task_member_name(store, task['assignee']), '、'.join(lost), '退回給它補存，補好再驗收。' if task['status'] == 'ready' else '沒有驗收。' + (task.get('note') or ''))))
                 elif check.get('verdict') == 'pass': task['status'] = 'done'; check['state'] = 'done'
+                elif check.get('verdict') == 'unreadable': check['state'] = 'unreadable'; task.update(status='review', reviewSince=time.time(), note='%s 讀不到要驗收的檔案，無法查核（讀不到檔案）：%s 看過結果後按「接受結果」。' % (who, check.get('reasons') or ''))  # #240: never sent back for that
                 elif check.get('verdict') == 'fail':
                     check['state'] = 'done'
                     work = next((a for a in reversed(task['attempts']) if a.get('state') == 'reported'), {})
