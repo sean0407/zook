@@ -110,6 +110,32 @@ class MemberStallTest(unittest.TestCase):
         self.assertEqual(p.get('now', ''), ''); self.assertEqual(p['command'], 1)
         m.progress_end('p1')
 
+    def test_antigravity_command_still_running_is_not_redone(self):
+        # A command Antigravity started and never finished may have reached outside: the part is not done again on another model.
+        m = self.m
+        m.progress_start('a1')
+        feed = m.progress_feeder('antigravity', 'a1')
+        step = {'event': 'step_update', 'step_update': {'step_type': 'tool', 'state': 'RUNNING', 'step_index': 3, 'tool_name': 'run_command', 'tool_info': {'parameters': {}}}}
+        feed((json.dumps(step) + '\n').encode())
+        self.assertEqual(m.progress_view({'id': 'a1', 'status': 'running'})['progress']['now'], '執行指令')
+        job = {'id': 'a1', 'toolCalls': []}
+        self.assertTrue(m.stall_mark(None, job, 'antigravity', True, 900))
+        self.assertTrue(job['stallNow']['acted'])
+        step['step_update']['state'] = 'DONE'; feed((json.dumps(step) + '\n').encode())
+        p = m.progress_view({'id': 'a1', 'status': 'running'})['progress']
+        self.assertEqual((p.get('now', ''), p['command']), ('', 1))
+        m.progress_end('a1')
+
+    def test_reading_only_member_is_redone(self):
+        m = self.m
+        m.progress_start('a2')
+        m.progress_feeder('codex', 'a2')((json.dumps({'type': 'item.completed', 'item': {'id': 'f', 'type': 'file_change', 'changes': [{'path': '/tmp/a.md'}]}}) + '\n').encode())
+        job = {'id': 'a2', 'toolCalls': []}
+        self.assertFalse(m.stall_mark(None, job, 'codex', True, 900))  # a file it wrote is redone, not sent anywhere
+        self.assertFalse(m.stall_mark(None, job, 'gemini', False, 900))
+        m.progress_end('a2')
+        self.assertTrue(m.stall_mark(None, {'id': 'a3'}, 'gemini', True, 900))  # its steps cannot be read: careful
+
 
 if __name__ == '__main__':
     unittest.main()

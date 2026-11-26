@@ -111,12 +111,16 @@ def progress_line(kind, d, rec):
             if what and d.get('subtype') == 'completed' and not refused: _progress_add(rec, what, 'u:' + str(d.get('call_id')) if d.get('call_id') else None, raw.get('path') or raw.get('file_path') or '')
     elif kind == 'antigravity':
         step = d.get('step_update') if d.get('event') == 'step_update' and isinstance(d.get('step_update'), dict) else {}
-        if step.get('step_type') == 'tool' and step.get('state') == 'DONE':
+        if step.get('step_type') == 'tool':
             info = step.get('tool_info') if isinstance(step.get('tool_info'), dict) else {}
             given = info.get('parameters') if isinstance(info.get('parameters'), dict) else {}
             what = _progress_tool(step.get('tool_name'))
             where = given.get('Path') or given.get('path') or given.get('TargetFile') or given.get('AbsolutePath') or given.get('file_path') or ''
-            if what: _progress_add(rec, what, 'a:' + str(step['step_index']) if 'step_index' in step else None, where)
+            ref = 'a:' + str(step['step_index']) if 'step_index' in step else None
+            if step.get('state') == 'DONE':
+                if ref: rec['asked'].pop(ref, None)
+                if what: _progress_add(rec, what, ref, where)
+            elif what and ref and len(rec['asked']) < 500: rec['asked'][ref] = (what, where)  # started, not done yet: what it is doing now (#307)
 
 
 def progress_feeder(kind, job_id, inner=None):
