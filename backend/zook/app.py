@@ -382,7 +382,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             chain = [(x[0], x[1], x[2] if len(x) > 2 else '' if auto else None, len(x) > 2 and not named) for x in raw]
             if job.get('plan'): chain = [x for x in chain if provider_kind(x[0]) in PLAN_KINDS] or chain[:1]  # a backup must be held to read-only too
             chain = held_backups(bot, provider, chain)
-            if job.get('reattach'): chain, fixed = [(provider, model, (job.get('ran') or ['', '', ''])[2], False)], False  # the CLI already running (background.py)
+            if job.get('reattach'): chain, fixed = [(provider, model, (job.get('ran') or ['', '', ''])[2], False)], False; job['stallTakenUp'] = True  # the CLI already running (background.py); a stall is not redone (stall.py)
             if not chain:
                 job.update(status='failed', error='這個 Bot 目前限在工作資料夾，不能用自訂 CLI 回覆。請在 Mac 的「編輯 Bot」換模型或放寬存取範圍。', finishedAt=NOW())
                 store.finish_message(job, '', 'failed'); store.save(); return
@@ -634,8 +634,8 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 proc = kept or bg_popen(self, job, args, cli_cwd, env, stdin_prompt, kind)  # under a runner when it may go on while Zook is closed (background.py)
                 kept = kept or bg_turn(proc, kind, feed, job); proc = kept or proc  # a kept CLI's reply taken up after a restart
                 self.processes[job_id] = proc; note_cli_pid(store, job_id, proc, binary)  # resume.py
-                stall_switch(store, job, provider, (account or {}).get('id', ''))  # a stalled part: said once its backup has really started (stall.py)
             bg_ready(self, proc)  # its runner's report is waited for with the lock let go (#290, background.py)
+            with store.lock: stall_switch(store, job, provider, (account or {}).get('id', ''))  # a stalled part: said once its backup has really started, a runner's too (stall.py)
             try:
                 # A reply may take as long as it keeps working. It is stopped when nothing has happened for a while (no output from the
                 # CLI, no tool use), or at the overall limit. A 長任務 is given its whole time even when its CLI stays silent.

@@ -8,6 +8,11 @@
 # - The backup is the next model in the reply's own order (provider_chain / auto_backups / backups_with_room: accounts with less
 #   than 20% left go last, the same CLI's other accounts are tried). The group is told in one plain sentence who stalled and
 #   which model takes over.
+# - A reply taken up after a restart (its CLI went on under its runner while Zook was closed, background.py) is never handed to a
+#   backup: Zook did not watch what it did meanwhile, and its backups were not set up again. It is stopped and the user decides.
+# - Under a runner, the stop goes through it (terminate_tree / kill_group end a HostedProc's group by way of its runner), the
+#   runner's own silence limit comes a minute after Zook's (runner_quiet), and a backup is only said to take over once its runner
+#   reported its CLI started (bg_ready, app.py).
 # - A reply that may already have reached outside is never done again by itself (#60's careful rule, task_outward_kind): any
 #   command counts, also one it started and never finished. Then, and when there is no backup, the group is told and the user
 #   (or the host) decides.
@@ -38,6 +43,9 @@ def stall_mark(store, job, kind, native, limit):
     """Lock held. This try of a group reply stalled: remembered for the group's note, and whether it may have done something that
     must not be done twice. Returns that (it is the reply's mayHaveActed)."""
     rec = PROGRESS.get(job['id'])
+    if job.get('stallTakenUp'):  # taken up after a restart: what it did while Zook was closed is not known
+        job['stallNow'] = dict(minutes=stall_minutes(limit), acted=True, why='restart')
+        return True
     if task_acted_outward(job): acted = True
     elif rec is not None and (rec['command'] > 0 or any(v[0] == 'command' for v in rec['asked'].values())): acted = True  # a command, also one still running
     else: acted = bool(native) and (kind not in STALL_READABLE or rec is None)  # its built-in tools' steps cannot be read: careful
@@ -55,18 +63,22 @@ def _stall_note(store, job, text):
 def stall_switch(store, job, provider, account):
     """Lock held. The backup model's CLI has just started on a part whose try stalled: say so in the group. Stopped or Zook closing
     before that: nothing is said (stall_finish says nothing for a part that was stopped)."""
-    stall = job.pop('stallSwitch', None)
-    if not stall: return
+    if job.get('status') != 'running' or not job.get('stallSwitch'): return  # stopped meanwhile: stall_finish says nothing
+    stall = job.pop('stallSwitch')
     _stall_note(store, job, '%%s 已經 %d 分鐘沒有任何動作，已停下這一份，改用 %s 重做。' % (stall['minutes'], auto_choice_name(provider, account or '')))
 
 
 def stall_finish(store, job):
     """Lock held. The reply is over: a stalled part that was not handed to a backup is said in the group, with why."""
-    stall = job.pop('stallNow', None) or job.pop('stallSwitch', None)
-    job.pop('stallSwitch', None)
+    now, waiting = job.pop('stallNow', None), job.pop('stallSwitch', None); job.pop('stallTakenUp', None)
+    stall = now or waiting
     if not stall or job.get('status') != 'failed': return
-    if stall.get('acted'):
+    if stall.get('why') == 'restart':
+        _stall_note(store, job, '%%s 已經 %d 分鐘沒有任何動作，已停下這一份。這一份是 Zook 重新開啟後接續的，Zook 不知道關閉期間它做了什麼，所以沒有自動換模型重做，請你決定要不要重做。' % stall['minutes'])
+    elif stall.get('acted'):
         _stall_note(store, job, '%%s 已經 %d 分鐘沒有任何動作，已停下這一份。它這次用過指令或可能已經對外做了一部分，換模型重做可能重複，所以沒有自動重做，請你決定要不要重做。' % stall['minutes'])
+    elif waiting:  # handed on, but no backup got to start (each was unavailable or could not start)
+        _stall_note(store, job, '%%s 已經 %d 分鐘沒有任何動作，已停下這一份。備用模型都沒能接手，這一份沒有重做，請主持人或你接手。' % stall['minutes'])
     else:
         _stall_note(store, job, '%%s 已經 %d 分鐘沒有任何動作，已停下這一份。沒有可用的備用模型，這一份沒有重做，請主持人或你接手。' % stall['minutes'])
 

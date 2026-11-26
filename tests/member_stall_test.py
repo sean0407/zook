@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """#307 成員卡住: a group member silent for MEMBER_STALL is stopped and its backup model redoes its part; one that keeps working is
 left alone however long it takes. The 15 minutes are a constant the tests shrink, so nothing waits for real."""
-import importlib.util, json, os, tempfile, threading, time, unittest
+import contextlib, importlib.util, json, os, tempfile, threading, time, unittest
 from pathlib import Path
 from unittest import mock
 
@@ -29,7 +29,7 @@ class MemberStallTest(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('zook_member_stall', SERVER)
         self.m = importlib.util.module_from_spec(spec); spec.loader.exec_module(self.m)
 
-    def run_member(self, script, backups=(), stall=0.6, group=True):
+    def run_member(self, script, backups=(), stall=0.6, group=True, extra=None, patches=()):
         m = self.m
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -40,6 +40,7 @@ class MemberStallTest(unittest.TestCase):
             store.data['settings']['fallbacks'] = []
             job = {'id': 'job', 'botId': bot['id'], 'messageId': 'msg', 'status': 'running', 'createdAt': m.NOW()}
             msg = {'id': 'msg', 'role': 'assistant', 'botId': bot['id'], 'content': '', 'status': 'running', 'createdAt': m.NOW()}
+            job.update(extra or {})
             if group:
                 g = {'id': 'g1', 'name': '專案組', 'botIds': [bot['id']], 'messages': [msg], 'status': 'running'}
                 store.data['groups'].append(g); job['groupId'] = 'g1'
@@ -49,8 +50,14 @@ class MemberStallTest(unittest.TestCase):
             calls = []
             def find(p, *a, **k):
                 calls.append(p); return str(root / p) if (root / p).exists() else None
+            self.hosted = []
+            real_popen = m.bg_popen
+            def popen(*a, **k):
+                proc = real_popen(*a, **k); self.hosted.append(isinstance(proc, m.HostedProc)); return proc
             try:
-                with mock.patch.object(m, 'MEMBER_STALL', stall), mock.patch.object(m, 'JOB_TIMEOUT', 30), mock.patch.object(m, 'find_cli', side_effect=find):
+                with mock.patch.object(m, 'MEMBER_STALL', stall), mock.patch.object(m, 'JOB_TIMEOUT', 30), mock.patch.object(m, 'find_cli', side_effect=find), \
+                     mock.patch.object(m, 'bg_popen', side_effect=popen), contextlib.ExitStack() as stack:
+                    for target, value in patches: stack.enter_context(mock.patch.object(m, target, value))
                     started = time.time()
                     thread = threading.Thread(target=app.run_job, args=('job', 'test', 'codex', ''))
                     thread.start(); thread.join(timeout=20)
@@ -135,6 +142,40 @@ class MemberStallTest(unittest.TestCase):
         self.assertFalse(m.stall_mark(None, job, 'gemini', False, 900))
         m.progress_end('a2')
         self.assertTrue(m.stall_mark(None, {'id': 'a3'}, 'gemini', True, 900))  # its steps cannot be read: careful
+
+    # A group reply under a runner (background.py) is not what Zook does today (bg_fits), but if it ever were, a stall must still
+    # be stopped through the runner and handed on correctly.
+    def test_stall_under_a_runner_is_stopped_and_handed_on(self):
+        job, notes, took = self.run_member(SILENT, backups=['claude'], patches=[('bg_fits', lambda j: True)])
+        self.assertEqual(self.hosted, [True, True], 'both tries ran under a runner')
+        self.assertEqual((job['status'], job.get('content')), ('completed', 'backup did it'), job.get('error'))
+        self.assertEqual(len(notes), 1, notes); self.assertIn('改用 Claude', notes[0])
+        self.assertLess(took, 15)
+
+    def test_backup_runner_that_never_starts_is_not_said_to_take_over(self):
+        m, seen = self.m, []
+        real = m.bg_ready
+        def ready(app, proc):
+            seen.append(1); real(app, proc)
+            if len(seen) == 2: raise RuntimeError('沒有啟動')  # as bg_ready does when the backup's runner never reports its CLI
+        job, notes, _ = self.run_member(SILENT, backups=['claude'], patches=[('bg_fits', lambda j: True), ('bg_ready', ready)])
+        self.assertEqual(job['status'], 'failed')
+        self.assertEqual(len(notes), 1, notes); self.assertNotIn('改用', notes[0]); self.assertIn('沒能接手', notes[0])
+
+    def test_reply_taken_up_after_a_restart_is_not_redone(self):
+        job, notes, _ = self.run_member(SILENT, backups=['claude'], extra={'reattach': True, 'ran': ['codex', '', '']})
+        self.assertEqual(job['status'], 'failed'); self.assertNotIn('fallback', job)
+        self.assertEqual(len(notes), 1, notes); self.assertIn('重新開啟', notes[0]); self.assertNotIn('改用', notes[0])
+        self.assertNotIn('stallTakenUp', job)
+
+    def test_switch_is_not_said_for_a_stopped_reply(self):
+        m = self.m
+        with tempfile.TemporaryDirectory() as directory:
+            store = m.Store(Path(directory) / 'data')
+            store.data['groups'].append({'id': 'g', 'name': 'G', 'botIds': [], 'messages': []})
+            job = {'id': 'j', 'groupId': 'g', 'botId': 'x', 'status': 'cancelled', 'stallSwitch': {'minutes': 15, 'acted': False}}
+            m.stall_switch(store, job, 'claude', ''); m.stall_finish(store, job)
+            self.assertEqual(store.find('groups', 'g')['messages'], [])
 
 
 if __name__ == '__main__':
