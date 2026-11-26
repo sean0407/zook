@@ -310,7 +310,7 @@ class TaskRuns:
         with store.lock:
             task.pop('resumed', None)  # told once (resume.py)
             handed = attempt['state'] == 'reported' and attempt.get('outcome') == 'succeeded' and turn['job']['status'] == 'completed'
-        with store.lock:
+        with store.lock, _group_files_lock:  # #245: the files looked at stay as they are until the task's state is set (lock order: store, then files)
             gone = task_files_missing(store, store.find('groups', group_id) or dict(id=group_id), task_member_name(store, task['assignee']), dict(attempt, files=list(attempt.get('files') or []) + [x for x in task.get('missingFiles') or [] if x not in (attempt.get('files') or [])]), turn['msg'], task.get('spec', '') + '\n' + str(run.get('goal') or ''), [a.get(k) for m in group_files_given(store.find('groups', group_id)) for a in m for k in ('name', 'origName')]) if handed else []  # what was missing before must be there now too  # #245: checked, with the lock, before anyone verifies them
             group = store.find('groups', group_id)
             if group:

@@ -101,7 +101,7 @@ def _nothing_saved(replies, pool):
     names a file that is already there (saved earlier, unchanged). Only replies whose files Zook brought back count; one that could
     not save, such as in 謹慎, is not asked to."""
     looked = [m for m in replies if 'savedFiles' in m]
-    if not looked or any(m.get('savedFiles') for m in looked) or not any(w in (m.get('content') or '') for m in looked for w in SAVE_SAID): return False
+    if not looked or any(n in pool for m in looked for n in m.get('savedFiles') or []) or not any(w in (m.get('content') or '') for m in looked for w in SAVE_SAID): return False
     return not any(_in_prose(n, pool) for m in looked for n in CLAIM_WORD.findall(m.get('content') or ''))
 
 
@@ -135,13 +135,12 @@ def _work_files(store, group, bot_id):
 
 
 def _redone(store, group_id, before, replies, bot_id):
-    """Lock held. Whether redone work with files was really handed in again: one of its files changed. Work without files is judged
+    """store.lock and _group_files_lock held. Whether redone work with files was really handed in again: one of its files changed. Work without files is judged
     by its reply (a redo that says it saved but saved nothing goes back like any other reply)."""
     if not before: return True
-    with _group_files_lock:
-        for n, digest in before.items():
-            path = group_files_dir(store, group_id) / n
-            if path.is_file() and not path.is_symlink() and _file_hash(path) != digest: return True
+    for n, digest in before.items():
+        path = group_files_dir(store, group_id) / n
+        if path.is_file() and not path.is_symlink() and _file_hash(path) != digest: return True
     return False
 
 
@@ -151,7 +150,7 @@ class CheckOrder:
         for the members whose files are missing followed by this check again, or False when the run ended."""
         store = self.store
         if not step.get('gate'): return steps  # nobody makes anything for it: it checks what is already there
-        with store.lock:  # the files are looked at with the lock held, so what is decided is what was seen
+        with store.lock, _group_files_lock:  # the files are looked at with both locks held, so what is decided is what is there
             group = store.find('groups', group_id)
             if not group or group.get('runId') != run_id: return False
             start = _ask_start(group); last = {}
@@ -160,19 +159,19 @@ class CheckOrder:
                 if m.get('role') == 'assistant' and m.get('botId') in step.get('gate', []) and not m.get('checkOf') and m.get('status') != 'running': last[m['botId']] = m
             latest = {b: m for b, m in last.items() if m.get('status') == 'completed' and m.get('content')}
             unfinished = [b for b in step.get('gate', []) if b not in latest and store.find('bots', b) and b in group['botIds']]  # no reply, or one that did not finish: not handed in
+            shared = [e.name for e in _plain_files(group_files_dir(store, group_id))]
             earlier = step.get('missing') if isinstance(step.get('missing'), dict) else {}  # what was missing before 補存 is looked for again, whatever the new reply says
-            alias = {b: [k for x in group['messages'][start:] if x.get('botId') == b and x.get('role') == 'assistant' for k in (x.get('sameAs') or {})] for b in latest}  # saved, kept as a shared file with the same content
+            alias = {b: [k for x in group['messages'][start:] if x.get('botId') == b and x.get('role') == 'assistant' for k, v in (x.get('sameAs') or {}).items() if v in shared] for b in latest}  # saved, kept as a shared file with the same content that is still there
             said = {b: [n for n in dict.fromkeys(list(m.get('missingFiles') or []) + list(earlier.get(b) or [])) if n != NOTHING_SAVED and not _same_file(n, alias[b])] for b, m in latest.items()}  # looked for again by the full name, among the files there now
             checkers = _names(store, step['bots'])
-            with _group_files_lock:  # nothing is being saved into the group's files while they are looked at
-                gone = {b: checked_present(store, group_id, names) for b, names in said.items() if names}
-                pool = [e.name for e in _plain_files(group_files_dir(store, group_id))]
+            gone = {b: checked_present(store, group_id, names) for b, names in said.items() if names}
+            pool = [e.name for e in _plain_files(group_files_dir(store, group_id))]
             given = {a.get(k) for x in group['messages'][start:] if x.get('role') == 'user' for a in x.get('attachments') or [] for k in ('name', 'origName')}
             given |= {p.rsplit('/', 1)[-1] for x in group['messages'][start:] if x.get('role') == 'user' for p in named_paths(x.get('content') or '')}  # the user's own files, given or named by path
             for b, m in latest.items():  # a file the reply says it handed over, by its full name, that is not among the shared files (the user's own files aside)
                 text = m.get('content') or ''
                 if any(w in text for w in SAVE_SAID):
-                    mine = [n for x in group['messages'][start:] if x.get('botId') == b and x.get('role') == 'assistant' for n in x.get('savedFiles') or []]  # what it really saved (Zook may have cleaned the name)
+                    mine = [n for x in group['messages'][start:] if x.get('botId') == b and x.get('role') == 'assistant' for n in x.get('savedFiles') or [] if n in pool]  # what it really saved and is still there (Zook may have cleaned the name)
                     named = [n for n in CLAIM_WORD.findall(text) if not _in_prose(n, given, True) and not _in_prose(n, pool) and not _in_prose(n, alias[b]) and not any(_claim_key(s).endswith(_claim_key(n)) or _claim_key(_short_name(n)) == _claim_key(s) for s in mine)]
                     if named: gone[b] = list(dict.fromkeys((gone.get(b) or []) + named))[:10]
             for b, m in latest.items():
@@ -259,17 +258,15 @@ def group_files_given(group):
 
 
 def task_files_missing(store, group, owner, attempt, msg, spec='', given=()):
-    """Lock held. The files a task's report lists, or its reply says it saved, that are not there as this member's: saved in this
-    reply, or last saved by this member (another member's file of the same name is not its work)."""
+    """store.lock and _group_files_lock held. The files a task's report lists, or its reply or summary says it saved, that are not
+    there as this member's: saved in this reply, or last saved by this member (another member's file of the same name is not its work)."""
     listed = list(attempt.get('files') or [])
     said = str(attempt.get('summary') or '') + '\n' + str(msg.get('content') or '')
     inputs = {p.rsplit('/', 1)[-1] for p in named_paths(str(spec or ''))} | set(given)  # files the work was told to read, or the user gave
     named = [n for n in CLAIM_WORD.findall(said) if not _in_prose(n, inputs, True)] if any(w in said for w in SAVE_SAID) else []  # 「已存好報價單.xlsx」 without listing it in files
-    with _group_files_lock:
-        pool = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
-        gone = checked_present(store, group['id'], listed + list(msg.get('missingFiles') or []), exact=listed, owner=owner) + [n for n in named if not _in_prose(n, pool)]
-        mine = set(msg.get('savedFiles') or []) | {n for n, info in (group.get('fileInfo') or {}).items() if (info or {}).get('by') == owner}
-        pool = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
+    pool = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
+    mine = set(msg.get('savedFiles') or []) | {n for n, info in (group.get('fileInfo') or {}).items() if (info or {}).get('by') == owner}
+    gone = checked_present(store, group['id'], listed + list(msg.get('missingFiles') or []), exact=listed, owner=owner) + [n for n in named if not _in_prose(n, [p for p in pool if p in mine])]  # named: there, and its own
     for raw in listed:
         base = re.sub(r'[（(][^（）()]{0,30}[）)]\s*$', '', ' '.join(str(raw or '').split())).strip(' 「」『』`\'"').rsplit('/', 1)[-1]
         if base and base not in gone and _same_file(base, pool, owner) and not _same_file(base, [n for n in pool if n in mine], owner): gone.append(base)
