@@ -308,10 +308,26 @@ def _opens(text):
 
 
 def _closing(text, start):
-    """Where what opened at start ends (after its ')'), and whether it ended."""
-    depth, j = 1, start + 2
-    while j < len(text) and depth: depth += {'(': 1, ')': -1}.get(text[j], 0); j += 1
-    return j, not depth
+    """Where what opened at start ends (after its ')'), and whether it ended: as a shell reads it, past quotes, backslashes, # comments
+    and here-documents inside (git commit -m "$(cat <<'EOF' … don't … EOF)")."""
+    stack, j = [')'], start + 2
+    while j < len(text) and stack:
+        c, top = text[j], stack[-1]
+        if top == "'": stack.pop() if c == "'" else None
+        elif c == '\\': j += 1
+        elif top in '"`':
+            if c == top: stack.pop()
+            elif top == '"' and text[j:j + 2] == '$(': stack.append(')'); j += 1
+        elif c == '#' and text[j - 1:j] in (' ', '\t', '\n', ';', '&', '|', '('): j = (text.find('\n', j) + 1 or len(text)) - 1
+        elif text[j:j + 2] == '<<' and text[j + 2:j + 3] != '<' and re.match(r'<<-?\s*([\'"]?)(\w+)\1', text[j:]):
+            word = re.match(r'<<-?\s*([\'"]?)(\w+)\1', text[j:]).group(2); end = re.search(r'\n\s*%s(?=\n|\)|$)' % word, text[j:])
+            if not end: return len(text), False
+            j += end.end() - 1
+        elif c in '\'"`': stack.append(c)
+        elif c == '(': stack.append(')')
+        elif c == ')': stack.pop()
+        j += 1
+    return j, not stack
 
 
 def _inner(command):
@@ -669,7 +685,7 @@ def _argv_boundaries(argv, whole, depth):
     elif name in ('sed', 'gsed', 'perl') and any(a.startswith('-i') or a == '--in-place' or re.fullmatch(r'-[a-zA-Z]*i[a-zA-Z]*', a) for a in args): targets = plain[1:] if name != 'perl' else plain
     elif name == 'dd': targets = [a[3:] for a in args if a.startswith('of=')]
     if name in TARS or name == 'rsync':  # tar -T FILE, rsync --files-from=FILE: the names to pack come from that file
-        found += [_hit('secret', '讀取 ' + _names(x))] if (x := _listed([v for i, a in enumerate(args) for v in [a.split('=', 1)[1] if a.startswith('--files-from=') else ''.join(args[i + 1:i + 2]) if a == '--files-from' else _short_value(args, i, {'-f', '-C', '-b', '-X', '-s'}, 'T') if name in TARS else None] if v], name)) else []
+        found += [_hit('secret', '讀取 ' + _names(x))] if (x := _listed([v for i, a in enumerate(args) for v in [a.split('=', 1)[1] if a.startswith('--files-from=') else ''.join(args[i + 1:i + 2]) if a == '--files-from' else _short_value(args, i, {'-f', '-C', '-b', '-X', '-s'}, 'T') if name in TARS else None] if v], name, (), plain[:-1] if name == 'rsync' else None)) else []  # rsync: names are under its sources
     letter = {'sort': 'o', 'curl': 'o', 'wget': 'O', 'unzip': 'd'}.get(name, '')  # sort -o FILE, curl -o FILE, wget -O FILE, unzip -d FOLDER
     targets += [v for i in range(len(args)) for v in [_short_value(args, i, set(), letter) if letter else None] if v] + [a.split('=', 1)[1] for a in args if a.startswith(('--output=', '--output-document=')) and name in ('sort', 'curl', 'wget')]
     if name == 'unzip' and not any(a.startswith('-') and 'd' in a for a in args) or name in TARS and any(a in ('--extract', '--get') or re.fullmatch(r'-?[a-zA-Z]*x[a-zA-Z]*', a) for a in args[:1] + [a for a in args if a[:1] == '-']):

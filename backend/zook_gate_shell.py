@@ -36,6 +36,10 @@ def _values(name):
     if name == 'PWD': return None if any(re.search(r'\bPWD\+?=', x) for x in _LINES) else _folders()  # set by hand: not where it runs
     found = []
     for line in _LINES:
+        use = min([m.start() for m in re.finditer(r'\$\{?%s\b' % re.escape(name), line)] or [len(line)])
+        for m in re.finditer(r'(?<![\w-])(?:(?:export|local|declare|readonly|typeset)\s+)?%s\+?=|\bfor\s+%s\s+in\b' % (re.escape(name), re.escape(name)), line):
+            ahead = re.sub(r'\$\(\s*mktemp[^()]*\)', '', line[:m.start()])  # only set for sure, before it is read: not in if, ||, ( … ), a function
+            if m.start() > use or re.search(r'[|&(){}`]|\b(?:if|then|else|elif|while|until|do|case|function)\b', ahead): return None
         temp = re.findall(r'(?:^|[\s;&|(])%s=["\']?\$\(\s*mktemp(?:\s+-[dqu]+|\s+-t\s+[\w.-]+)*\s*\)' % re.escape(name), line)  # a new temporary file
         found += [os.path.join(os.environ.get('TMPDIR') or '/tmp', 'zook-mktemp')] if temp else []
         if sum(w == name + '=$ZOOKSUB' for part in _split(_without_inner(line))[0] for w in part) > len(temp): return None  # set from another $( … ) too
@@ -83,7 +87,7 @@ def _read_file(path):
     return _secret_any(path)
 
 
-def _listed(files, prog, words=()):
+def _listed(files, prog, words=(), bases=None):
     """xargs -a FILE, parallel :::: FILE: the file, and the paths in it handed to the command (read now: a short plain file only, never
     one that is a key, a link or a pipe); the file itself when what is in it cannot be read. echo and printf open nothing."""
     out = [x for x in map(_secret_any, files) if x]
@@ -96,6 +100,8 @@ def _listed(files, prog, words=()):
                 with os.fdopen(fd, 'rb') as h: text = h.read(65537).decode('utf-8', 'replace') if stat.S_ISREG(os.fstat(h.fileno()).st_mode) else None
                 parts = set(text.split('\0') + text.splitlines() + text.split()) if text is not None and len(text) <= 65536 else None  # whole records too
                 for m in marks: parts |= set(re.split(m.encode().decode('unicode_escape') if len(m) <= 2 else m, text))  # xargs -d ',', parallel --colsep (a pattern)
+                if prog in TARS and any(x.startswith('-') for x in parts): parts = None  # tar -T: a line may be an option (-C ~): not followed here
+                parts = parts if bases is None else parts | {os.path.join(b, x.lstrip('/')) for b in bases for x in parts}  # rsync --files-from: under each source
             except (OSError, ValueError, IndexError, TypeError, re.error): parts = None
             out += ['（%s 列出的檔案）' % f] if parts is None else [x for x in map(_secret_any, parts) if x]
     return out
