@@ -38,6 +38,7 @@
     if (['botIds', 'hostId', 'checkMode'].includes(e.target.name) && e.target.closest('#group-form')) syncChecker(e.target.closest('#group-form'));  // #296
     if (['botIds', 'hostId', 'mode', 'checkMode', 'checkerId'].includes(e.target.name) && e.target.closest('#group-form')) groupFormNote(e.target.closest('#group-form'));
     if (e.target.id === 'group-file-input' && activeGroup()) uploadGroupFiles(activeGroup(), [...e.target.files]);
+    if (e.target.id === 'attach-input') { addFiles([...e.target.files]); e.target.value = ''; }
     if (e.target.name === 'access' && e.target.closest('#bot-form')) e.target.closest('form').querySelector('[data-access-folder]').hidden = e.target.value !== 'folder';
     if (e.target.name === 'transport' && e.target.closest('#connector-form')) e.target.closest('form').querySelectorAll('[data-for]').forEach(x => x.hidden = x.dataset.for !== e.target.value);
     if (e.target.name === 'accountType' && e.target.closest('#profile-form')) e.target.closest('form').querySelector('[data-key-field]').hidden = e.target.value !== 'key';
@@ -478,6 +479,7 @@
     }
   });
   document.addEventListener('keydown', e => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.classList?.contains('attach-btn')) { e.preventDefault(); e.target.querySelector('input')?.click(); return; }
     if (e.target.id === 'chat-input' && mention.items.length && !$('#mention-menu')?.hidden && !e.isComposing && e.keyCode !== 229) {
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();

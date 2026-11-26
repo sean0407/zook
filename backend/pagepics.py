@@ -16,7 +16,12 @@ PML = ('http://schemas.openxmlformats.org/presentationml/2006/main', 'http://pur
 
 
 MOST = [0]      # --pages N: picture only the first N pages (Zook's preview); 0 is every page
-SKIPPED = [0]   # pages left out by --pages
+SKIPPED = [0]   # pages left out by --pages or by the budget below
+# One run draws at most this much (about 35 A4 pages at 1600 wide), whatever the file asks for: a small PDF whose pages repeat a
+# huge picture cannot fill the disk or the memory. Pages past it are left out and said to be (「只轉了前 N 頁」).
+MAX_PIXELS = 130 * 1000 * 1000
+MAX_BYTES = 200 * 1024 * 1024
+USED = {'pixels': 0, 'bytes': 0}
 _children = []  # Quick Look or osascript running now: ended with pagepics
 
 
@@ -24,8 +29,8 @@ def _run(command, timeout=120):
     """One helper program in its own group, ended (with whatever it started) on time-out or when pagepics is stopped."""
     proc = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     _children.append(proc)
-    try: proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired: _end(proc)
+    try: proc.wait(timeout=timeout); return True
+    except subprocess.TimeoutExpired: _end(proc); return False
     finally:
         if proc in _children: _children.remove(proc)
 
@@ -82,13 +87,18 @@ def pdf_pages(path, out, width=1600):
     if not doc: raise SystemExit('讀不到這個 PDF：%s' % path)
     png_type, space, done, missing = cf.CFStringCreateWithCString(None, b'public.png', 0x08000100), cg.CGColorSpaceCreateDeviceRGB(), [], []
     stem = os.path.splitext(os.path.basename(path))[0]
-    for n in range(1, _first(cg.CGPDFDocumentGetNumberOfPages(doc)) + 1):
+    last = _first(cg.CGPDFDocumentGetNumberOfPages(doc))
+    for n in range(1, last + 1):
         page = cg.CGPDFDocumentGetPage(doc, n)
         box, turn = cg.CGPDFPageGetBoxRect(page, 1), cg.CGPDFPageGetRotationAngle(page) % 360  # 1 = crop box
         w, h = (box.h, box.w) if turn in (90, 270) else (box.w, box.h)
         scale = width / w
         pw, ph = int(round(w * scale)), int(round(h * scale))
-        ctx = cg.CGBitmapContextCreate(None, pw, ph, 8, 0, space, 1)  # premultiplied last
+        if w > 0 and 0 < ph <= 20 * width and (USED['pixels'] + pw * ph > MAX_PIXELS or USED['bytes'] > MAX_BYTES):
+            SKIPPED[0] += last - n + 1; break  # the budget is spent: the rest is left out, and said to be
+        ctx = cg.CGBitmapContextCreate(None, pw, ph, 8, 0, space, 1) if w > 0 and 0 < ph <= 20 * width else None  # premultiplied last; a page 20 times taller than wide is not drawn
+        if not ctx: missing.append(n); continue
+        USED['pixels'] += pw * ph
         cg.CGContextSetRGBFillColor(ctx, 1, 1, 1, 1); cg.CGContextFillRect(ctx, _Rect(0, 0, pw, ph))
         cg.CGContextScaleCTM(ctx, scale, scale)
         if turn: cg.CGContextTranslateCTM(ctx, w / 2, h / 2); cg.CGContextRotateCTM(ctx, -turn * 3.141592653589793 / 180); cg.CGContextTranslateCTM(ctx, -box.w / 2, -box.h / 2)
@@ -102,7 +112,10 @@ def pdf_pages(path, out, width=1600):
         cf.CFRelease(dest_url)
         if image: cg.CGImageRelease(image)
         if ctx: cg.CGContextRelease(ctx)
-        if written: done.append((target, w, h))
+        if written:
+            try: USED['bytes'] += os.path.getsize(target)
+            except OSError: pass
+            done.append((target, w, h))
         else:
             missing.append(n)
             try: os.remove(target)  # a half-written picture is not a page
@@ -147,35 +160,85 @@ def pptx_pages(path, out, width=1600):
     return done, missing
 
 
-# A Word file's text laid out on A4 pages by macOS's own text system (no app window), saved as a PDF. Quick Look only pictures
-# the first page of a .docx; this gives every page. Pictures inside the document may be left out: it is a preview, not the file.
+# A Word file's text laid out on A4 pages by macOS's own text system (no app window), saved as PDFs. Quick Look only pictures
+# the first page of a .docx; this gives every page. macOS's reader drops Word's page breaks (#338), so a copy marks each one
+# with PAGE_MARK first and the text is laid out in pieces cut there, each piece starting a new page. Pictures inside the
+# document may be left out: it is a preview, not the file.
+PAGE_MARK = 'ZOOKPAGEBREAK' + os.urandom(8).hex().upper()  # new each run: text in a document cannot pose as a break
 DOCX_TO_PDF = '''ObjC.import('AppKit');
-function run(argv) {
-  var text = $.NSAttributedString.alloc.initWithURLOptionsDocumentAttributesError($.NSURL.fileURLWithPath(argv[0]), $({}), null, null);
-  if (!text || text.isNil()) return 'unreadable';
+function layout(text, path) {
   var info = $.NSPrintInfo.sharedPrintInfo.copy;
   info.paperSize = $.NSMakeSize(595, 842); info.topMargin = 56; info.bottomMargin = 56; info.leftMargin = 56; info.rightMargin = 56;
   info.horizontalPagination = $.NSFitPagination; info.verticalPagination = $.NSAutoPagination; info.jobDisposition = $.NSPrintSaveJob;
-  info.dictionary.setObjectForKey($.NSURL.fileURLWithPath(argv[1]), $.NSPrintJobSavingURL);
+  info.dictionary.setObjectForKey($.NSURL.fileURLWithPath(path), $.NSPrintJobSavingURL);
   var view = $.NSTextView.alloc.initWithFrame($.NSMakeRect(0, 0, 483, 730));
   view.textStorage.setAttributedString(text);
   var job = $.NSPrintOperation.printOperationWithViewPrintInfo(view, info);
   job.showsPrintPanel = false; job.showsProgressPanel = false;
-  return job.runOperation ? 'ok' : 'failed';
+  return job.runOperation;
+}
+function run(argv) {
+  var text = $.NSAttributedString.alloc.initWithURLOptionsDocumentAttributesError($.NSURL.fileURLWithPath(argv[0]), $({}), null, null);
+  if (!text || text.isNil()) return 'unreadable';
+  var plain = text.string.js, mark = argv[2], cuts = [], at = 0, from = 0, n = 0;
+  while ((at = plain.indexOf(mark, at)) >= 0) { cuts.push(at); at += mark.length; }
+  cuts.push(plain.length);
+  for (var i = 0; i < cuts.length && i < 2000; i++) {
+    var start = from, end = cuts[i]; from = end + mark.length;
+    while (start < end && plain[start] === '\\n') start++;
+    if (start >= end && i > 0 && i === cuts.length - 1) break;  // nothing after the last break
+    if (!layout(text.attributedSubstringFromRange($.NSMakeRange(start, Math.max(0, end - start))), argv[1] + '-' + (++n) + '.pdf')) return 'failed';
+  }
+  return 'ok';
 }'''
 
 
+def mark_page_breaks(xml):
+    """word/document.xml with each page break (a break run, a paragraph set to start a new page, a section that starts on a new
+    page) written as PAGE_MARK text, which macOS's reader keeps. One pass over the paragraphs with plain searches: a malformed
+    file cannot make it slow."""
+    run = '<w:r><w:t>%s</w:t></w:r>' % PAGE_MARK
+    if len(xml) > 30 * 1024 * 1024: return xml  # a huge document is laid out as it is
+    xml = re.sub(r'<w:br\b[^<>]{0,200}/>', lambda m: '<w:t>%s</w:t>' % PAGE_MARK if 'w:type="page"' in m.group() else m.group(), xml)  # bounded: a malformed file cannot make it slow
+    out = []
+    for part in xml.split('</w:p>'):
+        start = part.find('<w:pPr>'); end = part.find('</w:pPr>', start) if start >= 0 else -1
+        props = part[start:end] if 0 <= start < end else ''
+        if props and re.search(r'<w:pageBreakBefore\b(?![^<>]{0,200}w:val="(?:0|false|off)")', props):
+            part = part[:end + 8] + run + part[end + 8:]
+        if props and '<w:sectPr' in props and 'w:val="continuous"' not in props: part += run
+        out.append(part)
+    return '</w:p>'.join(out)
+
+
 def docx_pages(path, out, width=1600):
-    """Every page of a Word file: laid out as a PDF by macOS, then drawn like any PDF. Returns ([(png, w, h)], [pages not written])."""
+    """Every page of a Word file: laid out as PDFs by macOS, then drawn like any PDF. Returns ([(png, w, h)], [pages not written])."""
     work = tempfile.mkdtemp(prefix='.zook-pagepics-', dir=out)
     try:
         stem = os.path.splitext(os.path.basename(path))[0]
-        script, pdf = os.path.join(work, 'layout.js'), os.path.join(work, stem + '.pdf')
+        script, marked = os.path.join(work, 'layout.js'), os.path.join(work, 'marked.docx')
         with open(script, 'w', encoding='utf-8') as f: f.write(DOCX_TO_PDF)
-        _run(['/usr/bin/osascript', '-l', 'JavaScript', script, os.path.abspath(path), pdf])
-        if not os.path.exists(pdf) or not os.path.getsize(pdf): return [], []
-        try: return pdf_pages(pdf, out, width)
-        except SystemExit: return [], []  # an unreadable layout: Quick Look's first page instead
+        try:
+            with zipfile.ZipFile(path) as z, zipfile.ZipFile(marked, 'w', zipfile.ZIP_DEFLATED) as copy:
+                for item in z.infolist():
+                    data = z.read(item)
+                    if item.filename == 'word/document.xml': data = mark_page_breaks(data.decode('utf-8')).encode('utf-8')
+                    copy.writestr(item.filename, data)
+        except (OSError, ValueError, zipfile.BadZipFile, UnicodeDecodeError): marked = os.path.abspath(path)
+        if not _run(['/usr/bin/osascript', '-l', 'JavaScript', script, marked, os.path.join(work, 'part'), PAGE_MARK]): return [], []  # ran out of time: not a partial layout as if whole
+        parts = sorted((n for n in os.listdir(work) if re.fullmatch(r'part-\d+\.pdf', n)), key=lambda n: int(n[5:-4]))
+        done, missing, most = [], [], MOST[0]
+        for i, name in enumerate(parts):
+            if most and len(done) >= most: SKIPPED[0] = max(SKIPPED[0], len(parts) - i); break
+            MOST[0] = most - len(done) if most else 0
+            try: made, lost = pdf_pages(os.path.join(work, name), work, width)
+            except SystemExit: missing.append(len(done) + len(missing) + 1); continue  # an unreadable piece: its page is said to be missing
+            for target, w, h in made:
+                final = os.path.join(out, '%s-%02d.png' % (stem, len(done) + len(missing) + 1)); shutil.move(target, final); done.append((final, w, h))
+            for _ in lost: missing.append(len(done) + len(missing) + 1)
+        MOST[0] = most
+        if most and len(done) >= most and SKIPPED[0]: SKIPPED[0] = max(SKIPPED[0], 1)
+        return done, missing
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -214,8 +277,10 @@ def main(argv):
         pages, missing = [(made, 0, 0)] if made else [], []
         if made: print('（這個格式只能轉第一頁；其餘內容請直接讀檔確認）')
     for target, w, h in pages: print('%s\t比例 %s' % (target, ratio(w, h)))
-    if SKIPPED[0]: print('（共 %d 頁，只轉了前 %d 頁）' % (SKIPPED[0] + MOST[0], MOST[0]))
-    if missing: raise SystemExit('這幾頁沒有轉出圖片：第 %s 頁（%s）。請改讀這幾頁的內容確認，並告訴使用者哪些版面沒有看到。'
+    if SKIPPED[0]: print('（共 %d 頁，只轉了前 %d 頁）' % (SKIPPED[0] + len(pages) + len(missing), len(pages) + len(missing)))
+    if missing:
+        print('（無法預覽的頁：第 %s 頁）' % '、'.join(map(str, missing[:20])))
+        raise SystemExit('這幾頁沒有轉出圖片：第 %s 頁（%s）。請改讀這幾頁的內容確認，並告訴使用者哪些版面沒有看到。'
                                  % ('、'.join(map(str, missing)), path))
     if not pages: raise SystemExit('沒有轉出圖片：%s' % path)
 
