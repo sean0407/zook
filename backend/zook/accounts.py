@@ -913,8 +913,8 @@ def skill_notes(path, connectors):
         hits = [on for name, on in connectors if len(key) >= 3 and len(name) >= 3 and (key in name or name in key)]
         if not hits: missing.append(label)
         elif not any(hits): off.append(label)
-    if missing: notes.append('會用到連接器' + ''.join('「%s」' % x for x in missing[:6]) + '，Zook 裡沒有。')
-    if off: notes.append('會用到的連接器' + ''.join('「%s」' % x for x in off[:6]) + '還沒開啟。')
+    if missing: notes.append('會用到連接器' + ''.join('「%s」' % x for x in missing[:6]) + '，Zook 裡沒有。要用的話到「連接器」頁加入；用不到可以不管。')
+    if off: notes.append('會用到的連接器' + ''.join('「%s」' % x for x in off[:6]) + '還沒開啟。到「連接器」頁打開就能用。')
     for cli, found in tools: notes.append('提到 %s 專屬的工具（%s），其他模型的 Bot 可能無法照做。' % (cli, '、'.join(found)))
     return notes
 

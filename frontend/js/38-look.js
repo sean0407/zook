@@ -24,20 +24,26 @@
   });
 
   // Commands: typing "/" at the start of a message to a Bot lists them. Choosing one switches that mode on for the next message.
-  const slash = {items: [], index: 0};
+  const slash = {items: [], index: 0, dismissed: false};  // dismissed: closed with Esc or a click away, until the text changes
   const slashCommands = () => [
     {cmd: '/goal', key: 'long', name: '長任務', desc: '這則訊息最長可以跑 4 小時，結束時通知你'},
     {cmd: '/plan', key: 'plan', name: '先規劃', desc: effortSupported() ? '這則訊息只請 Bot 提出計畫，不動手' : '這個 Bot 的模型不支援先規劃', off: !effortSupported()}];
-  function hideSlash() { const menu = $('#slash-menu'); if (menu) menu.hidden = true; slash.items = []; }
+  function hideSlash(dismiss) { const menu = $('#slash-menu'); if (menu) menu.hidden = true; slash.items = []; if (dismiss) slash.dismissed = true; }
+  // A redraw (a new Bot's greeting arriving, a reply streaming in) rebuilds the box: the list comes back if it was open (#197).
+  function refreshSlash() { if (!slash.dismissed && document.activeElement?.id === 'chat-input') showSlash(); }
+  const SLASH_KEYS = '<div class="slash-keys" aria-hidden="true">↑↓ 選擇 · Enter 確定 · Esc 關閉</div>';
   function showSlash() {
     const input = $('#chat-input'), menu = $('#slash-menu');
     if (!input || !menu || activeGroup()) return hideSlash();
     const typed = input.value;
     if (!/^\/[a-z]*$/i.test(typed)) return hideSlash();
     slash.items = slashCommands().filter(c => c.cmd.startsWith(typed.toLowerCase()));
-    if (!slash.items.length) return hideSlash();
+    if (!slash.items.length) {  // a command that does not exist is said so, with the ones there are
+      menu.innerHTML = `<div class="slash-empty" role="status">沒有「${esc(typed)}」這個指令。可以用的有 ${slashCommands().map(c => c.cmd).join('、')}；不是指令的話照常送出就好。</div>`;
+      menu.hidden = false; return;
+    }
     slash.index = Math.min(slash.index, slash.items.length - 1);
-    menu.innerHTML = slash.items.map((c, i) => `<button type="button" class="mention-option slash-option ${i === slash.index ? 'active' : ''} ${c.off ? 'off' : ''}" role="option" aria-selected="${i === slash.index}" data-slash="${i}"><span class="slash-cmd">${esc(c.cmd)}</span><span><strong>${esc(c.name)}</strong><small>${esc(c.desc)}</small></span></button>`).join('');
+    menu.innerHTML = slash.items.map((c, i) => `<button type="button" class="mention-option slash-option ${i === slash.index ? 'active' : ''} ${c.off ? 'off' : ''}" role="option" aria-selected="${i === slash.index}" data-slash="${i}"><span class="slash-cmd">${esc(c.cmd)}</span><span><strong>${esc(c.name)}</strong><small>${esc(c.desc)}</small></span></button>`).join('') + SLASH_KEYS;
     menu.hidden = false;
   }
   function pickSlash(i) {
@@ -46,20 +52,20 @@
     if (c.off) { toast(c.desc); return; }
     state[c.key][state.selected] = true; input.value = ''; hideSlash(); render(true);
     $('#chat-input')?.focus();
-    if (c.key === 'plan') toast('這則訊息 Bot 只會提出計畫，不會動手');
   }
-  document.addEventListener('input', e => { if (e.target.id === 'chat-input') { slash.index = 0; showSlash(); } });
+  document.addEventListener('input', e => { if (e.target.id === 'chat-input') { slash.index = 0; slash.dismissed = false; showSlash(); } });
   document.addEventListener('click', e => {
     const option = e.target.closest('[data-slash]');
     if (option) { e.preventDefault(); pickSlash(Number(option.dataset.slash)); }
-    else if (!e.target.closest('#chat-input')) hideSlash();
+    else if (!e.target.closest('#chat-input')) hideSlash(true);
   });
   // Before the message box's own keys: while the list is open the arrows move in it and Enter chooses.
   document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && e.target.id === 'chat-input' && !slash.items.length && $('#slash-menu') && !$('#slash-menu').hidden) { e.preventDefault(); e.stopPropagation(); hideSlash(true); return; }  // the 沒有這個指令 note
     if (e.target.id !== 'chat-input' || !slash.items.length || $('#slash-menu')?.hidden || e.isComposing || e.keyCode === 229) return;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); slash.index = (slash.index + (e.key === 'ArrowDown' ? 1 : -1) + slash.items.length) % slash.items.length; showSlash(); }
     else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); pickSlash(slash.index); }
-    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); hideSlash(); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); hideSlash(true); }
   }, true);
   // A command typed in full in front of the message ("/plan 幫我…") works too.
   document.addEventListener('submit', e => {

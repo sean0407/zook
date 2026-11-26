@@ -277,6 +277,7 @@
       state.lastRestored = true;
       restoreLastOpen();
       const page = location.hash.slice(1); if (PAGE_HASHES.includes(page)) { state.page = page; setTimeout(() => loadPage(page)); }  // reloaded on a page: it stays there (#188④, #168③)
+      restorePage();  // no page in the address: Skills, connectors or plugins open before stay open (#97; only from the chat)
     }
     if (state.groupId && !activeGroup()) state.groupId = null;
     for (const job of state.data.jobs || []) state.jobDetails[job.id] = job;

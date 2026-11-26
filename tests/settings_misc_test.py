@@ -177,6 +177,15 @@ class PagesKeepTheirAddress(unittest.TestCase):
         self.assertRegex(code, r"PAGE_HASHES = \[[^\]]*'schedules'")
         self.assertIn('const page = location.hash.slice(1); if (PAGE_HASHES.includes(page))', code)
 
+    def test_address_comes_before_the_kept_page(self):
+        """A page in the address (#168③) is opened first; the Skills or connectors page kept from before (#97) only when the
+        reload is on the chat, so the two never fight over which page shows."""
+        code = js()
+        after_reload = code[code.index('restoreLastOpen();'):]
+        self.assertLess(after_reload.index('PAGE_HASHES.includes(page)) { state.page = page;'), after_reload.index('restorePage();'))
+        self.assertIn("if (KEPT_PAGES.includes(page) && state.page === 'chat') loadPage(page)", code)
+        for page in ('skills', 'mcp', 'plugins'): self.assertRegex(code, r"PAGE_HASHES = \[[^\]]*'%s'" % page)  # the kept pages have an address too
+
 
 class NarrowUsageTable(unittest.TestCase):
     def test_scrolls_sideways(self):
