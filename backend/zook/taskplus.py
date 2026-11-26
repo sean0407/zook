@@ -114,7 +114,7 @@ def task_delegate_tool(app, store, job_id, group_id, run_id, task_id, mine, acte
             name = ' '.join(str(args.get('assignee') or '').split()).lstrip('@').lower()
             bot = next((b for b in (store.find('bots', x) for x in group['botIds']) if b and b['name'].strip().lower() == name), None)
             if not bot or bot['id'] in (run['hostId'], task['assignee']): raise RuntimeError('助手要是群組裡的其他成員（不是主持人，也不是你自己）。')
-            if group_is_checker(bot) and not task.get('check'): raise RuntimeError('%s 負責查核，不接製作的工作；派給其他成員。' % bot['name'])  # #245
+            if group_is_checker(store, group, bot, engine=True) and not task.get('check'): raise RuntimeError('%s 負責查核，不接製作的工作；派給其他成員。' % bot['name'])  # #245
             changes = str(args.get('changes') or 'files').strip().lower()
             if changes not in TASK_CHANGES: raise RuntimeError('changes 只能是 none、files 或 external。')
             why = task_can_deliver(store, bot, changes)

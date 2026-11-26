@@ -91,7 +91,7 @@ def task_pick_verifier(store, group, run, task, working):
     tried = (task.get('verify') or {}).get('tried') or []
     members = [store.find('bots', x) for x in group['botIds']]
     members = [b for b in members if b and b['id'] not in tried] + [b for b in members if b and b['id'] in tried]  # someone new first, the same one again if no one else can
-    members = sorted(members, key=lambda b: group_is_checker(b))  # #245: a 查核員 has its own check task; it verifies a single finished task only when nobody else can
+    checking = group_checkers(store, group, engine=True); members = sorted(members, key=lambda b: (b['id'] in checking) != (group.get('checkMode') == 'pick'))  # #296: the checker the user named comes first  # #245: a 查核員 has its own check task; it verifies a single finished task only when nobody else can
     for bot in members:
         if bot['id'] == task['assignee'] or task_member_ok(store, bot): continue
         provider = bot.get('provider') or (store.data.get('settings') or {}).get('provider') or ''
@@ -129,6 +129,7 @@ def task_verify_prompt(store, group, run, task, bot):
     shared = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
     if shared: rules.append('群組共用檔案在 %s：%s。用你的讀檔工具查看；讀不到時改用 zook_group_file_read。' % (group_copy_folder(store, bot['id']), '、'.join(shared[:40])))
     if task_layout_rule(attempt): rules.append(task_layout_rule(attempt))
+    if group_standing(group): rules.append(group_standing(group))  # #294
     known = ['使用者的決定：%s → %s' % (q, a) for q, a in task.get('decisions') or []]
     if task.get('question') and task.get('answer'): known.append('成員問主持人：%s；主持人回答：%s' % (task['question'], task['answer']))
     claims = ['工作 %d「%s」的回報：%s' % (t['n'], t['title'], ((t['attempts'] or [{}])[-1].get('summary') or '')) for t in run['tasks'] if t['n'] in (task.get('deps') or []) and t['status'] == 'done']

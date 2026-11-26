@@ -20,7 +20,7 @@ class CheckAfterDoneTask(base.TaskEngineTest):
 
     def test_reported_file_missing_goes_back_before_the_check(self):
         codex = self.req('POST', '/api/bots', {'name': '丁', 'provider': 'codex'})[1]
-        self.group = self.req('POST', '/api/groups', {'name': '混合', 'botIds': [self.bots['主持']['id'], self.bots['甲']['id'], codex['id']], 'hostId': self.bots['主持']['id']})[1]
+        self.group = self.req('POST', '/api/groups', {'name': '混合', 'botIds': [self.bots['主持']['id'], self.bots['甲']['id'], codex['id']], 'hostId': self.bots['主持']['id'], 'checkMode': 'name'})[1]
         self.engine()
         self.rules([{'match': PLAN, 'calls': [create(1, '甲')], 'reply': '分好了'},
                     {'match': CHECK, 'calls': [{'name': 'zook_task_verdict', 'arguments': {'result': 'pass', 'reasons': '都對得上'}}]},
@@ -39,7 +39,7 @@ class CheckAfterDoneTask(base.TaskEngineTest):
 
     def test_a_check_task_must_wait_for_the_work(self):
         checker = self.req('POST', '/api/bots', {'name': '查核員', 'provider': 'claude'})[1]
-        self.group = self.req('POST', '/api/groups', {'name': '查核', 'botIds': [self.bots['主持']['id'], self.bots['甲']['id'], checker['id']], 'hostId': self.bots['主持']['id']})[1]
+        self.group = self.req('POST', '/api/groups', {'name': '查核', 'botIds': [self.bots['主持']['id'], self.bots['甲']['id'], checker['id']], 'hostId': self.bots['主持']['id'], 'checkMode': 'name'})[1]
         self.engine()
         check = create(2, '查核員'); late = dict(check, arguments=dict(check['arguments'], title='工作3'))  # after filled in by Zook
         self.rules([{'match': PLAN, 'calls': [check, create(1, '甲'), late], 'reply': '分好了'},
@@ -54,7 +54,7 @@ class CheckAfterDoneTask(base.TaskEngineTest):
 
     def test_a_retry_that_leaves_the_file_out_is_still_not_checked(self):
         codex = self.req('POST', '/api/bots', {'name': '丁', 'provider': 'codex'})[1]
-        self.group = self.req('POST', '/api/groups', {'name': '混合', 'botIds': [self.bots['主持']['id'], self.bots['甲']['id'], codex['id']], 'hostId': self.bots['主持']['id']})[1]
+        self.group = self.req('POST', '/api/groups', {'name': '混合', 'botIds': [self.bots['主持']['id'], self.bots['甲']['id'], codex['id']], 'hostId': self.bots['主持']['id'], 'checkMode': 'name'})[1]
         self.engine()
         self.rules([{'match': PLAN, 'calls': [create(1, '甲')], 'reply': '分好了'},
                     {'match': CHECK, 'calls': [{'name': 'zook_task_verdict', 'arguments': {'result': 'pass', 'reasons': '都對得上'}}]},
@@ -67,7 +67,7 @@ class CheckAfterDoneTask(base.TaskEngineTest):
 
     def test_work_added_after_the_check_gets_a_follow_up_check(self):
         checker = self.req('POST', '/api/bots', {'name': '查核員', 'provider': 'claude'})[1]
-        self.group = self.req('POST', '/api/groups', {'name': '查核', 'botIds': [self.bots['主持']['id'], self.bots['甲']['id'], checker['id']], 'hostId': self.bots['主持']['id']})[1]
+        self.group = self.req('POST', '/api/groups', {'name': '查核', 'botIds': [self.bots['主持']['id'], self.bots['甲']['id'], checker['id']], 'hostId': self.bots['主持']['id'], 'checkMode': 'name'})[1]
         self.engine()
         self.rules([{'match': PLAN, 'calls': [create(1, '甲'), create(2, '查核員')], 'reply': '分好了'},
                     {'match': '=== 工作', 'calls': [handed('做好了。', [])]}, {'match': WAKE, 'calls': [dict(create(3, '甲'), arguments=dict(create(3, '甲')['arguments'], after=['2']))], 'reply': SUMMARY}])  # the new work even waits for the check

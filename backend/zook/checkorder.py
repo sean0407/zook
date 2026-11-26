@@ -1,7 +1,8 @@
 # 群組「做完才查」(#245, 併 #145、#170、#226). Loaded by backend/server.py into one shared namespace, after groups.py.
 #
-# Who checks is, for now, told by the member's name or persona (group_is_checker): a temporary fallback until the group form lets
-# the user choose the checker, and Zook picks a member of another vendor when nobody is chosen (queue #296).
+# Who checks is the group's 驗收方式 (checkMode, #296): 自動 asks one member of another vendor, 同家複查 also lets a member of the
+# same vendor check, 指定 names the checker, 不驗收 has none. A group from before the form had it (no checkMode, or 'name') keeps
+# telling the checker by its name or persona (named_checker), as #245 did.
 #
 # A member whose role is checking (查核員、驗收、審核…) is asked only after the members who make the work have handed it in, and
 # only when the files they said they handed in are there: a file said to be handed in but missing goes back to that member once
@@ -26,7 +27,7 @@ def _whole(full, part):
 CHECKER_NAME_WRITES = re.compile(r'撰寫|寫手|起草|整理|製作|設計|開發|企劃|規劃')  # 「驗收報告撰寫」 makes a document about checking; 「文件審核員」 checks
 CHECKER_NOT = re.compile(r'[不沒没非無无別]')  # 「不負責查核」「我不是負責查核的」: said not to be its job
 CHECKER_WRITES = re.compile(r'撰寫|寫|整理|製作|起草|報告|文件|紀錄|記錄|表單|清單')  # 「主要撰寫驗收報告」: it makes a document about checking
-MODERATOR_RULES['split_check'] = ['現在輪到你查核。照主持人分派給你的查核工作，實際打開要查的檔案（成員交的，或使用者給的）逐項核對，不要只看別人的說法。',
+MODERATOR_RULES['split_check'] = ['現在輪到你查核。照主持人分派給你的查核工作（沒有分派時，查核其他成員這次交出的成果），實際打開要查的檔案（成員交的，或使用者給的）逐項核對，不要只看別人的說法。',
                                   '第一行只寫【判定】同意、【判定】有疑慮 或 【判定】有錯誤 其中之一，接著用最多 4 點說明依據；有檔案沒打開，就寫明哪個沒看，不能判定通過。',
                                   '要給客戶或外部的內容，核對有沒有內部註記、計算過程、內部折扣或報價規則、【待確認】。',
                                   '只讀：不要修改、重做或另存任何檔案，也不要對外動作。', _NO_MENTION]
@@ -35,7 +36,51 @@ MODERATOR_RULES['split_resave'] = ['你剛才說交了檔案，但 Zook 檢查�
 MODERATOR_RULES['split_plan'] = MODERATOR_RULES['split_plan'][:-1] + ['負責查核或驗收的成員，Zook 會等其他成員交件後才請他查核；他那一行寫要查什麼。', _NO_MENTION]
 
 
-def group_is_checker(bot):
+CHECK_MODES = ('auto', 'none', 'same', 'pick')  # the group form's 驗收方式 (#296); 'name' (or none) is a group from before it
+
+
+def bot_vendor(store, bot):
+    """Which vendor a member's replies come from; '' when 自動選擇 picks it per reply (not known ahead)."""
+    provider = (bot or {}).get('provider') or (store.data.get('settings') or {}).get('provider') or ''
+    return '' if provider == AUTO else provider_kind(provider)
+
+
+def group_checkers(store, group, engine=False):
+    """The members who check (#296), by the group's 驗收方式. 自動 and 同家複查 pick one member that is not the host, only when
+    another member (the host too) is left to make the work. 自動 picks the one whose vendor differs from the most others, 同家複查
+    the one of the same vendor as the most others (the later one on a tie, both); nobody when no member fits. In 任務引擎
+    (engine) every task is already checked by another vendor, so 自動 and 同家複查 pick nobody there; a checker the user named, or a
+    group from before 驗收方式 (by name, as #245 did), still counts."""
+    present = [x for x in (group or {}).get('botIds') or [] if store.find('bots', x)]
+    mode = (group or {}).get('checkMode')
+    if mode not in CHECK_MODES: return [x for x in present if named_checker(store.find('bots', x))]  # a group from before 驗收方式
+    if mode == 'none': return []
+    host = group_host(store, group); seats = [x for x in present if x != host]
+    if mode == 'pick' and group.get('checkerId') in seats: return [group['checkerId']]  # gone from the group, or now its host: picked as 自動
+    if engine or not seats or len(present) < 2: return []
+    family = {x: bot_vendor(store, store.find('bots', x)) for x in present}
+    score = lambda c: sum(1 for x in present if x != c and family[x] and family[c] and (family[x] == family[c]) == (mode == 'same'))
+    best = max(reversed(seats), key=score)  # the first best in this order: the later member on a tie
+    return [best] if score(best) else []  # a vendor not known (自動選擇) is never counted as another one, or as the same
+
+
+def group_is_checker(store, group, bot, engine=False):
+    return bool(bot) and bot['id'] in group_checkers(store, group, engine)
+
+
+GROUP_STANDING_MAX = 4000  # 長期指示 (#294): the group's own standing instructions
+
+
+def group_standing(group):
+    """The group's 長期指示 for a member's prompt, or ''."""
+    text = str((group or {}).get('instructions') or '').strip()[:GROUP_STANDING_MAX]
+    return '群組的長期指示（使用者設定，每次回覆都要遵守；和使用者這次的訊息衝突時，以這次的訊息為準）：\n' + text if text else ''
+
+
+CHECKER_TAG = '（查核員：等其他成員交件後只讀查核，不接製作的工作）'
+
+
+def named_checker(bot):
     """Whether a member's role is checking others' work: its name says so, or the first sentence of its persona says that is its job now (not a past one)."""
     name = str((bot or {}).get('name') or '')
     if not CHECKER_NAME_WRITES.search(name) and any(not CHECKER_NOT.search(re.sub('不只|不僅|不但', '', name[:hit.start()])) for hit in CHECKER_NAME.finditer(name)): return True  # 「非查核員」「不負責查核員」 are not
@@ -45,10 +90,10 @@ def group_is_checker(bot):
                for hit in CHECKER_DUTY.finditer(persona))
 
 
-def split_checkers(store, ids):
+def split_checkers(store, group, ids):
     """(members who make the work, members who check it) among these. A checker is always a checker: with nobody making
     anything it checks what is there, still only reading."""
-    checkers = [x for x in ids if group_is_checker(store.find('bots', x))]
+    checking = group_checkers(store, group); checkers = [x for x in ids if x in checking]
     return [x for x in ids if x not in checkers], checkers
 
 
@@ -57,11 +102,11 @@ def check_step(checkers, producers, fixes=None):
     return dict(role='split_check', bots=list(checkers), blind=False, waitBusy=True, noSave=True, gate=list(producers), fixes=dict(fixes or {}))
 
 
-def split_work_steps(store, ids, fixes=None, host=None):
+def split_work_steps(store, group, ids, fixes=None, host=None):
     """分工's work: the members who make it at the same time, then those who check it (#245). With no member making anything,
     the check waits for the host's own share."""
     fixes = fixes or {}
-    producers, checkers = split_checkers(store, ids)
+    producers, checkers = split_checkers(store, group, ids)
     work = dict(role='split_work', bots=producers, blind=True, waitBusy=True, **({'fixes': {k: v for k, v in fixes.items() if k in producers}} if fixes else {}))
     return ([work] if producers else []) + ([check_step(checkers, producers or ([host] if host else []), {k: v for k, v in fixes.items() if k in checkers})] if checkers else [])
 
@@ -239,7 +284,7 @@ class CheckOrder:
         asked again after the work it checked is redone (the new version is checked, not the old one)."""
         group = self.store.find('groups', group_id)
         bots = [b for b in (self.store.find('bots', x) for x in group['botIds']) if b and b['id'] != closer]
-        producers, checkers = split_checkers(self.store, [b['id'] for b in bots])
+        producers, checkers = split_checkers(self.store, group, [b['id'] for b in bots])
         if not checkers: return dict(role='split_redo', bots=[b['id'] for b in bots if b['id'] in fixes], blind=False, fixes=fixes), None
         redo = [x for x in producers if x in fixes]
         checked = checkers if redo else [x for x in checkers if x in fixes]  # redone work is checked, also when the first check did not run
