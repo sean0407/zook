@@ -145,7 +145,7 @@ class KnowledgeFiles(unittest.TestCase):
 class KnowledgeUnits(unittest.TestCase):
     def setUp(self):
         self.ns = {'__file__': str(ROOT / 'backend/server.py')}
-        for part in ('core', 'knowledge', 'knowsearch'):
+        for part in ('core', 'sheetview', 'knowledge', 'knowsearch'):  # core's upload_name keeps a long name's extension with sheetview's keep_suffix
             f = ROOT / 'backend/zook' / (part + '.py'); exec(compile(f.read_text(encoding='utf-8'), str(f), 'exec'), self.ns)
 
     def test_only_ready_items_newest_ten_when_nothing_matches(self):
