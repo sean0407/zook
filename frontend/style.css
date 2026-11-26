@@ -2241,3 +2241,12 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .uc-bot-list { display:flex; flex-wrap:wrap; gap:4px 10px; padding-top:4px; }
 .detail-issue { margin:8px 0 0; padding:8px 10px; border-radius:8px; background:#fff4e5; color:#7a3d00; font-size:13px; line-height:1.5; }
 @media (max-width: 640px) { .usage-grid { grid-template-columns:1fr; } }
+/* #307: a group member's own page while it answers there */
+.member-busy { margin:8px 16px 0; padding:10px 12px; border:1px solid var(--line, #e5e5e5); border-radius:10px; background:var(--soft, rgba(0,0,0,.02)); }
+.member-busy-head { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:13px; }
+.member-live { margin:6px 0 8px; font-size:12px; line-height:1.6; }
+.member-live .wait-line { margin-top:0; }
+.live-row { display:flex; gap:8px; }
+.live-label { flex:0 0 auto; min-width:64px; color:var(--muted, #8b8b8b); }
+.live-body { min-width:0; overflow-wrap:anywhere; }
+.live-out { white-space:pre-wrap; display:block; max-height:7.5em; overflow:hidden; }
