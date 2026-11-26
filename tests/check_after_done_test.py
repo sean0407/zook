@@ -34,6 +34,7 @@ if name == '專員' and role == 'split_resave':
     if flag('resave') and folder: open(os.path.join(folder.group(1), '報價單.xlsx'), 'w').write('quote resaved')
     text = '已存到群組檔案：報價單.xlsx' if not flag('cannot') else '這次存不了，權限不足。'
 if name == '查核員': text = '【判定】同意\n看過報價單.xlsx'
+if role == 'split_plan' and flag('allidle'): text = '本次目標與產出：報價單\n專員：本次沒有工作\n查核員：檢查報價單'
 if role == 'split_plan' and flag('idlecheck'): text = '本次目標與產出：報價單\n專員：做報價單\n查核員：本次沒有工作'
 if name == '專員' and role == 'split_work' and flag('colon') and folder: open(os.path.join(folder.group(1), 'a:b.xlsx'), 'w').write('c'); text = '已存到群組檔案：a:b.xlsx'
 if name == '專員' and role == 'split_work' and flag('dupsave') and folder: open(os.path.join(folder.group(1), '報價-新版.xlsx'), 'w').write('old'); text = '已存到群組檔案：報價-新版.xlsx'
@@ -322,6 +323,12 @@ class CheckAfterDone(unittest.TestCase):
     def test_without_a_host_a_checker_listed_first_does_not_plan(self):
         self.say(self.group(names=('查核員', 'Alpha', '專員'), host=''))
         self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('專員', 'split_work'), ('查核員', 'split_check'), ('Alpha', 'split_merge')])
+
+    def test_nobody_making_anything_means_no_check(self):
+        self.flag('allidle')
+        found = self.say(self.group())
+        self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('Alpha', 'split_merge')])
+        self.assertTrue(any('查核員這次不用查核' in x for x in self.said(found)), self.said(found))
 
     def test_nothing_handed_in_means_no_check(self):
         self.flag('fail')

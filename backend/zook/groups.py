@@ -565,7 +565,7 @@ class GroupRuns:
                 if said_msg: said_msg['unrenderedClaim'] = True
             said_msg = find_message(group, turn['msg']['id'])
             if said_msg: said_msg.update(savedFiles=list(dict.fromkeys(list(saved) + [x[1] for x in turn.get('kept') or []])), sameAs=dict(turn.get('kept') or []), skippedFiles=list(skipped))  # #245: what really reached the group's files, for the check
-            for name in saved: group.setdefault('fileInfo', {})[name] = dict(by=bot['name'], **{k: v for k, v in (group.get('fileInfo', {}).get(name) or {}).items() if k == 'origName'})  # the uploaded name stays known
+            for name in saved: group.setdefault('fileInfo', {})[name] = dict(by=bot['name'], byId=bot['id'], **{k: v for k, v in (group.get('fileInfo', {}).get(name) or {}).items() if k == 'origName'})  # the uploaded name stays known
             if saved: group['messages'].append(dict(id=ID(), role='system', content='%s 存了共用檔案：%s' % (bot['name'], '、'.join(saved)), createdAt=NOW()))
             if skipped: group['messages'].append(dict(id=ID(), role='system', content='%s 的檔案太大沒有存進群組：%s' % (bot['name'], '、'.join(skipped)), createdAt=NOW()))
             store.save()
@@ -581,7 +581,13 @@ class GroupRuns:
             if not idle: return steps
             group['messages'].append(dict(id=ID(), role='system', content='主持人沒有分工作給 %s，這次不用回覆。' % '、'.join(b['name'] for b in bots if b['id'] in idle), createdAt=NOW()))
             self.store.save()
-        return [dict(s, bots=[x for x in s['bots'] if x not in idle], **({'gate': [x for x in s['gate'] if x not in idle]} if 'gate' in s else {})) for s in steps[:n] if [x for x in s['bots'] if x not in idle]] + steps[n:]  # a 查核員 never counts as idle here
+        kept = [dict(s, bots=[x for x in s['bots'] if x not in idle], **({'gate': [x for x in s['gate'] if x not in idle]} if 'gate' in s else {})) for s in steps[:n] if [x for x in s['bots'] if x not in idle]]
+        if any(s['role'] == 'split_check' and s['gate'] and not [x for x in s['gate'] if x not in idle] for s in steps[:n]):  # #245: nobody makes anything this time: nothing to check
+            kept = [s for s in kept if s['role'] != 'split_check']
+            with self.store.lock:
+                group = self.store.find('groups', group_id)
+                if group: group['messages'].append(dict(id=ID(), role='system', content='主持人這次沒有分工作給製作的成員，查核員這次不用查核。', createdAt=NOW())); self.store.save()
+        return kept + steps[n:]  # a 查核員 never counts as idle here
 
     def _send_back(self, group_id, run_id, step, merged, steps):
         """分工: the host's check found work that does not match what its member said. That member fixes it once, then the host

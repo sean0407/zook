@@ -9,7 +9,7 @@
 # the check is a step between the work and the host's merge, and runs again after the host sends work back; in a discussion with
 # a host it comes after the members' independent round. In 任務引擎 a task reported with files that are not there is tried again
 # before another vendor checks it.
-CHECKER_NAME = re.compile(r'查核|驗收|審核|審查|校對|稽核|覆核|複核|把關|品管|品檢|品保|品質|檢查|(?<![A-Za-z])(?:QA|reviewer|checker)(?![A-Za-z])', re.I)
+CHECKER_NAME = re.compile(r'查核|驗收|審核|審查|校對|稽核|覆核|複核|把關|品管|品檢|品保|品質檢查|檢查員|檢查專員|(?<![A-Za-z])(?:QA|reviewer|checker)(?![A-Za-z])', re.I)
 CHECKER_DUTY = re.compile(r'(?:負責|專門|主要|擔任|你是|我是|身為|作為)(?:做|進行|的)?[^，。,.；;\n]{0,6}?(?:查核|驗收|審核|審查|校對|稽核|覆核|複核|把關|檢查)')
 FILE_KINDS = CLAIM_KINDS + ('ai', 'psd', 'eps', 'svg', 'gif', 'webp', 'heic', 'tif', 'tiff', 'bmp', 'key', 'numbers', 'pages', 'rtf', 'odt', 'ods', 'odp', 'xml',
                             'yaml', 'yml', 'tsv', 'log', 'epub', 'indd', 'sketch', 'fig', 'mp4', 'mov', 'm4a', 'mp3', 'wav', 'py', 'js', 'sql', 'ics', 'vcf', 'xlsm')
@@ -82,19 +82,19 @@ def checked_present(store, group_id, names, exact=(), owner=''):
     return gone[:10]
 
 
-def _in_prose(word, names, loose=False):
+def _in_prose(word, names, joins=None):
     """Whether a word picked from prose (Chinese runs words together: 「已存好報價單.xlsx」) is one of these files: the full name, or the
-    name right after a word that joins it to the sentence (存好、交了、：…). 「新版報價單.xlsx」 is not 「報價單.xlsx」. loose: any ending
-    (only for leaving the user's own files out, where a wrong match can only mean one check fewer of a missing file)."""
+    name right after a word that joins it to the sentence (存好、交了、：…, or the joins given). 「新版報價單.xlsx」 is not 「報價單.xlsx」."""
     word = _claim_key(word)
     for n in names:
         key = _claim_key(n)
         if not n or not word.endswith(key): continue
         lead = word[:len(word) - len(key)]
-        if not lead or loose or lead.endswith(PROSE_JOIN): return True
+        if not lead or lead.endswith(PROSE_JOIN + tuple(joins or ())): return True
     return False
 
 
+INPUT_JOIN = ('照', '據', '据', '考', '看', '讀', '读', '用', '依', '從', '从', '由', '附', '給', '给')  # 「依照需求.pdf」「參考規格.pdf」: a file it read
 PROSE_JOIN = ('存', '好', '了', '到', '成', '進', '的', '是', '為', '为', '：', ':', '傳', '交', '出', '付', '上', '把', '將', '将', '即', '和', '與', '与', '及', '在')
 
 
@@ -183,7 +183,7 @@ class CheckOrder:
                 text = m.get('content') or ''
                 if any(w in text for w in SAVE_SAID):
                     mine = [n for x in group['messages'][start:] if x.get('botId') == b and x.get('role') == 'assistant' for n in x.get('savedFiles') or [] if n in pool]  # what it really saved and is still there (Zook may have cleaned the name)
-                    named = [n for n in FILE_WORD.findall(text) if not _in_prose(n, given, True) and not _in_prose(n, pool) and not _in_prose(n, alias[b]) and not any(_claim_key(s).endswith(_claim_key(n)) or _claim_key(_short_name(n)) == _claim_key(s) for s in mine)]
+                    named = [n for n in FILE_WORD.findall(text) if not _in_prose(n, given, INPUT_JOIN) and not _in_prose(n, pool) and not _in_prose(n, alias[b]) and not any(_claim_key(s).endswith(_claim_key(n)) or _claim_key(_short_name(n)) == _claim_key(s) for s in mine)]
                     if named: gone[b] = list(dict.fromkeys((gone.get(b) or []) + named))[:10]
             for b, m in latest.items():
                 if m.get('skippedFiles'): gone[b] = list(dict.fromkeys((gone.get(b) or []) + list(m['skippedFiles'])))  # too big to keep: an older file of that name is not this work
@@ -278,15 +278,15 @@ def group_files_given(group):
     return [m.get('attachments') or [] for m in (group or {}).get('messages') or [] if m.get('role') == 'user']
 
 
-def task_files_missing(store, group, owner, attempt, msg, spec='', given=()):
+def task_files_missing(store, group, owner, attempt, msg, spec='', given=(), owner_id=''):
     """store.lock and _group_files_lock held. The files a task's report lists, or its reply or summary says it saved, that are not
     there as this member's: saved in this reply, or last saved by this member (another member's file of the same name is not its work)."""
     listed = list(attempt.get('files') or [])
     said = str(attempt.get('summary') or '') + '\n' + str(msg.get('content') or '')
     inputs = {p.rsplit('/', 1)[-1] for p in named_paths(str(spec or ''))} | set(given)  # files the work was told to read, or the user gave
-    named = [n for n in FILE_WORD.findall(said) if not _in_prose(n, inputs, True)] if any(w in said for w in SAVE_SAID) else []  # 「已存好報價單.xlsx」 without listing it in files
+    named = [n for n in FILE_WORD.findall(said) if not _in_prose(n, inputs, INPUT_JOIN)] if any(w in said for w in SAVE_SAID) else []  # 「已存好報價單.xlsx」 without listing it in files
     pool = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
-    mine = set(msg.get('savedFiles') or []) | {n for n, info in (group.get('fileInfo') or {}).items() if (info or {}).get('by') == owner}
+    mine = set(msg.get('savedFiles') or []) | {n for n, info in (group.get('fileInfo') or {}).items() if (((info or {}).get('byId') == owner_id) if (info or {}).get('byId') else (info or {}).get('by') == owner)}  # by the Bot itself; names can repeat
     gone = checked_present(store, group['id'], listed + list(msg.get('missingFiles') or []), exact=listed, owner=owner) + [n for n in named if not _in_prose(n, [p for p in pool if p in mine])]  # named: there, and its own
     for raw in listed:
         base = re.sub(r'(\.[A-Za-z0-9]{1,10})\s*[（(][^（）()]{0,30}[）)]$', r'\1', ' '.join(str(raw or '').split())).strip(' 「」『』`\'"').rsplit('/', 1)[-1]
