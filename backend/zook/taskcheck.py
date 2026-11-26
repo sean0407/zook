@@ -129,6 +129,7 @@ def task_verify_prompt(store, group, run, task, bot):
     shared = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
     if shared: rules.append('群組共用檔案在 %s：%s。用你的讀檔工具查看；讀不到時改用 zook_group_file_read。' % (group_copy_folder(store, bot['id']), '、'.join(shared[:40])))
     if task_layout_rule(attempt): rules.append(task_layout_rule(attempt))
+    if group_standing(group): rules.append(group_standing(group))  # #294
     known = ['使用者的決定：%s → %s' % (q, a) for q, a in task.get('decisions') or []]
     if task.get('question') and task.get('answer'): known.append('成員問主持人：%s；主持人回答：%s' % (task['question'], task['answer']))
     claims = ['工作 %d「%s」的回報：%s' % (t['n'], t['title'], ((t['attempts'] or [{}])[-1].get('summary') or '')) for t in run['tasks'] if t['n'] in (task.get('deps') or []) and t['status'] == 'done']

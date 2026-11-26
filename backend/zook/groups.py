@@ -330,8 +330,10 @@ def current_paused(store, group, paused):
     present = [x for x in group['botIds'] if store.find('bots', x)]; closer = group_closer(store, group)
     if paused.get('kind') == 'steps':
         steps = []
+        checks = group_checkers(store, group)  # #296: 驗收方式 or the members changed while paused: the check goes to who checks now
         for step in paused['steps']:
             bots = [closer] if step['role'] in GROUP_CLOSING and closer else [x for x in step['bots'] if x in present]
+            if step['role'] == 'split_check': bots = [x for x in ([x for x in step['bots'] if x in checks] or [x for x in checks if x not in step.get('gate') or []]) if x in present]
             if bots: steps.append(dict(step, bots=bots))
         return dict(paused, steps=steps)
     host = group_host(store, group)

@@ -9,17 +9,17 @@
   const hostOptions = ids => [{id: '', name: '不設主持人'}, ...ids.map(id => state.data.bots.find(b => b.id === id)).filter(Boolean).map(b => ({id: b.id, name: b.name}))];
   // #296 驗收方式: who checks the work once it is handed in. A group from before it keeps telling the checker by its name until changed.
   const CHECK_MODES = ['auto', 'none', 'same', 'pick'];
-  const CHECK_MODE_OPTIONS = [{id: 'auto', name: '自動請一位別家成員查核一次', hint: '預設：成員交件後，Zook 挑一位別家 AI 的成員只讀查核'}, {id: 'none', name: '不驗收', hint: '成員交完就結束，不另外查核'}, {id: 'same', name: '同家複查', hint: '沒有別家的成員時，也請同一家的成員查核'}, {id: 'pick', name: '指定查核員', hint: '自己選一位成員負責查核'}];
+  const CHECK_MODE_OPTIONS = [{id: 'auto', name: '自動請一位別家成員查核一次', hint: '預設：成員交件後，Zook 挑一位別家 AI 的成員只讀查核'}, {id: 'none', name: '不驗收', hint: '成員交完就結束，不另外查核'}, {id: 'same', name: '同家複查', hint: '請一位和製作成員同一家 AI 的成員只讀查核'}, {id: 'pick', name: '指定查核員', hint: '自己選一位成員負責查核'}];
   const checkModeOf = g => !g.id ? 'auto' : CHECK_MODES.includes(g.checkMode) ? g.checkMode : 'name';
   const checkModeOptions = g => (checkModeOf(g) === 'name' ? [{id: 'name', name: '照成員名稱判斷（舊群組沿用）', hint: '名稱或人格寫「查核、驗收、審核」等字的成員負責查核'}] : []).concat(CHECK_MODE_OPTIONS);
   const checkerOptions = (ids, host) => [{id: '', name: '請選一位成員'}, ...ids.filter(id => id !== host).map(id => state.data.bots.find(b => b.id === id)).filter(Boolean).map(b => ({id: b.id, name: b.name}))];
   const checkerRow = (ids, host, value) => settingRow('查核員', '只讀查核其他成員交的成果，不接製作的工作', dropdown('checkerId', ids.includes(value) && value !== host ? value : '', checkerOptions(ids, host)));
-  // The member 自動 or 同家複查 would ask, the same way the server picks it (group_checkers): not the host, someone left to make the work, the vendor that differs from the most others, the later one on a tie.
+  // The member 自動 or 同家複查 would ask, the same way the server picks it (group_checkers): not the host, someone (the host too) left to make the work, the vendor that differs from (同家複查: matches) the most others, the later one on a tie.
   function autoChecker(ids, host, same) {
     const present = ids.filter(id => state.data.bots.some(b => b.id === id)), seats = present.filter(id => id !== host);
-    if (seats.length < 2) return '';
+    if (!seats.length || present.length < 2) return '';
     const fam = Object.fromEntries(present.map(id => [id, botFamily(state.data.bots.find(b => b.id === id))]));
-    const score = c => present.filter(x => x !== c && fam[x] && fam[c] && fam[x] !== fam[c]).length;
+    const score = c => present.filter(x => x !== c && fam[x] && fam[c] && (fam[x] === fam[c]) === same).length;
     let best = '', top = -1;
     for (const c of seats) { const s = score(c); if (s >= top) { best = c; top = s; } }
     return top > 0 || same ? best : '';
@@ -28,10 +28,11 @@
     const mode = form.elements.checkMode?.value, name = id => state.data.bots.find(b => b.id === id)?.name || '';
     if (mode === 'none') return '成員交完就結束，結果要你自己看。';
     if (mode === 'name') return '這個群組還沒選驗收方式，目前照成員名稱判斷誰查核；改選其他方式並儲存後就照新的方式。';
-    if (mode === 'pick') return '';
+    if (mode === 'pick') return form.elements.mode?.value === 'debate' && ids.filter(id => state.data.bots.some(b => b.id === id)).length < 3 ? '「辯論」只有兩位成員時，查核員也要上場辯論，這次不另外查核。' : '';
     const pick = autoChecker(ids, host, mode === 'same'), seats = ids.filter(id => id !== host && state.data.bots.some(b => b.id === id));
-    if (pick) return `會請「${name(pick)}」在其他成員交件後查核一次（只讀，不接製作的工作）。`;
-    if (seats.length < 2) return '主持人以外至少要兩位成員，才會有人查核；目前不會查核。';
+    const debate = form.elements.mode?.value === 'debate' && ids.filter(id => state.data.bots.some(b => b.id === id)).length < 3 ? '「辯論」只有兩位成員時，查核員也要上場辯論，這次不另外查核。' : '';
+    if (pick) return debate || `會請「${name(pick)}」在其他成員交件後查核一次（只讀，不接製作的工作）。`;
+    if (!seats.length) return '主持人以外至少要一位成員，才會有人查核；目前不會查核。';
     const fam = botFamily(state.data.bots.find(b => b.id === seats[0]));
     return `成員都是 ${providerShort(fam) || '同一家'}，找不到別家的成員查核，這次不會查核；要查核請改選「同家複查」，或加一位別家的 Bot。`;
   }

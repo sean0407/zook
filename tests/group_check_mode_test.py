@@ -53,9 +53,21 @@ class Picking(unittest.TestCase):
         self.assertEqual(server.group_checkers(store, dict(group, checkMode='pick', checkerId='gone')), ['b1'])  # left the group: picked as 自動
         self.assertEqual(server.group_checkers(store, dict(group, checkMode='none')), [])  # 「查核員」 by name is a maker now
         self.assertEqual(server.group_checkers(store, dict(group)), ['b2'])  # from before 驗收方式: by its name, as #245 did
-        self.assertEqual(server.group_checkers(store, dict(botIds=['b0', 'b1'], hostId='b0', checkMode='auto')), [])  # someone must be left to make the work
+        self.assertEqual(server.group_checkers(store, dict(botIds=['b0', 'b1'], hostId='b0', checkMode='auto')), ['b1'])  # the host makes the work, the other vendor checks it
+        self.assertEqual(server.group_checkers(store, dict(botIds=['b0', 'b1'], hostId='b0', checkMode='same')), ['b1'])  # only one can check
+        self.assertEqual(server.group_checkers(store, dict(botIds=['b0', 'b1', 'b2'], hostId='', checkMode='same')), ['b2'])  # the same vendor as the most others
+        self.assertEqual(server.group_checkers(store, dict(botIds=['b1', 'b0', 'b2'], hostId='', checkMode='same')), ['b2'])
+        self.assertEqual(server.group_checkers(store, dict(botIds=['b0'], hostId='', checkMode='auto')), [])  # nobody left to make the work
         self.assertEqual(server.group_checkers(store, dict(group, checkMode='auto'), engine=True), [])  # 任務引擎 checks every task by another vendor already
         self.assertEqual(server.group_checkers(store, dict(group, checkMode='pick', checkerId='b2'), engine=True), ['b2'])
+
+    def test_a_paused_check_goes_to_who_checks_now(self):
+        store = self.store('codex', 'codex', 'claude', 'claude')
+        paused = dict(kind='steps', steps=[dict(role='split_check', bots=['b2'], gate=['b0', 'b1']), dict(role='final', bots=['b0'])])
+        group = dict(botIds=['b0', 'b1', 'b2', 'b3'], hostId='b0')
+        self.assertEqual([s['role'] for s in server.current_paused(store, dict(group, checkMode='none'), paused)['steps']], ['final'])
+        self.assertEqual(server.current_paused(store, dict(group, checkMode='pick', checkerId='b3'), paused)['steps'][0]['bots'], ['b3'])
+        self.assertEqual(server.current_paused(store, dict(group, checkMode='auto'), paused)['steps'][0]['bots'], ['b3'])
 
     def test_numbered_name(self):
         self.assertEqual(server.numbered_name('週會', ['週會', '週會（2）']), '週會（3）')
