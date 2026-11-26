@@ -127,8 +127,8 @@
     if (!state.templates) { api('skill-templates').then(x => { state.templates = x.items; if (state.page === 'skills') render(true); }).catch(() => { state.templates = []; }); return ''; }
     const q = (query || '').toLowerCase(), left = state.templates.filter(t => !t.added && (!q || (t.name + t.description + t.category).toLowerCase().includes(q)));
     if (!left.length) return '';
-    const card = t => `<article class="dir-card catalog-card">${itemIcon(t.name)}<div class="dir-body"><div class="dir-title"><h3 title="${esc(t.name)}">${esc(t.name)}</h3><button class="primary small-btn" data-up="template-add" data-id="${esc(t.id)}" aria-label="加入「${esc(t.name)}」">加入</button></div><p class="dir-desc">${esc(t.description.replace(/。$/, ''))}</p><div class="dir-meta"><span>${esc(t.category)}</span></div></div></article>`;
-    return `<section class="dir-section catalog-intro"><h2 class="catalog-head">Skill 範本</h2><p class="muted">寫好的常用 Skill，按一下加入，所有 Bot 都能用。</p></section><section class="dir-section"><div class="dir-grid">${left.map(card).join('')}</div></section>`;
+    const card = t => `<article class="dir-card catalog-card template-card">${itemIcon(t.name)}<div class="dir-body"><div class="dir-title"><h3 title="${esc(t.name)}">${esc(t.name)}</h3><button class="primary small-btn" data-up="template-add" data-id="${esc(t.id)}" aria-label="加入「${esc(t.name)}」">加入</button></div><p class="dir-desc">${esc(t.description.replace(/。$/, ''))}</p><div class="dir-meta"><span>${esc(t.category)}</span></div></div></article>`;
+    return `<section class="dir-section catalog-intro" id="skill-templates"><h2 class="catalog-head">Skill 範本</h2><p class="muted">寫好的常用 Skill，按一下加入，所有 Bot 都能用。</p></section><section class="dir-section"><div class="dir-grid">${left.map(card).join('')}</div></section>`;
   }
   document.addEventListener('click', async e => {
     const el = e.target.closest?.('[data-up="template-add"]');
@@ -137,7 +137,10 @@
     try {
       const made = await post('skills/template', {id: el.dataset.id});
       state.templates = (await api('skill-templates')).items; state.integrations = await api('integrations');
-      render(true); toast('已加入「' + made.name + '」');
+      // The new Skill is shown first under 已開啟, marked, and brought into view (#183).
+      state.dirFresh = (state.integrations.skills || []).find(x => x.source === 'zook' && x.name === made.name)?.id || '';
+      render(true); toast('已加入「' + made.name + '」，放在「已開啟」最上面，所有 Bot 都能用');
+      document.querySelector(`[data-card="${CSS.escape(state.dirFresh)}"]`)?.scrollIntoView({behavior: 'smooth', block: 'center'});
     } catch (err) { el.disabled = false; toast(err.message); }
   });
 
