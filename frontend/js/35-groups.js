@@ -7,9 +7,46 @@
   const autoReady = g => !!groupHostId(g) && groupMembers(g).length >= 2;  // 自動 needs a host and two members (#218)
   const currentGroupMode = g => { const mode = state.groupMode[g.id] || g.mode || 'free'; return mode === 'auto' && (!taskEngineOn() || !autoReady(g)) ? 'free' : mode; };
   const hostOptions = ids => [{id: '', name: '不設主持人'}, ...ids.map(id => state.data.bots.find(b => b.id === id)).filter(Boolean).map(b => ({id: b.id, name: b.name}))];
+  // #296 驗收方式: who checks the work once it is handed in. A group from before it keeps telling the checker by its name until changed.
+  const CHECK_MODES = ['auto', 'none', 'same', 'pick'];
+  const CHECK_MODE_OPTIONS = [{id: 'auto', name: '自動請一位別家成員查核一次', hint: '預設：成員交件後，Zook 挑一位別家 AI 的成員只讀查核'}, {id: 'none', name: '不驗收', hint: '成員交完就結束，不另外查核'}, {id: 'same', name: '同家複查', hint: '請一位和製作成員同一家 AI 的成員只讀查核'}, {id: 'pick', name: '指定查核員', hint: '自己選一位成員負責查核'}];
+  const checkModeOf = g => !g.id ? 'auto' : CHECK_MODES.includes(g.checkMode) ? g.checkMode : 'name';
+  const checkModeOptions = g => (checkModeOf(g) === 'name' ? [{id: 'name', name: '照成員名稱判斷（舊群組沿用）', hint: '名稱或人格寫「查核、驗收、審核」等字的成員負責查核'}] : []).concat(CHECK_MODE_OPTIONS);
+  const checkerOptions = (ids, host) => [{id: '', name: '請選一位成員'}, ...ids.filter(id => id !== host).map(id => state.data.bots.find(b => b.id === id)).filter(Boolean).map(b => ({id: b.id, name: b.name}))];
+  const checkerRow = (ids, host, value) => settingRow('查核員', '只讀查核其他成員交的成果，不接製作的工作', dropdown('checkerId', ids.includes(value) && value !== host ? value : '', checkerOptions(ids, host)));
+  // The member 自動 or 同家複查 would ask, the same way the server picks it (group_checkers): not the host, someone (the host too) left to make the work, the vendor that differs from (同家複查: matches) the most others, the later one on a tie.
+  function autoChecker(ids, host, same) {
+    const present = ids.filter(id => state.data.bots.some(b => b.id === id)), seats = present.filter(id => id !== host);
+    if (!seats.length || present.length < 2) return '';
+    const fam = Object.fromEntries(present.map(id => [id, botFamily(state.data.bots.find(b => b.id === id))]));
+    const score = c => present.filter(x => x !== c && fam[x] && fam[c] && (fam[x] === fam[c]) === same).length;
+    let best = '', top = -1;
+    for (const c of seats) { const s = score(c); if (s >= top) { best = c; top = s; } }
+    return top > 0 ? best : '';
+  }
+  function checkHint(form, ids, host) {
+    const mode = form.elements.checkMode?.value, name = id => state.data.bots.find(b => b.id === id)?.name || '';
+    if (mode === 'none') return '成員交完就結束，結果要你自己看。';
+    if (mode === 'name') return '這個群組還沒選驗收方式，目前照成員名稱判斷誰查核；改選其他方式並儲存後就照新的方式。';
+    if (mode === 'pick') return form.elements.mode?.value === 'debate' && ids.filter(id => state.data.bots.some(b => b.id === id)).length < 3 ? '「辯論」只有兩位成員時，查核員也要上場辯論，這次不另外查核。' : '';
+    const pick = autoChecker(ids, host, mode === 'same'), seats = ids.filter(id => id !== host && state.data.bots.some(b => b.id === id));
+    const debate = form.elements.mode?.value === 'debate' && ids.filter(id => state.data.bots.some(b => b.id === id)).length < 3 ? '「辯論」只有兩位成員時，查核員也要上場辯論，這次不另外查核。' : '';
+    if (pick) return debate || `會請「${name(pick)}」在其他成員交件後查核一次（只讀，不接製作的工作）。`;
+    if (!seats.length) return '主持人以外至少要一位成員，才會有人查核；目前不會查核。';
+    const fam = botFamily(state.data.bots.find(b => b.id === seats[0])), unknown = ids.some(id => state.data.bots.some(b => b.id === id && !botFamily(b)));
+    if (unknown) return '有成員用「自動選擇」模型，Zook 事先不知道是哪一家，可能挑不到查核員；要確定由誰查核，請改選「指定查核員」。';
+    if (mode === 'same') return '沒有和其他成員同一家的成員可以複查，這次不會查核；可以改選「自動請一位別家成員查核一次」。';
+    return `成員都是 ${providerShort(fam) || '同一家'}，找不到別家的成員查核，這次不會查核；要查核請改選「同家複查」，或加一位別家的 Bot。`;
+  }
+  function syncChecker(form) {
+    const ids = new FormData(form).getAll('botIds'), host = form.elements.hostId?.value || '', slot = form.querySelector('[data-checker-field]');
+    if (!slot) return;
+    slot.hidden = form.elements.checkMode?.value !== 'pick';
+    slot.innerHTML = checkerRow(ids, host, form.elements.checkerId?.value || '');
+  }
   function groupSettingRows(g, chosen) {
     const host = g.id ? groupHostId(g) : '', limit = g.turnLimit || 4;
-    return `<div class="setting-list in-form"><div data-host-field>${settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', host, hostOptions([...chosen])))}</div>${settingRow('討論方式', '送出時也能在輸入框旁，只對這一則訊息改用別的方式', dropdown('mode', g.mode === 'auto' && !taskEngineOn() ? 'free' : g.mode || 'free', groupModeOptions()))}${settingRow('回合上限', '要回答的成員都回一次算 1 回合；自動轉交和追問也算在內，到了就先停下（「自動」做到目標達成為止）', dropdown('turnLimit', String(limit), [4, 5, 8, 12, 16].map(n => ({id: String(n), name: n + ' 回合'}))))}</div><p class="small error-text" data-group-problem role="alert" hidden></p><p class="muted small" data-group-hint hidden></p>`;
+    return `<div class="setting-list in-form"><div data-host-field>${settingRow('主持人', '負責開場分派、收斂討論和總結', dropdown('hostId', host, hostOptions([...chosen])))}</div>${settingRow('討論方式', '送出時也能在輸入框旁，只對這一則訊息改用別的方式', dropdown('mode', g.mode === 'auto' && !taskEngineOn() ? 'free' : g.mode || 'free', groupModeOptions()))}${settingRow('回合上限', '要回答的成員都回一次算 1 回合；自動轉交和追問也算在內，到了就先停下（「自動」做到目標達成為止）', dropdown('turnLimit', String(limit), [4, 5, 8, 12, 16].map(n => ({id: String(n), name: n + ' 回合'}))))}${settingRow('驗收方式', '成員交件後要不要請另一位成員查核', dropdown('checkMode', checkModeOf(g), checkModeOptions(g)))}<div data-checker-field ${checkModeOf(g) === 'pick' ? '' : 'hidden'}>${checkerRow([...chosen], host, g.checkerId || '')}</div></div><p class="muted small" data-check-hint hidden></p><p class="small error-text" data-group-problem role="alert" hidden></p><p class="muted small" data-group-hint hidden></p>`;
   }
   function syncGroupHost(form) {
     const ids = new FormData(form).getAll('botIds'), slot = form.querySelector('[data-host-field]'), now = form.elements.hostId.value;
@@ -28,13 +65,15 @@
   function groupFormNote(form) {
     const ids = new FormData(form).getAll('botIds'), mode = form.elements.mode?.value, host = form.elements.hostId?.value;
     const members = ids.map(id => state.data.bots.find(b => b.id === id)).filter(Boolean);
-    const problem = mode !== 'auto' ? '' : !host ? '「自動」要由主持人拆工作、派給成員：請在「主持人」選一位成員，或改用其他討論方式。' : members.length < 2 ? '「自動」至少要 2 位成員，請再選一位。' : '';
+    const problem = form.elements.checkMode?.value === 'pick' && !form.elements.checkerId?.value ? '「指定查核員」要選一位查核員，或改用其他驗收方式。' : mode !== 'auto' ? '' : !host ? '「自動」要由主持人拆工作、派給成員：請在「主持人」選一位成員，或改用其他討論方式。' : members.length < 2 ? '「自動」至少要 2 位成員，請再選一位。' : '';
     const families = members.map(botFamily), one = members.length >= 2 && families.every(f => f && f === families[0]);
     const el = form.querySelector('[data-group-problem]'), hint = form.querySelector('[data-group-hint]');
     if (el) { el.textContent = problem; el.hidden = !problem; }
     const kept = groupKeepsAuto(form) ? '這個群組設定為「自動」，但任務引擎已關閉，所以暫時用「自由」討論；儲存不會改掉，到「設定」打開任務引擎就會恢復。' : '';
-    const words = [kept, one ? `成員都是 ${providerShort(families[0])}，沒有跨家驗收：結果要你自己看，或加一位別家的 Bot。` : ''].filter(Boolean).join(' ');
+    const words = [kept, one && mode === 'auto' ? `成員都是 ${providerShort(families[0])}，沒有跨家驗收：結果要你自己看，或加一位別家的 Bot。` : '', mode === 'auto' && form.elements.checkMode?.value !== 'pick' ? '「自動」討論方式會另外請別家成員驗收每一項工作，不受「驗收方式」影響（指定查核員除外）。' : ''].filter(Boolean).join(' ');
     if (hint) { hint.textContent = words; hint.hidden = !words; }
+    const check = form.querySelector('[data-check-hint]'), said = mode === 'auto' ? '' : checkHint(form, ids, host || '');
+    if (check) { check.textContent = said; check.hidden = !said; }
     return !problem;
   }
   // #223②: a group saved as 自動 while the task engine is off shows 自由; left on 自由 (and still with a host and two members), saving keeps 自動.
@@ -222,7 +261,7 @@
       const steps = calls.length ? `<div class="work-steps">${workSteps(calls, m.status === 'running')}</div>` : `<div class="work-none">${m.status === 'running' ? '正在進行，用到的工具會陸續出現在這裡。' : m.work || (job && !job.slim) ? '這次沒有使用 Skill、連接器或工具，也沒有查資料，直接回覆。' : '這次的過程紀錄已經整理掉了（只保留最近的回覆）。'}</div>`;
       const thought = thinking.length ? `<details class="work-thinking"><summary>思考過程</summary>${thinking.map(t => `<p>${esc(t)}</p>`).join('')}</details>` : '';
       const end = m.status === 'running' ? '<div class="bubble">正在進行…</div>' : m.content ? `<div class="bubble md">${markdown(m.content)}</div>` : `<div class="bubble">${esc(m.status === 'cancelled' ? '已停止' : '沒有回覆')}</div>`;
-      return `<div class="date">${esc(formatDate(m.createdAt))}</div>${q ? `<div class="work-ask"><span>${esc(q.author || '你')} 在群組說</span>${esc(String(q.content || '').slice(0, 300))}</div>` : ''}<div class="work-turn"><div class="work-label">過程（Skill、連接器、工具、查了什麼、做了什麼）</div>${steps}${thought}<div class="work-label">想完後在群組的回應</div><div class="message assistant">${avatar(b)}${end}</div></div>`;
+      return `<div class="date">${esc(formatDate(m.createdAt))}</div>${q ? `<div class="work-ask"><span>${esc(q.author || '你')} 在群組說</span>${esc(String(q.content || '').slice(0, 300))}</div>` : ''}<div class="work-turn"><div class="work-label">過程（Skill、連接器、工具、查了什麼、做了什麼）</div>${m.status === 'running' && job?.status === 'running' ? memberLiveBox(job) : ''}${steps}${thought}<div class="work-label">想完後在群組的回應</div><div class="message assistant">${avatar(b)}${end}</div></div>`;
     }).join('');
     return `<main class="main"><header class="main-header"><button class="bot-pill" data-action="edit-bot">${avatar(b)}${esc(b.name)} <span class="muted">⌄</span></button><div class="header-actions"><button class="text-btn" data-member-work="" data-back="group" data-group="${esc(g.id)}">‹ 回到群組</button><button class="text-btn" data-action="chats" title="所有對話">☰ 群組：${esc(g.name)}</button><button class="text-btn" data-member-work="">和 ${esc(b.name)} 的對話</button>${!state.detailOpen ? '<button class="text-btn" data-action="toggle-detail">顯示詳情</button>' : ''}</div></header><div class="conversation" id="conversation"><div class="conversation-inner"><div class="work-head">${esc(b.name)} 在「${esc(g.name)}」的工作過程<small>每次發言前用了哪些 Skill、連接器和工具，查了什麼、做了什麼、怎麼想的；群組裡只放想完後的回應。</small></div>${got?.more ? '<div class="older-bar"><button class="link" data-member-older="1">載入更早的發言</button></div>' : ''}${turns || `<div class="detail-empty">${got ? '他還沒有在這個討論中發言。' : '正在讀取…'}</div>`}</div></div></main>${state.detailOpen ? detail(b) : ''}`;
   }

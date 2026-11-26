@@ -19,8 +19,7 @@ import xml.etree.ElementTree as _KET
 
 KNOWLEDGE_FILES = 50                # files in the knowledge base at once
 KNOWLEDGE_TEXT = 100000             # characters kept from one file (the same limit as typed text)
-KNOWLEDGE_SHOWN = 4000              # characters of each item a Bot reads with a reply
-KNOWLEDGE_RECENT = 10               # items a Bot reads with a reply: the newest it may use
+KNOWLEDGE_RECENT = 10               # items a Bot reads in short when nothing in the knowledge base matches its question (knowsearch.py)
 KNOWLEDGE_SECONDS = 120             # reading one file's text
 KNOWLEDGE_UNPACKED = 100 * 1024 * 1024  # all XML read from one .xlsx or .pptx
 KNOWLEDGE_TEXT_TYPES = ('.txt', '.md', '.markdown', '.csv', '.tsv', '.json', '.log', '.yaml', '.yml', '.xml')
@@ -48,15 +47,6 @@ class KnowledgeUnreadable(ValueError):
 
 def knowledge_usable(item):
     return item.get('status', 'ready') == 'ready' and bool(item.get('content'))
-
-
-def knowledge_for(store, bot):
-    """What one Bot reads with a reply: the newest usable items for every Bot or for it (a file still being read, or one that failed, is left out)."""
-    return [x for x in store.data['knowledge'] if (not x.get('botId') or x.get('botId') == bot['id']) and knowledge_usable(x)][-KNOWLEDGE_RECENT:]
-
-
-def knowledge_lines(items):
-    return '\n'.join(x['title'] + ': ' + x['content'][:KNOWLEDGE_SHOWN] for x in items)
 
 
 def knowledge_view(store):
@@ -91,20 +81,21 @@ def _knowledge_bot(store, body):
 def knowledge_route(handler, store, parts, path):
     """Typed items: add, change, delete. Lock held."""
     method = handler.command
+    if path == '/api/knowledge/search' and method == 'POST': return knowledge_search_route(handler, store)  # 試搜尋 (knowsearch.py)
     if path == '/api/knowledge' and method == 'POST':
         item = dict(id=ID(), title='', content='', tags=[], botId='', createdAt=NOW(), updatedAt=NOW()); body = handler.body()
         if (again := create_seen(handler, 'knowledge', body)): return handler.respond(200, dict(again, duplicate=True))
-        _knowledge_bot(store, body); update(item, body, 'knowledge'); store.data['knowledge'].append(item); store.save(); return handler.respond(201, item)
+        _knowledge_bot(store, body); update(item, body, 'knowledge'); store.data['knowledge'].append(item); store.save(); knowledge_index_touch(store, item['id']); return handler.respond(201, item)
     if len(parts) == 3:
         item = store.find('knowledge', parts[2])
         if not item: return handler.error(404, '找不到知識項目。')
         if method == 'DELETE':
-            store.data['knowledge'].remove(item); store.save(); knowledge_drop_file(store, item['id'])
+            store.data['knowledge'].remove(item); store.save(); knowledge_drop_file(store, item['id']); knowledge_index_touch(store, item['id'])
             return handler.respond(200, {'ok': True})
         if method == 'PATCH':
             body = handler.body()
             if item.get('source') and 'content' in body and body['content'] != item.get('content'): raise ValueError('檔案的內容不能在這裡修改；要換內容，請刪除後重新上傳。')
-            _knowledge_bot(store, body); update(item, body, 'knowledge'); item['updatedAt'] = NOW(); store.save(); return handler.respond(200, item)
+            _knowledge_bot(store, body); update(item, body, 'knowledge'); item['updatedAt'] = NOW(); store.save(); knowledge_index_touch(store, item['id']); return handler.respond(200, item)
     return handler.error(404, '找不到資源。')
 
 
@@ -192,7 +183,7 @@ def knowledge_process(store, item_id):
         if not item or item.get('status') != 'processing': return  # deleted meanwhile
         item.update(done, updatedAt=NOW())
         if not item.get('error'): item.pop('error', None)
-        store.save()
+        store.save(); knowledge_index_touch(store, item_id)  # its passages are ready before the next reply (knowsearch.py)
 
 
 def knowledge_start(store):
@@ -206,6 +197,7 @@ def knowledge_start(store):
     for folder in folders:
         if folder.name not in known: shutil.rmtree(str(folder), ignore_errors=True)
     for item_id in waiting: knowledge_queue(store, item_id)
+    knowledge_index_warm(store)  # older items are cut into passages now, not at the first reply (knowsearch.py)
 
 
 def knowledge_requeue(store):

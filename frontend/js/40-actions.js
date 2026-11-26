@@ -21,15 +21,18 @@
         case 'edit-group':
           groupModal(activeGroup());
           break;
-        case 'delete-group':
+        case 'delete-group': {
+          const groupId = $('#group-form')?.dataset.id;  // read now: the question replaces the form (#317)
+          if (!groupId) break;
           if (await ask({title: '刪除這個群組？', lines: ['群組的對話、任務板、群組檔案和它的排程會一起刪除，無法復原。', '成員 Bot 不會被刪除，它們自己的對話都還在。'],
-                         run: () => api('groups/' + encodeURIComponent($('#group-form').dataset.id), {method: 'DELETE'})})) {
+                         run: () => api('groups/' + encodeURIComponent(groupId), {method: 'DELETE'})})) {
             closeModal();
             state.groupId = null;
             await refresh();
             toast('已刪除群組')
           }
           break;
+        }
         case 'account-detail':
           accountDetail(id, el.dataset.account || '');
           break;
@@ -84,6 +87,7 @@
           await installUpdate();
           break;
         case 'accounts-from-form':
+          if (!(await leaveModalForm())) break;  // the Bot form with changes asks first (#297)
           closeModal(); state.accounts = null; await loadPage('usage');
           break;
         case 'profile-add':
@@ -351,6 +355,7 @@
           state.query = ''; await openConversation('bot', el.dataset.bot, id);
           break;
         case 'chats':
+          if (!(await leaveModalForm())) break;  // 返回 from 對話名稱 with changes asks first (#297)
           chatsModal(activeBot());
           break;
         case 'new-chat': {
@@ -418,10 +423,10 @@
           break;
         }
         case 'close-modal':
-          closeModal();
+          requestCloseModal();  // asks first when the form has changes (21b-unsaved.js)
           break;
         case 'overlay':
-          if (e.target === el) closeModal();
+          if (e.target === el) requestCloseModal();
           break;
         case 'avatar-pick': { const panel = $('#bot-form .avatar-panel'); panel.hidden = !panel.hidden; break; }
         case 'default-folder': { const picked = (await post('choose-folder')).path; if (picked) { state.data.settings = await post('settings', {access: 'folder', accessFolder: picked}, 'PATCH'); render(true); toast('已更新「存取範圍」'); } break; }

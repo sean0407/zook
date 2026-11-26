@@ -41,7 +41,7 @@ class TeamToolsTest(unittest.TestCase):
         self.assertEqual(self.store.data['settings']['disabledSkills'], [])
 
     def test_only_admin_gets_team_tools(self):
-        everyone = {'zook_remember', 'zook_list_schedules', 'zook_create_schedule', 'zook_update_schedule', 'zook_delete_schedule'}
+        everyone = {'zook_remember', 'zook_forget', 'zook_list_schedules', 'zook_create_schedule', 'zook_update_schedule', 'zook_delete_schedule'}
         self.assertEqual(set(self.tools(self.other)), everyone)
         tools = self.tools(self.admin)
         self.assertEqual(set(tools), everyone | {'zook_list_team', 'zook_create_bot', 'zook_create_group', 'zook_start_group_discussion'})

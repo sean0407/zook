@@ -29,6 +29,33 @@ def set_group_fields(store, group, body, creating=False):
         group['name'] = name.strip()
     if not group.get('name'):
         group['name'] = '、'.join(store.find('bots', x)['name'] for x in group['botIds'])[:100]
+    if creating: group['name'] = numbered_name(group['name'], [g.get('name') for g in store.data['groups'] if g is not group])  # #294: 「週會（2）」
+    if 'instructions' in body:  # 長期指示 (#294)
+        if not isinstance(body['instructions'], str) or len(body['instructions']) > GROUP_STANDING_MAX: raise ValueError('長期指示最多 %s 字，目前是 %s 字。' % (format(GROUP_STANDING_MAX, ','), format(len(str(body['instructions'])), ',')))
+        group['instructions'] = body['instructions'].strip()
+    if group.get('status') == 'running' and (('checkMode' in body and body['checkMode'] != group.get('checkMode', 'name')) or (body.get('checkMode', group.get('checkMode')) == 'pick' and 'checkerId' in body and body['checkerId'] != group.get('checkerId'))):
+        raise ValueError('群組討論進行中，暫時無法修改驗收方式。')  # the steps already planned keep their check
+    if 'checkMode' in body:  # 驗收方式 (#296); 'name' keeps a group from before it as it was
+        if body['checkMode'] not in CHECK_MODES + ('name',): raise ValueError('驗收方式無效。')
+        group['checkMode'] = body['checkMode']
+    elif creating: group['checkMode'] = 'auto'  # every new group, from the form or not (團隊、管理員工具、API); only groups made before it keep the name rule
+    if 'checkerId' in body:
+        if not isinstance(body['checkerId'], str): raise ValueError('查核員無效。')
+        group['checkerId'] = body['checkerId']
+    if group.get('checkMode') == 'pick' and ('checkMode' in body or 'checkerId' in body or 'hostId' in body or 'botIds' in body):
+        if group.get('checkerId') not in group['botIds']: raise ValueError('「指定查核員」要選一位這個群組的成員。')
+        if group.get('checkerId') == group_host(store, group): raise ValueError('查核員不能同時是主持人，請選另一位成員，或改用其他驗收方式。')
+
+
+def numbered_name(name, taken):
+    """A new group's name, with （2）、（3）… when another group already has it."""
+    taken = {str(x or '').strip() for x in taken}
+    if name not in taken: return name
+    n = 2
+    while True:
+        tail = '（%d）' % n
+        if name[:100 - len(tail)] + tail not in taken: return name[:100 - len(tail)] + tail
+        n += 1
 
 
 # What a field is called on screen, for a refusal in plain words (#156): 「名稱不能是空白。」「工作指示最多 10,000 字。」
