@@ -1,6 +1,6 @@
   // 連接器目錄: official remote connectors that can be added with one click.
   const CATALOG_AUTH = {login: ['連結', '按下後在瀏覽器登入'], open: ['加入', '不需要登入'], key: ['貼上金鑰', '需要金鑰'], manual: ['', '尚不支援一鍵連結']};
-  // The catalog sits under 已連接 on the connectors page. An entry leaves it once it is added, because it then shows above.
+  // The catalog sits at the top of the connectors page (#303). An entry leaves it once it is added, because it then shows under 已連接.
   function loadCatalog() {
     if (state.catalogLoading) return;
     state.catalogLoading = true;
@@ -17,7 +17,7 @@
       return `<article class="dir-card catalog-card ${i.auth === 'manual' ? 'off' : ''}">${itemIcon(i.name, i.icon)}<div class="dir-body"><div class="dir-title"><h3 title="${esc(i.name)}">${esc(i.name)}</h3>${action}</div><p class="dir-desc">${esc(i.about.replace(/。$/, ''))}</p><div class="dir-meta"><span>由 ${esc(i.vendor || i.name)} 提供 · ${esc(hint)}</span></div>${failed ? `<p class="dir-note error-text">沒有連上：${esc(failed)}</p>` : ''}</div></article>`;
     };
     const body = Object.entries(groups).map(([name, items]) => `<section class="dir-section"><h2><span class="catalog-group">${esc(name)}</span><small>${items.length}</small></h2><div class="dir-grid">${items.map(card).join('')}</div></section>`).join('');
-    return `<section class="dir-section catalog-intro"><h2 class="catalog-head">連接器目錄</h2><p class="muted">各家官方連接器，按一下加入。</p></section>${body || '<div class="detail-empty">目錄裡的連接器都已經加入，或沒有符合搜尋的項目。</div>'}`;
+    return `<section class="dir-section catalog-intro"><h2 class="catalog-head">連接器目錄</h2><p class="muted">各家官方連接器，按一下加入。加入時會先測試連線，成功才開啟給所有 Bot。</p></section>${body || '<div class="detail-empty">目錄裡的連接器都已經加入，或沒有符合搜尋的項目。</div>'}`;
   }
   function renderCatalog() { render(true); }
   function catalogWhy(id) {
@@ -49,10 +49,13 @@
     }
     await refresh();
     if (!made.login) { toast(`${item.name} 已加入，所有 Bot 都可以使用`); return; }
-    toast('已在瀏覽器開啟登入頁，完成後回到這裡');
+    toast('已在瀏覽器開啟登入頁，登入並測試成功後會自動開啟');
     for (let n = 0; n < 90 && (state.page === 'mcp' || $('.catalog-list')); n++) {  // wait for the browser to come back, while the user is still here
       await new Promise(r => setTimeout(r, 2000));
       let now; try { now = await api('integrations'); } catch (_) { continue; }
-      if ((now.mcp || []).find(i => i.id === made.id)?.signedIn) { state.integrations = now; await retestConnector(made.id); render(true); toast(state.mcpTests[made.id]?.status === 'ready' ? `${item.name} 已登入，可以使用` : `${item.name} 已登入，但連線沒有成功`); return; }
+      if ((now.mcp || []).find(i => i.id === made.id)?.signedIn) {
+        state.integrations = now; await connectorOnIfReady(made.id); render(true);  // tested again by Zook, on only if it worked (#303)
+        const t = state.mcpTests[made.id] || {}; toast(t.changed ? `${item.name} 已登入，但測試時設定被改過，先維持關閉。請再測試一次` : t.status === 'ready' ? `${item.name} 已登入，連線測試成功，所有 Bot 都可以使用` : `${item.name} 已登入，但連線沒有成功，先維持關閉`); return;
+      }
     }
   }

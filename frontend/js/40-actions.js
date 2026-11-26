@@ -515,11 +515,10 @@
         case 'connector-copy': {
           el.disabled = true;
           const made = await post('connector-copy', {id});
+          state.mcpTests[made.id] = made.test || {status: 'error', error: '沒有測試結果。'};  // tested as it was added; on only when it worked (#303)
           state.integrations = await api('integrations'); await refresh();
-          try { state.mcpTests[made.id] = await post('mcp/' + encodeURIComponent(made.id) + '/test'); }
-          catch (error) { state.mcpTests[made.id] = {status: 'error', error: error.message}; }
           render(true);
-          toast(state.mcpTests[made.id].status === 'ready' ? '已加入，連線正常' : state.mcpTests[made.id].needsLogin ? '已加入，請按「登入」完成連接' : '已加入，但目前無法使用。原因寫在卡片上');
+          toast(made.on ? '已加入，連線正常' : made.test?.status === 'ready' ? '已加入，連線正常。原本是關閉的，要用時再打開' : connectorAddedNote(made));
           break;
         }
         case 'pack-export': {
@@ -563,7 +562,10 @@
             await new Promise(r => setTimeout(r, 2000));
             state.integrations = await api('integrations');
             const now = (state.integrations.mcp || []).find(i => i.id === id);
-            if (adding ? ids(now) !== before : now?.signedIn) { await retestConnector(id); render(true); toast(adding ? '已新增帳號，可以在卡片上選擇要用哪一個' : '登入完成'); break; }
+            if (adding ? ids(now) !== before : now?.signedIn) {
+              const on = await connectorOnIfReady(id); render(true);  // tested again; Zook switches it on only if it was waiting for this sign-in (#303)
+              toast(adding ? '已新增帳號，可以在卡片上選擇要用哪一個' : on ? '登入完成，連線測試成功，所有 Bot 都可以使用' : '登入完成'); break;
+            }
           }
           break;
         }
