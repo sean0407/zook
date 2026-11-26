@@ -106,7 +106,7 @@ def _folders():
                 if not re.match(r'\.\.?(/|$)', where):  # a plain name: CDPATH may lead to a folder of that name elsewhere
                     if any('CDPATH' in x for x in _LINES): return None  # set on this very line: where it leads is not known here
                     if any('/%s/' % os.path.normpath(where).strip('/') in s.rstrip('/') + '/' for d in SECRET_DIRS + CREDENTIALS + _accounts_folder() for s in (d, os.path.realpath(d))): return None
-                    more += [os.path.join(_expand(c), where) for c in os.environ.get('CDPATH', '').split(':') if os.path.isabs(_expand(c))]
+                    more += [os.path.normpath(os.path.join(f, _expand(c) or '.', where)) for c in os.environ.get('CDPATH', '').split(':') for f in found]
                 found += more
             elif len(words) == 1 and not set(words[0]) & set('$`*?[]{}\\') and os.path.isabs(_expand(words[0])) and os.path.isdir(_expand(words[0])):
                 found.append(_expand(words[0]))  # zsh's AUTO_CD: a folder alone is a cd
@@ -127,6 +127,11 @@ def _secret_any(path, unsure=True):
     found = _resolved(path)
     if found is None: return _secret_path(path) and path or ('$PWD/' + _expand(path) if unsure else '')
     return next((x for x in found if _secret_path(x)), '')
+
+
+def _read_file(path):
+    """A file a command reads (-f FILE, xargs -a FILE): a key or sign-in, or a variable or {a,b} that may be one."""
+    return _secret_any(path) or (path if set(_expand(path)) & set('$`{') else '')
 
 
 def _rooted(starts):
@@ -477,7 +482,7 @@ def command_boundaries(command, depth=0):
             if (script or (prog in INTERPRETERS or prog.startswith('python')) and all(a.startswith('-') for a in stripped[1:])) and (read or n in piped):
                 found.append(_hit('unclear', '（要執行的程式來自另一個指令的輸出）'))  # … | bash, bash < file: the program is what comes in
             found += _redirect_hits(read, written, empty=not stripped or os.path.basename(stripped[0]) in (':', 'true') and len(stripped) == 1 and not read or stripped[:2] == ['cat', '/dev/null'])
-            listed = [w for w in map(_secret_any, _arg_files(words)) if w]  # xargs -a FILE, parallel --arg-file FILE or :::: FILE: read too
+            listed = [w for w in map(_read_file, _arg_files(words)) if w]  # xargs -a FILE, parallel --arg-file FILE or :::: FILE: read too
             found += [_hit('secret', '讀取 ' + _names(listed))] if listed else []
             found += _argv_boundaries(stripped, command, depth)
     finally: _LINES.pop()
@@ -634,7 +639,7 @@ def _search_roots(name, args, whole='', depth=0):
 def _argv_boundaries(argv, whole, depth):
     if not argv: return []
     word = argv[0]; name = os.path.basename(word); args = argv[1:]
-    if '$' in word and word != '$' or '`' in word or GLUED in word or GLUED in argv[:2]: return [_hit('unclear', '（要執行的程式是變數）')]
+    if '$' in word and word != '$' or '`' in word or GLUED in word or GLUED in argv[:2] or word not in ('[', '[[') and re.search(r'\{[^}]*(,|\.\.)|[*?]|\[.', word): return [_hit('unclear', '（要執行的程式是變數）')]
     if (name in SHELLS | INTERPRETERS | {'source', '.', 'eval'} or name.startswith('python')) and '/dev/fd/63' in args:
         return [_hit('unclear', '（要執行的程式來自另一個指令的輸出）')]  # bash <( … ): what it runs is that command's output
     if word == '$': return []
@@ -745,11 +750,13 @@ def _argv_boundaries(argv, whole, depth):
     web = set(_curl_addresses(args)) if name in ('curl', 'wget') else set()  # an address without https:// is still not a file here
     touched = [a for a in local if '://' not in a and a not in web and (a.startswith(('/', '~', '$HOME', '${HOME}', '.', '@')) or '/' in a or os.path.basename(a).startswith('.env'))]
     touched += [a.split('=', 1)[1] for a in args if a.startswith('--') and '=' in a]
-    touched += [a[k:] for a in args if re.match(r'-[^-]', a) for k in range(2, len(a)) if a[k] in '/~$.']  # a value fixed to its option: -f$HOME/…
-    if name in ('grep', 'egrep', 'fgrep', 'ggrep', 'rg', 'ripgrep', 'ugrep'):  # the files its patterns or globs come from: -f FILE, -if FILE, --file FILE
+    greps = name in ('grep', 'egrep', 'fgrep', 'ggrep', 'rg', 'ripgrep', 'ugrep')  # their own words after -e are patterns, not files
+    touched += [a[k:] for a in args if re.match(r'-[^-]', a) and not greps for k in range(2, len(a)) if a[k] in '/~$.']  # a value fixed to its option: -o$HOME/…
+    if greps:  # the files its patterns or globs come from: -f FILE, -if FILE, --file FILE (a variable there: not known, so asked)
         valued, opts = RG_VALUED if name in ('rg', 'ripgrep') else UGREP_VALUED if name == 'ugrep' else GREP_ONLY_VALUED, _options(args)
-        touched += [a.split('=', 1)[1] if '=' in a else args[i + 1] if i + 1 < len(args) else '' for i, a in enumerate(opts) if a.split('=', 1)[0] in ('--file', '--exclude-from', '--include-from', '--ignore-file')]
-        touched += [v for v in (_short_value(args, i, valued, 'f') for i in range(len(opts))) if v]
+        files = [a.split('=', 1)[1] if '=' in a else args[i + 1] if i + 1 < len(args) else '' for i, a in enumerate(opts) if a.split('=', 1)[0] in ('--file', '--exclude-from', '--include-from', '--ignore-file')]
+        files += [v for v in (_short_value(args, i, valued, 'f') for i in range(len(opts))) if v]
+        if any(map(_read_file, files)): found.append(_hit('secret', '讀取 ' + _names(map(_read_file, files))))
     bare = plain if roots is None and _folders() != [_CWD[0]] else []  # after a cd, a bare name may be in a folder of keys (not a search's words)
     hits = [x for x in list(map(_secret_any, touched)) + [_secret_any(a, name not in ('echo', 'printf', 'test', '[', 'export', 'cd', 'pushd', 'chdir')) for a in bare] if x]
     if not any(k == 'secret' for k, _ in found) and hits: found.append(_hit('secret', _names(hits)))

@@ -83,6 +83,18 @@ class GateHoles(unittest.TestCase):
         for line in ('pwd; bash --version | head -1', 'echo xargs -a auth.json', 'grep -eauth.json report.txt', 'bash -c "ls" | head'):
             self.assertNotAsked(line)
 
+    def test_review_round_three(self):
+        for line in ('rg -f "$KEYS" /dev/null', 'xargs -a "$ARGFILE" cat', 'parallel --arg-file "$ARGFILE" echo', 'grep --file=$F x'):
+            self.assertIn('secret', kinds(line), line)
+        for line in ('r{m..m} -rf /tmp/important', '{rm,-rf,/tmp/x}', '/bin/r? -rf /tmp/x', '/bin/r[m] -rf /tmp/x', 'sudo r{m,} x'):
+            self.assertIn('unclear', kinds(line), line)
+        self.assertNotAsked('grep -e$HOME/.ssh/config notes.txt')
+        self.assertNotAsked('[ -f notes.txt ]'); self.assertNotAsked('[[ -f notes.txt ]] && echo ok')
+        os.environ['CDPATH'] = '../.ssh'
+        gate._CWD[0] = os.path.join(os.path.expanduser('~'), 'Documents')
+        self.assertAsked('cd archive && rg -uuu . .')
+        del os.environ['CDPATH']
+
     def test_cdpath_may_lead_to_keys(self):
         os.environ['CDPATH'] = os.path.expanduser('~')
         self.assertAsked('cd .ssh && rg x .')
