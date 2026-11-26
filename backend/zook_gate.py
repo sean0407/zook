@@ -392,7 +392,7 @@ def command_boundaries(command, depth=0):
     """Every boundary in a shell command line, in order, as (kind, title)."""
     if not isinstance(command, str): return []
     if depth > 4: return [_hit('unclear', '（指令包了太多層）')]
-    found = []
+    found, command = [], re.sub(r'\\\r?\n', '', command)  # a backslash at the end of a line joins it to the next (r\⏎m is rm)
     _LINES.append(command)  # a cd here leads the searches of the commands inside it too
     try:
         for inner in _inner(command): found += [_hit('unclear', '（括號沒有成對）')] if inner is None else command_boundaries(inner, depth + 1)
@@ -402,8 +402,10 @@ def command_boundaries(command, depth=0):
             words, read, written = _redirects(argv)
             stripped = _strip(words); prog = os.path.basename(stripped[0]) if stripped else ''
             script = prog in SHELLS and not any(re.fullmatch(r'-[a-z]*c[a-z]*', a) for a in stripped[1:]) and (any(re.fullmatch(r'-[a-z]*s[a-z]*', a) for a in stripped[1:]) or all(a.startswith('-') for a in stripped[1:]))
-            if (script or (prog in INTERPRETERS or prog.startswith('python')) and all(a.startswith('-') for a in stripped[1:])) and (read or n in piped):
-                found.append(_hit('unclear', '（要執行的程式來自另一個指令的輸出）'))  # … | bash, bash < file: the program is what comes in
+            fed = [w for k, w in enumerate(words[:-1]) if words[k].startswith('<<')]  # bash <<< 'text', bash <<EOF: the program is in the line
+            handed = any(os.path.basename(w) in ('xargs', 'parallel') for w in words[:len(words) - len(stripped)]) and (prog in SHELLS | {'eval', 'source', '.'})  # xargs bash -c: from the input
+            if (script or (prog in INTERPRETERS or prog.startswith('python')) and all(a.startswith('-') for a in stripped[1:])) and (read or n in piped) or script and '<<' in ''.join(argv) or handed:  # python <<PY: its code is read below
+                found += command_boundaries(argv[argv.index('<<<') + 1], depth + 1) if script and '<<<' in argv and not handed and not read and n not in piped else [_hit('unclear', '（要執行的程式來自另一個指令的輸出）')]  # … | bash, bash < file
             found += _redirect_hits(read, written, empty=not stripped or os.path.basename(stripped[0]) in (':', 'true') and len(stripped) == 1 and not read or stripped[:2] == ['cat', '/dev/null'])
             listed = _listed(_arg_files(words), prog, words)  # xargs -a FILE, parallel --arg-file FILE or :::: FILE: read too
             found += [_hit('secret', '讀取 ' + _names(listed))] if listed else []
@@ -569,7 +571,8 @@ def _argv_boundaries(argv, whole, depth):
     plain = [a for a in args if not a.startswith('-')]
     found = []
     if name in SHELLS or name == 'eval':
-        script = next((args[i + 1] for i, a in enumerate(args[:-1]) if re.fullmatch(r'-[a-z]*c[a-z]*', a)), None) if name in SHELLS else ' '.join(args)
+        script = next((next((x for x in args[i + 1:] if x[:1] != '-'), None) for i, a in enumerate(args) if re.fullmatch(r'-[a-z]*c[a-z]*', a)), None) if name in SHELLS else ' '.join(args)  # bash -c -- '…'
+        if script is None and name in SHELLS and any(re.fullmatch(r'-[a-z]*c[a-z]*', a) for a in args): return [_hit('unclear', '（shell -c 沒有寫出要執行的內容）')]
         if script: return command_boundaries(script, depth + 1)
     if name in INTERPRETERS or re.fullmatch(r'python3(\.\d+)?', name):
         code = next((args[i + 1] for i, a in enumerate(args[:-1]) if a in INLINE_FLAGS), None)

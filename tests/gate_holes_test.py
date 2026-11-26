@@ -165,6 +165,18 @@ class GateHoles(unittest.TestCase):
         for line in ("grep -F '<(' notes\\ file.txt", 'tar -czf /tmp/a.tgz -T ok.txt', 'cat "$PWD/notes.txt"'):
             self.assertNotAsked(line)
 
+    def test_review_round_nine(self):
+        self.assertIn('delete', kinds('r\\\nm -rf /tmp/victim'))
+        self.assertIn('delete', kinds("bash <<< 'rm -rf /tmp/victim'"))
+        self.assertIn('unclear', kinds("bash <<EOF\nrm -rf /tmp/victim\nEOF"))
+        self.assertIn('unclear', kinds("printf '%s\\n' 'rm -rf /tmp/victim' | xargs bash -c"))
+        self.assertIn('unclear', kinds("printf x | xargs -I{} sh -c 'echo {}'"))
+        self.assertIn('delete', kinds("bash -c -- 'rm -rf /tmp/victim'"))
+        self.assertIn('unclear', kinds('bash -c'))
+        self.assertNotAsked('echo a \\\n  b')
+        self.assertNotAsked("bash -c 'ls'")
+        self.assertNotAsked("python3 - <<'PY'\nprint(1)\nPY"); self.assertNotAsked('node <<EOF\nconsole.log(1)\nEOF')
+
     def test_cdpath_may_lead_to_keys(self):
         os.environ['CDPATH'] = os.path.expanduser('~')
         self.assertAsked('cd .ssh && rg x .')
