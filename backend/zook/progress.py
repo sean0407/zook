@@ -17,7 +17,7 @@ PROGRESS_STEP = 15  # seconds: lastAt moves in steps, so a busy reply does not r
 
 def progress_start(job_id):
     """A CLI starts for this reply (also a backup model, or the same reply taken up after a restart): counted from here."""
-    PROGRESS[job_id] = dict(read=0, write=0, command=0, web=0, last=time.time(), step='', stepAt=0.0, seen=set(), asked={}, zookDone=0, zookAt=0.0)
+    PROGRESS[job_id] = dict(read=0, write=0, command=0, web=0, last=time.time(), step='', stepAt=0.0, seen=set(), asked={}, zookDone=0, zookAt=0.0, files=[])
 
 
 def progress_end(job_id):
@@ -42,9 +42,16 @@ def _progress_add(rec, what, ref, where=''):
     if what == 'write' and isinstance(where, str) and where.startswith('/') and len(where) < 300 and len(rec.setdefault('paths', [])) < 50 and where not in rec['paths']:
         rec['paths'].append(where)  # before the count, so 產出 read for the new count finds it (#53, outputs.py)
     rec[what] += 1; rec['stepAt'] = time.time()
+    rec['step'] = _progress_words(what, where)
     name = _progress_base(where)
-    rec['step'] = {'read': '讀取檔案「%s」' % name if name else '讀取檔案', 'write': '修改檔案「%s」' % name if name else '修改檔案',
-                   'command': '執行指令', 'web': '查網路資料'}[what]  # a command is never shown, only that one ran
+    if what in ('read', 'write') and name:  # the last few files it read or changed, by name only (#307: a member's own page)
+        rec['files'] = [f for f in rec['files'] if f['name'] != name][-5:] + [dict(w=what, name=name)]
+
+
+def _progress_words(what, where=''):
+    name = _progress_base(where)
+    return {'read': '讀取檔案「%s」' % name if name else '讀取檔案', 'write': '修改檔案「%s」' % name if name else '修改檔案',
+            'command': '執行指令', 'web': '查網路資料'}[what]  # a command is never shown, only that one ran
 
 
 def _progress_tool(name, where=''):
@@ -74,8 +81,12 @@ def progress_line(kind, d, rec):
                 asked = rec['asked'].pop('c:' + str(block.get('tool_use_id')), None)
                 if asked and block.get('is_error') is not True: _progress_add(rec, asked[0], 'c:' + str(block.get('tool_use_id')), asked[1])  # refused or failed: not done
     elif kind == 'codex':
+        if d.get('type') == 'item.started' and isinstance(d.get('item'), dict) and d['item'].get('id') and len(rec['asked']) < 500:
+            what = {'command_execution': 'command', 'web_search': 'web', 'file_change': 'write'}.get(d['item'].get('type'))
+            if what: rec['asked']['x:' + str(d['item']['id'])] = (what, '')  # what it is doing now, counted once it finishes
         item = d.get('item') if d.get('type') == 'item.completed' and isinstance(d.get('item'), dict) else {}  # only what it finished
         ref = 'x:' + str(item.get('id')) if item.get('id') else None
+        if ref: rec['asked'].pop(ref, None)
         if item.get('type') == 'command_execution': _progress_add(rec, 'command', ref)
         elif item.get('type') == 'web_search': _progress_add(rec, 'web', ref)
         elif item.get('type') == 'file_change':
@@ -93,6 +104,9 @@ def progress_line(kind, d, rec):
             name = next(iter(call), ''); raw = (call.get(name) or {}).get('args') if isinstance(call.get(name), dict) else {}
             raw = raw if isinstance(raw, dict) else {}
             what = _progress_tool(name.replace('ToolCall', ''))
+            ref = 'u:' + str(d.get('call_id')) if d.get('call_id') else None
+            if what and ref and d.get('subtype') == 'started' and len(rec['asked']) < 500: rec['asked'][ref] = (what, raw.get('path') or raw.get('file_path') or '')
+            elif ref: rec['asked'].pop(ref, None)
             refused = re.search(r'(?i)"(?:error|rejected|denied|failure)"|permission denied|被拒|沒有允許', json.dumps(call, ensure_ascii=False)[:20000])
             if what and d.get('subtype') == 'completed' and not refused: _progress_add(rec, what, 'u:' + str(d.get('call_id')) if d.get('call_id') else None, raw.get('path') or raw.get('file_path') or '')
     elif kind == 'antigravity':
@@ -157,6 +171,9 @@ def progress_view(job):
     if read + write + web + other > rec['zookDone']: rec['zookDone'], rec['zookAt'] = read + write + web + other, time.time()  # when it was seen done, not asked for
     step = zook_step if zook_step and rec['zookAt'] >= rec['stepAt'] else rec['step'] or zook_step  # whichever was done last
     out['progress'] = dict(read=rec['read'] + read, write=rec['write'] + write, command=rec['command'], web=rec['web'] + web, tool=other, lastAt=int(rec['last'] * 1000), step=step)
+    started = list(rec['asked'].values())  # a step the CLI began and has not finished: what it is doing right now
+    if started: out['progress']['now'] = _progress_words(*started[-1])
+    if rec['files']: out['progress']['files'] = list(rec['files'])
     return out
 
 
