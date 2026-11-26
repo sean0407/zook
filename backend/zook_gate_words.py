@@ -29,7 +29,8 @@ TEMP_DIRS = ['/tmp', '/private/tmp', '/var/folders', '/private/var/folders']
 CLI_FOLDERS = {'.claude', '.cursor', '.codex', '.grok', '.gemini', '.antigravity', 'cursor-config'}
 WRAPPERS = {'env', 'nohup', 'time', 'command', 'builtin', 'exec', 'nice', 'caffeinate', 'timeout', 'xargs', 'stdbuf', 'arch', 'noglob', 'nocorrect', 'busybox', 'parallel'}
 WRAPPER_VALUED = {'env': {'-u', '-P', '-C'}, 'nice': {'-n'}, 'timeout': {'-s', '-k', '--signal', '--kill-after'}, 'caffeinate': {'-t', '-w'},
-                  'xargs': {'-I', '-J', '-L', '-n', '-P', '-R', '-S', '-s', '-E', '-d', '-a', '--arg-file', '--delimiter', '--max-args', '--max-procs', '--eof', '--replace'}, 'stdbuf': {'-i', '-o', '-e'}, 'time': {'-o', '-f'}, 'exec': {'-a'},
+                  'xargs': {'-I', '-J', '-L', '-n', '-P', '-R', '-S', '-s', '-E', '-d', '-a', '--arg-file', '--delimiter', '--max-args', '--max-procs'},  # --eof, --replace: a value only with =
+                  'stdbuf': {'-i', '-o', '-e'}, 'time': {'-o', '-f'}, 'exec': {'-a'},
                   'parallel': {'-j', '--jobs', '-S', '--sshlogin', '-a', '--arg-file', '--colsep', '-d', '--delimiter', '-n', '-N', '--timeout'}}
 SHELL_WORDS = {'if', 'then', 'else', 'elif', 'fi', 'do', 'done', 'while', 'until', '!', '{', '}', 'coproc'}  # what runs after them is a command too
 SHELLS = {'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish'}
@@ -65,3 +66,20 @@ CURL_VALUED = CURL_SEND | {'-H', '--header', '-o', '--output', '-u', '--user', '
                            '-c', '--cookie-jar', '-w', '--write-out', '-x', '--proxy', '-m', '--max-time', '--connect-timeout', '-r', '--range', '-E', '--cert',
                            '--key', '--cacert', '-U', '--proxy-user', '--retry', '--limit-rate', '-z', '--time-cond', '--resolve', '--connect-to', '-D',
                            '--dump-header', '-C', '--continue-at', '-Y', '-y', '--speed-limit', '--speed-time', '--max-redirs', '--interface', '--oauth2-bearer'}
+
+# ---- the CLI's own tools
+SHELL_TOOLS = {'bash', 'shell', 'terminal', 'runterminalcommand', 'run_terminal_cmd'}
+READ_TOOLS = {'read', 'grep', 'glob', 'ls', 'listdir', 'list_dir', 'notebookread', 'readlints', 'filesearch', 'semanticsearch', 'codebasesearch'}
+WRITE_TOOLS = {'write', 'edit', 'multiedit', 'notebookedit', 'editnotebook', 'strreplace', 'str_replace', 'applypatch', 'apply_patch'}
+PATH_KEYS = ('file_path', 'path', 'notebook_path', 'target_file', 'target_directory', 'directory', 'paths', 'files', 'target_directories')
+
+# Why a reply is held to folders (ZOOK_GATE_WHY, set by Zook for this reply) and what the user can do about it. Only explains: what
+# the reply may reach is decided by Zook before the CLI starts, never here (巡檢 #86 #88: 「系統說它無法判讀」, 「不在可動資料夾範圍」).
+HELD = {'probe': ('Zook 還在確認這個 Claude 帳號的安全檢查有沒有生效，確認前這一則只能用 Bot 自己的資料夾',
+                  '這一則用過工具就會確認，使用者下一則再交辦一次就能存到原本要的位置'),
+        'workspace': ('這個 Bot 的存取範圍是「只限 Bot 工作區」',
+                      '使用者要存到別處，可以自己到「編輯 Bot」→「進階設定」→「存取範圍」改成「整台 Mac」或「指定資料夾」；要不要放寬由使用者決定'),
+        'folder': ('這個 Bot 的存取範圍是「指定資料夾」，只能動那個資料夾',
+                   '使用者要存到別處，可以自己到「編輯 Bot」→「進階設定」→「存取範圍」換資料夾或改成「整台 Mac」；要不要放寬由使用者決定'),
+        'plan': ('這一則是只能讀的回覆（例如查核或規劃），只能讀這次附上的檔案', '要存檔請使用者交給負責做事的回覆'),
+        'careful': ('這個 Bot 的主動性是「謹慎」，內建工具只能讀這次附上的檔案', '存檔改用 zook 工具（會先問使用者）')}

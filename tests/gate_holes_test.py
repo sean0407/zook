@@ -95,6 +95,31 @@ class GateHoles(unittest.TestCase):
         self.assertAsked('cd archive && rg -uuu . .')
         del os.environ['CDPATH']
 
+    def test_review_round_four(self):
+        self.assertAsked("bash -c 'cd ~/.codex; echo $(cat auth.json)'")
+        self.assertAsked("bash -c 'cd ~/.ssh; echo $(cat config)'")
+        link = os.path.join(self.temp.name, 'link'); os.symlink(os.path.join(os.path.expanduser('~'), '.ssh'), link)
+        self.assertAsked('cd -P %s/.. && rg -uuu x .' % link) if os.path.isdir(os.path.expanduser('~/.ssh')) else None
+        for line in ('rg x ~-', 'cd ~-; rg x .', 'cat "$KEYFILE"', 'printf x > "$TARGET"', 'X=~/.ssh/config; cat "$X"', 'for f in ~/.ssh/*; do cat "$f"; done',
+                     'cat $PWD/../x/$NAME'):
+            self.assertAsked(line)
+        gate._CWD[0] = os.path.join(os.path.expanduser('~'), '.ssh')
+        self.assertAsked('sort -oconfig x')
+        gate._CWD[0] = self.temp.name
+        self.assertAsked('rg -uuu -iC 3 token ~')
+        gate._CWD[0] = os.path.expanduser('~'); self.assertAsked('rg -uuu -iC 3 token'); gate._CWD[0] = self.temp.name
+        for line in ('if xargs -a "$ARGFILE" cat; then :; fi', 'env -u TOKEN xargs -a ~/.ssh/config cat'):
+            self.assertAsked(line)
+        self.assertIn('delete', kinds("printf '%s\\n' /tmp/victim | xargs --eof rm -rf"))
+        self.assertIn('delete', kinds("printf x | xargs --replace rm -rf {}"))
+        self.assertIn('unclear', kinds("printf '%s' 'rm -rf /tmp/x'|(bash)"))
+        Path(self.temp.name, 'src', 'notes.txt').write_text('keep')
+        self.assertIn('delete', kinds('cd src && : > notes.txt'))
+        import time; began = time.time(); kinds('rg x .; ' + 'cd .; ' * 30 + 'tar ' + '-C . ' * 30 + '-cf /tmp/x.tar .'); self.assertLess(time.time() - began, 5)
+        for line in ('grep -F "<(" "$HOME/notes.txt"', "cat <(printf '%s' case)", 'xargs echo --arg-file "$LABEL"', 'for f in src/*; do wc -l "$f"; done', 'git log | grep CDPATH',
+                     'X=src; rg foo "$X"', 'git commit -m "$(cat <<EOF\nmsg\nEOF\n)"', 'echo "$HOME"'):
+            self.assertNotAsked(line)
+
     def test_cdpath_may_lead_to_keys(self):
         os.environ['CDPATH'] = os.path.expanduser('~')
         self.assertAsked('cd .ssh && rg x .')
