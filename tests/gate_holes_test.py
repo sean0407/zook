@@ -212,6 +212,16 @@ class GateHoles(unittest.TestCase):
         self.assertNotIn('secretword', str(gate.command_boundaries('cat "/tmp/$X/secretword"')))  # a variable is shown by its name only
         self.assertNotAsked('curl -s "https://example.test/$ID/x"')
 
+    def test_review_round_thirteen(self):
+        self.assertAsked("cat <<'END-TEXT'\nHOME=/tmp\nEND-TEXT\ncat \"$HOME/.ssh/config\"")
+        self.assertAsked("cat <<'END-TEXT'\nF=notes.txt\nEND-TEXT\ncat \"$F\"")
+        self.assertAsked("cat <<EOF\nF=notes.txt\ncat \"$F\"")  # its end never comes
+        Path(self.temp.name, 'args.txt').write_text('notes.txt\n'); Path(self.temp.name, 'payload.txt').write_text('.env\n')
+        for line in ('cp payload.txt args.txt; xargs -a args.txt cat', 'cat payload.txt > args.txt; xargs -a args.txt cat', "bash -c 'xargs -a args.txt cat' && cp payload.txt args.txt"):
+            self.assertAsked(line)
+        self.assertNotAsked('xargs -a args.txt cat')
+        self.assertNotAsked("git commit -m \"$(cat <<'END-MSG'\nFix it (really)\nEND-MSG\n)\"")
+
     def test_cdpath_may_lead_to_keys(self):
         os.environ['CDPATH'] = os.path.expanduser('~')
         self.assertAsked('cd .ssh && rg x .')

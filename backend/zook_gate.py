@@ -129,6 +129,7 @@ def _expand(path):
 
 _CWD = [os.getcwd()]
 _PIPED = [set()]
+HEREDOC = r'''(?<!<)<<(?!<)-?[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|\\?([^\s;&|<>()'"]+))'''  # <<EOF, <<-'END-TEXT': its marker word
 GLUED, TARS = '_glued_', ('tar', 'gtar', 'gnutar', 'bsdtar')  # GLUED: where $( … ) was, inside a word
 _LINES = []  # the command line being read, and the ones around it (bash -c, $( … ), <( … )): a cd in any of them leads what follows
 
@@ -319,8 +320,8 @@ def _closing(text, start):
             if c == top: stack.pop()
             elif top == '"' and text[j:j + 2] == '$(': stack.append(')'); j += 1
         elif c == '#' and text[j - 1:j] in (' ', '\t', '\n', ';', '&', '|', '('): j = (text.find('\n', j) + 1 or len(text)) - 1
-        elif text[j:j + 2] == '<<' and text[j + 2:j + 3] != '<' and re.match(r'<<-?\s*([\'"]?)(\w+)\1', text[j:]):
-            word = re.match(r'<<-?\s*([\'"]?)(\w+)\1', text[j:]).group(2); end = re.search(r'\n\s*%s(?=\n|\)|$)' % word, text[j:])
+        elif text[j:j + 2] == '<<' and text[j - 1:j] != '<' and re.match(HEREDOC, text[j:]):
+            word = next(g for g in re.match(HEREDOC, text[j:]).groups() if g); end = re.search(r'\n\s*%s(?=\n|\)|$)' % re.escape(word), text[j:])
             if not end: return len(text), False
             j += end.end() - 1
         elif c in '\'"`': stack.append(c)

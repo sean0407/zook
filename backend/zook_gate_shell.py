@@ -32,7 +32,14 @@ def _folders():
 
 def _no_heredocs(text):
     """The line without what its here-documents hold: lines of text for a program, never commands or settings of the line."""
-    return re.sub(r'(<<-?\s*([\'"]?)(\w+)\2[^\n]*)\n.*?\n\s*\3(?=\n|$)', r'\1', text, flags=re.S)
+    out, i = '', 0
+    for m in re.finditer(HEREDOC, text):  # each here-document: its text runs from the next line to the line holding only its marker
+        nl = text.find('\n', m.end())
+        if m.start() < i or nl < 0: continue
+        end = re.search(r'\n\s*%s(?=\n|$)' % re.escape(next(g for g in m.groups() if g)), text[nl:])
+        if not end: return out + text[i:nl]  # never ended: all the rest is its text
+        out += text[i:nl] + '\n'; i = nl + end.end()
+    return out + text[i:]
 
 
 def _values(name):
@@ -99,6 +106,7 @@ def _listed(files, prog, words=(), bases=None):
     one that is a key, a link or a pipe); the file itself when what is in it cannot be read. echo and printf open nothing."""
     out = [x for x in map(_secret_any, files) if x]
     marks = [v for i, w in enumerate(words) for v in [w.split('=', 1)[1] if w.startswith(('--delimiter=', '--colsep=')) else ''.join(words[i + 1:i + 2]) if w in ('--delimiter', '--colsep') else _short_value(words, i, set(), 'dC')] if v is not None]
+    out += ['（%s 列出的檔案）' % f for f in files if _LINES and (max(x.count(f) for x in _LINES) > 1 or any(x.count(f) > _LINES[-1].count(f) for x in _LINES))]  # named elsewhere on the line: it may be written first
     for f in [] if out or prog in ('echo', 'printf') else files:
         where = [x for x in _resolved(f) or [] if os.path.isfile(_abs(x))]
         for one in where or [None]:  # every folder the line may run in: the list there
