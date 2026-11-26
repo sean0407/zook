@@ -182,3 +182,18 @@ def update(target, body, kind):
     if kind == 'settings': upkeep_fields(_active['data'], body, changes)
     if kind == 'bot' and changes.get('provider') == AUTO: changes.update(model='', account='')  # each reply picks its own model
     target.update(changes)
+
+
+# #162 (G46): two windows (or the Mac and its phone) editing one Bot. 編輯 Bot sends what the Bot was when the window opened (base);
+# when another save changed any of what the form edits since, this one is refused instead of quietly putting the old values back.
+BOT_FORM_KEYS = ('name', 'jobTitle', 'persona', 'instructions', 'provider', 'model', 'account', 'effort', 'section', 'pinned',
+                 'fallbacks', 'features', 'access', 'accessFolder', 'shape', 'color')
+EDIT_CONFLICT = '這個 Bot 已在別處修改（另一個視窗或手機）。請按「取消」關閉，重新打開「編輯設定」再改一次。'
+
+
+def edit_conflict(bot, body):
+    """True when the Bot changed since the form was opened. base is taken out of body, so it is never stored."""
+    base = body.pop('base', None)
+    if not isinstance(base, dict): return False
+    same = lambda v: None if v in (None, '') else v
+    return any(same(bot.get(k)) != same(base[k]) for k in BOT_FORM_KEYS if k in base)

@@ -244,15 +244,15 @@
       }
       form.elements.model.value = '';
       form.elements.modelSelect.value = '';
-      form.elements.modelCustom.value = '';
-      form.elements.modelCustom.hidden = true;
+      if (form.elements.modelCustom) { form.elements.modelCustom.value = ''; form.elements.modelCustom.hidden = true; }
+      if (form.id === 'bot-form') setDropdown(form, 'effort', '');  // G44 (#159②): another CLI's 深入 is not carried over
       form.dataset.providerChanged = '1';
-      form.querySelector('.model-note').textContent = '換了一家，型號已改回它建議的版本，正在讀取能選的型號…';
+      form.querySelector('.model-note').textContent = '換了一家，型號和思考強度已改回預設，正在讀取能選的型號…';
       loadModels(form);
     } else if (e.target.name === 'modelSelect') {
       const custom = form.elements.modelCustom;
-      const isCustom = e.target.value === '__custom__';
-      custom.hidden = !isCustom;
+      const isCustom = !!custom && e.target.value === '__custom__';
+      if (custom) custom.hidden = !isCustom;
       form.elements.model.value = isCustom ? custom.value : e.target.value;
       if (isCustom) custom.focus();
     }
@@ -316,13 +316,18 @@
           section: d.get('section'),
           pinned: d.has('pinned'),
           fallbacks: d.get('fallbackChoice') === '__none' ? [] : !d.get('fallbackChoice') || d.get('fallbackChoice') === '__default' ? null : [d.get('fallbackChoice')], effort: d.get('effort') || '', features: Object.fromEntries([['multi', d.get('featureMulti')], ['image', d.get('featureImage')], ['browser', d.get('featureBrowser')]].filter(x => x[1]).map(x => [x[0], x[1] === 'on'])),
-          account: d.has('providerChoice') ? String(d.get('providerChoice')).split('::')[1] || '' : d.get('account') || '',
-          access: d.get('access') || '', accessFolder: d.get('access') === 'folder' ? d.get('accessFolder') || '' : ''
+          account: d.has('providerChoice') ? String(d.get('providerChoice')).split('::')[1] || '' : d.get('account') || ''
         };
+        // G45 (#256 #332①): Claude and Cursor hide 存取範圍. What that menu still holds is not sent and stops nothing.
+        const accessShown = !form.querySelector('[data-access-row]')?.hidden;
+        if (accessShown) Object.assign(data, {access: d.get('access') || '', accessFolder: d.get('access') === 'folder' ? d.get('accessFolder') || '' : ''});
         if (d.get('heldAccess') === 'full' && !form.querySelector('[data-held-access]').hidden) Object.assign(data, {access: 'full', accessFolder: ''});  // #284: back behind the gate
         if (!id) data.clientId = onceId(form);
-        if (data.access === 'folder' && !data.accessFolder) { if (form.querySelector('[data-access-row]')?.hidden) toast('請先選擇資料夾'); else needFolder(form); return; }
-        let result = await post(id ? 'bots/' + encodeURIComponent(id) : 'bots', data, id ? 'PATCH' : 'POST');
+        if (accessShown && data.access === 'folder' && !data.accessFolder) { needFolder(form); return; }
+        if (id && form.botBase) data.base = form.botBase;  // G46 (#162)
+        let result;
+        try { result = await post(id ? 'bots/' + encodeURIComponent(id) : 'bots', data, id ? 'PATCH' : 'POST'); }
+        catch (error) { if (error.status === 409 && id) { formNote(form, error.message, 'conflict'); return; } throw error; }  // stays open; nothing is overwritten
         if (!id) { try { sessionStorage.removeItem('swarmr-new-bot-draft'); } catch (_) {} }
         closeModal();
         await refresh();
