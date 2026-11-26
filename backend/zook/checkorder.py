@@ -27,12 +27,12 @@ MODERATOR_RULES['split_plan'] = MODERATOR_RULES['split_plan'][:-1] + ['負責查
 
 
 def group_is_checker(bot):
-    """Whether a member's role is checking others' work: its name says so, or the first clause of its persona says that is its job now."""
+    """Whether a member's role is checking others' work: its name says so, or the first sentence of its persona says that is its job now (not a past one)."""
     name = str((bot or {}).get('name') or '')
     if not CHECKER_NAME_WRITES.search(name) and any(not CHECKER_NOT.search(re.sub('不只|不僅|不但', '', name[:hit.start()])) for hit in CHECKER_NAME.finditer(name)): return True  # 「非查核員」「不負責查核員」 are not
-    persona = re.split(r'[，,。.；;！!？?\n]', str((bot or {}).get('persona') or (bot or {}).get('instructions') or '').strip())[0][:80]  # its first clause says what it is now
-    if re.search(r'曾|以前|過去|原本|之前|前任', persona): return False
-    return any(not CHECKER_NOT.search(re.sub('不只|不僅|不但', '', persona[max(0, hit.start() - 4):hit.end()])) and not CHECKER_WRITES.search(hit.group(0) + re.split(r'[，。,.；;、\n]', persona[hit.end():hit.end() + 4])[0])
+    persona = re.split(r'[。.！!？?\n]', str((bot or {}).get('persona') or (bot or {}).get('instructions') or '').strip())[0][:80]  # its first sentence says what it is now
+    clause = lambda hit: re.split(r'[，,；;、]', persona[:hit.start()])[-1]  # the words before it in the same clause
+    return any(not re.search(r'曾|以前|過去|原本|之前|前任', clause(hit)) and not CHECKER_NOT.search(re.sub('不只|不僅|不但', '', persona[max(0, hit.start() - 4):hit.end()])) and not CHECKER_WRITES.search(hit.group(0) + re.split(r'[，。,.；;、\n]', persona[hit.end():hit.end() + 4])[0])
                for hit in CHECKER_DUTY.finditer(persona))
 
 
@@ -74,7 +74,7 @@ def checked_present(store, group_id, names, exact=(), owner=''):
     pool = [e.name for e in _plain_files(group_files_dir(store, group_id))]
     gone = []
     for raw in names or []:
-        name = re.sub(r'[（(][^（）()]{0,30}[）)]\s*$', '', ' '.join(str(raw or '').split())).strip(' 「」『』`\'"')
+        name = re.sub(r'(\.[A-Za-z0-9]{1,10})\s*[（(][^（）()]{0,30}[）)]$', r'\1', ' '.join(str(raw or '').split())).strip(' 「」『』`\'"')  # 「報價單.xlsx（群組檔案）」; 「報價單（新版）.xlsx」 stays as it is
         base = name.rsplit('/', 1)[-1]
         if (raw not in exact and not re.search(r'\.[A-Za-z0-9]{1,10}$', base)) or not base or base in gone: continue  # a report's own list is looked for name by name
         if _same_file(base, pool, owner): continue  # the very name (or Zook's rename of it): an older file whose name merely ends the same is not it
@@ -208,8 +208,9 @@ class CheckOrder:
                 note(('%s 沒有補存到（正在忙或沒有回覆），%s 還是找不到；%s 這次不查核。' % (_names(store, idle), files, checkers)) if idle else
                      '%s 補存後還是找不到 %s，%s 這次不查核；請 %s 重新存檔後再請查核。' % (_names(store, list(gone)), files, checkers, _names(store, list(gone))))
                 store.save(); return steps[1:]
-            step['need'] = sorted({n for b in latest for x in group['messages'][start:] if x.get('botId') == b and x.get('role') == 'assistant' and not x.get('checkOf')
-                                   for n in list(x.get('savedFiles') or []) + list((x.get('sameAs') or {}).values()) if n in pool})[:40]  # what the check is for: gone by the time it starts, it does not run
+            need = sorted({n for b in latest for x in group['messages'][start:] if x.get('botId') == b and x.get('role') == 'assistant' and not x.get('checkOf')
+                           for n in list(x.get('savedFiles') or []) + list((x.get('sameAs') or {}).values()) if n in pool})[:40]
+            step['need'] = {n: _file_hash(group_files_dir(store, group_id) / n) for n in need}  # what the check is for, as it is now: gone or changed by the time it starts, it does not run
         return steps
 
     def _free_check(self, group_id, run_id, gate):
@@ -266,9 +267,10 @@ def task_check_new_work(run, task):
 
 
 def task_files_kept(store, group, msg):
-    """store.lock and _group_files_lock held. The shared files a task's reply brought in, for its check to find still there."""
+    """store.lock and _group_files_lock held. {name: content hash} of the shared files a task's reply brought in, for its check to
+    find still there, unchanged."""
     pool = {e.name for e in _plain_files(group_files_dir(store, group['id']))}
-    return sorted(n for n in list(msg.get('savedFiles') or []) + list((msg.get('sameAs') or {}).values()) if n in pool)[:40]
+    return {n: _file_hash(group_files_dir(store, group['id']) / n) for n in sorted(set(list(msg.get('savedFiles') or []) + list((msg.get('sameAs') or {}).values())) & pool)[:40]}
 
 
 def group_files_given(group):
@@ -287,7 +289,7 @@ def task_files_missing(store, group, owner, attempt, msg, spec='', given=()):
     mine = set(msg.get('savedFiles') or []) | {n for n, info in (group.get('fileInfo') or {}).items() if (info or {}).get('by') == owner}
     gone = checked_present(store, group['id'], listed + list(msg.get('missingFiles') or []), exact=listed, owner=owner) + [n for n in named if not _in_prose(n, [p for p in pool if p in mine])]  # named: there, and its own
     for raw in listed:
-        base = re.sub(r'[（(][^（）()]{0,30}[）)]\s*$', '', ' '.join(str(raw or '').split())).strip(' 「」『』`\'"').rsplit('/', 1)[-1]
+        base = re.sub(r'(\.[A-Za-z0-9]{1,10})\s*[（(][^（）()]{0,30}[）)]$', r'\1', ' '.join(str(raw or '').split())).strip(' 「」『』`\'"').rsplit('/', 1)[-1]
         if base and base not in gone and _same_file(base, pool, owner) and not _same_file(base, [n for n in pool if n in mine], owner): gone.append(base)
     alias = [k for k in (msg.get('sameAs') or {}) if k]  # saved under its name, kept as the shared file with the same content
     full = [x for x in listed + list(msg.get('savedFiles') or []) + alias if x and x not in gone]  # whole names it handed over: a piece of one picked from the prose is that file

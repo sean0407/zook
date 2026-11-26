@@ -335,7 +335,7 @@ class TaskChecks:
             task = next((t for t in (run or {}).get('tasks') or [] if t['id'] == task_id), None)
             if not task or not task.get('verify'): return
             check, label, origin = task['verify'], '%d. %s（驗收）' % (task['n'], task['title']), run['origin'] if run['origin'] != 'user' else 'bot'
-        step = dict(waitBusy=True, readonly=True, need=list(check.get('need') or []), **({'use': check['use']} if check.get('use') else {}),  # #245: the files it checks must still be there
+        step = dict(waitBusy=True, readonly=True, need=dict(check.get('need') or {}) if isinstance(check.get('need'), dict) else {}, **({'use': check['use']} if check.get('use') else {}),  # #245: the files it checks must still be there
                     job=dict(taskRole='verifier', taskRunId=run['id'], taskId=task_id, taskTitle=label, origin=origin), msg=dict(taskId=task_id, taskCheck=True),
                     attachIds=[run.get('goalId')], promptFor=lambda bot, writable: task_verify_prompt(store, store.find('groups', group_id), store.find('groups', group_id)['taskRun'], task, bot))
         turn = self._task_turn(group_id, run_id, check['bot'], step)
@@ -365,7 +365,7 @@ class TaskChecks:
                     work = next((a for a in reversed(task['attempts']) if a.get('state') == 'reported'), {})
                     task_failed_attempt(task, '%s 驗收沒有通過：%s' % (who, check.get('reasons') or ''), store.find('jobs', work.get('jobId')) if work.get('jobId') else None)
                 elif len(check.get('tried', [])) < 1:  # no verdict: once more, with another member when there is one
-                    task['verify'] = dict(state='waiting', tried=check.get('tried', []) + [check['bot']], need=list(check.get('need') or []))
+                    task['verify'] = dict(state='waiting', tried=check.get('tried', []) + [check['bot']], need=check.get('need') or {})
                 else: check['state'] = 'missing'; task['status'] = 'stuck'; task['note'] = '驗收兩次都沒有完成（最後是 %s），停下來等你決定。工作本身已經回報完成。' % who
             if group: task_board_update(store, group)
             store.save()

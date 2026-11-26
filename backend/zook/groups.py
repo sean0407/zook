@@ -516,7 +516,7 @@ class GroupRuns:
             for m in heard:
                 m.setdefault('heardBy', bot['name'])  # the window says who read the 插話 first (a 任務's host: taskrun.py)
                 if bot_id not in m.setdefault('readBy', []): m['readBy'] = (m['readBy'] + [bot_id])[-20:]
-            return dict(job=job, msg=msg, prompt=prompt, provider=provider, model=model, bot=copy.deepcopy(bot), role=role, writable=writable, skipFiles=set(step.get('hideFiles') or ()), saved=[], seen=seen, staged=staged, check=check, heard=bool(named), need=list(step.get('need') or []))
+            return dict(job=job, msg=msg, prompt=prompt, provider=provider, model=model, bot=copy.deepcopy(bot), role=role, writable=writable, skipFiles=set(step.get('hideFiles') or ()), saved=[], seen=seen, staged=staged, check=check, heard=bool(named), need=dict(step.get('need') or {}) if isinstance(step.get('need'), dict) else {})
 
     def _group_job(self, group_id, turn):
         """One Bot's turn, with its own copy of the group's files."""
@@ -525,8 +525,13 @@ class GroupRuns:
             try:
                 if provider_kind(turn['provider']) == 'antigravity': live_drop_bot(self, bot['id'], turn['job'])  # nothing of the Bot's is copied in while an agy of it still runs
                 if not turn.get('staged', True): raise OSError('attachments')
-                seen = sync_group_files_in(store, group_id, bot['id'], turn['skipFiles'])
-                lost = [n for n in turn.get('need') or [] if n not in seen]  # #245: a file the check is for went away after it was let through
+                need = turn.get('need') if isinstance(turn.get('need'), dict) else {}
+                if need:  # #245: copied as they were let through, with saving and deleting held off; gone or changed means the check does not run
+                    with _group_files_lock:
+                        try: seen = sync_group_files_in(store, group_id, bot['id'], turn['skipFiles'])
+                        except (OSError, ValueError): turn['job']['lostFiles'] = sorted(need); raise
+                else: seen = sync_group_files_in(store, group_id, bot['id'], turn['skipFiles'])
+                lost = [n for n, digest in need.items() if seen.get(n) != digest]
                 if lost: turn['job']['lostFiles'] = lost; raise RuntimeError('要查核的檔案 %s 在查核開始前不見了（可能被刪掉），這次沒有查核。' % '、'.join(lost))
                 if turn.get('check'): turn['prompt'] += named_check_copy(store, group_id, bot['id'], turn['job'], turn['check'])
             except (OSError, ValueError, RuntimeError) as exc:

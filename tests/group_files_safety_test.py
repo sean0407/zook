@@ -107,6 +107,7 @@ class GroupFileSafety(unittest.TestCase):
         listed = ['a:b.xlsx', '報價單.xlsx', '報價單.pdf', 'README']
         self.assertEqual(server.checked_present(self.store, 'g1', listed, exact=listed, owner='甲'), ['報價單.pdf', 'README'])
         self.assertEqual(server.checked_present(self.store, 'g1', ['keep.txt', 'gone.docx']), ['gone.docx'])
+        (self.shared / '提案.pptx').write_text('old'); self.assertEqual(server.checked_present(self.store, 'g1', ['提案（新版）.pptx', '提案.pptx（群組檔案）'], exact=['提案（新版）.pptx']), ['提案（新版）.pptx'])
         (self.shared / '舊版合約.docx').write_text('old'); self.assertEqual(server.checked_present(self.store, 'g1', ['合約.docx']), ['合約.docx'])  # an older file that merely ends the same is not it
         group = dict(id='g1', fileInfo={'報價單（甲）.xlsx': {'by': '甲'}, 'ab.xlsx': {'by': '乙'}})
         self.assertEqual(server.task_files_missing(self.store, group, '甲', dict(files=['報價單.xlsx', 'ab.xlsx']), {}), ['ab.xlsx'])  # another member's file is not its work
@@ -119,7 +120,7 @@ class GroupFileSafety(unittest.TestCase):
         (self.shared / 'Q3 報價單.xlsx').write_text('q3')
         self.assertEqual(server.task_files_missing(self.store, dict(group, fileInfo={'Q3 報價單.xlsx': {'by': '甲'}}), '甲', dict(files=['Q3 報價單.xlsx'], summary='已存好 Q3 報價單.xlsx'), dict(savedFiles=['Q3 報價單.xlsx'])), [])  # a piece of a whole name it handed over
         self.assertEqual([server.group_is_checker(dict(name=n)) for n in ('查核員', '非查核員', '不負責查核員', 'QA', 'AQAB')], [True, False, False, True, False])
-        self.assertEqual([server.group_is_checker(dict(name='甲', persona=x)) for x in ('不只負責查核，也要寫報價。', '主要不負責查核，做報價單。', '你擔任驗收角色。', '負責檢查其他成員的成果。', '主要撰寫驗收報告。', '我是設計師，曾負責驗收舊版，現在製作報價單。', '過去負責查核，現在做報價。')], [True, False, True, True, False, False, False])
+        self.assertEqual([server.group_is_checker(dict(name='甲', persona=x)) for x in ('不只負責查核，也要寫報價。', '主要不負責查核，做報價單。', '你擔任驗收角色。', '負責檢查其他成員的成果。', '主要撰寫驗收報告。', '我是設計師，曾負責驗收舊版，現在製作報價單。', '過去負責查核，現在做報價。', '我是設計師，負責驗收其他成員的成果。')], [True, False, True, True, False, False, False, True])
         self.assertEqual([server.group_is_checker(dict(name=n)) for n in ('品質檢查員', '驗收報告撰寫', '文件審核員', '檢查專員', '品質檢查專員')], [True, False, True, True, True])
 
 if __name__ == '__main__': unittest.main()
