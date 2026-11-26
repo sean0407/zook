@@ -1657,6 +1657,8 @@ button.group-file-name:hover strong { text-decoration: underline; }
 .office-page figcaption { margin-top: 4px; font-size: 12px; color: var(--muted); }
 .output-link { font: inherit; text-decoration: underline; text-decoration-style: dotted; }
 .local-link { font: inherit; color: #2563eb; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; text-align: left; }
+.local-link.missing-file { color: #8a8a8a; }
+.missing-note { color: #a44035; font-size: 12.5px; margin-left: 2px; }
 .button-link { display: inline-flex; align-items: center; text-decoration: none; }
 .catalog-item.off { opacity: 0.55; }
 .catalog-item .dir-icon, .catalog-item .item-icon { flex: none; }
@@ -2176,6 +2178,7 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .page:has(.dir-bar) { scrollbar-gutter: stable; }
 @media (max-width: 940px) { .dir-search { order: 3; flex: 1 0 100%; width: 100%; margin-left: 0; } }
 /* #176: 產出's switch for the scripts a Bot wrote to make its files */
+.output-head { margin: 8px 0 2px; padding: 0 2px; font-size: 12px; color: var(--muted); }
 .output-scripts { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; padding: 0 2px; font-size: 12px; color: var(--muted); cursor: pointer; }
 /* 知識庫 (#84, #122, #123) */
 .know-intro { margin: 0 0 6px; }
@@ -2186,7 +2189,6 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .know-state.processing { color: #7a5a12; background: #fbf3df; }
 .know-state.failed { color: #a33; background: #fbecec; }
 .card p.know-text { display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; color: #555; }
-.card p.know-warn { margin-top: 8px; color: #8a5a00; font-size: 11.5px; }
 .card p.error-text { margin-top: 4px; }
 .know-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 12px; }
 .know-meta .status { margin-top: 0; }
@@ -2198,6 +2200,15 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .detail-profile .trouble-badge { margin-left:6px; }
 .trouble-banner { margin:0 16px 4px; padding:8px 12px; border-radius:10px; background:#fff4e5; color:#7a3d00; font-size:13px; line-height:1.5; }
 .sched-trouble { margin:2px 0 0; }
+/* #295 試搜尋 on the 知識庫 page */
+.know-search { margin: 0 0 18px; }
+.know-search-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.know-search-row input { flex: 1 1 240px; min-width: 0; }
+.know-search-row .dd { flex: 0 1 180px; min-width: 0; }
+.know-search > p { margin: 10px 0 6px; }
+.know-hit { border: 1px solid var(--line, #e6e6e6); border-radius: 10px; padding: 8px 12px; margin-top: 6px; }
+.know-hit strong { display: block; font-size: 12.5px; overflow-wrap: anywhere; }
+.know-hit p { margin: 4px 0 0; font-size: 12.5px; color: #555; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 /* #316: one card per account, grouped by CLI; every card the same blocks in the same order, equal width, equal height in a row */
 .usage-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:12px; align-items:stretch; }
 /* #317: one CLI is one box spanning the grid (its cards still line up with the grid's columns), so it can be dragged and marked as a whole. */
@@ -2246,3 +2257,15 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .uc-bot-list { display:flex; flex-wrap:wrap; gap:4px 10px; padding-top:4px; }
 .detail-issue { margin:8px 0 0; padding:8px 10px; border-radius:8px; background:#fff4e5; color:#7a3d00; font-size:13px; line-height:1.5; }
 @media (max-width: 640px) { .usage-grid { grid-template-columns:1fr; } }
+
+/* #298: the memory page says first who keeps it */
+.memory-lead { font-weight: 600; margin: 0 0 8px; }
+/* #307: a group member's own page while it answers there */
+.member-busy { margin:8px 16px 0; padding:10px 12px; border:1px solid var(--line, #e5e5e5); border-radius:10px; background:var(--soft, rgba(0,0,0,.02)); }
+.member-busy-head { display:flex; justify-content:space-between; align-items:center; gap:8px; font-size:13px; }
+.member-live { margin:6px 0 8px; font-size:12px; line-height:1.6; }
+.member-live .wait-line { margin-top:0; }
+.live-row { display:flex; gap:8px; }
+.live-label { flex:0 0 auto; min-width:64px; color:var(--muted, #8b8b8b); }
+.live-body { min-width:0; overflow-wrap:anywhere; }
+.live-out { white-space:pre-wrap; display:block; max-height:7.5em; overflow:hidden; }

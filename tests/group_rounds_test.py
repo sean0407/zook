@@ -52,7 +52,7 @@ class GroupRounds(unittest.TestCase):
         return resp.status, json.loads(data)
 
     def group(self, **fields):
-        status, group = self.req('POST', '/api/groups', dict({'botIds': [self.bots[n]['id'] for n in ('Alpha', 'Beta', 'Gamma')], 'hostId': ''}, **fields)); self.assertEqual(status, 201, group); return group
+        status, group = self.req('POST', '/api/groups', dict({'botIds': [self.bots[n]['id'] for n in ('Alpha', 'Beta', 'Gamma')], 'hostId': '', 'checkMode': 'none'}, **fields)); self.assertEqual(status, 201, group); return group
 
     def settle(self, group):
         for _ in range(300):

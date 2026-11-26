@@ -29,7 +29,7 @@ class ConfirmDialog(unittest.TestCase):
         ask = source('21-ask.js')
         self.assertIn('function ask(', ask); self.assertIn('new Promise', ask)
         self.assertIn("e.key === 'Escape'", ask); self.assertIn('ask-overlay', ask)  # Esc and the backdrop are 取消
-        self.assertIn('>取消<', ask); self.assertIn('danger-btn', ask)
+        self.assertIn("keep = '取消'", ask); self.assertIn('danger-btn', ask)
         self.assertIn("working = ok + '中…'", ask); self.assertIn('yes.disabled = no.disabled = true', ask)
         self.assertIn('stopImmediatePropagation', ask)  # Esc closes only the question, not the window under it
         css = (ROOT / 'frontend/style.css').read_text(encoding='utf-8')
