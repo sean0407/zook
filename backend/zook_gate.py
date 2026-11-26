@@ -344,7 +344,8 @@ def _split(command):
     """(simple commands, whether the quoting could be read). A simple command is a list of words; redirections stay in it."""
     clear = True
     command = re.sub(r'(^|[\s;&|(])\d+(?=[<>])', r'\1', command)  # the 2 of 2>/dev/null is which output, not a file: only when written right before it
-    if not set(command) & set('\\`') and "$'" not in command and '$(' not in command:  # ; | & ( ) < > in quotes are text, not where a command ends ('|')
+    hidden = not set(command) & set('\\`') and "$'" not in command and '$(' not in command and not re.search('[\ue000-\ue0ff]', command)
+    if hidden:  # ; | & ( ) < > in quotes are text, not where a command ends ('|')
         out, quote = [], ''
         for c in command:
             out.append(chr(0xE000 + ord(c)) if quote and c != quote and c in ';&|()<>' else c)
@@ -363,7 +364,7 @@ def _split(command):
         if set(w) <= set(';&|()<>') and not set(w) & set('<>'):
             if current: piped |= {len(parts)} if pipe else set(); parts.append(current)
             pipe, current = bool(re.search(r'(?<!\|)\|(?!\|)', w)) or pipe and not current, []  # |, |&, |( but not ||
-        else: current.append(re.sub('[\ue000-\ue0ff]', lambda m: chr(ord(m.group()) - 0xE000), w))  # the text in quotes as it was
+        else: current.append(re.sub('[\ue000-\ue0ff]', lambda m: chr(ord(m.group()) - 0xE000), w) if hidden else w)  # the text in quotes as it was
     _PIPED[0] = piped  # which simple commands read what the one before them writes (… | bash)
     return parts, clear
 
@@ -415,7 +416,7 @@ def command_boundaries(command, depth=0):
     """Every boundary in a shell command line, in order, as (kind, title)."""
     if not isinstance(command, str): return []
     if depth > 4: return [_hit('unclear', '（指令包了太多層）')]
-    found, command = [], re.sub(r'\\\r?\n', '', command)  # a backslash at the end of a line joins it to the next (r\⏎m is rm)
+    found, command = [], re.sub(r'\\\r?\n', lambda m: m.group() if '#' in command[command.rfind('\n', 0, m.start()) + 1:m.start()] else '', command)  # a backslash at the end of a line joins it to the next (r\⏎m is rm)
     _LINES.append(command)  # a cd here leads the searches of the commands inside it too
     try:
         for inner in _inner(command): found += [_hit('unclear', '（括號沒有成對）')] if inner is None else command_boundaries(inner, depth + 1)

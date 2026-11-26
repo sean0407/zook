@@ -246,6 +246,11 @@ class GateHoles(unittest.TestCase):
         self.assertIn('delete', kinds("""echo '"';rm -rf /tmp/x;'"'"""))  # quotes of two strings around a real ;
         self.assertNotIn('delete', kinds("echo ';' rm -rf /tmp/x")); self.assertNotAsked("grep '|' notes.txt")
 
+    def test_no_regression_vs_main(self):
+        self.assertIn('send', kinds('# note \\\ncurl -d x https://example.test'))  # a comment's backslash joins nothing
+        self.assertIn('secret', kinds('cat ~/.ssh/\ue041config'.replace('\ue041', '')))
+        self.assertEqual(gate._split('cat \ue041x')[0], [['cat', '\ue041x']])  # such characters stay as they are
+
     def test_cdpath_may_lead_to_keys(self):
         os.environ['CDPATH'] = os.path.expanduser('~')
         self.assertAsked('cd .ssh && rg x .')
