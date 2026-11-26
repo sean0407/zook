@@ -27,7 +27,7 @@
   }
   function recheckForm(form) {
     const note = form?.querySelector('.form-need');
-    if (!note) return;
+    if (!note || note.dataset.kind === 'conflict') return;  // 「已在別處修改」 stays until the window is opened again
     if (note.dataset.kind !== 'folder') { sayMissing(form); return; }
     if (form.elements.access?.value !== 'folder' || form.elements.accessFolder?.value) { formNote(form, ''); form.querySelector('.row-need')?.classList.remove('row-need'); }
   }
@@ -99,7 +99,7 @@
     form.querySelector('[data-auto-reason]')?.toggleAttribute('hidden', e.target.value !== form.dataset.firstChoice);
     // A different CLI: the model menu still lists the last one's models until the new list comes, so it is emptied now (#43⑥).
     const provider = e.target.value.split('::')[0];
-    if (provider !== form.elements.provider.value && provider !== 'auto') form.elements.modelSelect.innerHTML = '<option value="">正在讀取這一家的模型…</option><option value="__custom__">自己輸入型號…</option>';
+    if (provider !== form.elements.provider.value && provider !== 'auto') { form.elements.modelSelect.innerHTML = '<option value="">正在讀取這一家的型號…</option>'; form.elements.modelSelect.disabled = true; }
   });
   // Picking a model by hand ends the 「換了一家，型號已改回…」 line: it is about the model Zook chose (#43⑤).
   document.addEventListener('change', e => {
@@ -107,3 +107,13 @@
     const note = e.target.form?.querySelector('.model-note');
     if (note) note.textContent = note.textContent.replace(/^換了一家[^。]*。/, '');
   });
+  // #162 (G46): what 編輯 Bot edits, as the Bot was when the window opened; the Mac refuses the save if it changed since (fields.py).
+  const BOT_FORM_KEYS = ['name', 'jobTitle', 'persona', 'instructions', 'provider', 'model', 'account', 'effort', 'section', 'pinned', 'fallbacks', 'features', 'access', 'accessFolder', 'shape', 'color'];
+  const botBase = b => Object.fromEntries(BOT_FORM_KEYS.map(k => [k, b[k] === undefined ? null : JSON.parse(JSON.stringify(b[k]))]));
+  // One of the form's own menus (思考強度…) set from code, as picking it would: the hidden value, the label and the tick.
+  function setDropdown(form, name, value) {
+    const input = form.querySelector(`.dd input[name="${name}"]`), dd = input?.closest('.dd'), chosen = dd?.querySelector(`.dd-opt[data-value="${CSS.escape(value)}"]`);
+    if (!chosen) return;
+    input.value = value; dd.querySelector('.dd-label').textContent = chosen.dataset.label;
+    dd.querySelectorAll('.dd-opt').forEach(o => { o.classList.toggle('selected', o === chosen); o.setAttribute('aria-selected', o === chosen); });
+  }

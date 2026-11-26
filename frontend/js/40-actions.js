@@ -302,12 +302,7 @@
         case 'open-run':
           await openConversation(el.dataset.kind, el.dataset.target, id);
           break;
-        case 'pick-files': {
-          closeModal();
-          const picker = document.createElement('input'); picker.type = 'file'; picker.multiple = true;
-          picker.onchange = () => addFiles([...picker.files]); picker.click();
-          break;
-        }
+        case 'pick-files': $('#attach-input')?.click(); closeModal(); break;
         case 'unattach':
           dropPending(id); render(true);
           break;

@@ -95,7 +95,7 @@ class OutputScripts(unittest.TestCase):
         self.assertEqual(got[2], [['a.pdf'], []])
 
     def test_a_switch_shows_them(self):
-        panel = block(JS('36-outputs.js'), '  function outputsPanel', '\n  // A PDF opens')
+        panel = block(JS('36-outputs.js'), '  function outputsPanel', '\n  // #153④⑥')
         self.assertIn('toggle(', panel); self.assertIn('data-show-scripts', panel)
         self.assertIn('dataset.showScripts', JS('50-forms.js'))
 
