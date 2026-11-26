@@ -11,14 +11,15 @@
   }
   // Before leaving a form window for another (新增帳號, 用一句話建立整個團隊, 返回): true when it may go on.
   async function leaveModalForm() {
+    if (modalRoot.querySelector('form[data-busy]')) return false;  // being saved: stay until it is done
     if (!modalDirty()) return true;
     await requestCloseModal();
     return !modalRoot.querySelector('form');
   }
   function modalFields() {
     return [...modalRoot.querySelectorAll('form')].map(f => [...f.elements]
-      .filter(el => el.name && el.type !== 'button' && el.type !== 'submit' && el.type !== 'file' && el.type !== 'search' && !('memberSearch' in el.dataset))
-      .map(el => el.name + '=' + (el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value)).join('\n')).join('\n--\n');
+      .filter(el => el.name && el.type !== 'button' && el.type !== 'submit' && el.type !== 'search' && !('memberSearch' in el.dataset))
+      .map(el => el.name + '=' + (el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.type === 'file' ? [...el.files].map(x => x.name).join('/') : el.value)).join('\n')).join('\n--\n');  // a file picked to upload counts
   }
   function modalDirty() {
     return modalEdit.touched && modalEdit.snap !== null && !!modalRoot.querySelector('form') && modalFields() !== modalEdit.snap;

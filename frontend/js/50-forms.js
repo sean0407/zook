@@ -485,7 +485,7 @@
     }
     if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'n') {
       e.preventDefault();
-      if (state.data.bots.length >= 2) groupModal(); else toast('至少需要 2 個 Bot 才能建立群組');
+      if (state.data.bots.length < 2) toast('至少需要 2 個 Bot 才能建立群組'); else leaveModalForm().then(go => { if (go) groupModal(); });  // a form with changes asks first (#297)
       return
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
