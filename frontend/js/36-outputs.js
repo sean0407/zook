@@ -42,12 +42,21 @@
   const officeShell = (url, name, kind) => `<div class="office-view" data-src="${esc(url)}" data-sheet="${isSheet(name) ? 1 : ''}" data-kind="${esc(kind || 'office')}"><p class="muted office-wait">正在產生預覽…</p></div>`;
   // #108④ #337③: a web page shown as a page, never run: no scripts, forms, pop-ups or plug-ins (sandbox with nothing allowed, so it
   // is also cut off from Zook's own pages and data), and nothing loaded from anywhere (its own policy allows only pictures,
-  // styles and fonts written into the file itself). Tags that could reach out or move the page are taken out first as well.
+  // styles and fonts written into the file itself). The file is first read as an inert document (nothing runs or loads there)
+  // and what could move or reload the frame is taken out: refresh and other http-equiv tags, <base>, <link>, and links that do
+  // not go to a web page (a link inside the file would otherwise open Zook's own addresses in the frame).
   const HTML_POLICY = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; media-src data:; form-action 'none'";
   function htmlFrame(text, name) {
-    const page = String(text).replace(/<(meta|base|link)\b[^>]*>/gi, m => /^<meta\b/i.test(m) && !/http-equiv/i.test(m) ? m : '');
-    const doc = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${HTML_POLICY}"><base target="_blank">` + page;
-    return `<div class="html-view"><p class="muted small office-note">網頁預覽：不執行程式、不連網，版面可能和瀏覽器略有不同。</p><iframe sandbox="" referrerpolicy="no-referrer" srcdoc="${esc(doc)}" title="${esc(name)}"></iframe></div>`;
+    const doc = new DOMParser().parseFromString(String(text), 'text/html');
+    doc.querySelectorAll('meta[http-equiv], base, link, script, noscript, iframe, frame, frameset, object, embed, portal').forEach(x => x.remove());
+    for (const el of doc.querySelectorAll('*')) for (const at of [...el.attributes]) {  // every href (SVG's xlink:href too), form targets and pings
+      const to = at.value.trim();
+      if (at.localName === 'href' && !/^(https?:\/\/|mailto:|#)/i.test(to) || ['action', 'formaction', 'ping'].includes(at.localName)) el.removeAttributeNode(at);
+    }
+    const first = new DOMParser().parseFromString(`<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${HTML_POLICY}"><base target="_blank">`, 'text/html').head;
+    doc.head.prepend(...[...first.childNodes].map(x => doc.importNode(x, true)));  // the policy comes before anything of the file's own
+    const page = '<!doctype html>' + doc.documentElement.outerHTML;
+    return `<div class="html-view"><p class="muted small office-note">網頁預覽：不執行程式、不連網，版面可能和瀏覽器略有不同。</p><iframe sandbox="" referrerpolicy="no-referrer" srcdoc="${esc(page)}" title="${esc(name)}"></iframe></div>`;
   }
   async function previewBody(url, kind, name) {
     if (kind === 'office') {

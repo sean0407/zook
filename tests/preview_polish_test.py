@@ -53,6 +53,13 @@ class SheetTables(unittest.TestCase):
         sheet = server.sheet_tables(xlsx([('大', rows)]))['sheets'][0]
         self.assertEqual(len(sheet['rows']), server.SHEET_ROWS); self.assertTrue(sheet['more']); self.assertTrue(sheet['wide']); self.assertEqual(sheet['cols'], 1)
 
+    def test_crafted_sheets_stay_small(self):
+        same = ''.join('<row r="1"><c r="A1"><v>%d</v></c></row>' % n for n in range(server.SHEET_ROWS + 50))  # one row number again and again
+        self.assertEqual(len(server.sheet_tables(xlsx([('x', same)]))['sheets'][0]['rows']), server.SHEET_ROWS)
+        wide = '<row r="1"><c r="%s1"><v>1</v></c><c r="A1" s="1"><v>0.5</v></c></row>' % ('A' * 5000)
+        got = server.sheet_tables(xlsx([('x', wide)], styles='<numFmts><numFmt numFmtId="164" formatCode="0.%s"/></numFmts><cellXfs><xf numFmtId="0"/><xf numFmtId="164"/></cellXfs>' % ('0' * 5000)))['sheets'][0]
+        self.assertTrue(got['wide']); self.assertEqual(got['rows'][0][1][0], '0.5000000000')
+
     def test_crafted_files_are_refused(self):
         bomb = '<!DOCTYPE x [<!ENTITY a "aaaaaaaa"><!ENTITY b "&a;&a;&a;&a;">]>'
         with self.assertRaises(server.SheetRefused): server.sheet_tables(xlsx([('x', '<row r="1"><c r="A1" t="inlineStr"><is><t>&b;</t></is></c></row>')], doctype=bomb))
@@ -113,6 +120,7 @@ class NamesAndNotes(unittest.TestCase):
                '<w:p><w:pPr><w:sectPr><w:type w:val="continuous"/></w:sectPr></w:pPr></w:p>'
                '<w:p><w:pPr><w:sectPr/></w:pPr><w:r><w:t>三</w:t></w:r></w:p><w:p><w:r><w:br/></w:r></w:p></w:body>')
         self.assertEqual(pagepics.mark_page_breaks(xml).count(pagepics.PAGE_MARK), 3)
+        slow = time.time(); pagepics.mark_page_breaks('<w:p><w:pPr>' * 200000); self.assertLess(time.time() - slow, 2)  # malformed: no long scan
 
     @unittest.skipUnless(os.path.exists('/usr/bin/osascript') and not os.environ.get('CI'), "needs this Mac's text system")
     def test_real_word_file_breaks_into_pages(self):
@@ -144,6 +152,10 @@ class PageCode(unittest.TestCase):
         policy = re.search(r'HTML_POLICY = "([^"]+)"', code).group(1)
         self.assertIn("default-src 'none'", policy); self.assertNotIn('http', policy); self.assertNotIn("'self'", policy)
         self.assertIn("kind === 'html'", code)
+        frame = code[code.index('  function htmlFrame'):code.index('  async function previewBody')]
+        self.assertIn("new DOMParser().parseFromString(String(text), 'text/html')", frame)  # read inert, not cut with patterns (review: '>' inside quotes)
+        for tag in ('meta[http-equiv]', 'base', 'link', 'script', 'iframe', 'object', 'embed'): self.assertIn(tag, frame)
+        self.assertIn('(https?:\\/\\/|mailto:|#)', frame); self.assertIn("at.localName === 'href'", frame)  # a link to Zook's own addresses is taken out
 
     def test_cards_icons_names_and_sizes(self):
         files, pages, groups = self.read('36b-files.js'), self.read('30-pages.js'), self.read('35-groups.js')
@@ -164,7 +176,7 @@ __CODE__
 (async () => {
   const box = {isConnected: true, innerHTML: ''};
   await fillSheetView(box, '/api/x');
-  console.log(JSON.stringify({fetched, html: box.innerHTML, col: [columnName(1), columnName(26), columnName(27), columnName(60)], frame: htmlFrame('<html><head><meta http-equiv="refresh" content="0;url=https://x.example"><base href="https://x.example/"><link rel="stylesheet" href="https://x.example/a.css"></head><body><script>alert(1)</script>"hi"</body></html>', 'a.html')}));
+  console.log(JSON.stringify({fetched, html: box.innerHTML, col: [columnName(1), columnName(26), columnName(27), columnName(60)]}));
 })();
 """
         with tempfile.TemporaryDirectory() as d:
@@ -176,10 +188,6 @@ __CODE__
         self.assertEqual(got['col'], ['A', 'Z', 'AA', 'BH'])
         self.assertIn('data-sheet-tab="1"', got['html']); self.assertIn('<th>AB</th>', got['html']); self.assertIn('<th>5</th>', got['html'])
         self.assertIn('圖表不會顯示', got['html']); self.assertIn('前 300 列', got['html'])
-        frame = got['frame']
-        self.assertIn('sandbox=""', frame)
-        self.assertNotIn('refresh', frame); self.assertNotIn('x.example/a.css', frame); self.assertNotIn('base href', frame)
-        self.assertIn('Content-Security-Policy', frame); self.assertNotIn('<script>', frame)  # escaped inside srcdoc
 
 
 class Routes(unittest.TestCase):

@@ -73,7 +73,7 @@ def _sheet_styles(z):
     """[(number format id, format code)] per cell style index."""
     codes, styles, inside = {}, [], [False]
     def start(name, attrs):
-        if name == 'numFmt': codes[attrs.get('numFmtId', '')] = attrs.get('formatCode', '')
+        if name == 'numFmt': codes[attrs.get('numFmtId', '')] = attrs.get('formatCode', '')[:200]
         elif name == 'cellXfs': inside[0] = True
         elif name == 'xf' and inside[0]:
             fid = attrs.get('numFmtId', '0'); styles.append((int(fid) if fid.isdigit() else 0, codes.get(fid, '')))
@@ -100,7 +100,7 @@ def _sheet_number(raw, style, date1904):
     if (dated or timed) and fid not in (0, 1, 2, 3, 4, 9, 10, 11, 12, 13, 37, 38, 39, 40, 48, 49) and -1 < value < 2958466:
         when = (datetime.datetime(1904, 1, 1) if date1904 else datetime.datetime(1899, 12, 30)) + datetime.timedelta(days=value)
         return ' '.join(x for x in (when.strftime('%Y-%m-%d') if dated else '', when.strftime('%H:%M') if timed else '') if x)
-    places = len(re.search(r'\.(0*)', plain).group(1)) if re.search(r'\.0', plain) else 0
+    places = min(10, len(re.search(r'\.(0*)', plain).group(1))) if re.search(r'\.0', plain) else 0
     if fid in (9, 10) or '%' in plain:
         return ('%.' + str(2 if fid == 10 else places) + 'f%%') % (value * 100)
     if fid in (3, 4) or ',' in plain:
@@ -111,6 +111,7 @@ def _sheet_number(raw, style, date1904):
 
 def _column_number(ref):
     letters = re.match(r'[A-Z]+', ref or '')
+    if letters and len(letters.group()) > 3: return SHEET_COLS + 1  # past XFD: never shown, and no huge number worked out
     n = 0
     for ch in (letters.group() if letters else ''): n = n * 26 + ord(ch) - 64
     return n
@@ -122,7 +123,7 @@ def _read_sheet(z, name, shared, styles, date1904):
         if tag == 'row':
             r = attrs.get('r', '')
             state['row'] = int(r) if r.isdigit() else state['row'] + 1; state['col'] = 0
-            if state['row'] > SHEET_ROWS: state['more'] = True; raise _SheetStop()
+            if state['row'] > SHEET_ROWS or len(rows) >= SHEET_ROWS: state['more'] = True; raise _SheetStop()  # row numbers may repeat in a crafted file
             rows.append([state['row'], []])
         elif tag == 'c' and rows:
             col = _column_number(attrs.get('r', '')) or state['col'] + 1; state['col'] = col

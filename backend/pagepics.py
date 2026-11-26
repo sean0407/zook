@@ -182,12 +182,19 @@ function run(argv) {
 
 def mark_page_breaks(xml):
     """word/document.xml with each page break (a break run, a paragraph set to start a new page, a section that starts on a new
-    page) written as PAGE_MARK text, which macOS's reader keeps."""
+    page) written as PAGE_MARK text, which macOS's reader keeps. One pass over the paragraphs with plain searches: a malformed
+    file cannot make it slow."""
     run = '<w:r><w:t>%s</w:t></w:r>' % PAGE_MARK
-    xml = re.sub(r'<w:br\b[^>]*\bw:type="page"[^>]*/>', '<w:t>%s</w:t>' % PAGE_MARK, xml)
-    xml = re.sub(r'(<w:p\b[^>]*>\s*<w:pPr>(?:(?!</w:pPr>).)*?<w:pageBreakBefore(?![^>]*w:val="(?:0|false|off)")[^>]*/>(?:(?!</w:pPr>).)*</w:pPr>)', lambda m: m.group(1) + run, xml, flags=re.S)
-    return re.sub(r'(<w:pPr>(?:(?!</w:pPr>).)*<w:sectPr\b(?:[^>]*/>|(?:(?!</w:sectPr>|</w:pPr>).)*</w:sectPr>)(?:(?!</w:pPr>).)*</w:pPr>(?:(?!</w:p>).)*)(</w:p>)',
-                  lambda m: m.group(1) + ('' if re.search(r'<w:type w:val="continuous"', m.group(1)) else run) + m.group(2), xml, flags=re.S)
+    xml = re.sub(r'<w:br\b[^>]*?\bw:type="page"[^>]*/>', '<w:t>%s</w:t>' % PAGE_MARK, xml)
+    out = []
+    for part in xml.split('</w:p>'):
+        start = part.find('<w:pPr>'); end = part.find('</w:pPr>', start) if start >= 0 else -1
+        props = part[start:end] if 0 <= start < end else ''
+        if props and re.search(r'<w:pageBreakBefore\b(?![^>]*w:val="(?:0|false|off)")', props):
+            part = part[:end + 8] + run + part[end + 8:]
+        if props and '<w:sectPr' in props and 'w:val="continuous"' not in props: part += run
+        out.append(part)
+    return '</w:p>'.join(out)
 
 
 def docx_pages(path, out, width=1600):
