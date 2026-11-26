@@ -139,7 +139,7 @@ def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, 
     members = [m for m in members if m]
     names = {m['id']: m['name'] for m in store.data['bots']}
     roster = '\n'.join('- %s：%s' % (m['name'], (m.get('persona') or m.get('instructions') or '一般助理')[:200].replace('\n', ' ')) for m in members)
-    knowledge = knowledge_for(store, bot)  # knowledge.py
+    knowledge = knowledge_for(store, bot, knowledge_group_ask(group, target, fix, hidden))  # knowsearch.py
     transcript = []
     shared = [e.name for e in _plain_files(group_files_dir(store, group['id'])) if e.name not in hidden_files]
     local = lambda text, author: group_local_paths(store, group, bot['id'], text, set(shared), author)  # another member's workspace path → where this Bot reads the file

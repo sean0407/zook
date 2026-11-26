@@ -454,6 +454,8 @@
         await refresh();
         const next = scheduleNext(saved || {});
         toast(next ? `已儲存排程，下次執行：${nextLabel(next)}` : '已儲存排程');
+      } else if (form.id === 'know-search-form') {
+        await knowSearch(form);  // 試搜尋 (36c-knowledge.js)
       } else if (form.id === 'note-form') {
         await saveNote(form, form.dataset.id ? '' : onceId(form));  // 36c-knowledge.js; a typed one is made once however often 儲存 is pressed
       } else if (form.id === 'settings-form') {
