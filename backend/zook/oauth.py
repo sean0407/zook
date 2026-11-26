@@ -185,7 +185,7 @@ def oauth_finish(app, state, code):
             elif now: new['name'] = '帳號 %d' % (len(others) + 2); others.append(new)  # another account; the default stays as it is
             else: new['name'] = '帳號 1'; record['oauth'] = new
             if not others: record.pop('otherAccounts', None)
-            connector_touch(record['id']); store.save()
+            connector_touch(record['id'], signed_in=True); store.save()
     if not fits: blob_delete(blob_id); raise ValueError(changed)
     if old: blob_delete(old)
 

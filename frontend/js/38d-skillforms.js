@@ -28,16 +28,17 @@
   function connectorAddedNote(made) {
     const test = made.test || {};
     if (made.on) return '已新增，連線測試成功，所有 Bot 都可以使用';
-    if (test.needsLogin) { state.waitOn = state.waitOn || new Set(); state.waitOn.add(made.id); return '已新增，要先登入。登入並測試成功後會自動開啟'; }
+    if (test.needsLogin) return '已新增，要先登入。登入並測試成功後會自動開啟（這之間你自己開關過或改過設定，就不會自動開）';
     return '已新增，但連線測試沒有成功，先維持關閉。原因寫在卡片上';
   }
-  // After a sign-in: Zook tests the connector again and switches it on only when that worked with the settings saved now (#303).
+  // After a sign-in: Zook tests the connector again. Zook itself decides whether it is switched on: only one it was asked to switch
+  // on once signed in, and only if nothing changed and nobody switched it on or off since (#303).
   async function connectorOnIfReady(id) {
     let r;
     try { r = await post('connectors/' + encodeURIComponent(id.split(':')[1]) + '/turn-on'); }
     catch (error) { state.mcpTests[id] = {status: 'error', error: error.message}; return false; }
     state.mcpTests[id] = r.test;
-    if (r.on) { state.data.settings.sharedMcp = [...new Set([...(state.data.settings.sharedMcp || []), id])]; state.waitOn?.delete(id); }
+    if (r.on) state.data.settings.sharedMcp = [...new Set([...(state.data.settings.sharedMcp || []), id])];
     return r.on;
   }
   function skillModal(item) {

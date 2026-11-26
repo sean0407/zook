@@ -539,7 +539,7 @@ class Handler(BaseHTTPRequestHandler):
                 except LookupError as exc: return self.error(404, str(exc))
                 return self.respond(200, {'ok': True})
             if len(parts) == 4 and parts[:2] == ['api', 'connectors'] and parts[3] == 'turn-on' and self.command == 'POST' and not self.device:  # after its sign-in: tested again here, on only if what was tested is what is saved (#303)
-                self.body(); on, test = connector_first_test(store, 'zook:' + parts[2]); return self.respond(200, dict(on=on, test=test))
+                self.body(); on, test = connector_first_test(store, 'zook:' + parts[2], 'if-waiting', waiting=True); return self.respond(200, dict(on=on, test=test))
             if len(parts) == 4 and parts[:2] == ['api', 'connectors'] and parts[3] in ('login', 'logout') and self.command == 'POST' and not self.device:
                 with store.lock: record = copy.deepcopy(next((c for c in store.data['connectors'] if c['id'] == parts[2]), None))
                 if not record: return self.error(404, '找不到這個連接器。')
@@ -565,7 +565,7 @@ class Handler(BaseHTTPRequestHandler):
                         for blob in drop: blob_delete(blob)  # the address or the way to sign in changed
                         for old in old_keys: secret_drop(old)  # the keys these replaced
                         if existing: return self.respond(200, dict(id='zook:' + record['id'], name=record['name']))
-                        on, test = connector_first_test(store, 'zook:' + record['id'])  # on for every Bot only once it worked (#303)
+                        on, test = connector_first_test(store, 'zook:' + record['id'], waiting=True)  # on for every Bot only once it worked (#303)
                         return self.respond(201, dict(id='zook:' + record['id'], name=record['name'], on=on, test=test))
                     if existing and self.command == 'DELETE':
                         with store.lock:

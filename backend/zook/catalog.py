@@ -102,7 +102,7 @@ def catalog_add(app, item_id, key=None):
     key = key.strip() if item['auth'] == 'key' and isinstance(key, str) else ''
     if item['auth'] == 'key' and not key: raise ValueError('請貼上金鑰。')
     with _catalog_lock:
-        with store.lock: existing = copy.deepcopy(next((c for c in store.data['connectors'] if c.get('url') == item['url']), None))
+        with store.lock: existing = copy.deepcopy(next((c for c in store.data['connectors'] if c.get('url') == item['url']), None)); rev = connector_rev(existing['id']) if existing else 0
         if existing and existing.get('oauth'): return existing, ''
         if existing and item['auth'] == 'open': return existing, ''
         record = copy.deepcopy(existing)  # a copy: a failed save puts back the connector exactly as it was
@@ -122,6 +122,7 @@ def catalog_add(app, item_id, key=None):
             with store.lock:
                 current = next((c for c in store.data['connectors'] if c['id'] == record['id']), None)
                 if existing and not current: raise RuntimeError('%s 在加入期間被移除了，請再加入一次。' % item['name'])  # not brought back
+                if existing and connector_rev(record['id']) != rev: raise RuntimeError('%s 在加入期間被修改或開關過，沒有覆蓋，請再加入一次。' % item['name'])  # nothing overwritten, nothing switched on
                 replaced = (current or {}).get('secretId') if made and (current or {}).get('secretId') != made else ''
                 taken = {same_name(c['name']) for c in store.data['connectors'] if c['id'] != record['id']}
                 record['name'] = next((n for n in [record['name']] + ['%s %d' % (item['name'], i) for i in range(2, 200)] if same_name(n) not in taken), '%s %s' % (item['name'], record['id'][:6]))
@@ -130,6 +131,7 @@ def catalog_add(app, item_id, key=None):
                 if auth != 'login' and ident not in (st.get('sharedMcp') or []):  # checked above; one that needs a sign-in is switched on once signed in and tested (#303)
                     st['sharedMcp'] = (st.get('sharedMcp') or []) + [ident]; added = True
                 store.save()
+                if auth == 'login': connector_wait_sign_in(record['id'], connector_rev(record['id']))  # on once signed in and tested, if nothing changes before
         except Exception:
             if made: secret_delete(made)  # the connector was not saved, so its key does not stay behind
             with store.lock:

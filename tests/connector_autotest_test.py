@@ -58,15 +58,13 @@ class ConnectorAddTest(unittest.TestCase):
         self.assertFalse(z.device_may('POST', '/api/connectors/abc/turn-on'))
 
     def race(self, change, **extra):
-        """Add a slow connector that works, switch it off, ask for turn-on and make a change while it is being tested."""
-        import threading
+        """Add a slow connector that works and make a change while its first test runs (it is saved before it is tested)."""
         body = dict({'name': 'Slow', 'transport': 'stdio', 'command': '%s %s' % (sys.executable, self.root / 'slow.py')}, **extra)
-        made = self.req('POST', '/api/connectors', body)[1]; ident = made['id'].split(':')[1]
-        self.assertTrue(made['on']); self.assertEqual(self.req('PATCH', '/api/settings', {'sharedMcp': []})[0], 200)
         out = {}
-        worker = threading.Thread(target=lambda: out.update(self.req('POST', '/api/connectors/%s/turn-on' % ident, {})[1])); worker.start()
-        time.sleep(0.6); change(ident); worker.join(30)
-        return made['id'], ident, out
+        worker = threading.Thread(target=lambda: out.update(self.req('POST', '/api/connectors', body)[1])); worker.start()
+        time.sleep(0.6); ident = next(m for m in self.req('GET', '/api/integrations')[1]['mcp'] if m['name'] == 'Slow')['id'].split(':')[1]
+        change(ident); worker.join(30)
+        return out['id'], ident, out
 
     def test_a_change_made_and_undone_during_the_test_keeps_it_off(self):
         def change(ident):
@@ -74,7 +72,7 @@ class ConnectorAddTest(unittest.TestCase):
             self.assertEqual(self.req('PATCH', '/api/connectors/' + ident, {'env': {}})[0], 200)  # A -> B -> A
         made, ident, out = self.race(change)
         self.assertEqual((out['on'], out['test'].get('changed')), (False, True)); self.assertNotIn(made, self.shared())
-        self.assertTrue(self.req('POST', '/api/connectors/%s/turn-on' % ident, {})[1]['on'])  # nothing changes now: on
+        self.assertEqual(self.req('POST', '/api/mcp/%s/test' % made, {})[1]['status'], 'ready')  # it works; switched on by hand from here
 
     def test_a_key_replaced_under_the_same_id_during_the_test_keeps_it_off(self):
         change = lambda ident: self.assertEqual(self.req('PATCH', '/api/connectors/' + ident, {'secret': 'second-key-12345'})[0], 200)
@@ -264,6 +262,36 @@ class CatalogSignIn(unittest.TestCase):
             z._catalog_check = removed
             self.assertRaisesRegex(RuntimeError, '被移除', z.catalog_add, app, 'svc', 'good-key-12345')
             self.assertEqual(store.data['connectors'], []); self.assertNotIn('zook:c1', store.data['settings'].get('sharedMcp') or []); self.assertEqual(self.keys(temp), [])
+
+    def test_one_changed_during_the_catalog_check_is_not_overwritten_nor_switched_on(self):
+        with tempfile.TemporaryDirectory() as temp:
+            z, store, app = self.catalog(temp)
+            store.data['connectors'].append(self.connector())
+            for change in ('edit', 'switch'):
+                def meanwhile(item, key):
+                    with store.lock:
+                        if change == 'edit': store.data['connectors'][0] = dict(store.data['connectors'][0], name='Edited'); z.connector_touch('c1')  # edited in another window
+                        else: z.settings_patch(store, {'sharedMcp': ['zook:c1']}); z.settings_patch(store, {'sharedMcp': []})  # switched on and off again
+                z._catalog_check = meanwhile
+                self.assertRaisesRegex(RuntimeError, '修改或開關', z.catalog_add, app, 'svc', 'good-key-12345')
+                self.assertEqual(store.data['connectors'][0]['secretId'], ''); self.assertNotIn('zook:c1', store.data['settings'].get('sharedMcp') or [])
+                self.assertEqual(self.keys(temp), [])
+            self.assertEqual(store.data['connectors'][0]['name'], 'Edited')
+
+    def test_a_catalog_sign_in_switches_on_only_if_nothing_changed_while_waiting(self):
+        with tempfile.TemporaryDirectory() as temp:
+            z, store, app = self.catalog(temp)
+            z.CONNECTOR_CATALOG[:] = [z._c('svc', 'Svc', '測試', 'https://svc.example/mcp', 'login', '測試。')]; z.oauth_begin = lambda app, record, **kw: 'https://login.example/'
+            ready = lambda ident, inventory: {'status': 'ready', 'toolCount': 1}
+            z.runtime_module = lambda: type('R', (), {'test_connection': staticmethod(ready)}); z.inventory_for = lambda store, **kw: {}
+            for toggled in (True, False):
+                store.data['connectors'][:] = []; store.data['settings']['sharedMcp'] = []
+                record, _ = z.catalog_add(app, 'svc'); ident = 'zook:' + record['id']
+                if toggled: z.settings_patch(store, {'sharedMcp': [ident]}); z.settings_patch(store, {'sharedMcp': []})
+                with store.lock: z.connector_touch(record['id'], signed_in=True)  # the sign-in finished (oauth_finish)
+                on, test = z.connector_first_test(store, ident, 'if-waiting', waiting=True)
+                self.assertEqual((on, test['wanted']), (not toggled, not toggled), toggled)
+                self.assertEqual(ident in store.data['settings']['sharedMcp'], not toggled)
 
     def test_a_refused_sign_in_counts_as_a_change_once(self):
         with tempfile.TemporaryDirectory() as temp:

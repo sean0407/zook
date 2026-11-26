@@ -568,7 +568,7 @@
             state.integrations = await api('integrations');
             const now = (state.integrations.mcp || []).find(i => i.id === id);
             if (adding ? ids(now) !== before : now?.signedIn) {
-              const on = state.waitOn?.has(id) ? await connectorOnIfReady(id) : (await retestConnector(id), false); render(true);  // one added just now waited for this sign-in: Zook tests it and turns it on (#303)
+              const on = await connectorOnIfReady(id); render(true);  // tested again; Zook switches it on only if it was waiting for this sign-in (#303)
               toast(adding ? '已新增帳號，可以在卡片上選擇要用哪一個' : on ? '登入完成，連線測試成功，所有 Bot 都可以使用' : '登入完成'); break;
             }
           }

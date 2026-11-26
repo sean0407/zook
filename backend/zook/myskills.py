@@ -94,10 +94,23 @@ def custom_skill_route(store, method, rest, body):
 _connector_revs, _revs_lock = {}, threading.Lock()
 
 
-def connector_touch(connector_id):
+_auto_on = {}  # connector id -> its change count when Zook was asked to switch it on once signed in (#303)
+
+
+def connector_touch(connector_id, signed_in=False):
     """Count a change to what a connector connects with: its settings, a key replaced in the Keychain (same id), an account signed
-    in, switched or signed out, removal. A sign-in renewed while the connector is being used or tested is not counted."""
-    with _revs_lock: _connector_revs[connector_id] = _connector_revs.get(connector_id, 0) + 1
+    in, switched or signed out, switched on or off, removal. A sign-in renewed while it is used or tested is not counted.
+    Any change also drops a waiting 「switch on once signed in」, except the sign-in it was waiting for (signed_in)."""
+    with _revs_lock:
+        now = _connector_revs.get(connector_id, 0); _connector_revs[connector_id] = now + 1
+        if signed_in and _auto_on.get(connector_id) == now: _auto_on[connector_id] = now + 1
+        else: _auto_on.pop(connector_id, None)
+
+
+def connector_wait_sign_in(connector_id, rev):
+    """Lock held. Switch this connector on once it is signed in and tested, unless anything about it changes before then."""
+    with _revs_lock:
+        if _connector_revs.get(connector_id, 0) == rev: _auto_on[connector_id] = rev
 
 
 def shared_touch(before, after):
@@ -166,19 +179,31 @@ def connector_rev(connector_id):
     with _revs_lock: return _connector_revs.get(connector_id, 0)
 
 
-def connector_first_test(store, ident, turn_on=True):
+def connector_first_test(store, ident, turn_on=True, waiting=False):
     """Test a connector just added, or just signed in to. It is switched on for every Bot only when it worked and nothing about it
-    changed while it was tested (#303); otherwise it stays off and the reason goes back with the answer.
+    changed while it was tested (#303); otherwise it stays off and the reason goes back with the answer. A new one that needs a
+    sign-in first is remembered (waiting=True when adding); after the sign-in, waiting=True means: on only if it is still remembered.
     Never called with store.lock held: starting a program or reaching a service takes time."""
     cid = ident.split(':', 1)[1] if ident.startswith('zook:') else ''
     exists = lambda: any(c['id'] == cid for c in store.data['connectors'])
-    with store.lock: rev = connector_rev(cid); there = exists()  # read before the test reads its settings and keys
+    with store.lock:
+        rev = connector_rev(cid); there = exists()  # read before the test reads its settings and keys
+        if waiting and turn_on == 'if-waiting':
+            with _revs_lock: turn_on = _auto_on.get(cid) == rev  # still wanted: nothing changed, nobody switched it on or off since
     try: test = runtime_module().test_connection(ident, inventory_for(store, testing=ident))
     except Exception as exc: test = {'status': 'error', 'toolCount': 0, 'error': str(exc)[:300] or '連線失敗。'}
     on = bool(turn_on) and test.get('status') == 'ready'
     if on:
         with store.lock:
             on = there and exists() and connector_rev(cid) == rev  # any change in between, even one changed back, means it was not what was tested
-            if on: st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + [ident])); store.save()
+            if on:
+                st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + [ident])); store.save()
+                with _revs_lock: _auto_on.pop(cid, None)
         if not on: test = dict(test, changed=True, error='測試時的設定已經被修改或移除，先維持關閉。請再測試一次。')
+    if waiting and not on:
+        with store.lock:
+            if test.get('needsLogin') and turn_on: connector_wait_sign_in(cid, rev)  # still waits for its sign-in (only if nothing changed)
+            else:
+                with _revs_lock: _auto_on.pop(cid, None)  # failed for another reason, or no longer wanted: switched on by hand from now
+    if waiting: test = dict(test, wanted=bool(turn_on))  # whether it was still to be switched on by itself
     return on, test
