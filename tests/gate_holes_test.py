@@ -120,6 +120,19 @@ class GateHoles(unittest.TestCase):
                      'X=src; rg foo "$X"', 'git commit -m "$(cat <<EOF\nmsg\nEOF\n)"', 'echo "$HOME"'):
             self.assertNotAsked(line)
 
+    def test_review_round_five(self):
+        for line in ('echo "$(printf \'%s/.ssh/config\' "$HOME")"; cat "$_"', 'F=$(printf x); cat "$F"', 'T=$(mktemp); T=$(printf x); cat "$T"', 'read F; cat "$F"', 'F=notes.txt; read F; cat "$F"',
+                     'F=x cat "$F"', 'cat "$(printf ~/.ssh/config)"', 'D=.ssh; tar -C "$HOME" -C "$D" -cf /tmp/a.tar .', 'cat ~/{.ssh,Desktop}/config',
+                     'cat ~/.ss{h,x}/id_x', 'rg x ~/{.ssh,Desktop}', 'cat ~/{a..z}/x'):
+            self.assertAsked(line)
+        listing = Path(self.temp.name, 'paths.txt'); listing.write_text('notes.txt\n~/.ssh/id_rsa\n')
+        for line in ('xargs -a paths.txt cat', 'parallel cat :::: paths.txt', 'xargs -a missing.txt cat'):
+            self.assertAsked(line)
+        listing.write_text('notes.txt\nsrc/a.txt\n')
+        for line in ('xargs -a paths.txt cat', 'F=patterns.txt; grep -f "$F" notes.txt', 'grep -e "$PATTERN" notes.txt', 'git commit -m "$MESSAGE"', 'xargs -a missing.txt echo',
+                     'export F=notes.txt; cat "$F"', 'T=$(mktemp); echo x > "$T"; cat "$T"', 'D="$(mktemp -d)"; cd "$D" && ls', 'for d in src; do tar -C "$d" -cf /tmp/x.tar .; done'):
+            self.assertNotAsked(line)
+
     def test_cdpath_may_lead_to_keys(self):
         os.environ['CDPATH'] = os.path.expanduser('~')
         self.assertAsked('cd .ssh && rg x .')

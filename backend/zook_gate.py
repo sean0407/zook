@@ -29,14 +29,13 @@ MAX_ACTIONS = 10   # what one card shows in full; more than this, or a line too 
 MAX_TITLE = 200
 
 # ---- what counts as a boundary: the lists of programs, options and paths (zook_gate_words.py, next to this file)
-def _words():
-    import importlib.util
-    spec = importlib.util.spec_from_file_location('zook_gate_words', os.path.join(HERE, 'zook_gate_words.py'))
-    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-    return {k: v for k, v in vars(module).items() if k.isupper() and k != 'HOME'}
+def _load(name):
+    """A part of this check kept in its own file next to this one, read into this same namespace (as server.py does for Zook)."""
+    path = os.path.join(HERE, name)
+    with open(path, encoding='utf-8') as f: exec(compile(f.read(), path, 'exec'), globals())
 
 
-globals().update(_words())
+_load('zook_gate_words.py')
 
 
 # ---- the Bot's own scratch folder (queue #261): its files are deleted by Zook's zook_clean_scratch tool (scratch.py), never by a
@@ -84,109 +83,6 @@ def _line_folders(whole):
         elif len(words) == 1 and not set(words[0]) & set('$`*?[]{}\\') and os.path.isabs(_expand(words[0])) and os.path.isdir(_expand(words[0])):
             folders.append(_expand(words[0]))  # zsh's AUTO_CD: a folder alone is a cd
     return folders
-
-
-def _folders():
-    """Every folder a command of the line being read may run in, after each cd, pushd or chdir of it (in any order: one may fail);
-    None when one cannot be known (a variable, cd -, popd, env -C, a name CDPATH may lead to keys)."""
-    found, stack = [_CWD[0]], 0  # stack: pushd's of this line not yet undone; a popd goes back to a folder of this line only then
-    for line in _LINES:
-        for part in _split(_without_inner(line))[0]:
-            raw = _redirects(part)[0]
-            if re.search(r'(?:^|\s)(?:\S*/)?env(?:\s+(?:-\S*|\S*=\S*))*?\s+(?:-[^-\s]*C|--chdir)', ' '.join(raw)): return None  # env -C: elsewhere
-            words = _strip(list(raw))
-            if words[:1] == ['popd'] and (words[1:] not in ([], ['-q']) or not stack) or words[:1] == ['pushd'] and len(words) == 1: return None
-            stack += {'pushd': 1, 'popd': -1}.get(words[0] if words else '', 0)
-            if words[:1] in (['cd'], ['pushd'], ['chdir']):
-                rest = [w for w in words[1:] if not re.fullmatch(r'-[LPeq@]+|--', w)]
-                where = _expand(rest[0]) if rest else HOME
-                if len(rest) > 1 or where[:1] in ('-', '+', '', '~') or set(where) & set('$`*?[]{}\\'): return None  # ~-: the folder before
-                more = [x for f in found for x in (os.path.normpath(os.path.join(f, where)), os.path.realpath(os.path.join(f, where)))]  # cd -P: links first
-                if not re.match(r'\.\.?(/|$)|/', where):  # a plain name: CDPATH may lead to a folder of that name elsewhere
-                    if any(re.search(r'\bCDPATH\s*=', x) for x in _LINES): return None  # set on this very line: where it leads is not known here
-                    if any('/%s/' % os.path.normpath(where).strip('/') in s.rstrip('/') + '/' for d in SECRET_DIRS + CREDENTIALS + _accounts_folder() for s in (d, os.path.realpath(d))): return None
-                    more += [os.path.normpath(os.path.join(f, _expand(c) or '.', where)) for c in os.environ.get('CDPATH', '').split(':') for f in found]
-                found = list(dict.fromkeys(found + more))
-                if len(found) > 40: return None  # too many to follow: not known
-            elif len(words) == 1 and not set(words[0]) & set('$`*?[]{}\\') and os.path.isabs(_expand(words[0])) and os.path.isdir(_expand(words[0])):
-                found.append(_expand(words[0]))  # zsh's AUTO_CD: a folder alone is a cd
-    return list(dict.fromkeys(found))
-
-
-def _values(name):
-    """What a variable of the line being read may hold: set on it (NAME=value) or a for loop's words; None when not known."""
-    found = []
-    for line in _LINES:
-        for part in _split(_without_inner(line))[0]:
-            found += [w.split('=', 1)[1] for w in part if w.startswith(name + '=')]
-            if part[:3] == ['for', name, 'in']: found += part[3:]
-    return found or ([] if name == '_' else None) if name != 'PWD' else _folders()
-
-
-def _resolved(path, depth=0):
-    """The path, and where it is from each folder a cd of this line may have led to (a relative path), with what a wildcard matches
-    there and what a variable set on the line holds; None when one cannot be known."""
-    p = _expand(path)
-    names = re.findall(r'\$\{?(\w+)', p)
-    if names or '`' in p:
-        held = [_values(n) for n in names]
-        if '`' in p or None in held or depth > 2: return None
-        out = []
-        for n, values in zip(names, held):
-            for v in values: out += _resolved(re.sub(r'\$\{?%s\}?' % n, lambda m: v, p), depth + 1) or [None]
-        return None if None in out else [path] + out
-    folders = [] if not p or os.path.isabs(p) else None if p.startswith('~') else _folders()  # ~-, ~+: the folder before, or now
-    found = None if folders is None else [path] + [os.path.join(f, p) for f in folders]
-    return found and found + [m for x in found[1:] or [p] if set(x) & set('*?[') for m in glob.glob(_expand(x))]
-
-
-def _secret_any(path, unsure=True):
-    """Where a key or sign-in is named, after the cds of this line; '' when none is. unsure: a path in a folder that cannot be known
-    (cd "$VAR") counts too, as $PWD/…"""
-    found = _resolved(path)
-    if found is None: return _secret_path(path) and path or ((path if set(path) & set('$`') else '$PWD/' + _expand(path)) if unsure else '')
-    return next((x for x in found if _secret_path(x)), '')
-
-
-def _read_file(path):
-    """A file a command reads (-f FILE, xargs -a FILE): a key or sign-in, or a variable or {a,b} that may be one."""
-    return _secret_any(path) or (path if set(_expand(path)) & set('$`{') else '')
-
-
-def _rooted(starts):
-    """(the folders a search starts from, after the cds of its line; whether one cannot be known: a variable, or an unknown cd)."""
-    found = [_resolved(s) if not set(_expand(s)) & set('{}') else None for s in starts]  # {a,b}: not known here
-    return [_abs(x) for f in found for x in f or []], None in found  # not normalized: a/link/.. is where the link leads
-
-
-def _short_value(args, i, valued, letters):
-    """The value of the first of these short options in args[i] (-fFILE, -if FILE), or None: another option's value ends the search."""
-    for k, ch in enumerate(args[i][1:] if re.match(r'-[^-]', args[i]) else '', 2):
-        if ch in letters: return args[i][k:] or (args[i + 1] if i + 1 < len(args) else '')
-        if '-' + ch in valued: return None
-
-
-def _takes_next(a, valued):
-    """The option takes the next word as its value: itself, or the first letter taking a value is its last (-tn 1, not -aFILE)."""
-    first = next((k for k, ch in enumerate(a[1:], 2) if '-' + ch in valued), 0) if re.fullmatch(r'-[A-Za-z0-9]+', a) else 0
-    return a in valued or bool(first) and not a[first:]
-
-
-def _arg_files(words):
-    """The files xargs (-a, --arg-file) and GNU parallel (-a, --arg-file, :::: and ::::+) read their arguments from."""
-    out, tool, listing, done = [], '', False, False
-    for i, w in enumerate(words):
-        if os.path.basename(w) in ('xargs', 'parallel') and not tool and not _strip(words[:i]):  # in the place of the command
-            tool = os.path.basename(w); continue
-        if not tool: continue
-        done = done or not w.startswith('-') and not _takes_next(words[i - 1], WRAPPER_VALUED[tool]) and not listing and not w.startswith(':::')
-        if w in ('::::', '::::+'): listing = True
-        elif w.startswith(':::'): listing = False
-        elif listing: out.append(w)
-        elif done: continue  # the command's own words
-        elif w in ('-a', '--arg-file') or w.startswith('--arg-file='): out += [w.split('=', 1)[1]] if '=' in w else words[i + 1:i + 2]
-        elif _short_value(words, i, WRAPPER_VALUED[tool], 'a') is not None: out.append(_short_value(words, i, WRAPPER_VALUED[tool], 'a'))
-    return out
 
 
 def _into_scratch(dest, folders):
@@ -336,7 +232,7 @@ def _short(text, most=60):
 
 def _where(path):
     """Where a file is, whole, so two files of the same name are told apart: ~/… inside the home folder. A web address: its site only."""
-    if '$' in str(path) or '`' in str(path): return '「%s」指向的位置' % _short(str(path).strip('"\''), 40)  # a variable: where it points is not known here
+    if '$' in str(path) or '`' in str(path): return '「%s」指向的位置' % _short(str(path).strip('"\'').replace('$ZOOKSUB', '$( … )'), 40)  # a variable: where it points is not known here
     if str(path).lower().startswith('file://'): path = _file_url(str(path))
     elif '://' in str(path): return _host(path) or '網址'
     full = os.path.normpath(_abs(path))
@@ -508,7 +404,7 @@ def command_boundaries(command, depth=0):
             if (script or (prog in INTERPRETERS or prog.startswith('python')) and all(a.startswith('-') for a in stripped[1:])) and (read or n in piped):
                 found.append(_hit('unclear', '（要執行的程式來自另一個指令的輸出）'))  # … | bash, bash < file: the program is what comes in
             found += _redirect_hits(read, written, empty=not stripped or os.path.basename(stripped[0]) in (':', 'true') and len(stripped) == 1 and not read or stripped[:2] == ['cat', '/dev/null'])
-            listed = [w for w in map(_read_file, _arg_files(words)) if w]  # xargs -a FILE, parallel --arg-file FILE or :::: FILE: read too
+            listed = _listed(_arg_files(words), prog)  # xargs -a FILE, parallel --arg-file FILE or :::: FILE: read too
             found += [_hit('secret', '讀取 ' + _names(listed))] if listed else []
             found += _argv_boundaries(stripped, command, depth)
     finally: _LINES.pop()
@@ -516,10 +412,10 @@ def command_boundaries(command, depth=0):
 
 
 def _without_inner(command):
-    """The line without what runs inside each $( … ) and `…` (read on its own): at the start of a word or a value it becomes $_, as
+    """The line without what runs inside each $( … ) and `…` (read on its own): at the start of a word or a value it becomes $ZOOKSUB, as
     the program to run a variable; inside a word it splits the word as before (~/.aws$(…) still reads as ~/.aws), marked."""
     def instead(text, start):  # process substitution: the file name a shell puts there; glued to a word: GLUED, so a name built so is seen
-        return '/dev/fd/63' if text[start] in '<>=' else '$_' if start == 0 or text[start - 1] in ' \t\n;&|(=\'"' else ' %s ' % GLUED
+        return '/dev/fd/63' if text[start] in '<>=' else '$ZOOKSUB' if start == 0 or text[start - 1] in ' \t\n;&|(=\'"' else ' %s ' % GLUED
     out, i = re.sub(r'`[^`]*`', lambda m: instead(command, m.start()), command), 0
     while True:
         start = next((k for k, quoted, single in _opens(out) if k >= i and not quoted and not single), -1)  # in '…': left for bash -c
@@ -654,7 +550,7 @@ def _search_roots(name, args, whole='', depth=0):
         if name in TARS:  # tar -C folder: the names after it are there; each -C from the one before it, so any of them counts
             moved = []
             for v in [v for i, a in enumerate(args) for v in [a[12:] if a.startswith('--directory=') else ''.join(args[i + 1:i + 2]) if a == '--directory' else _short_value(args, i, {'-f', '-b', '-T', '-X', '-s'}, 'C')] if v is not None]:
-                moved = list(dict.fromkeys(moved + [v] + ([] if os.path.isabs(_expand(v)) or set(v) & set('$`') else [os.path.join(d, v) for d in moved])))[:40]
+                moved = list(dict.fromkeys(moved + [v] + ([] if os.path.isabs(_expand(v)) else [os.path.join(d, v) for d in moved])))[:40]
             plain = plain + [os.path.join(d, s) for d in moved for s in (plain or ['.']) if not os.path.isabs(_expand(s))]
         listing = name in ('rg', 'ripgrep') and _rg_list_only(args, whole, depth)  # names only (#138)
         if name in ('rg', 'ripgrep') and any(a in ('--in', '--in0') or a.startswith(('--in=', '--in0=')) for a in _options(args)): plain = plain + ['/']  # the paths come from a list Zook does not read: any of them
@@ -784,7 +680,7 @@ def _argv_boundaries(argv, whole, depth):
         files += [v for v in (_short_value(args, i, valued, 'f') for i in range(len(opts))) if v]
         if any(map(_read_file, files)): found.append(_hit('secret', '讀取 ' + _names(map(_read_file, files))))
     bare = plain if roots is None and _folders() != [_CWD[0]] else []  # after a cd, a bare name may be in a folder of keys (not a search's words)
-    bare += [a for a in plain if '$' in a and a != '$_']  # a file named by a variable: what it holds, or asked when not known
+    bare += [a for i, a in enumerate(args) if '$' in a and a[:1] != '-' and not (i and args[i - 1][:1] == '-') and not greps]  # a file named by a variable (not an option's value)
     hits = [x for x in list(map(_secret_any, touched)) + [_secret_any(a, name not in ('echo', 'printf', 'test', '[', '[[', 'export', 'cd', 'pushd', 'chdir')) for a in bare] if x]
     if not any(k == 'secret' for k, _ in found) and hits: found.append(_hit('secret', _names(hits)))
     return found
@@ -984,6 +880,8 @@ def main():
         sys.stderr.write('Zook 的安全檢查出錯，所以擋下了這個動作。請直接告訴使用者。\n')
         return 2
 
+
+_load('zook_gate_shell.py')  # where a command runs and what it reads: cd, variables, xargs -a (queue #293)
 
 if __name__ == '__main__':
     sys.exit(main())
