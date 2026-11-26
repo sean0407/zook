@@ -533,7 +533,7 @@
 
   function modal(title, body, footer = '', wide = false) {
     state.modal = document.activeElement;
-    modalRoot.innerHTML = `<div class="modal-overlay" data-action="overlay"><section class="modal ${wide?'wide':''}" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="modal-head"><h2 id="modal-title">${esc(title)}</h2><button class="icon-btn" data-action="close-modal" aria-label="關閉">×</button></div>${body}${footer}</section></div>`;
+    modalRoot.innerHTML = `<div class="modal-overlay" data-action="overlay"><section class="modal ${wide?'wide':''} ${wide==='viewer'?'viewer':''}" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div class="modal-head"><h2 id="modal-title">${esc(title)}</h2><button class="icon-btn" data-action="close-modal" aria-label="關閉">×</button></div>${body}${footer}</section></div>`;
     modalEditsReset();  // 21b-unsaved.js
     setTimeout(() => $('.modal input,.modal textarea,.modal select,.modal button')?.focus(), 0);
     modalRoot.querySelectorAll('form').forEach(f => { f.noValidate = true; });  // an empty field is said in words; the browser's bubble may not show (#209)

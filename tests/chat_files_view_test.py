@@ -35,7 +35,7 @@ class ChatFilesViewTest(unittest.TestCase):
             status, _, _ = self.req('POST', base, data, {'X-File-Name': __import__('urllib.parse').parse.quote(name), 'Content-Type': 'application/octet-stream'})
             self.assertLess(status, 300)
         listed = {f['name']: f['kind'] for f in self.req('GET', base)[1]['files']}
-        self.assertEqual(listed, {'設計圖v0.1.png': 'image', '說明.md': 'markdown', '頁面.html': 'text', '圖.svg': 'file', '資料.zip': 'file'})
+        self.assertEqual(listed, {'設計圖v0.1.png': 'image', '說明.md': 'markdown', '頁面.html': 'html', '圖.svg': 'file', '資料.zip': 'file'})
         get = lambda n: self.req('GET', base + '/' + __import__('urllib.parse').parse.quote(n), raw=True)
         self.assertEqual(get('設計圖v0.1.png')[2], 'image/png')
         self.assertEqual(get('說明.md')[2], 'text/plain; charset=utf-8')
