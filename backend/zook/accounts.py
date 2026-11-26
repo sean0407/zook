@@ -258,16 +258,19 @@ def _secret_read(account_id):
 
 
 def secret_delete(account_id):
+    """True when the key is gone (or was never there)."""
     _secret_forget(account_id)
-    if not ACCOUNT_ID.fullmatch(account_id or ''): return
+    if not ACCOUNT_ID.fullmatch(account_id or ''): return True
     file = _secret_file(account_id)
     if file:
         try: file.unlink()
-        except OSError: pass
-        return
-    try: subprocess.run(['/usr/bin/security', 'delete-generic-password', '-s', KEYCHAIN_SERVICE, '-a', account_id],
-                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
-    except (OSError, subprocess.TimeoutExpired): pass
+        except FileNotFoundError: pass
+        except OSError: return False
+        return True
+    try: p = subprocess.run(['/usr/bin/security', 'delete-generic-password', '-s', KEYCHAIN_SERVICE, '-a', account_id],
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+    except (OSError, subprocess.TimeoutExpired): return False
+    return p.returncode in (0, 44)  # 44: no such item
 
 
 def provider_env(provider, account=None):

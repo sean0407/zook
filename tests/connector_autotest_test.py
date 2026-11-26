@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """#303 (#22): a connector you add is tested once at once. Only one that works is switched on for every Bot; one that does not
 stays off with the reason. #288③: connector names that differ only in upper/lower case clash."""
-import base64, http.client, importlib.util, io, json, os, subprocess, sys, tempfile, threading, time, unittest, zipfile
+import base64, copy, http.client, importlib.util, io, json, os, subprocess, sys, tempfile, threading, time, unittest, zipfile
 from pathlib import Path
 
 SERVER = Path(__file__).resolve().parents[1] / 'backend/server.py'
@@ -186,6 +186,84 @@ class CatalogSignIn(unittest.TestCase):
             store.save = raced
             self.assertRaises(OSError, z.catalog_add, app, 'svc', 'good-key-12345')
             self.assertIs(store.data['connectors'][0], patched)
+
+    def connector(self, **extra):
+        return dict(dict(id='c1', name='Svc', transport='http', command='', url='https://svc.example/mcp', env={}, secretName='', secretId='', headers={}, moreSecrets={}, origin=''), **extra)
+
+    def test_switching_off_while_a_test_finishes_stays_off(self):
+        with tempfile.TemporaryDirectory() as temp:
+            z, store = self.load(temp)
+            store.data['connectors'].append(self.connector()); store.data['settings']['sharedMcp'] = ['zook:c1']
+            fire, out = threading.Event(), []
+            def tested(ident, inventory): fire.wait(5); return {'status': 'ready', 'toolCount': 1}
+            z.runtime_module = lambda: type('R', (), {'test_connection': staticmethod(tested)}); z.inventory_for = lambda store, **kw: {}
+            worker = threading.Thread(target=lambda: out.append(z.connector_first_test(store, 'zook:c1'))); worker.start(); time.sleep(0.3)
+            real = z.update
+            def racing(target, body, kind): real(target, body, kind); fire.set(); worker.join(0.5)  # the test finishes right after the list is changed
+            z.update = racing
+            z.settings_patch(store, {'sharedMcp': []})
+            worker.join(5)
+            self.assertNotIn('zook:c1', store.data['settings']['sharedMcp']); self.assertFalse(out[0][0])
+
+    def keys(self, temp): return sorted(p.name for p in (Path(temp) / 'secrets').iterdir())
+
+    def test_a_failed_save_of_new_keys_changes_nothing_and_leaves_no_key(self):
+        with tempfile.TemporaryDirectory() as temp:
+            z, store = self.load(temp)
+            z.secret_set('a' * 32, 'old-key-12345'); store.data['connectors'].append(self.connector(transport='stdio', command='x', url='', secretName='K', secretId='a' * 32))
+            record = dict(store.data['connectors'][0], moreSecrets={}); written = z.connector_keys_write(record, 'new-key-12345', {})
+            def broken(): raise OSError('disk full')
+            store.save = broken
+            self.assertRaises(OSError, z.connector_publish, store, record, written)
+            self.assertEqual(store.data['connectors'][0]['secretId'], 'a' * 32); self.assertEqual(self.keys(temp), ['a' * 32])
+
+    def test_two_edits_at_once_leave_one_key_each_and_no_strays(self):
+        with tempfile.TemporaryDirectory() as temp:
+            z, store = self.load(temp)
+            z.secret_set('a' * 32, 'old-key-12345'); z.secret_set('b' * 32, 'old-extra-12345')
+            store.data['connectors'].append(self.connector(transport='stdio', command='x', url='', secretName='K', secretId='a' * 32, moreSecrets={'EXTRA': 'b' * 32}))
+            first, second, third = (copy.deepcopy(store.data['connectors'][0]) for _ in range(3))  # all read before any was saved
+            done = []
+            for record, secret, more in ((first, 'first-key-12345', {}), (second, 'second-key-12345', {}), (third, None, {'EXTRA': 'new-extra-12345'})):
+                written = z.connector_keys_write(record, secret, more)
+                old, _ = z.connector_publish(store, record, written)
+                for ident in old: z.secret_drop(ident)
+            saved = store.data['connectors'][0]
+            self.assertEqual((z.secret_get(saved['secretId']), z.secret_get(saved['moreSecrets']['EXTRA'])), ('second-key-12345', 'new-extra-12345'))  # the third did not undo the second
+            self.assertEqual(self.keys(temp), sorted([saved['secretId'], saved['moreSecrets']['EXTRA']]))
+
+    def test_a_key_that_cannot_be_deleted_is_logged(self):
+        with tempfile.TemporaryDirectory() as temp:
+            z, _ = self.load(temp)
+            z.secret_delete = lambda ident: False
+            err = io.StringIO(); real, sys.stderr = sys.stderr, err
+            try: z.secret_drop('c' * 32)
+            finally: sys.stderr = real
+            self.assertIn('could not delete', err.getvalue()); self.assertIn('c' * 32, err.getvalue())
+
+    def catalog(self, temp):
+        z, store = self.load(temp)
+        z.CONNECTOR_CATALOG[:] = [z._c('svc', 'Svc', '測試', 'https://svc.example/mcp', 'key', '測試。')]; z._catalog_check = lambda item, key: None
+        return z, store, type('App', (), {'store': store, 'server_address': ('127.0.0.1', 1)})()
+
+    def test_a_failed_catalog_save_does_not_leave_it_on(self):
+        with tempfile.TemporaryDirectory() as temp:
+            z, store, app = self.catalog(temp)
+            store.data['connectors'].append(self.connector())
+            def broken(): raise OSError('disk full')
+            store.save = broken
+            self.assertRaises(OSError, z.catalog_add, app, 'svc', 'good-key-12345')
+            self.assertNotIn('zook:c1', store.data['settings'].get('sharedMcp') or []); self.assertEqual(self.keys(temp), [])
+
+    def test_one_removed_during_the_catalog_check_is_not_brought_back(self):
+        with tempfile.TemporaryDirectory() as temp:
+            z, store, app = self.catalog(temp)
+            store.data['connectors'].append(self.connector())
+            def removed(item, key):
+                with store.lock: store.data['connectors'][:] = []  # removed from another window meanwhile
+            z._catalog_check = removed
+            self.assertRaisesRegex(RuntimeError, '被移除', z.catalog_add, app, 'svc', 'good-key-12345')
+            self.assertEqual(store.data['connectors'], []); self.assertNotIn('zook:c1', store.data['settings'].get('sharedMcp') or []); self.assertEqual(self.keys(temp), [])
 
     def test_a_refused_sign_in_counts_as_a_change_once(self):
         with tempfile.TemporaryDirectory() as temp:

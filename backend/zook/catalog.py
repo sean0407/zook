@@ -114,23 +114,28 @@ def catalog_add(app, item_id, key=None):
                 if '不需要登入' not in str(exc): raise RuntimeError('%s 目前無法登入：%s' % (item['name'], exc))
                 auth = 'open'  # the service turned out to need no sign-in
         if auth != 'login': _catalog_check(item, key)
-        made, replaced = '', ''
+        made, replaced, ident, added, current = '', '', 'zook:' + record['id'], False, None
         try:
             if key:  # under a new Keychain id: the one it replaces is deleted once this is saved
-                replaced = record.get('secretId') or ''; record['secretId'] = made = ID()
+                record['secretId'] = made = ID()
                 record['secretName'] = 'Authorization'; secret_set(made, key)
             with store.lock:
+                current = next((c for c in store.data['connectors'] if c['id'] == record['id']), None)
+                if existing and not current: raise RuntimeError('%s 在加入期間被移除了，請再加入一次。' % item['name'])  # not brought back
+                replaced = (current or {}).get('secretId') if made and (current or {}).get('secretId') != made else ''
                 taken = {same_name(c['name']) for c in store.data['connectors'] if c['id'] != record['id']}
                 record['name'] = next((n for n in [record['name']] + ['%s %d' % (item['name'], i) for i in range(2, 200)] if same_name(n) not in taken), '%s %s' % (item['name'], record['id'][:6]))
                 store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]; connector_touch(record['id'])  # a new key for one already there
-                if auth != 'login':  # checked above; one that needs a sign-in is switched on once signed in and tested (#303)
-                    st = store.data['settings']; st['sharedMcp'] = list(dict.fromkeys((st.get('sharedMcp') or []) + ['zook:' + record['id']]))
+                st = store.data['settings']
+                if auth != 'login' and ident not in (st.get('sharedMcp') or []):  # checked above; one that needs a sign-in is switched on once signed in and tested (#303)
+                    st['sharedMcp'] = (st.get('sharedMcp') or []) + [ident]; added = True
                 store.save()
         except Exception:
             if made: secret_delete(made)  # the connector was not saved, so its key does not stay behind
             with store.lock:
                 if any(c is record for c in store.data['connectors']):  # still this attempt's: put back what was there, unless another change came since
-                    store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + ([existing] if existing else []); connector_touch(record['id'])
+                    store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + ([current] if current else []); connector_touch(record['id'])
+                if added: st = store.data['settings']; st['sharedMcp'] = [x for x in st.get('sharedMcp') or [] if x != ident]  # nor left on
             raise
-        if replaced: secret_delete(replaced)
+        if replaced: secret_drop(replaced)
         return record, url

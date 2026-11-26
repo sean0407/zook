@@ -107,10 +107,10 @@ def shared_touch(before, after):
 
 
 def connector_keys_write(record, secret, more):
-    """Write a connector's new keys under new Keychain ids and point the record at them; returns the ids they replace, to delete
-    once the record is saved. A key is never overwritten in place, so a test reading the old one cannot be mistaken for the new.
+    """Write a connector's new keys under new Keychain ids and point the record at them. Returns {key name ('' for the main key):
+    new id}. A key is never overwritten in place, so a test reading the old one cannot be mistaken for the new.
     If one cannot be written, the ones already written are deleted and the record is left as it was."""
-    made, old, plan = [], [], ([('', secret)] if secret else []) + sorted(more.items())
+    made, plan = [], ([('', secret)] if secret else []) + sorted(more.items())
     try:
         for key, value in plan:
             ident = ID(); secret_set(ident, value); made.append((key, ident))
@@ -118,10 +118,48 @@ def connector_keys_write(record, secret, more):
         for _, ident in made: secret_delete(ident)
         raise
     for key, ident in made:
-        if key: old.append(record['moreSecrets'].get(key)); record['moreSecrets'][key] = ident
-        else: old.append(record.get('secretId')); record['secretId'] = ident
-    if not secret and not record['secretName'] and record.get('secretId'): old.append(record['secretId']); record['secretId'] = ''  # the key was removed
-    return [x for x in old if x]
+        if key: record['moreSecrets'][key] = ident
+        else: record['secretId'] = ident
+    if not secret and not record['secretName']: record['secretId'] = ''  # the key was removed
+    return dict(made)
+
+
+def secret_drop(ident):
+    """Delete a key that nothing uses any more. A failure is written to Zook's log (the id only, never the key)."""
+    if not secret_delete(ident): sys.stderr.write('zook: could not delete an unused connector key (%s) from the Keychain\n' % ident); sys.stderr.flush()
+
+
+def connector_publish(store, record, written):
+    """Save an edited or new connector with its new keys, as one change. Keys this edit did not change follow what is saved now
+    (another edit may have replaced them meanwhile). If saving fails, nothing changes and the new keys are deleted.
+    Returns (the keys nothing uses any more, sign-ins to delete); both are deleted by the caller once this is saved."""
+    with store.lock:
+        current = copy.deepcopy(next((c for c in store.data['connectors'] if c['id'] == record['id']), None)) or {}
+        if '' not in written and record.get('secretId') and current.get('secretId'): record['secretId'] = current['secretId']
+        for key in record['moreSecrets']:
+            if key not in written and (current.get('moreSecrets') or {}).get(key): record['moreSecrets'][key] = current['moreSecrets'][key]
+        stale, drop = current.get('oauth'), connector_blob_ids(current)  # read now, so a sign-in that just finished is not lost
+        if stale and record['transport'] == 'http' and record['url'] == current.get('url') and '' not in written:  # still the same sign-ins
+            record['oauth'] = stale; drop = []
+            if current.get('otherAccounts'): record['otherAccounts'] = current['otherAccounts']
+        before = list(store.data['connectors'])
+        store.data['connectors'] = [c for c in before if c['id'] != record['id']] + [record]; connector_touch(record['id'])  # settings and keys published together
+        try: store.save()
+        except Exception:
+            store.data['connectors'] = before
+            for ident in written.values(): secret_delete(ident)
+            raise
+    keep = set(connector_secret_ids(record))
+    return [x for x in connector_secret_ids(current) if x not in keep], drop
+
+
+def settings_patch(store, body):
+    """設定 changed from the page. Under the lock with the change count, so a connector the user switches off while a test is
+    finishing stays off: either the test sees the change, or the user's list is saved after it."""
+    with store.lock:
+        was = list(store.data['settings'].get('sharedMcp') or [])
+        update(store.data['settings'], body, 'settings'); shared_touch(was, store.data['settings'].get('sharedMcp')); store.save()
+        return store.data['settings']
 
 
 def connector_rev(connector_id):
