@@ -90,7 +90,7 @@ class CheckAfterDone(unittest.TestCase):
     def flag(self, name): Path(str(self.log) + '.' + name).write_text('x')
 
     def group(self, mode='split', names=('Alpha', '專員', '查核員'), host='Alpha'):
-        status, group = self.req('POST', '/api/groups', {'botIds': [self.bots[n]['id'] for n in names], 'hostId': self.bots[host]['id'] if host else '', 'mode': mode})
+        status, group = self.req('POST', '/api/groups', {'botIds': [self.bots[n]['id'] for n in names], 'hostId': self.bots[host]['id'] if host else '', 'mode': mode, 'checkMode': 'name'})  # #296: a group from before 驗收方式, told by name
         self.assertEqual(status, 201, group); return group
 
     def say(self, group, text='做一份報價單'):
@@ -164,7 +164,7 @@ class CheckAfterDone(unittest.TestCase):
         self.bots['報價'] = self.req('POST', '/api/bots', {'name': '報價', 'provider': 'codex', 'persona': '主要不負責查核，做報價單。'})[1]
         self.bots['審'] = self.req('POST', '/api/bots', {'name': '小審', 'provider': 'codex', 'persona': '負責驗收其他成員的成果。'})[1]
         self.bots['驗'] = self.req('POST', '/api/bots', {'name': '小驗', 'provider': 'codex', 'persona': '你擔任驗收角色，看別人的成果。'})[1]
-        g = self.req('POST', '/api/groups', {'botIds': [self.bots[n]['id'] for n in ('Alpha', '報價', '審', '驗')], 'hostId': self.bots['Alpha']['id'], 'mode': 'split'})[1]
+        g = self.req('POST', '/api/groups', {'botIds': [self.bots[n]['id'] for n in ('Alpha', '報價', '審', '驗')], 'hostId': self.bots['Alpha']['id'], 'mode': 'split', 'checkMode': 'name'})[1]
         self.say(g)
         order = [x[0] for x in self.order()]
         self.assertEqual((order[:2], set(order[2:4]), order[4:]), (['Alpha', '報價'], {'小審', '小驗'}, ['Alpha']))

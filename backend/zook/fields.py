@@ -38,6 +38,7 @@ def set_group_fields(store, group, body, creating=False):
     if 'checkMode' in body:  # 驗收方式 (#296); 'name' keeps a group from before it as it was
         if body['checkMode'] not in CHECK_MODES + ('name',): raise ValueError('驗收方式無效。')
         group['checkMode'] = body['checkMode']
+    elif creating: group['checkMode'] = 'auto'  # every new group, from the form or not (團隊、管理員工具、API); only groups made before it keep the name rule
     if 'checkerId' in body:
         if not isinstance(body['checkerId'], str): raise ValueError('查核員無效。')
         group['checkerId'] = body['checkerId']

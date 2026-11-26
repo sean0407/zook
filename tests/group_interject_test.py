@@ -43,7 +43,7 @@ class GroupInterject(unittest.TestCase):
         except ValueError: return resp.status, data
 
     def group(self, names):
-        status, group = self.req('POST', '/api/groups', {'botIds': [self.bots[n]['id'] for n in names]}); self.assertEqual(status, 201, group); return group
+        status, group = self.req('POST', '/api/groups', {'botIds': [self.bots[n]['id'] for n in names], 'checkMode': 'none'}); self.assertEqual(status, 201, group); return group
 
     def wait(self, test, what):
         for _ in range(200):
@@ -96,7 +96,7 @@ class GroupInterject(unittest.TestCase):
 
     def test_a_split_round_reads_it_before_the_host_merges(self):
         # #126: the host's next turn has it, so the summary is not built on the old numbers.
-        status, g = self.req('POST', '/api/groups', {'botIds': [self.bots[n]['id'] for n in ('Alpha', 'Beta', 'Gamma')], 'hostId': self.bots['Gamma']['id']})
+        status, g = self.req('POST', '/api/groups', {'botIds': [self.bots[n]['id'] for n in ('Alpha', 'Beta', 'Gamma')], 'hostId': self.bots['Gamma']['id'], 'checkMode': 'none'})
         self.assertEqual(status, 201, g); self.slow.write_text('1')
         self.req('POST', '/api/groups/%s/messages' % g['id'], {'content': '分工做', 'mode': 'split'})
         self.wait(lambda: not self.slow.exists(), 'Alpha did not start')

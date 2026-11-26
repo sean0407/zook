@@ -158,6 +158,8 @@ class GroupForm(unittest.TestCase):
         self.assertEqual(self.req('POST', '/api/groups', {'botIds': [ids['甲'], ids['乙']], 'checkMode': 'pick', 'checkerId': ids['丙']})[0], 400)
         self.assertEqual(self.req('POST', '/api/groups', {'botIds': [ids['甲'], ids['乙']], 'hostId': ids['乙'], 'checkMode': 'pick', 'checkerId': ids['乙']})[0], 400)
         self.assertEqual(self.req('POST', '/api/groups', {'botIds': [ids['甲'], ids['乙']], 'checkMode': 'later'})[0], 400)
+        made = self.req('POST', '/api/groups', {'botIds': [ids['甲'], ids['乙'], ids['丙']]})[1]  # 團隊、管理員工具、API: no 驗收方式 sent
+        self.assertEqual(made['checkMode'], 'auto')
         g = self.group('turns', names=('甲', '乙', '丙'), checkMode='pick', checkerId=ids['甲'])
         self.say(g); self.assertEqual(self.order(), [('乙', 'turn'), ('丙', 'turn'), ('甲', 'check')])
 
