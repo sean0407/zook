@@ -344,6 +344,12 @@ def _split(command):
     """(simple commands, whether the quoting could be read). A simple command is a list of words; redirections stay in it."""
     clear = True
     command = re.sub(r'(^|[\s;&|(])\d+(?=[<>])', r'\1', command)  # the 2 of 2>/dev/null is which output, not a file: only when written right before it
+    if not set(command) & set('\\`') and "$'" not in command:  # ; | & ( ) < > in quotes are text, not where a command ends ('|')
+        out, quote = [], ''
+        for c in command:
+            out.append(chr(0xE000 + ord(c)) if quote and c != quote and c in ';&|()<>' else c)
+            quote = ('' if c == quote else quote) if quote else c if c in '\'"' else ''
+        command = ''.join(out)
     try:
         lex = shlex.shlex(command.replace('\n', ' ; '), posix=True, punctuation_chars=';&|()<>')
         lex.whitespace_split = True; lex.commenters = ''
@@ -357,7 +363,7 @@ def _split(command):
         if set(w) <= set(';&|()<>') and not set(w) & set('<>'):
             if current: piped |= {len(parts)} if pipe else set(); parts.append(current)
             pipe, current = bool(re.search(r'(?<!\|)\|(?!\|)', w)) or pipe and not current, []  # |, |&, |( but not ||
-        else: current.append(w)
+        else: current.append(re.sub('[\ue000-\ue0ff]', lambda m: chr(ord(m.group()) - 0xE000), w))  # the text in quotes as it was
     _PIPED[0] = piped  # which simple commands read what the one before them writes (… | bash)
     return parts, clear
 
@@ -622,6 +628,8 @@ def _argv_boundaries(argv, whole, depth):
             for i, a in enumerate(args):
                 if a in ('-exec', '-execdir', '-ok', '-okdir'):
                     sub = args[i + 1:]; sub = sub[:next((j for j, x in enumerate(sub) if x in (';', '+', '{}+')), len(sub))]
+                    listed = _listed(_arg_files(sub), os.path.basename((_strip(sub) or [''])[0]), sub)  # -exec xargs -a FILE
+                    found += [_hit('secret', '讀取 ' + _names(listed))] if listed else []
                     if sub and os.path.basename(sub[0]) not in DELETE_COMMANDS: found += _argv_boundaries(_strip(sub), whole, depth + 1)
     if name == 'mv' and plain and ('.Trash' in plain[-1] or plain[-1].rstrip('/').endswith('/Trash')):
         found.append(_hit('delete', '%s（移到垃圾桶）' % _names(plain[:-1])))

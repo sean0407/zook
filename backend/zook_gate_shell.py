@@ -66,7 +66,7 @@ def _values(name):
     found = []
     for raw in _LINES:
         line = _no_heredocs(raw)
-        if line != raw and (set(raw) & set('\\`') or "$'" in raw or any(_in_quotes(raw, m.start()) for m in re.finditer(HEREDOC, raw))): return None  # a <<word in quotes is text
+        if line != raw and (set(raw) & set('\\`#') or "$'" in raw or any(_in_quotes(raw, m.start()) for m in re.finditer(HEREDOC, raw))): return None  # a <<word in quotes is text
         use = min([m.start() for m in re.finditer(r'\$\{?%s\b' % re.escape(name), line)] or [len(line)])
         for m in re.finditer(r'(?<![\w-])(?:(?:export|local|declare|readonly|typeset)\s+)?%s\+?=|\bfor\s+%s\s+in\b' % (re.escape(name), re.escape(name)), line):
             ahead = re.sub(r'\$\(\s*mktemp[^()]*\)', '', line[:m.start()])  # only set for sure, before it is read: not in if, ||, ( … ), a function
@@ -98,7 +98,8 @@ def _resolved(path, depth=0):
         if '`' in p or None in held or depth > 2: return None
         out = []
         for n, values in zip(names, held):
-            for v in values: out += _resolved(re.sub(r'\$\{?%s\}?' % n, lambda m: v, p), depth + 1) or [None]
+            for v in values:  # unquoted, a value with spaces is several words: each is checked too
+                for one in [v] + (v.split() if re.search(r'\s', v) else []): out += _resolved(re.sub(r'\$\{?%s\}?' % n, lambda m: one, p), depth + 1) or [None]
         return None if None in out else [path] + out
     folders = [] if not p or os.path.isabs(p) else None if p.startswith('~') else _folders()  # ~-, ~+: the folder before, or now
     found = None if folders is None else [path] + [os.path.join(f, p) for f in folders]
@@ -133,8 +134,9 @@ def _listed(files, prog, words=(), bases=None):
                 fd = os.open(_abs(one), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK) if one else -1
                 with os.fdopen(fd, 'rb') as h: raw = h.read(65537) if stat.S_ISREG(os.fstat(h.fileno()).st_mode) else None
                 text = raw.decode('utf-8', 'replace') if raw is not None and len(raw) <= 65536 else None  # longer: not all of it is seen
+                if any(w.startswith('--colsep') for w in words): raise ValueError('a pattern')  # parallel --colsep: not followed here
                 null = any(w in ('-0', '--null', '--from0') or re.fullmatch(r'-[^-]*0\w*', w) for w in words)
-                parts = set(text.split('\0') if null else [p for m in marks for p in re.split(m.encode().decode('unicode_escape') if len(m) <= 2 else m, text)] if marks else text.splitlines() + text.split() + (shlex.split(text) if set(text) & set('\'"\\') else []))  # as the tool splits it; xargs takes quotes and \\ away
+                parts = set(text.split('\0') if null else [p for m in marks for p in text.split(m.encode().decode('unicode_escape') if len(m) <= 2 else m)] if marks else text.splitlines() + text.split() + (shlex.split(text) if set(text) & set('\'"\\') else []))  # as the tool splits it; xargs takes quotes and \\ away
                 if prog in TARS and any(x.startswith('-') for x in parts): parts = None  # tar -T: a line may be an option (-C ~): not followed here
                 parts = parts if bases is None else parts | {os.path.join(b, x.lstrip('/')) for b in bases for x in parts}  # rsync --files-from: under each source
             except (OSError, ValueError, IndexError, TypeError, AttributeError, re.error): parts = None
@@ -165,7 +167,7 @@ def _arg_files(words):
     """The files xargs (-a, --arg-file) and GNU parallel (-a, --arg-file, :::: and ::::+) read their arguments from."""
     out, tool, listing, done = [], '', False, False
     for i, w in enumerate(words):
-        if os.path.basename(w) in ('xargs', 'parallel') and not tool and not _strip(words[:i]):  # in the place of the command
+        if os.path.basename(w) in ('xargs', 'parallel') and not tool and (_strip(words[:i]) or ['sudo'])[0] in ('sudo', 'doas'):  # in the place of the command
             tool = os.path.basename(w); continue
         if not tool: continue
         if not done and os.path.basename(w) in ('xargs', 'parallel') and not _takes_next(words[i - 1], WRAPPER_VALUED[tool]):  # xargs … parallel …: its own lists too

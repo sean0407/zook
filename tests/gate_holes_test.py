@@ -233,6 +233,19 @@ class GateHoles(unittest.TestCase):
         for line in ('echo .env > list.txt; xargs -a list.txt cat', 'cp other list.txt && xargs -a list.txt cat', 'X=$(cp a list.txt); xargs -a list.txt cat'):
             self.assertAsked(line)
 
+    def test_review_round_fifteen(self):
+        Path(self.temp.name, 'pipe.txt').write_text(os.path.expanduser('~/.ssh/id_rsa') + '|')
+        self.assertAsked("xargs -d '|' -a pipe.txt cat")
+        self.assertAsked('F=$HOME/.ssh/id_rsa\\ /tmp/nope; cat $F')
+        Path(self.temp.name, 'arglist').write_text('~/.ssh/id_rsa\n')
+        self.assertAsked('find . -maxdepth 0 -exec xargs -a arglist cat \\;')
+        self.assertAsked('sudo xargs -a arglist cat')
+        self.assertAsked('F=notes.txt; # <<:\nF=$HOME/.ssh/id_rsa\n:\ncat "$F"')
+        Path(self.temp.name, 'c.txt').write_text('notes.txt,src')
+        self.assertAsked("parallel --colsep ',' cat :::: c.txt"); self.assertNotAsked("xargs -d '|' -a c.txt cat")
+        self.assertIn('delete', kinds("""echo '"';rm -rf /tmp/x;'"'"""))  # quotes of two strings around a real ;
+        self.assertNotIn('delete', kinds("echo ';' rm -rf /tmp/x")); self.assertNotAsked("grep '|' notes.txt")
+
     def test_cdpath_may_lead_to_keys(self):
         os.environ['CDPATH'] = os.path.expanduser('~')
         self.assertAsked('cd .ssh && rg x .')
