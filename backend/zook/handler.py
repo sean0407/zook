@@ -766,7 +766,7 @@ class Handler(BaseHTTPRequestHandler):
                     if len(parts) == 3 and self.command == 'PATCH':
                         candidate = copy.deepcopy(group); set_group_fields(store, candidate, self.body())
                         added = candidate['messages'][len(group['messages']):]  # the discussion may still be running, so its messages stay as they are
-                        group.update({k: candidate[k] for k in ('name', 'botIds', 'hostId', 'mode', 'turnLimit') if k in candidate}); group['messages'].extend(added)
+                        group.update({k: candidate[k] for k in ('name', 'botIds', 'hostId', 'mode', 'turnLimit', 'checkMode', 'checkerId', 'instructions') if k in candidate}); group['messages'].extend(added)
                         store.save(); return self.respond(200, page_group(group))
                     if len(parts) == 3 and self.command == 'DELETE':
                         if group['status'] == 'running': return self.error(409, '群組討論進行中，請先停止。')

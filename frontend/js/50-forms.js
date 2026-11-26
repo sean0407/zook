@@ -34,7 +34,8 @@
     if (e.target.name === 'connectorAccount') switchConnectorAccount(e.target);
     if (e.target.name === 'groupMode' && activeGroup()) { state.groupMode[activeGroup().id] = e.target.value; updateGroupEstimate(); }
     if (e.target.name === 'botIds' && e.target.closest('#group-form')) syncGroupHost(e.target.closest('#group-form'));
-    if (['botIds', 'hostId', 'mode'].includes(e.target.name) && e.target.closest('#group-form')) groupFormNote(e.target.closest('#group-form'));
+    if (['botIds', 'hostId', 'checkMode'].includes(e.target.name) && e.target.closest('#group-form')) syncChecker(e.target.closest('#group-form'));  // #296
+    if (['botIds', 'hostId', 'mode', 'checkMode', 'checkerId'].includes(e.target.name) && e.target.closest('#group-form')) groupFormNote(e.target.closest('#group-form'));
     if (e.target.id === 'group-file-input' && activeGroup()) uploadGroupFiles(activeGroup(), [...e.target.files]);
     if (e.target.name === 'access' && e.target.closest('#bot-form')) e.target.closest('form').querySelector('[data-access-folder]').hidden = e.target.value !== 'folder';
     if (e.target.name === 'transport' && e.target.closest('#connector-form')) e.target.closest('form').querySelectorAll('[data-for]').forEach(x => x.hidden = x.dataset.for !== e.target.value);
@@ -405,7 +406,7 @@
         state.accounts = await api('accounts'); render(true); pollAccounts();
       } else if (form.id === 'group-form') {
         const d = new FormData(form), id = form.dataset.id, keepAuto = groupKeepsAuto(form);  // #223②: not quietly saved as 自由
-        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds'), hostId: d.get('hostId') || '', ...(keepAuto ? {} : {mode: d.get('mode') || 'free'}), turnLimit: Number(d.get('turnLimit')) || 4, ...(id ? {} : {clientId: onceId(form)})}, id ? 'PATCH' : 'POST');
+        const result = await post(id ? 'groups/' + encodeURIComponent(id) : 'groups', {name: d.get('name').trim(), botIds: d.getAll('botIds'), hostId: d.get('hostId') || '', ...(keepAuto ? {} : {mode: d.get('mode') || 'free'}), turnLimit: Number(d.get('turnLimit')) || 4, checkMode: d.get('checkMode') || 'auto', checkerId: d.get('checkMode') === 'pick' ? d.get('checkerId') || '' : '', instructions: String(d.get('instructions') || ''), ...(id ? {} : {clientId: onceId(form)})}, id ? 'PATCH' : 'POST');
         closeModal();
         state.groupId = result.id;
         state.page = 'chat';
