@@ -1,5 +1,5 @@
 # The running service: schedules, replies, group discussions. Loaded by backend/server.py into one shared namespace.
-class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compacting, Teams, Intros, ThreadingHTTPServer):
+class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Triggers, Syncing, Waiting, Compacting, Teams, Intros, ThreadingHTTPServer):
     daemon_threads = True
     def __init__(self, address, store, assets, token):
         super().__init__(address, Handler)
@@ -169,7 +169,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             effort = 'fast'; auto_mark = dict(auto_mark, autoWhy=auto_mark.get('autoWhy', '') + QUICK_NOTE)
         if not P.spec(store.data, provider) or not isinstance(model, str) or len(model) > 100: raise ValueError('模型設定無效。')
         if plan and (provider_kind(provider) not in PLAN_KINDS or not ability_on(store, provider, 'plan')): raise ValueError('這個模型不支援先規劃。')
-        knowledge = knowledge_for(store, bot)  # knowledge.py
+        knowledge = knowledge_for(store, bot, content)  # the passages that match this message (knowsearch.py)
         placed = place_attachments(store, bot['id'], attachments) if attachments else []
         earlier = place_attachments(store, bot['id'], (before := recent_attachments(store, messages[-12:], {a['id'] for a in attachments or []})))
         so_far = place[3] if place else len(messages)
@@ -354,6 +354,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             except OSError: pass
             with self.store.lock:
                 job = self.store.find('jobs', job_id)
+                if job: stall_finish(self.store, job)  # a stalled part nobody took over: said in the group (stall.py)
                 if job and job.get('long') and job['status'] != 'running':  # nobody is expected to be watching a long task
                     body = '長任務完成：' + (first_sentence(job.get('content') or '') or '已完成。') if job['status'] == 'completed' else '長任務已停止。' if job['status'] == 'cancelled' else '長任務失敗：' + (job.get('error') or '')
                     self.notify(self.target_name('bot', job['botId']), body, 'bot', job['botId'], job.get('messageId'), always=True)
@@ -381,7 +382,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             chain = [(x[0], x[1], x[2] if len(x) > 2 else '' if auto else None, len(x) > 2 and not named) for x in raw]
             if job.get('plan'): chain = [x for x in chain if provider_kind(x[0]) in PLAN_KINDS] or chain[:1]  # a backup must be held to read-only too
             chain = held_backups(bot, provider, chain)
-            if job.get('reattach'): chain, fixed = [(provider, model, (job.get('ran') or ['', '', ''])[2], False)], False  # the CLI already running (background.py)
+            if job.get('reattach'): chain, fixed = [(provider, model, (job.get('ran') or ['', '', ''])[2], False)], False; job['stallTakenUp'] = True  # the CLI already running (background.py); a stall is not redone (stall.py)
             if not chain:
                 job.update(status='failed', error='這個 Bot 目前限在工作資料夾，不能用自訂 CLI 回覆。請在 Mac 的「編輯 Bot」換模型或放寬存取範圍。', finishedAt=NOW())
                 store.finish_message(job, '', 'failed'); store.save(); return
@@ -445,10 +446,11 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 reason = fallback_why(error, job.pop('errorKind', None))  # this try's own kind; the next try starts without it
                 if (p, a) == (first[0], first[2]): why = reason
                 job.setdefault('attempts', []).append(dict(provider=p, reason=reason))  # only a fixed reason: what a CLI said may hold an account name or more
-                acted = job.get('mayHaveActed') or any(c.get('category') not in ('read', 'external_read') for c in (job.get('toolCalls') or [])[before:])
+                acted = job.get('mayHaveActed') or (not job.get('stallNow') and any(c.get('category') not in ('read', 'external_read') for c in (job.get('toolCalls') or [])[before:]))  # a stall: #60's rule (stall.py)
                 if acted:  # It already changed something; repeating the work on another model could do it twice.
                     job.update(status='failed', error=error or 'CLI 執行失敗。', finishedAt=NOW())
                     store.finish_message(job, '', 'failed'); store.save(); return
+                if job.get('stallNow'): job['stallSwitch'] = job.pop('stallNow')  # said in the group when the backup starts
 
     def _run_attempt(self, job_id, prompt, provider, model, bot, inventory, final):
         store = self.store; session = None; first_prompt, first_bot, again = prompt, copy.deepcopy(bot), False
@@ -633,14 +635,15 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 kept = kept or bg_turn(proc, kind, feed, job); proc = kept or proc  # a kept CLI's reply taken up after a restart
                 self.processes[job_id] = proc; note_cli_pid(store, job_id, proc, binary)  # resume.py
             bg_ready(self, proc)  # its runner's report is waited for with the lock let go (#290, background.py)
+            with store.lock: stall_switch(store, job, provider, (account or {}).get('id', ''))  # a stalled part: said once its backup has really started, a runner's too (stall.py)
             try:
                 # A reply may take as long as it keeps working. It is stopped when nothing has happened for a while (no output from the
                 # CLI, no tool use), or at the overall limit. A 長任務 is given its whole time even when its CLI stays silent.
-                quiet_limit = LONG_JOB_TIMEOUT if job.get('long') else agy_quiet(kind, JOB_TIMEOUT)
+                quiet_limit = reply_quiet(kind, job)  # a group reply: 15 minutes, then its backup takes over (stall.py)
                 deadline = time.monotonic() + (LONG_JOB_TIMEOUT if job.get('long') else max(JOB_HARD_TIMEOUT, JOB_TIMEOUT))
                 pipes = kept or Pipes(proc, prompt.encode('utf-8') if stdin_prompt else None, MAX_CLI_OUTPUT, on_output=feed)
                 active = self.__dict__.setdefault('job_activity', {}); active[job_id] = time.monotonic()
-                stopped_for = ''
+                stopped_for, stalled = '', False
                 while True:
                     began = time.monotonic()
                     if pipes.wait(min(2, max(0.05, quiet_limit / 4))): break
@@ -650,9 +653,9 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                     if pipes.last >= began: progress_touch(job_id)  # stderr counts as a sign of life too
                     if kind == 'antigravity' and any(c.get('status') == 'running' for c in waiting_on.get('toolCalls') or []): active[job_id] = now  # agy is silent while a Zook tool works
                     if asking: deadline += now - began; active[job_id] = now; continue  # time spent waiting for the user does not count
-                    if now - max(pipes.last, active.get(job_id, 0)) >= quiet_limit: stopped_for = quiet_reason(kind, quiet_limit)
+                    if now - max(pipes.last, active.get(job_id, 0)) >= quiet_limit: stopped_for, stalled = quiet_why(kind, job, quiet_limit)
                     elif now >= deadline: stopped_for = '已超過時間上限。'
-                    if job_id in FORCED: stopped_for = '已強制停止。'  # 強制停止: its output is not waited for any longer (progress.py)
+                    if job_id in FORCED: stopped_for, stalled = '已強制停止。', False  # 強制停止: its output is not waited for any longer (progress.py)
                     if stopped_for: raise subprocess.TimeoutExpired(args, quiet_limit)
                 output, stderr = pipes.result()
                 ended_by = getattr(getattr(getattr(proc, 'cli', None), 'proc', None) or proc, 'stopped', '')  # its runner ended it (background.py)
@@ -666,7 +669,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 if job_id not in FORCED:  # 強制停止 already killed what could be killed safely: not signalled or waited for again
                     terminate_tree(proc)
                     if not pipes.wait(5): kill_group(proc); pipes.wait(2)
-                with store.lock: job['mayHaveActed'] = bool(native)  # stopped midway, so what its tools already did is unknown
+                with store.lock: job['mayHaveActed'] = stall_mark(store, job, kind, native, quiet_limit) if stalled else bool(native)  # stopped midway, so what its tools already did is unknown
                 raise RuntimeError('執行逾時：' + stopped_for)
             finally: self.__dict__.get('job_activity', {}).pop(job_id, None)
             if len(output) > MAX_CLI_OUTPUT:
