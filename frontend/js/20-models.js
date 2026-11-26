@@ -184,7 +184,10 @@
     return `<h2 class="settings-h">Bot 預設</h2><p class="muted small settings-note">每個 Bot 一開始都照這裡。要讓某個 Bot 不一樣：點開它的對話，按右上角「顯示詳情」→「編輯設定」→「進階設定」；在那裡選「預設」的項目會跟著這裡改。</p><div class="setting-list">${settingRow('存取範圍', 'Bot 可以讀寫哪些檔案。用 Claude、Cursor 的 Bot 一律是整台 Mac（重要動作先問你）', dropdown('defaultAccess', access, ACCESS, 'data-bot-default="access"'))}<div class="setting-row" ${access === 'folder' ? '' : 'hidden'}><div class="setting-copy"><strong>指定的資料夾</strong><span>${esc(st.accessFolder || '尚未選擇')}</span></div><div class="setting-control"><button type="button" class="secondary" data-action="default-folder">選擇資料夾…</button></div></div>${settingRow('思考強度', 'Bot 回答前想多久。想越久越仔細，但比較慢、用量也較多', dropdown('defaultEffort', st.effort || 'standard', EFFORTS, 'data-bot-default="effort"'))}${settingRow('分工給小幫手', '大工作讓 Bot 再找幾個小幫手同時做，比較快，但用量較多', toggle('data-bot-default="multi"', st.features?.multi === true, '分工給小幫手'))}${settingRow('圖片生成', '請 Bot 畫圖或做圖片', toggle('data-bot-default="image"', st.features?.image === true, '圖片生成'))}${settingRow('內建瀏覽器', '上網搜尋只能讀文字；打開這個，Bot 還能開網頁、截圖、在搜尋框打字（每次先問你，不能登入）', toggle('data-bot-default="browser"', st.features?.browser === true, '內建瀏覽器'))}</div>`;
   }
 
-  const approvalReason = a => /^zook_(create|update|delete)_schedule$/.test(a.name) ? '排程會在你不在時自動執行，不論主動性都要你核准' : CATEGORY_REASON[a.category];
+  const approvalReason = a => /^zook_(create|update|delete)_schedule$/.test(a.name) ? '排程會在你不在時自動執行，不論主動性都要你核准' : a.name === 'zook_native_gate' ? nativeReason(a) : CATEGORY_REASON[a.category];
+  // Why a CLI's own step is asked, from what it does (#318③): a command Zook cannot read through (kind unclear) is not called 高風險.
+  const NATIVE_REASON = {delete: '刪除或清空檔案', send: '把資料送出這台 Mac', secret: '讀到或改到密碼、金鑰', install: '安裝軟體', system: '改系統設定', guard: '改到 Zook 或 CLI 的安全設定'};
+  const nativeReason = a => { const risky = [...new Set(((a.arguments || {}).actions || []).map(x => x && x.kind).filter(k => k !== 'unclear' && NATIVE_REASON[k]))]; return risky.length ? `高風險動作（${risky.map(k => NATIVE_REASON[k]).join('、')}），一律需要核准` : '這個指令的寫法（例如用變數當程式、內嵌程式碼）讓 Zook 確認不了它不會刪檔或對外送出，所以先問你；看詳細內容確認是你要的再允許'; };
   const CATEGORY_REASON = {danger: '高風險動作（刪除、安全性或對外發送），一律需要核准', code: '會執行程式碼', external_write: '會修改外部服務', external_read: '會查詢外部服務', internal: '會變更 Zook 內的資料'};
 
   function personaPanel(b) {
