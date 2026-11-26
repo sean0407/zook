@@ -559,14 +559,8 @@ class Handler(BaseHTTPRequestHandler):
                         record, secret = connector_fields(body, existing)
                         with store.lock:
                             if any(same_name(c['name']) == same_name(record['name']) and c['id'] != record['id'] for c in store.data['connectors']): raise ValueError('已經有同名的連接器（大小寫不同也算同名）。')
-                        if secret:
-                            record['secretId'] = record['secretId'] or ID(); secret_set(record['secretId'], secret)
-                        elif not record['secretName'] and record['secretId']:
-                            secret_delete(record['secretId']); record['secretId'] = ''
                         more = body.get('moreSecrets') if isinstance(body.get('moreSecrets'), dict) else {}
-                        for key, value in more.items():  # keys a copied or imported connector carries besides the main one
-                            if key in record['moreSecrets'] and isinstance(value, str) and value.strip():
-                                record['moreSecrets'][key] = record['moreSecrets'][key] or ID(); secret_set(record['moreSecrets'][key], value.strip())
+                        old_keys = connector_keys_write(record, secret, {k: v.strip() for k, v in more.items() if k in record['moreSecrets'] and isinstance(v, str) and v.strip()})  # new Keychain items; nothing changed if one fails
                         with store.lock:
                             current = next((c for c in store.data['connectors'] if c['id'] == record['id']), None) or {}
                             stale = current.get('oauth')  # read now, so a sign-in that just finished is not lost
@@ -574,9 +568,10 @@ class Handler(BaseHTTPRequestHandler):
                             if stale and record['transport'] == 'http' and record['url'] == current.get('url') and not secret:  # still the same sign-ins
                                 record['oauth'] = stale; drop = []
                                 if current.get('otherAccounts'): record['otherAccounts'] = current['otherAccounts']
-                            store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]; connector_touch(record['id'])  # a key replaced under the same id counts too
+                            store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + [record]; connector_touch(record['id'])  # settings and keys published together
                             for blob in drop: blob_delete(blob)  # the address or the way to sign in changed
                             store.save()
+                        for old in old_keys: secret_delete(old)  # the keys these replaced
                         if existing: return self.respond(200, dict(id='zook:' + record['id'], name=record['name']))
                         on, test = connector_first_test(store, 'zook:' + record['id'])  # on for every Bot only once it worked (#303)
                         return self.respond(201, dict(id='zook:' + record['id'], name=record['name'], on=on, test=test))
@@ -889,7 +884,7 @@ class Handler(BaseHTTPRequestHandler):
                     trash_bot(store, bot)  # kept aside, so it can be brought back
                     store.data['bots'].remove(bot); store.save(); return self.respond(200, {'ok': True})
                 if path == '/api/settings' and self.command == 'PATCH':
-                    body = self.body(); update(store.data['settings'], body, 'settings'); store.save()
+                    body = self.body(); was = list(store.data['settings'].get('sharedMcp') or []); update(store.data['settings'], body, 'settings'); shared_touch(was, store.data['settings'].get('sharedMcp')); store.save()
                     if 'remote' in body: threading.Thread(target=self.server.sync_remote, daemon=True).start()
                     if 'permissionMode' in body: self.server.release_approvals()
                     return self.respond(200, store.data['settings'])

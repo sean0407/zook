@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """#303 (#22): a connector you add is tested once at once. Only one that works is switched on for every Bot; one that does not
 stays off with the reason. #288③: connector names that differ only in upper/lower case clash."""
-import http.client, importlib.util, json, os, subprocess, sys, tempfile, time, unittest
+import base64, http.client, importlib.util, io, json, os, subprocess, sys, tempfile, threading, time, unittest, zipfile
 from pathlib import Path
 
 SERVER = Path(__file__).resolve().parents[1] / 'backend/server.py'
@@ -21,7 +21,7 @@ class ConnectorAddTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name)
         (self.root / 'assets').mkdir(); (self.root / 'assets/index.html').write_text('x'); (self.root / 'home').mkdir()
-        (self.root / 'mcp.py').write_text(MCP); (self.root / 'slow.py').write_text('import time\ntime.sleep(1.5)\n' + MCP); (self.root / 'broken.py').write_text('import sys\nsys.stderr.write("no token\\n"); sys.exit(3)\n')
+        (self.root / 'mcp.py').write_text(MCP); (self.root / 'echo.py').write_text(MCP.replace("'hello'", "'key_' + __import__('os').environ.get('FAKE_KEY', 'none').replace('-', '_')")); (self.root / 'slow.py').write_text('import time\ntime.sleep(1.5)\n' + MCP); (self.root / 'broken.py').write_text('import sys\nsys.stderr.write("no token\\n"); sys.exit(3)\n')
         env = dict(os.environ, HOME=str(self.root / 'home'), ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', ZOOK_SECRETS_DIR=str(self.root))
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')],
                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
@@ -81,6 +81,25 @@ class ConnectorAddTest(unittest.TestCase):
         made, ident, out = self.race(change, secretName='FAKE_KEY', secret='first-key-12345')
         self.assertFalse(out['on']); self.assertTrue(out['test']['changed']); self.assertNotIn(made, self.shared())
 
+    def test_switching_it_on_and_off_during_the_test_keeps_it_off(self):
+        def change(ident):
+            for shared in (['zook:' + ident], []): self.assertEqual(self.req('PATCH', '/api/settings', {'sharedMcp': shared})[0], 200)  # turned on, then off again
+        made, ident, out = self.race(change)
+        self.assertFalse(out['on']); self.assertTrue(out['test']['changed']); self.assertNotIn(made, self.shared())
+
+    def test_a_refused_change_of_keys_leaves_the_old_keys(self):
+        manifest = {'format': 'zook-pack', 'version': 1, 'skills': [], 'connectors': [{'name': 'Packed', 'transport': 'stdio', 'command': '%s %s' % (sys.executable, self.root / 'echo.py'),
+                    'env': {}, 'headers': {}, 'secretName': 'FAKE_KEY', 'moreSecrets': ['EXTRA_KEY']}]}
+        raw = io.BytesIO()
+        with zipfile.ZipFile(raw, 'w') as z: z.writestr('zook.json', json.dumps(manifest))
+        self.assertEqual(self.req('POST', '/api/pack', {'data': base64.b64encode(raw.getvalue()).decode()})[1]['connectors'], ['Packed'])
+        item = next(m for m in self.req('GET', '/api/integrations')[1]['mcp'] if m['name'] == 'Packed'); ident = item['id'].split(':')[1]
+        self.assertEqual(self.req('PATCH', '/api/connectors/' + ident, {'secret': 'first-key-12345', 'moreSecrets': {'EXTRA_KEY': 'extra-key-12345'}})[0], 200)
+        status, _ = self.req('PATCH', '/api/connectors/' + ident, {'secret': 'second-key-12345', 'moreSecrets': {'EXTRA_KEY': 'not a key!'}})
+        self.assertEqual(status, 400)
+        self.assertEqual(self.req('POST', '/api/mcp/%s/test' % item['id'], {})[1]['tools'][0]['name'], 'key_first_key_12345')  # nothing was changed
+        self.assertEqual(len(list(self.root.glob('[0-9a-f]' * 32))), 2)  # and no stray key left behind
+
     def test_names_that_differ_only_in_case_clash(self):
         command = '%s %s' % (sys.executable, self.root / 'mcp.py')
         self.assertEqual(self.req('POST', '/api/connectors', {'name': 'GitHub', 'transport': 'stdio', 'command': command})[0], 201)
@@ -136,6 +155,45 @@ class CatalogSignIn(unittest.TestCase):
             def tested(ident, inventory): z.oauth_logout(store, 'c1'); return {'status': 'ready', 'toolCount': 1}
             z.runtime_module = lambda: type('R', (), {'test_connection': staticmethod(tested)}); z.inventory_for = lambda store, **kw: {}
             self.assertFalse(z.connector_first_test(store, 'zook:c1')[0])
+
+    def load(self, temp):
+        os.environ['ZOOK_SECRETS_DIR'] = str(Path(temp) / 'secrets'); (Path(temp) / 'secrets').mkdir(); self.addCleanup(os.environ.pop, 'ZOOK_SECRETS_DIR', None)
+        spec = importlib.util.spec_from_file_location('zook_first_test_%d' % id(temp), SERVER); z = importlib.util.module_from_spec(spec); spec.loader.exec_module(z)
+        return z, z.Store(Path(temp) / 'data')
+
+    def test_a_read_racing_a_new_key_does_not_keep_the_old_one(self):
+        with tempfile.TemporaryDirectory() as temp:
+            z, _ = self.load(temp); key = 'a' * 32
+            z.secret_set(key, 'old-value-12345'); real = z._secret_read; started, go = threading.Event(), threading.Event()
+            def slow(ident): value = real(ident); started.set(); go.wait(5); return value
+            z._secret_read = slow
+            reader = threading.Thread(target=z.secret_get, args=(key,)); reader.start(); started.wait(5)
+            z._secret_read = real; z.secret_set(key, 'new-value-12345'); go.set(); reader.join(5)
+            self.assertEqual(z.secret_get(key), 'new-value-12345')
+
+    def test_a_failed_catalog_save_puts_back_only_its_own_change(self):
+        with tempfile.TemporaryDirectory() as temp:
+            z, store = self.load(temp)
+            z.CONNECTOR_CATALOG[:] = [z._c('svc', 'Svc', '測試', 'https://svc.example/mcp', 'key', '測試。')]; z._catalog_check = lambda item, key: None
+            old = dict(id='c1', name='Svc', transport='http', command='', url='https://svc.example/mcp', env={}, secretName='', secretId='', headers={}, moreSecrets={}, origin='')
+            store.data['connectors'].append(dict(old)); app = type('App', (), {'store': store, 'server_address': ('127.0.0.1', 1)})()
+            def broken(): raise OSError('disk full')
+            store.save = broken; before = z.connector_rev('c1')
+            self.assertRaises(OSError, z.catalog_add, app, 'svc', 'good-key-12345')
+            self.assertEqual(store.data['connectors'], [old]); self.assertEqual(z.connector_rev('c1'), before + 2)  # put back, and counted as a change
+            patched = dict(old, name='Patched')
+            def raced(): store.data['connectors'][:] = [patched]; z.connector_touch('c1'); raise OSError('disk full')  # another change saved meanwhile
+            store.save = raced
+            self.assertRaises(OSError, z.catalog_add, app, 'svc', 'good-key-12345')
+            self.assertIs(store.data['connectors'][0], patched)
+
+    def test_a_refused_sign_in_counts_as_a_change_once(self):
+        with tempfile.TemporaryDirectory() as temp:
+            z, store = self.load(temp)
+            store.data['connectors'].append(dict(id='c1', name='C', transport='http', url='https://x.example/mcp', oauth={'secretId': 'a1'}))
+            before = z.connector_rev('c1')
+            z._oauth_lost(store, 'c1', 'a1'); self.assertEqual(z.connector_rev('c1'), before + 1)
+            z._oauth_lost(store, 'c1', 'a1'); self.assertEqual(z.connector_rev('c1'), before + 1)  # already marked: nothing new
 
     def test_a_sign_in_renewed_by_the_test_is_not_a_change(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -229,7 +229,7 @@ def _mark_lost(accounts, secret_id):
 def _oauth_lost(store, connector_id, secret_id):
     with store.lock:
         record = next((c for c in store.data['connectors'] if c['id'] == connector_id), None) or {}
-        if _mark_lost([record.get('oauth')] + list(record.get('otherAccounts') or []), secret_id): store.save()
+        if _mark_lost([record.get('oauth')] + list(record.get('otherAccounts') or []), secret_id): connector_touch(connector_id); store.save()  # it can no longer be used as tested
     return ''
 
 

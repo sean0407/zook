@@ -100,6 +100,30 @@ def connector_touch(connector_id):
     with _revs_lock: _connector_revs[connector_id] = _connector_revs.get(connector_id, 0) + 1
 
 
+def shared_touch(before, after):
+    """A connector switched on or off for every Bot is a change too: a test running meanwhile does not switch it back (#303)."""
+    for ident in set(before or []) ^ set(after or []):
+        if isinstance(ident, str) and ident.startswith('zook:'): connector_touch(ident[5:])
+
+
+def connector_keys_write(record, secret, more):
+    """Write a connector's new keys under new Keychain ids and point the record at them; returns the ids they replace, to delete
+    once the record is saved. A key is never overwritten in place, so a test reading the old one cannot be mistaken for the new.
+    If one cannot be written, the ones already written are deleted and the record is left as it was."""
+    made, old, plan = [], [], ([('', secret)] if secret else []) + sorted(more.items())
+    try:
+        for key, value in plan:
+            ident = ID(); secret_set(ident, value); made.append((key, ident))
+    except Exception:
+        for _, ident in made: secret_delete(ident)
+        raise
+    for key, ident in made:
+        if key: old.append(record['moreSecrets'].get(key)); record['moreSecrets'][key] = ident
+        else: old.append(record.get('secretId')); record['secretId'] = ident
+    if not secret and not record['secretName'] and record.get('secretId'): old.append(record['secretId']); record['secretId'] = ''  # the key was removed
+    return [x for x in old if x]
+
+
 def connector_rev(connector_id):
     with _revs_lock: return _connector_revs.get(connector_id, 0)
 

@@ -105,7 +105,7 @@ def catalog_add(app, item_id, key=None):
         with store.lock: existing = copy.deepcopy(next((c for c in store.data['connectors'] if c.get('url') == item['url']), None))
         if existing and existing.get('oauth'): return existing, ''
         if existing and item['auth'] == 'open': return existing, ''
-        record = existing
+        record = copy.deepcopy(existing)  # a copy: a failed save puts back the connector exactly as it was
         if not record: record, _ = connector_fields(dict(name=item['name'], transport='http', url=item['url'], **({'secret': key} if key else {})))
         url, auth = '', item['auth']
         if auth == 'login':
@@ -114,11 +114,11 @@ def catalog_add(app, item_id, key=None):
                 if '不需要登入' not in str(exc): raise RuntimeError('%s 目前無法登入：%s' % (item['name'], exc))
                 auth = 'open'  # the service turned out to need no sign-in
         if auth != 'login': _catalog_check(item, key)
-        made = ''
+        made, replaced = '', ''
         try:
-            if key:
-                if not record.get('secretId'): record['secretId'] = made = ID()
-                record['secretName'] = 'Authorization'; secret_set(record['secretId'], key)
+            if key:  # under a new Keychain id: the one it replaces is deleted once this is saved
+                replaced = record.get('secretId') or ''; record['secretId'] = made = ID()
+                record['secretName'] = 'Authorization'; secret_set(made, key)
             with store.lock:
                 taken = {same_name(c['name']) for c in store.data['connectors'] if c['id'] != record['id']}
                 record['name'] = next((n for n in [record['name']] + ['%s %d' % (item['name'], i) for i in range(2, 200)] if same_name(n) not in taken), '%s %s' % (item['name'], record['id'][:6]))
@@ -128,6 +128,9 @@ def catalog_add(app, item_id, key=None):
                 store.save()
         except Exception:
             if made: secret_delete(made)  # the connector was not saved, so its key does not stay behind
-            with store.lock: store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + ([existing] if existing else [])
+            with store.lock:
+                if any(c is record for c in store.data['connectors']):  # still this attempt's: put back what was there, unless another change came since
+                    store.data['connectors'] = [c for c in store.data['connectors'] if c['id'] != record['id']] + ([existing] if existing else []); connector_touch(record['id'])
             raise
+        if replaced: secret_delete(replaced)
         return record, url
