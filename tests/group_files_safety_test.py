@@ -123,6 +123,7 @@ class GroupFileSafety(unittest.TestCase):
         self.assertEqual(server.task_files_missing(self.store, dict(group, fileInfo={'Q3 報價單.xlsx': {'by': '甲'}}), '甲', dict(files=['Q3 報價單.xlsx'], summary='已存好 Q3 報價單.xlsx'), dict(savedFiles=['Q3 報價單.xlsx'])), [])  # a piece of a whole name it handed over
         self.assertEqual([server.group_is_checker(dict(name=n)) for n in ('查核員', '非查核員', '不負責查核員', 'QA', 'AQAB')], [True, False, False, True, False])
         self.assertEqual([server.group_is_checker(dict(name='甲', persona=x)) for x in ('不只負責查核，也要寫報價。', '主要不負責查核，做報價單。', '你擔任驗收角色。', '負責檢查其他成員的成果。', '主要撰寫驗收報告。', '我是設計師，曾負責驗收舊版，現在製作報價單。', '過去負責查核，現在做報價。', '我是設計師，負責驗收其他成員的成果。')], [True, False, True, True, False, False, False, True])
-        self.assertEqual([server.group_is_checker(dict(name=n)) for n in ('品質檢查員', '驗收報告撰寫', '文件審核員', '檢查專員', '品質檢查專員', '品質改善工程師')], [True, False, True, True, True, False])
+        self.assertEqual([server.group_is_checker(dict(name=n)) for n in ('品質檢查員', '驗收報告撰寫', '文件審核員', '檢查專員', '品質檢查專員', '品質改善工程師', '品質檢查流程設計師')], [True, False, True, True, True, False, False])
+        (self.shared / '新版報價.xlsx').write_text('n'); self.assertEqual(server.task_files_missing(self.store, dict(group, fileInfo={'新版報價.xlsx': {'by': '甲', 'byId': 'mine'}}), '甲', dict(files=['報價.xlsx']), dict(savedFiles=['新版報價.xlsx']), owner_id='mine'), ['報價.xlsx'])  # a longer name is another file
 
 if __name__ == '__main__': unittest.main()

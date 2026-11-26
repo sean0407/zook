@@ -18,8 +18,8 @@ began = time.time()
 s = sys.stdin.read() if '--prompt-file' not in a else ''
 flag = lambda x: os.path.exists(os.environ['GROUP_LOG'] + '.' + x)
 name = re.search(r'現在輪到你（(.+?)）回覆', s); name = name.group(1) if name else 'solo'
-role = next((r for r, mark in (('split_check', '輪到你查核'), ('split_resave', 'Zook 檢查到'), ('split_redo', '主持人驗收後退回你的部分'), ('split_plan', '你負責分工'),
-                               ('split_work', '只完成分派給你'), ('split_remerge', '第二次彙整'), ('split_merge', '你負責彙整'), ('work', '先獨立完成主持人分派'),
+role = next((r for r, mark in (('split_follow', '使用者這次只點名你'), ('turn', '現在是輪流發言'), ('split_check', '輪到你查核'), ('split_resave', 'Zook 檢查到'), ('split_redo', '主持人驗收後退回你的部分'), ('split_plan', '你負責分工'),
+                               ('split_work', '只完成分派給你'), ('split_remerge', '第二次彙整'), ('split_merge', '你負責彙整'), ('work', '先獨立完成主持人分派'), ('compare', '你看不到他們的內容'),
                                ('moderate', '閱讀成員剛才的發言'), ('final', '討論到此結束'), ('kickoff', '本次目標與產出')) if mark in s), 'free')
 folder = re.search(r'要給群組的產出請存到 (.+?)（只放', s)
 text = name + ' ' + role
@@ -41,6 +41,8 @@ if name == '專員' and role == 'split_work' and flag('dupsave') and folder: ope
 if name == '專員' and role == 'split_work' and flag('aimiss'): text = '已存到群組檔案：報價單.xlsx、設計.ai'
 if name == '專員' and role == 'split_work' and flag('textdeliver'): text = '已交付三個建議：一、二、三。'
 if name == '專員' and role == 'split_redo' and flag('redonew') and folder: open(os.path.join(folder.group(1), '報價單v2.xlsx'), 'w').write('v2'); text = '改好了，已存到群組檔案：報價單v2.xlsx'
+if role == 'split_follow': text = '【派工】專員：做報價單\n好'
+if name == '專員' and role == 'split_work' and flag('blend'): text = '已存到群組檔案：報價單.xlsx、場景.blend'
 if role == 'kickoff': text = '目標：報價\n@查核員：檢查使用者給的報價單' if flag('onlycheck') else '目標：報價\n@專員：做報價單' + ('' if flag('nocheck') else '\n@查核員：檢查報價單')
 if role in ('split_merge', 'split_remerge', 'final', 'moderate'): text = '【結論】好\n【待你決定】無\n【行動項目】無\n【未解問題】無'
 if role == 'moderate' and flag('modmention'): text = '@查核員 再看一次合計'
@@ -329,6 +331,23 @@ class CheckAfterDone(unittest.TestCase):
         found = self.say(self.group())
         self.assertEqual(self.order(), [('Alpha', 'split_plan'), ('Alpha', 'split_merge')])
         self.assertTrue(any('查核員這次不用查核' in x for x in self.said(found)), self.said(found))
+
+    def test_work_handed_out_later_is_checked_too(self):
+        g = self.group(); self.say(g, '@Alpha 請專員做報價單')
+        self.assertEqual(self.order(), [('Alpha', 'split_follow'), ('專員', 'split_work'), ('查核員', 'split_check'), ('Alpha', 'split_merge')])
+
+    def test_in_turns_the_checker_speaks_last_and_only_reads(self):
+        self.say(self.group(mode='turns', names=('查核員', 'Alpha', '專員'), host=''))
+        self.assertEqual([n for n, _ in self.order()], ['Alpha', '專員', '查核員']); self.assertIn('read-only', self.runs()[2]['args'])
+
+    def test_in_compare_the_checker_only_reads(self):
+        self.say(self.group(mode='compare'))
+        self.assertTrue(all('read-only' in r['args'] for r in self.runs() if r['name'] == '查核員'))
+
+    def test_a_missing_file_of_any_kind_is_looked_for(self):
+        self.flag('blend')
+        self.say(self.group())
+        self.assertIn(('專員', 'split_resave'), self.order())
 
     def test_nothing_handed_in_means_no_check(self):
         self.flag('fail')

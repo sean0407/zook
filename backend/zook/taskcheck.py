@@ -91,6 +91,7 @@ def task_pick_verifier(store, group, run, task, working):
     tried = (task.get('verify') or {}).get('tried') or []
     members = [store.find('bots', x) for x in group['botIds']]
     members = [b for b in members if b and b['id'] not in tried] + [b for b in members if b and b['id'] in tried]  # someone new first, the same one again if no one else can
+    members = sorted(members, key=lambda b: group_is_checker(b))  # #245: a 查核員 has its own check task; it verifies a single finished task only when nobody else can
     for bot in members:
         if bot['id'] == task['assignee'] or task_member_ok(store, bot): continue
         provider = bot.get('provider') or (store.data.get('settings') or {}).get('provider') or ''

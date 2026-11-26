@@ -13,8 +13,17 @@ CHECKER_NAME = re.compile(r'查核|驗收|審核|審查|校對|稽核|覆核|複
 CHECKER_DUTY = re.compile(r'(?:負責|專門|主要|擔任|你是|我是|身為|作為)(?:做|進行|的)?[^，。,.；;\n]{0,6}?(?:查核|驗收|審核|審查|校對|稽核|覆核|複核|把關|檢查)')
 FILE_KINDS = CLAIM_KINDS + ('ai', 'psd', 'eps', 'svg', 'gif', 'webp', 'heic', 'tif', 'tiff', 'bmp', 'key', 'numbers', 'pages', 'rtf', 'odt', 'ods', 'odp', 'xml',
                             'yaml', 'yml', 'tsv', 'log', 'epub', 'indd', 'sketch', 'fig', 'mp4', 'mov', 'm4a', 'mp3', 'wav', 'py', 'js', 'sql', 'ics', 'vcf', 'xlsm')
-FILE_WORD = re.compile(r'[^\s/\\「」『』【】\[\]，、。：:；！？()（）*`\'"<>|]{1,120}\.(?:%s)(?![A-Za-z0-9])' % '|'.join(FILE_KINDS), re.I)  # a file name in a reply, more kinds than CLAIM_WORD
-CHECKER_NAME_WRITES = re.compile(r'撰寫|寫手|起草|整理|製作')  # 「驗收報告撰寫」 makes a document about checking; 「文件審核員」 checks
+FILE_WORD = re.compile(r'[^\s/\\「」『』【】\[\]，、。：；！？()（）*`\'"<>|]{1,120}\.(?=[A-Za-z0-9]{0,7}[A-Za-z])[A-Za-z0-9]{1,8}(?![A-Za-z0-9.])', re.I)  # a file name of any kind in a reply (a half-width colon may be part of it)
+NOT_FILES = ('com', 'net', 'org', 'io', 'tw', 'edu', 'gov', 'co', 'app', 'dev', 'me', 'info', 'cn', 'jp', 'hk', 'us', 'uk')  # web addresses, not files
+file_words = lambda text: [w for w in FILE_WORD.findall(str(text or '')) if w.rsplit('.', 1)[-1].lower() not in NOT_FILES and '://' not in w]
+
+
+def _whole(full, part):
+    """Whether part is full, or the end of full after a space or a mark (「Q3 報價單.xlsx」 read as 「報價單.xlsx」), never after a letter
+    or character of a longer word (「新版報價單.xlsx」 is another file)."""
+    full, part = _claim_key(full), _claim_key(part)
+    return full == part or (full.endswith(part) and not full[len(full) - len(part) - 1].isalnum())
+CHECKER_NAME_WRITES = re.compile(r'撰寫|寫手|起草|整理|製作|設計|開發|工程師|企劃|規劃')  # 「驗收報告撰寫」 makes a document about checking; 「文件審核員」 checks
 CHECKER_NOT = re.compile(r'[不沒没非無无別]')  # 「不負責查核」「我不是負責查核的」: said not to be its job
 CHECKER_WRITES = re.compile(r'撰寫|寫|整理|製作|起草|報告|文件|紀錄|記錄|表單|清單')  # 「主要撰寫驗收報告」: it makes a document about checking
 MODERATOR_RULES['split_check'] = ['現在輪到你查核。照主持人分派給你的查核工作，實際打開要查的檔案（成員交的，或使用者給的）逐項核對，不要只看別人的說法。',
@@ -109,7 +118,7 @@ def _nothing_saved(replies, pool):
     looked = [m for m in replies if 'savedFiles' in m]
     if not looked or any(n in pool for m in looked for n in m.get('savedFiles') or []): return False
     if not any(any(w in (m.get('content') or '') for w in SAVE_WORDS) or (any(w in (m.get('content') or '') for w in SAVE_SAID) and FILE_WORD.search(m.get('content') or '')) for m in looked): return False  # 「已交付三個建議」 hands over text, not a file
-    return not any(_in_prose(n, pool) for m in looked for n in FILE_WORD.findall(m.get('content') or ''))
+    return not any(_in_prose(n, pool) for m in looked for n in file_words(m.get('content')))
 
 
 NOTHING_SAVED = '（說存了的檔案）'
@@ -132,7 +141,7 @@ def _work_files(store, group, bot_id):
     out = {}
     with _group_files_lock:
         pool = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
-        names |= {p for p in pool for m in replies for w in FILE_WORD.findall(m.get('content') or '') if _in_prose(w, [p])}  # a file its reply says it handed over
+        names |= {p for p in pool for m in replies for w in file_words(m.get('content')) if _in_prose(w, [p])}  # a file its reply says it handed over
         names |= {v for m in replies for v in (m.get('sameAs') or {}).values() if v in pool}  # saved, kept as the shared file with the same content
         for n in sorted(names)[:40]:
             path = group_files_dir(store, group['id']) / n
@@ -151,7 +160,7 @@ def _redone(store, group_id, before, replies, bot_id):
     for m in replies:
         if m.get('botId') != bot_id or m.get('role') != 'assistant': continue
         new = [n for n in m.get('savedFiles') or [] if n in pool and n not in before]
-        if any(_in_prose(w, [n]) or _claim_key(n).endswith(_claim_key(w)) for w in FILE_WORD.findall(m.get('content') or '') for n in new): return True
+        if any(_in_prose(w, [n]) or _whole(n, w) or _claim_key(_short_name(w)) == _claim_key(n) for w in file_words(m.get('content')) for n in new): return True
     return False
 
 
@@ -183,7 +192,7 @@ class CheckOrder:
                 text = m.get('content') or ''
                 if any(w in text for w in SAVE_SAID):
                     mine = [n for x in group['messages'][start:] if x.get('botId') == b and x.get('role') == 'assistant' for n in x.get('savedFiles') or [] if n in pool]  # what it really saved and is still there (Zook may have cleaned the name)
-                    named = [n for n in FILE_WORD.findall(text) if not _in_prose(n, given, INPUT_JOIN) and not _in_prose(n, pool) and not _in_prose(n, alias[b]) and not any(_claim_key(s).endswith(_claim_key(n)) or _claim_key(_short_name(n)) == _claim_key(s) for s in mine)]
+                    named = [n for n in file_words(text) if not _in_prose(n, given, INPUT_JOIN) and not _in_prose(n, pool) and not _in_prose(n, alias[b]) and not any(_whole(s, n) or _claim_key(_short_name(n)) == _claim_key(s) for s in mine)]
                     if named: gone[b] = list(dict.fromkeys((gone.get(b) or []) + named))[:10]
             for b, m in latest.items():
                 if m.get('skippedFiles'): gone[b] = list(dict.fromkeys((gone.get(b) or []) + list(m['skippedFiles'])))  # too big to keep: an older file of that name is not this work
@@ -266,11 +275,13 @@ def task_check_new_work(run, task):
     run['log'].append(dict(at=NOW(), what='create', task=run['tasks'][-1]['n']))
 
 
-def task_files_kept(store, group, msg):
-    """store.lock and _group_files_lock held. {name: content hash} of the shared files a task's reply brought in, for its check to
-    find still there, unchanged."""
+def task_files_kept(store, group, msg, attempt=None, owner=''):
+    """store.lock and _group_files_lock held. {name: content hash} of the shared files the task handed in (brought in by its reply,
+    or listed in its report and already there), for its check to find still there, unchanged."""
     pool = {e.name for e in _plain_files(group_files_dir(store, group['id']))}
-    return {n: _file_hash(group_files_dir(store, group['id']) / n) for n in sorted(set(list(msg.get('savedFiles') or []) + list((msg.get('sameAs') or {}).values())) & pool)[:40]}
+    names = set(list(msg.get('savedFiles') or []) + list((msg.get('sameAs') or {}).values()))
+    names |= {p for p in pool for f in (attempt or {}).get('files') or [] if _same_file(str(f).rsplit('/', 1)[-1], [p], owner)}
+    return {n: _file_hash(group_files_dir(store, group['id']) / n) for n in sorted(names & pool)[:40]}
 
 
 def group_files_given(group):
@@ -284,7 +295,7 @@ def task_files_missing(store, group, owner, attempt, msg, spec='', given=(), own
     listed = list(attempt.get('files') or [])
     said = str(attempt.get('summary') or '') + '\n' + str(msg.get('content') or '')
     inputs = {p.rsplit('/', 1)[-1] for p in named_paths(str(spec or ''))} | set(given)  # files the work was told to read, or the user gave
-    named = [n for n in FILE_WORD.findall(said) if not _in_prose(n, inputs, INPUT_JOIN)] if any(w in said for w in SAVE_SAID) else []  # 「已存好報價單.xlsx」 without listing it in files
+    named = [n for n in file_words(said) if not _in_prose(n, inputs, INPUT_JOIN)] if any(w in said for w in SAVE_SAID) else []  # 「已存好報價單.xlsx」 without listing it in files
     pool = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
     mine = set(msg.get('savedFiles') or []) | {n for n, info in (group.get('fileInfo') or {}).items() if (((info or {}).get('byId') == owner_id) if (info or {}).get('byId') else (info or {}).get('by') == owner)}  # by the Bot itself; names can repeat
     gone = checked_present(store, group['id'], listed + list(msg.get('missingFiles') or []), exact=listed, owner=owner) + [n for n in named if not _in_prose(n, [p for p in pool if p in mine])]  # named: there, and its own
@@ -293,5 +304,5 @@ def task_files_missing(store, group, owner, attempt, msg, spec='', given=(), own
         if base and base not in gone and _same_file(base, pool, owner) and not _same_file(base, [n for n in pool if n in mine], owner): gone.append(base)
     alias = [k for k in (msg.get('sameAs') or {}) if k]  # saved under its name, kept as the shared file with the same content
     full = [x for x in listed + list(msg.get('savedFiles') or []) + alias if x and x not in gone]  # whole names it handed over: a piece of one picked from the prose is that file
-    piece = lambda n: n in named and any(_claim_key(f).endswith(_claim_key(n)) or _claim_key(_short_name(f)).endswith(_claim_key(n)) for f in full)
+    piece = lambda n: n in named and any(_whole(f, n) or _claim_key(_short_name(n)) == _claim_key(_short_name(f)) for f in full)
     return [n for n in dict.fromkeys(gone + list(msg.get('skippedFiles') or [])) if not _in_prose(n, alias) and not _same_file(n, alias) and not piece(n)][:10]

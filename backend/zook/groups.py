@@ -244,7 +244,7 @@ def group_steps(store, group, mode):
     members = [x for x in group['botIds'] if store.find('bots', x)]
     closer, host = group_closer(store, group), group_host(store, group)
     step = lambda role, bots, blind=False: dict(role=role, bots=list(bots), blind=blind)
-    if mode == 'turns': return [step('turn', [x]) for x in members] + ([step('final', [host])] if host else [])
+    if mode == 'turns': return [step('turn', [x]) for x in sorted(members, key=lambda x: group_is_checker(store.find('bots', x)))] + ([step('final', [host])] if host else [])  # #245: a 查核員 speaks after the others
     if mode == 'compare': return [step('compare', members, True), step('compare_diff', [closer])]
     others = [x for x in members if x != closer] or members
     if mode == 'split': return [step('split_plan', [closer])] + split_work_steps(store, others, host=closer) + [step('split_merge', [closer])]  # #71: a busy member's share waits for it; #245: a 查核員 after the work
@@ -467,6 +467,7 @@ class GroupRuns:
                 group_skip_turn(group, bot, '%s 正在其他對話中工作，這次沒有查核，請等它完成後再試一次。' % bot['name'] if (step or {}).get('targetId') else ' 正在其他對話中工作，這次略過。', step)
                 store.save(); return None
             step = step or {}; readonly = bool(step.get('readonly') or step.get('noSave')); auto_chain, auto_mark = None, {}
+            if not readonly and not step.get('promptFor') and role not in GROUP_CLOSING and bot_id != group_host(store, group) and group_is_checker(bot): readonly = True  # #245: a 查核員 only reads, whatever the 討論方式
             if step.get('use'): auto_chain = [list(step['use'])]  # a check stays on the model that was chosen for it
             elif bot.get('provider') == AUTO:
                 asked = next((m for m in reversed(group['messages']) if m.get('role') == 'user'), {})
@@ -624,7 +625,8 @@ class GroupRuns:
             if not work: return steps
             group['messages'].append(dict(id=ID(), role='system', content='主持人照分工派給 %s，做完再由主持人彙整。' % '、'.join(b['name'] for b in bots if b['id'] in work), createdAt=NOW()))
             self.store.save()
-        return split_work_steps(self.store, [b['id'] for b in bots if b['id'] in work], work, host) + [dict(role='split_merge', bots=[host], blind=False)] + steps
+        handed = [b['id'] for b in bots if b['id'] in work]
+        return split_work_steps(self.store, handed + [b['id'] for b in bots if b['id'] not in work and group_is_checker(b) and any(not group_is_checker(x) for x in bots if x['id'] in work)], work, host) + [dict(role='split_merge', bots=[host], blind=False)] + steps  # #245: the group's 查核員 checks the work handed out
 
     def _wait_free(self, group_id, run_id, step):
         """#71 (decisions #5): a 分工 member that was busy in another conversation does its share once it is free. Returns the
