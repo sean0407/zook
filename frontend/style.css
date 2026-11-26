@@ -2241,3 +2241,6 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .uc-bot-list { display:flex; flex-wrap:wrap; gap:4px 10px; padding-top:4px; }
 .detail-issue { margin:8px 0 0; padding:8px 10px; border-radius:8px; background:#fff4e5; color:#7a3d00; font-size:13px; line-height:1.5; }
 @media (max-width: 640px) { .usage-grid { grid-template-columns:1fr; } }
+
+/* #298: the memory page says first who keeps it */
+.memory-lead { font-weight: 600; margin: 0 0 8px; }

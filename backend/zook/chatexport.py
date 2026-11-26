@@ -3,7 +3,7 @@
 #
 # The file has one top title (the conversation). Each message starts with a bold line: who said it, when, and for a reply the
 # model and whether it failed or was stopped. A reply's own headings move two levels down, so they never sit level with the title.
-# Attached files are named but not put in the file.
+# Attached files, and the files a reply saved (#302), are named but not put in the file.
 EXPORT_UNSAFE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 EXPORT_FENCE = re.compile(r'^\s{0,3}(`{3,}|~{3,})')
 EXPORT_FENCE_END = re.compile(r'^\s{0,3}(`{3,}|~{3,})\s*$')
@@ -72,7 +72,16 @@ def export_message(data, jobs, m, speaker, tag='', verdict=''):
     if verdict: lines.append(verdict)
     names = [str(a.get('name') or '') for a in m.get('attachments') or [] if isinstance(a, dict) and a.get('name')]
     if names: lines.append('📎 附件：%s（檔案沒有帶入這份匯出）' % '、'.join(names))
+    made = export_saved(job) if m.get('role') == 'assistant' else []
+    if made: lines.append('📄 這則回覆存的檔案：%s（檔案沒有帶入這份匯出）' % '、'.join(made))
     return '\n\n'.join(lines)
+
+
+def export_saved(job):
+    """The names of the files a reply saved (#302), from what its tools wrote; only the names, never where on this Mac."""
+    paths = [(c.get('arguments') or {}).get('path') for c in (job or {}).get('toolCalls') or [] if isinstance(c, dict) and c.get('name') in ('native_write', 'zook_workspace_write')]
+    names = [str(p).rstrip('/').rsplit('/', 1)[-1] for p in paths + list((job or {}).get('wrote') or []) if isinstance(p, str) and p.strip()]
+    return list(dict.fromkeys(n for n in names if n))[:20]
 
 
 def export_file(title, facts, blocks):

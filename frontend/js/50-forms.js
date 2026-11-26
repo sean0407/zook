@@ -453,7 +453,8 @@
         closeModal();
         await refresh();
         const next = scheduleNext(saved || {});
-        toast(next ? `已儲存排程，下次執行：${nextLabel(next)}` : '已儲存排程');
+        const renamed = !id && saved?.name && saved.name !== data.name ? `已有相同的排程，這筆叫「${saved.name}」。` : '';  // #299
+        toast(renamed + (next ? `已儲存排程，下次執行：${nextLabel(next)}` : '已儲存排程'));
       } else if (form.id === 'note-form') {
         await saveNote(form, form.dataset.id ? '' : onceId(form));  // 36c-knowledge.js; a typed one is made once however often 儲存 is pressed
       } else if (form.id === 'settings-form') {
@@ -492,7 +493,7 @@
       $('#side-search')?.focus()
     }
     if (e.key === 'Escape' && state.modal) {
-      closeModal();
+      requestCloseModal();
       return
     }
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && e.target.id === 'chat-input') {

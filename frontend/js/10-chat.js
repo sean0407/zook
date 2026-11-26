@@ -276,6 +276,7 @@
       case 'zook_start_group_discussion': return `在群組「${a.group_name || ''}」發起討論`;
       case 'zook_feature': return `使用${a.feature || '特色功能'}`;
       case 'zook_remember': return `記住一件事：「${String(a.content || '').slice(0, 60)}」`;
+      case 'zook_forget': return `忘掉一則記憶：「${String(a.content || '').slice(0, 60)}」`;
       case 'zook_ask_user': return `問你：「${String(a.question || '').slice(0, 60)}」`;
       case 'zook_browser_open': return `用內建瀏覽器開啟 ${String(a.url || '').slice(0, 80)}`;
       case 'zook_browser_click': return `在網頁上點第 ${String(a.number || '').slice(0, 6)} 個連結`;

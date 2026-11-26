@@ -523,7 +523,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 if bot.get('isAdmin') and not resume: prompt += '\n你是團隊總管：可以用 zook_list_team 查看所有 Bot 和群組，用 zook_create_bot 新增 Bot，用 zook_create_group 把 Bot 拉成群組，用 zook_start_group_discussion 在群組發起討論。新增前先確認沒有重複的 Bot。'
                 if not resume: prompt += feature_note(features, kind)
                 if not planning and not resume: prompt += schedule_instructions()
-                if not planning and not resume: prompt += '\n記憶：使用者告訴你值得長期記住的偏好、事實或決定時，用 zook_remember 記下（scope=bot 只給你自己，scope=shared 給所有 Bot）。不要記錄密碼、金鑰或一次性的內容。'
+                if not planning and not resume: prompt += '\n記憶：使用者告訴你值得長期記住的偏好、事實或決定時，用 zook_remember 記下（scope=bot 只給你自己，scope=shared 給所有 Bot）；使用者要你忘掉某則記憶時，用 zook_forget。不要記錄密碼、金鑰或一次性的內容。'
                 if choices_for(store, job): prompt += ASK_NOTE
                 if 'zook_browser_open' in [t.get('name') for t in tools]: prompt += BROWSER_PROMPT
                 if kind == 'grok': prompt += '\nZook 工具在這裡的完整名稱是 zook__ 加上工具名，例如 zook__zook_create_schedule。'
@@ -781,6 +781,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
             return {'saved': True, 'scope': scope}
         tools = [(runtime._schema('zook_remember', 'Save a long-term memory for future conversations (user preferences, facts, decisions). Never store secrets.',
                                   {'content': S('What to remember, one concise statement'), 'scope': S('bot (only you) or shared (all Bots); default bot')}, ['content'], False), remember, False)]
+        tools.append(forget_tool(store, bot_id, runtime, origin))  # 「忘掉…」 (memorytools.py, #298)
         tools += self.schedule_tools(bot, runtime, group_id, origin)
         if group_id: tools.append(group_file_tool(store, group_id, runtime))
         if not bot.get('isAdmin'): return tools
@@ -853,6 +854,7 @@ class App(Scheduling, Resuming, GroupRuns, TaskRuns, TaskChecks, Triggers, Synci
                 if len(store.data['schedules']) >= MAX_SCHEDULES: raise RuntimeError('排程已達上限 %d 個，請使用者先刪除不用的排程。' % MAX_SCHEDULES)
                 record = apply(schedule_tool_body(store, bot, group_id, args, True),
                                dict(id=ID(), botId='', groupId='', content='', time='', repeat='daily', on=True, catchUp=True, createdAt=NOW(), createdBy=bot['id']))
+                number_same_schedule(store, record)  # 「…（2）」 (scheduling.py, #299)
                 store.data['schedules'].append(record); store.save()
                 return dict(id=record['id'], target=schedule_target_name(store, record), when=schedule_when(record), created=True)
         def change(args):

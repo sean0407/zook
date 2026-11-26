@@ -732,6 +732,7 @@ class Handler(BaseHTTPRequestHandler):
                     if len(store.data['schedules']) >= MAX_SCHEDULES: return self.error(409, '排程已達上限 %d 個，請先刪除不用的排程。' % MAX_SCHEDULES)
                     item = schedule_fields(store, body, dict(id=ID(), botId='', content='', time='', repeat='daily', on=True, catchUp=True, createdAt=NOW()))
                     if not self.device: trigger_fields(store, self.last_body, item)
+                    number_same_schedule(store, item)  # 「…（2）」 (scheduling.py, #299)
                     store.data['schedules'].append(item); store.save(); return self.respond(201, item)
                 if len(parts) == 3 and parts[:2] == ['api', 'schedules'] and self.command in ('PATCH', 'DELETE'):
                     item = store.find('schedules', parts[2])

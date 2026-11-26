@@ -423,10 +423,10 @@
           break;
         }
         case 'close-modal':
-          closeModal();
+          requestCloseModal();  // asks first when the form has changes (21b-unsaved.js)
           break;
         case 'overlay':
-          if (e.target === el) closeModal();
+          if (e.target === el) requestCloseModal();
           break;
         case 'avatar-pick': { const panel = $('#bot-form .avatar-panel'); panel.hidden = !panel.hidden; break; }
         case 'default-folder': { const picked = (await post('choose-folder')).path; if (picked) { state.data.settings = await post('settings', {access: 'folder', accessFolder: picked}, 'PATCH'); render(true); toast('已更新「存取範圍」'); } break; }
