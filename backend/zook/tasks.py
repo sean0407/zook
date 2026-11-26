@@ -257,7 +257,7 @@ def task_stop(store, group):
     for t in run.get('tasks') or []:
         if t.get('parent') and t.get('staged'): task_handoff_abort(run, t['parent'])  # its member's turn is being stopped
     for t in run.get('tasks') or []:
-        if t.get('status') == 'verifying': t['verify'] = dict(state='waiting'); t['note'] = '工作本身已經回報完成，重試只會重新驗收。'  # stopped during its check
+        if t.get('status') == 'verifying': t['verify'] = verify_again(t); t['note'] = '工作本身已經回報完成，重試只會重新驗收。'  # stopped during its check
         if t.get('status') == 'review': t['status'] = 'stuck'  # its result can still be accepted
         if t.get('status') not in TASK_SETTLED: t['status'] = 'cancelled'
         t.pop('staged', None)
@@ -279,7 +279,7 @@ def task_recover(group, store=None):
         if t.get('status') not in TASK_SETTLED or t.get('status') == 'review': t['before'] = t.get('status')
         if t.get('parent') and t.get('staged'): task_handoff_abort(run, t['parent'])  # its member's turn was cut short
     for t in run.get('tasks') or []:
-        if t.get('status') == 'verifying': t['status'] = 'unknown'; t['verify'] = dict(state='waiting'); t['note'] = '工作本身已經回報完成，重試只會重新驗收。'
+        if t.get('status') == 'verifying': t['status'] = 'unknown'; t['verify'] = verify_again(t); t['note'] = '工作本身已經回報完成，重試只會重新驗收。'
         elif t.get('status') == 'running':
             t['status'] = 'unknown'
             last = (t.get('attempts') or [{}])[-1]
@@ -394,7 +394,7 @@ def task_host_prompt(store, group, run, bot, kind):
                  '「怎樣算完成」要寫成可以檢查的條件，例如「列出 3 個景點，每個附一句理由」。',
                  '交給最適合的成員，一項工作一位；不要自己做成員的工作。互不相關的工作會同時進行。',
                  '你自己也可以接其中一項（assignee 寫你自己的名稱「%s」）：先把成員的工作建立好，主持人最多接一項，不要把工作都留給自己。成員正在忙也照樣派給他，Zook 會等他有空再開始。' % bot['name'],
-                 '要等別的工作做完才能開始的，在 after 填那些工作的編號；Zook 會把它們的回報交給這項工作。只在真的需要前面的結果時才填，其餘讓它們同時進行。',
+                 '要等別的工作做完才能開始的，在 after 填那些工作的編號；Zook 會把它們的回報交給這項工作。只在真的需要前面的結果時才填，其餘讓它們同時進行。查核或驗收別人成果的工作，先建立被查的工作再建立它；Zook 會讓查核等所有製作的工作交件後才開始，查核只能讀。',
                  'Zook 會依成員的額度覆核你的指派；額度不夠時會改派，並告訴你改了什麼。',
                  'changes 寫這項工作會動到什麼：none（只讀、只查資料）、files（會建立或修改檔案）、external（會對外動作，例如寄信）。寫 none 的工作會在只能讀的狀態下進行。',
                  '每項工作完成後，Zook 會請另一家模型的成員依「怎樣算完成」驗收；沒通過會帶著意見重做，連續三次沒完成就停下來交給使用者。',
@@ -521,6 +521,11 @@ def task_tools(app, job_id, runtime):
                     dep = next((t for t in run['tasks'] if str(t['n']) == str(key).strip().lstrip('#')), None)  # by number only: a title may look like a number
                     if not dep: raise RuntimeError('after 裡的「%s」不是已建立的工作編號。先建立前面的工作。' % key)
                     if dep['n'] not in deps: deps.append(dep['n'])
+                checking = group_is_checker(bot)  # #245: a check waits for all the work there is (later work too, below) and only reads
+                if checking and any(not group_is_checker(store.find('bots', x)) for x in group['botIds'] if x != bot['id']):
+                    work = [t['n'] for t in run['tasks'] if not t.get('check') and t['status'] not in ('cancelled', 'failed')]
+                    if not work: raise RuntimeError('%s 負責查核：先建立它要查的工作，再建立查核工作，等交件後才開始。' % bot['name'])
+                    deps += [n for n in work if n not in deps]
                 changes = str(args.get('changes') or 'files').strip().lower()
                 if changes not in TASK_CHANGES: raise RuntimeError('changes 只能是 none、files 或 external。')
                 suggested, moved = bot, ''
@@ -537,11 +542,17 @@ def task_tools(app, job_id, runtime):
                 label = '主持人：' + reason if reason else '主持人指定'
                 basis = '依剩餘額度改派' if bot is not suggested else label
                 if bot is suggested and task_learn_on(store) and bot['id'] != run['hostId']: bot, basis = task_pick_by_record(store, group, run, bot, kind, label, changes)  # #71: the host's own share stays its own
+                if group_is_checker(bot) and not group_is_checker(suggested): bot, moved, basis = suggested, '', label  # #245: work is never moved onto a 查核員
+                if checking and not group_is_checker(bot): bot, moved, basis = suggested, '', label  # a check stays with the 查核員 the host chose
+                if checking or group_is_checker(bot): changes = 'none'  # a 查核員's task only reads, also when it went to someone else
                 # New work waits for the user's 「照這個做」, unless 設定 lets work that changes nothing start by itself.
                 confirmed = task_execution(store) == 'lowrisk' and changes == 'none' and not any(t['status'] == 'stuck' for t in run['tasks'])
                 task = dict(id=ID(), n=len(run['tasks']) + 1, title=title, spec=spec, doneWhen=done_when, assignee=bot['id'], suggested=suggested['name'], deps=deps,
-                            why=moved, basis=basis, kind=kind, depth=1, status='pending' if deps else 'ready', attempts=[], failures=0, question='', answer='', changes=changes, confirmed=confirmed, staged=True, createdAt=NOW())
+                            why=moved, basis=basis, kind=kind, depth=1, status='pending' if deps else 'ready', attempts=[], failures=0, question='', answer='', changes=changes, confirmed=confirmed, staged=True, createdAt=NOW(),
+                            **({'check': True} if checking else {}))
+                if not checking and task_check_room(run, deps) > task_max(run) - len(run['tasks']) - 1: raise RuntimeError('查核已經開始，新增的工作要另外複查，但工作數已到上限。把工作合併，或先寫總結。')
                 run['tasks'].append(task); run['log'].append(dict(at=NOW(), what='create', task=task['n'])); acted()
+                if not checking: task_check_new_work(run, task)  # #245: work added later is checked too
                 task_board_update(store, group); store.save()
             app.task_poke(group_id)
             out = dict(created=task['n'], assignee=bot['name'], next='已建立。全部建立好就結束這一輪；有結果時 Zook 會叫醒你。')

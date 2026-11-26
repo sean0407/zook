@@ -18,6 +18,9 @@ prompt = sys.stdin.read()
 rules = json.load(open(os.path.join(here, 'rules.json')))
 rule = next((r for r in rules if r['match'] in prompt), {'match': '', 'reply': 'ok'})
 began = time.time(); names, answers = [], []
+if rule.get('write'):  # a file the member saves for the group
+    import re; found = re.search(r'要交給群組的檔案請存到 (.+?)（只放', prompt)
+    if found: open(os.path.join(found.group(1), rule['write']), 'w').write('made')
 def codex_config():
     found = {}
     for i, a in enumerate(sys.argv):

@@ -810,7 +810,8 @@ class Handler(BaseHTTPRequestHandler):
                     if len(parts) == 5 and parts[3] == 'files' and self.command == 'DELETE' and not self.device:
                         found = group_file_path(store, group, parts[4])
                         if not found: return self.error(404, '找不到這個檔案。')
-                        found.unlink(); (group.get('fileInfo') or {}).pop(parts[4], None); store.save(); sweep_previews_later(store, force=True)  # its preview pictures go with it
+                        with _group_files_lock: found.unlink()  # not while a check is letting files through (#245)
+                        (group.get('fileInfo') or {}).pop(parts[4], None); store.save(); sweep_previews_later(store, force=True)  # its preview pictures go with it
                         return self.respond(200, {'ok': True})
                     if len(parts) == 4 and parts[3] == 'estimate' and self.command == 'POST':
                         body = self.body(); mode = body.get('mode') or group.get('mode') or 'free'

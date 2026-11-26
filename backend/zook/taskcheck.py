@@ -91,6 +91,7 @@ def task_pick_verifier(store, group, run, task, working):
     tried = (task.get('verify') or {}).get('tried') or []
     members = [store.find('bots', x) for x in group['botIds']]
     members = [b for b in members if b and b['id'] not in tried] + [b for b in members if b and b['id'] in tried]  # someone new first, the same one again if no one else can
+    members = sorted(members, key=lambda b: group_is_checker(b))  # #245: a 查核員 has its own check task; it verifies a single finished task only when nobody else can
     for bot in members:
         if bot['id'] == task['assignee'] or task_member_ok(store, bot): continue
         provider = bot.get('provider') or (store.data.get('settings') or {}).get('provider') or ''
@@ -266,7 +267,7 @@ def task_route(handler, store, group, parts):
             task.update(status='done', note=TASK_CUT_ACCEPTED if cut else '你看過後接受了結果（沒有經過另一家驗收）。'); task['verify'] = dict(task.get('verify') or {}, state='accepted'); task.pop('reviewSince', None)
             if cut: task.update(acceptedCut=True, acceptedAt=NOW()); task.pop('resumed', None)
         elif reported and (task.get('verify') or {}).get('verdict') != 'fail':
-            task.update(status='verifying', verify=dict(state='waiting')); task.pop('note', None)  # the work is done: only the check runs again
+            task.update(status='verifying', verify=verify_again(task)); task.pop('note', None)  # the work is done: only the check runs again
         else:
             # A new series: the count starts again, the history stays. What waits for it waits again.
             task.update(status='pending' if task.get('deps') or task.get('gate') else 'ready', failures=0, confirmed=True if task['attempts'] else task.get('confirmed', True)); task.pop('note', None)  # never started: it still needs 「照這個做」
@@ -335,7 +336,7 @@ class TaskChecks:
             task = next((t for t in (run or {}).get('tasks') or [] if t['id'] == task_id), None)
             if not task or not task.get('verify'): return
             check, label, origin = task['verify'], '%d. %s（驗收）' % (task['n'], task['title']), run['origin'] if run['origin'] != 'user' else 'bot'
-        step = dict(waitBusy=True, readonly=True, **({'use': check['use']} if check.get('use') else {}),
+        step = dict(waitBusy=True, readonly=True, need=dict(check.get('need') or {}) if isinstance(check.get('need'), dict) else {}, **({'use': check['use']} if check.get('use') else {}),  # #245: the files it checks must still be there
                     job=dict(taskRole='verifier', taskRunId=run['id'], taskId=task_id, taskTitle=label, origin=origin), msg=dict(taskId=task_id, taskCheck=True),
                     attachIds=[run.get('goalId')], promptFor=lambda bot, writable: task_verify_prompt(store, store.find('groups', group_id), store.find('groups', group_id)['taskRun'], task, bot))
         turn = self._task_turn(group_id, run_id, check['bot'], step)
@@ -350,16 +351,22 @@ class TaskChecks:
                 store.save(); return
             if task['status'] == 'verifying':
                 who = task_member_name(store, check['bot'])
+                lost = list((turn or {}).get('job', {}).get('lostFiles') or [])
                 if not turn or turn['job']['status'] != 'completed': check.pop('verdict', None)  # it failed or was stopped after its verdict: not a check
                 try: task_rate_record(store, task, check.get('verdict'))
                 except Exception: pass  # the record is a hint; the verdict settles the task whatever happens to it
-                if check.get('verdict') == 'pass': task['status'] = 'done'; check['state'] = 'done'
+                if lost:  # #245: the files went away before the check could read them: back to the member who made them, not another checker
+                    check['state'] = 'done'; task['missingFiles'] = lost[:10]
+                    work = next((a for a in reversed(task['attempts']) if a.get('state') == 'reported'), {})
+                    task_failed_attempt(task, '交給驗收前，%s 從群組檔案裡不見了。把檔案存回群組檔案後再回報。' % '、'.join(lost), store.find('jobs', work.get('jobId')) if work.get('jobId') else None)
+                    group['messages'].append(dict(id=ID(), role='system', createdAt=NOW(), content='%s 要驗收的 %s 在驗收開始前不見了；%s' % (task_member_name(store, task['assignee']), '、'.join(lost), '退回給它補存，補好再驗收。' if task['status'] == 'ready' else '沒有驗收。' + (task.get('note') or ''))))
+                elif check.get('verdict') == 'pass': task['status'] = 'done'; check['state'] = 'done'
                 elif check.get('verdict') == 'fail':
                     check['state'] = 'done'
                     work = next((a for a in reversed(task['attempts']) if a.get('state') == 'reported'), {})
                     task_failed_attempt(task, '%s 驗收沒有通過：%s' % (who, check.get('reasons') or ''), store.find('jobs', work.get('jobId')) if work.get('jobId') else None)
                 elif len(check.get('tried', [])) < 1:  # no verdict: once more, with another member when there is one
-                    task['verify'] = dict(state='waiting', tried=check.get('tried', []) + [check['bot']])
+                    task['verify'] = dict(state='waiting', tried=check.get('tried', []) + [check['bot']], need=check.get('need') or {})
                 else: check['state'] = 'missing'; task['status'] = 'stuck'; task['note'] = '驗收兩次都沒有完成（最後是 %s），停下來等你決定。工作本身已經回報完成。' % who
             if group: task_board_update(store, group)
             store.save()
