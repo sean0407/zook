@@ -1,6 +1,6 @@
 
-  // 剩餘額度 on the usage page: one card per CLI, with a row for each of its accounts (#242).
-  // A row shows what is left; sign-in, version, abilities and removal are behind 詳細. CLIs that are not installed
+  // 剩餘額度 on the usage page: one card per account, grouped by CLI (#316, replacing #242's one card per CLI).
+  // A card shows what is left; sign-in, version, abilities and removal are behind 詳細. CLIs that are not installed
   // stay out of the grid and are installed from ＋ 新增模型, except while an install is running or has just failed.
   const ACCOUNT_BADGE = {logged_in: ['ok', '已登入'], not_logged_in: ['warn', '尚未登入'], installed: ['', '已安裝'], unknown: ['', '狀態不明'], not_installed: ['warn', '未安裝']};
   function flowView(l, kind, id, account = '') {
@@ -80,30 +80,6 @@
     if (p.terminalLogin && (!a || p.id === 'antigravity')) return `<button class="${signed ? 'secondary' : 'primary'}" data-action="terminal-login" data-id="${esc(p.id)}" data-account="${esc(acct)}">${signed ? '重新登入' : ['gemini', 'antigravity'].includes(p.id) ? '用 Google 帳號登入' : '在終端機登入'}</button>`;
     return (p.loginMethods || []).map((m, i) => `<button class="${i === 0 && !signed ? 'primary' : 'secondary'}" data-action="account-login" data-id="${esc(p.id)}" data-account="${esc(acct)}" data-method="${esc(m.id)}" ${m.id === 'device' ? 'title="用另一台裝置（例如手機）打開登入網頁，輸入這裡顯示的代碼完成登入"' : ''}>${signed && i === 0 ? '重新登入' : esc(m.label)}</button>`).join('');
   }
-  // Where the bars go: progress of an install or sign-in, a sign-in button, a line saying why there are no bars, or the bars.
-  function cardBody(p, a, q) {
-    const who = a || p, flow = a ? a.login : p.login;
-    if (!a && p.install?.state === 'running') return flowView(p.install, 'install', p.id);
-    if (flow?.state === 'running') return flowView(flow, 'login', p.id, a ? a.id : '');
-    const done = (!a && p.install && p.install.state !== 'running' ? flowView(p.install, 'install', p.id) : '') + (flow && flow.state !== 'running' ? flowView(flow, 'login', p.id, a ? a.id : '') : '');
-    if (!p.installed) return done || '<p class="quota-empty">尚未安裝。</p>';
-    if (['not_logged_in', 'not_installed'].includes(who.status)) {
-      const buttons = loginButtons(p, a);
-      return done + (buttons ? `<div class="card-login"><p class="quota-empty">尚未登入</p><div class="card-actions">${buttons}</div></div>` : `<p class="quota-empty">${esc(p.loginNote || '尚未登入。')}</p>`);
-    }
-    if (q?.apiBilling || who.type === 'key') return done + '<div class="quota-billed"><b>依用量計費</b><small>API 金鑰帳號沒有 5 小時、每週額度，用多少付多少。</small></div>';  // #199: never a subscription's figures
-    if (!state.quota) return loadingBlock('正在偵測使用量…');
-    if (state.quota.error) return `<p class="error-text small">${esc(state.quota.error)}</p>`;
-    const s = q?.quota;
-    if (!a && p.issue) return done;  // the line above already says why this sign-in cannot be used and what to do
-    if (q?.noQuotaApi) return '<p class="quota-empty">這個 CLI 不提供額度資料。</p>';
-    if (q?.quotaUnread && !(s?.windows || []).length) return '<p class="quota-empty">讀不到額度</p>';
-    if (limitNow(s) && !(s.windows || []).length) return `<p class="error-text small">${esc(limitWords(s.limitReached))}</p>`;
-    if (!s || !(s.windows || []).length) return '<p class="quota-empty">還沒有額度資料，按右上角「偵測使用量」讀取。</p>';
-    const bars = quotaRows(s.windows);
-    const extra = (s.resetCredits ? `<p class="quota-coupon-line">額度重置券 ${s.resetCredits} 張（在 Codex 中使用）</p>` : '') + (s.credits && (s.credits.unlimited || (s.credits.balance && s.credits.balance !== '0')) ? `<p class="quota-extra">額外額度：${s.credits.unlimited ? '不限' : esc(s.credits.balance)}</p>` : '') + (limitNow(s) ? `<p class="error-text small">${esc(limitWords(s.limitReached))}</p>` : '');
-    return done + bars + extra;
-  }
   // 下一步 on a used-up card, in plain words: another signed-in account that still has room (same CLI first), and/or when this one resets.
   function outNext(p, a, lv) {
     const spare = [p, ...(state.accounts?.providers || []).filter(x => x.id !== p.id)].filter(x => x.installed).flatMap(x => [{x, b: null}, ...(x.profiles || []).map(b => ({x, b}))])
@@ -112,23 +88,124 @@
     if (lv.clock) return `下一步：${other ? other + '，或' : ''}等到 ${lv.clock} 重置後再用。`;
     return `下一步：${other ? other + '；' : ''}這家沒有說何時重置，稍後按「偵測使用量」再看${other ? '' : '，或按「＋ 帳號」加入其他帳號'}。`;
   }
-  // One account inside its family card: what is left, 自動選用 and 詳細. A row is dragged inside its card when the card has several.
-  function accountRow(p, a, many) {
-    const q = quotaFor(p.id, a ? a.id : undefined), lv = p.installed ? accountLevel(p.id, a ? a.id : '') : {level: ''};
-    const levelLine = lv.level === 'out' ? `<div class="quota-state out"><span class="out-badge">已用完</span><small>${esc(lv.reset || '未提供重置時間')}</small><p class="quota-next">${esc(outNext(p, a, lv))}</p></div>` : lv.level === 'low' ? `<p class="quota-state low">快用完・剩不到 20%</p>` : '';
-    const name = a ? a.name : (p.profiles || []).length ? '預設帳號' : '', line = (a ? [a.email || a.method] : [p.email || p.method || (name ? '' : p.vendor)]).filter(Boolean).join(' · ');
-    const auto = q?.autoOn === undefined ? '' : `<label class="auto-pick small-switch">${toggle(`${a ? `data-auto-account="${esc(a.id)}"` : `data-auto-model="${esc(p.id)}"`} ${q.autoBilled ? 'disabled' : ''}`, q.autoOn, '自動選用')}<span ${lv.level === 'out' && q.autoOn ? 'title="這個帳號已用完，重置前自動選用會先跳過它"' : ''}>${q.autoBilled ? 'API 計費，不會自動選用' : '自動選用'}</span></label>`;
-    const keys = (p.profiles || []).filter(x => x.type === 'key').length;
-    const issue = a ? '' : p.issue;  // a sign-in problem of the CLI's own account; extra accounts (API keys) are not affected
-    const warn = issue || (!a && (p.changed || []).length) ? `<p class="error-text small">${esc(issue || '這個版本有變動，暫時關閉：' + p.changed.join('、'))}${issue && keys ? `（已加入的 ${keys} 把 API 金鑰不受影響，可直接在 Bot 設定選用。）` : ''}</p>` : '';
-    const head = name || line ? `<div class="acct-row-head"><strong>${esc(name || line)}</strong>${name && line ? `<span title="${esc(line)}">${esc(line)}</span>` : ''}</div>` : '';
-    return `<section class="acct-row ${lv.level ? 'quota-' + lv.level : ''}" ${many ? 'draggable="true" ' : ''}data-row-key="${esc(cardKey(p, a))}"${many ? ' title="拖動可以調整這張卡裡的順序"' : ''}>${head}<div class="account-body">${warn}${levelLine}${cardBody(p, a, q)}</div><footer class="account-foot">${auto}<div class="card-actions"><button class="secondary small-btn" data-action="account-detail" data-id="${esc(p.id)}" data-account="${esc(a ? a.id : '')}">詳細</button></div></footer></section>`;
+  // ---- #316: one card per account, and every card has the same blocks in the same order: head, status, bars, reset times,
+  // 下一步 (only when needed), 綁定 Bot, then 自動選用 and 詳細. The cards of one CLI come together under its title row.
+  // The bars every account of one CLI shows, in one order: by kind of model (Antigravity), five hours before weekly.
+  const slotGroup = l => l.includes(' · ') ? l.split(' · ')[0] : '', slotRank = l => l.includes('小時') ? 0 : l.includes('週') ? 1 : 2;
+  function familySlots(rows) {
+    const labels = [];
+    for (const {p, a} of rows) {
+      const q = quotaFor(p.id, a ? a.id : undefined);
+      if (q?.apiBilling || (a && a.type === 'key')) continue;  // paid by use: its old figures are not shown
+      for (const w of q?.quota?.windows || []) { const l = String(w.label || ''); if (l && !labels.includes(l)) labels.push(l); }
+    }
+    const groups = [...new Set(labels.map(slotGroup))];
+    return labels.map((l, i) => ({l, i})).sort((x, y) => groups.indexOf(slotGroup(x.l)) - groups.indexOf(slotGroup(y.l)) || slotRank(x.l) - slotRank(y.l) || x.i - y.i).map(x => x.l);
   }
-  // One card per CLI: its name, ＋ 帳號 and a row for each of its accounts (the CLI's own sign-in and those added).
-  function familyCard(f) {
-    const p = f.p, many = f.rows.length > 1;
+  // The bars of one account on its card, one per slot of its CLI; a slot it has no figure for says 不提供. A used-up weekly limit
+  // stops the others of the same kind of model, as in quotaRows.
+  function slotRows(slots, windows) {
+    const period = l => l.split(' · ').pop(), rows = (windows || []).map(w => ({label: String(w.label || ''), left: windowLeft(w), resetsAt: w.resetsAt}));
+    return slots.map(label => {
+      const r = rows.find(x => x.label === label);
+      if (!r) return `<div class="quota-row none"><div class="quota-label"><span>${esc(label)}</span><span><b>不提供</b></span></div><div class="quota-track left-track"></div></div>`;
+      const stop = rows.find(x => x !== r && x.left <= 0 && period(x.label).includes('週') && slotGroup(x.label) === slotGroup(r.label)), blocked = !!stop && r.left > 0;
+      return `<div class="quota-row ${blocked ? 'blocked' : ''}"><div class="quota-label"><span>${esc(label)}</span><span><b>${blocked ? `被${esc(period(stop.label))}額度擋住` : '剩餘 ' + r.left + '%'}</b></span></div><div class="quota-track left-track"><div class="quota-bar ${blocked ? 'off' : r.left < 20 ? 'warn' : ''}" style="width:${r.left}%"></div></div></div>`;
+    }).join('');
+  }
+  // When each limit is full again; limits that reset at the same time share a line.
+  function slotResets(slots, windows) {
+    const lines = [];
+    for (const label of slots) {
+      const w = (windows || []).find(x => String(x.label || '') === label);
+      if (!w) continue;
+      const text = windowLeft(w) >= 100 ? '額度是滿的' : resetWords(w.resetsAt), same = lines.find(x => x.text === text);
+      if (same) same.labels.push(label); else lines.push({labels: [label], text});
+    }
+    return lines.map(x => `<div><span>${esc(x.labels.join('、'))}</span><span>${esc(x.text)}</span></div>`).join('');
+  }
+  const issueShort = t => String(t || '').split(/[：，。]/)[0];
+  // ② The one status badge: 可用, 快用完 (under 20%), 已用完 or 無法使用, with a short note after it.
+  function cardStatus(p, a, lv) {
+    const who = a || p, flow = a ? a.login : p.login;
+    if (!a && p.install?.state === 'running') return {cls: 'off', text: '無法使用', note: '正在安裝／更新'};
+    if (!p.installed) return {cls: 'off', text: '無法使用', note: '尚未安裝'};
+    if (['not_logged_in', 'not_installed'].includes(who.status)) return {cls: 'off', text: '無法使用', note: flow?.state === 'running' ? '正在登入' : '尚未登入'};
+    if (!a && who.status !== 'logged_in' && (state.data?.rings || []).find(x => x.id === p.id)?.signedIn === false) return {cls: 'off', text: '無法使用', note: '尚未登入'};  // the last sign-in check (#111 #158), until this page reads it again
+    if (!a && p.issue) return {cls: 'off', text: '無法使用', note: issueShort(p.issue)};
+    const changed = !a && (p.changed || []).length ? '部分功能暫時關閉' : '';
+    if (lv.level === 'out') return {cls: 'out', text: '已用完', note: lv.why || (lv.group ? `「${lv.group}」用完了` : '')};
+    if (lv.level === 'low') return {cls: 'low', text: '快用完', note: `剩 ${lv.left}%` + (lv.group ? `（${lv.group}）` : '')};
+    return {cls: 'ok', text: '可用', note: changed};
+  }
+  // ③ and ④: the bars and the reset times, or one line saying why there are none (paid by use, no figures from this CLI, not signed
+  // in, an install or sign-in in progress).
+  function cardQuota(p, a, q, slots) {
+    const who = a || p, flow = a ? a.login : p.login, line = t => `<p class="quota-empty">${esc(t)}</p>`;
+    if (!a && p.install?.state === 'running') return {body: flowView(p.install, 'install', p.id), reset: ''};
+    if (flow?.state === 'running') return {body: flowView(flow, 'login', p.id, a ? a.id : ''), reset: ''};
+    const done = (!a && p.install && p.install.state !== 'running' ? flowView(p.install, 'install', p.id) : '') + (flow && flow.state !== 'running' ? flowView(flow, 'login', p.id, a ? a.id : '') : '');
+    if (!p.installed) return {body: done || line('尚未安裝。'), reset: ''};
+    if (['not_logged_in', 'not_installed'].includes(who.status)) {
+      const buttons = loginButtons(p, a);
+      return {body: done + (buttons ? `<div class="card-actions">${buttons}</div>` : line(p.loginNote || '登入後才能查看額度。')), reset: ''};
+    }
+    if (q?.apiBilling || who.type === 'key') return {body: done + '<div class="quota-billed"><b>依用量計費</b><small>API 金鑰沒有 5 小時、每週額度，用多少付多少。</small></div>', reset: '不適用'};  // #199
+    if (!state.quota) return {body: loadingBlock('正在偵測使用量…'), reset: ''};
+    if (state.quota.error) return {body: `<p class="error-text small">${esc(state.quota.error)}</p>`, reset: ''};
+    if (!a && p.issue) return {body: done + line('這個登入目前不能用，沒有額度資料。'), reset: ''};
+    if (q?.noQuotaApi) return {body: line('這個 CLI 不提供額度資料。'), reset: '不提供'};
+    const s = q?.quota, wins = s?.windows || [];
+    if (!wins.length) return {body: done + (limitNow(s) ? `<p class="error-text small">${esc(limitWords(s.limitReached))}</p>` : line(q?.quotaUnread ? '讀不到額度。' : '還沒有額度資料，按右上角「偵測使用量」讀取。')), reset: ''};
+    const extra = (s.resetCredits ? `<p class="quota-coupon-line">額度重置券 ${esc(s.resetCredits)} 張（在 Codex 中使用）</p>` : '') + (s.credits && (s.credits.unlimited || (s.credits.balance && s.credits.balance !== '0')) ? `<p class="quota-extra">額外額度：${s.credits.unlimited ? '不限' : esc(s.credits.balance)}</p>` : '');
+    return {body: done + slotRows(slots, wins) + extra, reset: slotResets(slots, wins)};
+  }
+  // ⑤ 下一步, only when the account cannot be used now.
+  function cardNext(p, a, lv, st) {
+    if (st.cls === 'out') return outNext(p, a, lv);
+    if (st.cls !== 'off' || st.note === '正在安裝／更新' || st.note === '正在登入') return '';
+    if (st.note === '尚未登入') return loginButtons(p, a) ? '下一步：按上面的按鈕登入。' : '下一步：照上面的說明登入。';
+    return '下一步：按「詳細」看原因和怎麼處理。';
+  }
+  // The Bots that answer with this account: their own model and account, or the default model when they have none.
+  // A Bot on 自動選擇 that has not been matched yet is bound to no account.
+  function boundBots(p, a) {
+    const dflt = state.data?.settings?.provider || 'codex', acct = a ? a.id : '';
+    return (state.data?.bots || []).filter(b => (b.provider || dflt) === p.id && (b.account || '') === acct);
+  }
+  document.addEventListener('toggle', e => { if (e.target.dataset?.bound) (state.boundOpen ||= {})[e.target.dataset.bound] = e.target.open; }, true);
+  const accountName = a => a ? a.name : '預設帳號';
+  function usageCard(r, slots, many, st) {
+    const {p, a} = r, who = a || p, q = quotaFor(p.id, a ? a.id : undefined), lv = r.lv, key = r.key;
+    const name = a ? a.name : p.email || '預設帳號', method = a ? (a.type === 'key' ? 'API 金鑰' : a.method || '登入帳號') : p.method || 'CLI 自己的登入';
+    const sub = [method, a && a.email && a.email !== name ? a.email : ''].filter(Boolean).join(' · ');
+    // ② The status badge sits beside the name, so it takes no row of its own; its short note follows the sign-in method.
+    const badge = `<span class="status-badge ${st.cls}" ${st.note ? `title="${esc(st.note)}"` : ''}>${st.text}</span>`;
+    const head = `<header class="uc-head"><div class="uc-title"><span class="uc-family">${esc(cliShort(p))}</span>${a ? '' : '<span class="uc-default">預設</span>'}</div><div class="uc-name-row"><strong class="uc-name" title="${esc(name)}">${esc(name)}</strong>${badge}</div><small class="uc-method" title="${esc([sub, st.note].filter(Boolean).join(' · '))}">${esc(sub)}${st.note ? `<span class="uc-note"> · ${esc(st.note)}</span>` : ''}</small></header>`;
+    const quota = cardQuota(p, a, q, slots), next = cardNext(p, a, lv, st);
+    const bots = boundBots(p, a), bound = bots.length ? `<details class="uc-bots" data-bound="${esc(key)}" ${state.boundOpen?.[key] ? 'open' : ''}><summary>綁定 Bot：${bots.length} 個</summary><div class="uc-bot-list">${bots.map(b => `<button class="link" data-action="select-bot" data-id="${esc(b.id)}">${esc(b.name)}</button>`).join('')}</div></details>` : '<p class="uc-bots none">綁定 Bot：0 個</p>';
+    const off = q?.autoOn === undefined || q.autoBilled, autoLabel = q?.autoBilled || (a && a.type === 'key') ? 'API 計費，不會自動選用' : '自動選用';
+    const auto = `<label class="auto-pick small-switch">${toggle(`${a ? `data-auto-account="${esc(a.id)}"` : `data-auto-model="${esc(p.id)}"`} ${off ? 'disabled' : ''}`, !!q?.autoOn && !q.autoBilled, '自動選用')}<span ${lv.level === 'out' && q?.autoOn ? 'title="這個帳號已用完，重置前自動選用會先跳過它"' : ''}>${autoLabel}</span></label>`;
+    return `<article class="left-card account-card usage-card uc-${st.cls}" ${many ? 'draggable="true" title="拖動可以調整同一家帳號的順序" ' : ''}data-row-key="${esc(key)}"><div class="uc-main">${head}<div class="uc-quota">${quota.body}</div><div class="uc-reset"><span class="uc-label">重置時間</span>${quota.reset && quota.reset.startsWith('<') ? quota.reset : `<div><span>${esc(quota.reset || '—')}</span></div>`}</div>${next ? `<p class="uc-next">${esc(next)}</p>` : ''}${bound}</div><footer class="account-foot">${auto}<div class="card-actions"><button class="secondary small-btn" data-action="account-detail" data-id="${esc(p.id)}" data-account="${esc(a ? a.id : '')}">詳細</button></div></footer></article>`;
+  }
+  // One CLI: a title row with ＋ 帳號 across the whole grid, then a card per account. The wrapper takes no room in the grid.
+  function familyGroup(f, statuses) {
+    const p = f.p, many = f.rows.length > 1, slots = familySlots(f.rows);
     const add = p.installed && (p.canAddLogin || p.canAddKey) ? `<button class="secondary small-btn" data-action="profile-add" data-id="${esc(p.id)}">＋ 帳號</button>` : '';
-    return `<article class="left-card account-card family-card" draggable="true" data-card-key="${esc(f.key)}" title="拖動可以調整順序"><header class="account-head"><div class="account-title"><h3>${esc(cliShort(p))}${p.custom ? ' <span class="pill">自訂</span>' : ''}</h3>${many ? `<span>${f.rows.length} 個帳號</span>` : ''}</div><div class="family-tools">${p.version?.updateAvailable ? `<span class="new-version" title="有新版 ${esc(p.version.latest)}">有新版</span>` : ''}${add}</div></header><div class="family-rows">${f.rows.map(r => accountRow(r.p, r.a, many)).join('')}</div></article>`;
+    return `<div class="usage-family" data-card-key="${esc(f.key)}"><div class="usage-family-head" draggable="true" title="拖動可以調整各家的順序"><h3>${esc(cliShort(p))}${p.custom ? ' <span class="pill">自訂</span>' : ''}</h3><span class="muted small">${f.rows.length} 個帳號</span><span class="family-tools">${p.version?.updateAvailable ? `<span class="new-version" title="有新版 ${esc(p.version.latest)}">有新版</span>` : ''}${add}</span></div>${f.rows.map(r => usageCard(r, slots, many, statuses.get(r.key))).join('')}</div>`;
+  }
+  // #301: one plain sentence on top: which accounts can be used now, which are nearly or quite used up, which cannot be used.
+  function usageSummary(fams, statuses) {
+    const parts = {ok: [], low: [], out: [], off: []};  // each account in one of them only
+    for (const f of fams) {
+      const name = cliShort(f.p);
+      for (const kind of Object.keys(parts)) {
+        const rows = f.rows.filter(r => { const c = statuses.get(r.key).cls; return c === kind; });
+        if (rows.length) parts[kind].push(rows.length === f.rows.length ? (rows.length > 1 ? `${name} ${rows.length} 個帳號` : name) : `${name}（${rows.map(r => accountName(r.a)).join('、')}）`);
+      }
+    }
+    const said = [['現在能用', parts.ok], ['快用完（還能用）', parts.low], ['已用完', parts.out], ['無法使用', parts.off]].filter(([, x]) => x.length).map(([k, x]) => `${k}：${x.join('、')}`);
+    return (parts.ok.length || parts.low.length ? '' : '現在沒有能用的帳號；') + said.join('；') + '。';
   }
   // The order: dragged by the user (自訂), or most left first (自動); kept in the settings so the phone lists them the same way.
   // The setting stays a list of account keys ('codex', 'codex::<id>'), as before the families: a family comes where its first
@@ -193,37 +270,43 @@
     const shown = list.filter(p => p.installed || p.install?.state === 'running');  // a failed install is retried from ＋ 新增模型
     const waiting = list.length - shown.length;
     const sort = `<div class="card-sort"><span class="usage-auto-label">排序</span>${dropdown('usageCardSort', state.data?.settings?.usageCardSort === 'auto' ? 'auto' : 'custom', CARD_SORTS, 'data-card-sort')}</div>`;
-    const help = '<p class="muted small usage-help">同一家的帳號放在同一張卡。「5 小時」「每週」是訂閱方案的兩種用量上限，用完要等重置；任一種用完，這個帳號就暫時不能用。API 金鑰依用量計費，沒有這兩種上限。「自動選用」打開時，Bot 選「自動」就可能用到這個帳號。</p>';
-    return `<section class="usage-block"><div class="overview-head"><h2>剩餘額度</h2>${shown.length ? sort : ''}</div>${shown.length ? help : ''}${shown.length ? `<div class="left-grid account-grid family-grid">${usageFamilies(shown).map(familyCard).join('')}</div>` : '<div class="blank">還沒有安裝任何模型，按右上角「＋ 新增模型」。</div>'}${waiting ? `<p class="muted small">另有 ${waiting} 個已加入但尚未安裝的模型，可在「＋ 新增模型」安裝。</p>` : ''}</section>`;
+    const fams = usageFamilies(shown), statuses = new Map();
+    for (const f of fams) for (const r of f.rows) { r.lv = r.p.installed ? accountLevel(r.p.id, r.a ? r.a.id : '') : {level: ''}; statuses.set(r.key, cardStatus(r.p, r.a, r.lv)); }
+    const summary = state.quota && !state.quota.error ? `<p class="usage-summary">${esc(usageSummary(fams, statuses))}</p>` : '';
+    const help = '<p class="muted small usage-help">一個帳號一張卡，同一家的排在一起。「5 小時」「每週」是訂閱方案的兩種用量上限，用完要等重置；任一種用完，這個帳號就暫時不能用。API 金鑰依用量計費，沒有這兩種上限。「自動選用」打開時，Bot 選「自動」就可能用到這個帳號。</p>';
+    return `<section class="usage-block"><div class="overview-head"><h2>剩餘額度</h2>${shown.length ? sort : ''}</div>${shown.length ? summary + help : ''}${shown.length ? `<div class="usage-grid">${fams.map(f => familyGroup(f, statuses)).join('')}</div>` : '<div class="blank">還沒有安裝任何模型，按右上角「＋ 新增模型」。</div>'}${waiting ? `<p class="muted small">另有 ${waiting} 個已加入但尚未安裝的模型，可在「＋ 新增模型」安裝。</p>` : ''}</section>`;
   }
   document.addEventListener('change', e => {
     if (e.target.dataset?.cardSort === undefined) return;
     saveCardOrder({usageCardSort: e.target.value === 'auto' ? 'auto' : 'custom'});
     toast(e.target.value === 'auto' ? '剩餘額度依剩下多少自動排序' : '剩餘額度照你拖動的順序');
   });
-  // Dragging: a card goes before or after the card it is dropped on; an account row before or after another row of the same card.
-  // Either way the order becomes 自訂.
+  // Dragging: a card goes before or after another card of the same CLI; a CLI's title row moves all its cards before or after
+  // another CLI. Either way the order becomes 自訂.
   let draggingUsage = null;
-  const DROP_MARKS = '.drop-before, .drop-after';
-  const clearCardMarks = () => document.querySelectorAll(`.account-card:is(${DROP_MARKS}), .acct-row:is(${DROP_MARKS})`).forEach(el => el.classList.remove('drop-before', 'drop-after'));
+  const clearCardMarks = () => document.querySelectorAll('.usage-family-head:is(.drop-before, .drop-after), .usage-card:is(.drop-before, .drop-after)').forEach(el => el.classList.remove('drop-before', 'drop-after'));
   const cardDrop = e => {
-    if (!draggingUsage) return null;
-    const el = draggingUsage.kind === 'row' ? e.target.closest?.('[data-row-key]') : e.target.closest?.('[data-card-key]');
-    if (!el) return null;
-    const key = draggingUsage.kind === 'row' ? el.dataset.rowKey : el.dataset.cardKey;
-    if (key === draggingUsage.key || (draggingUsage.kind === 'row' && el.closest('[data-card-key]')?.dataset.cardKey !== draggingUsage.family)) return null;
-    const r = el.getBoundingClientRect();
-    return {el, key, after: draggingUsage.kind === 'row' ? e.clientY > r.top + r.height / 2 : e.clientX > r.left + r.width / 2};
+    const fam = draggingUsage && e.target.closest?.('[data-card-key]');
+    if (!fam) return null;
+    if (draggingUsage.kind === 'row') {
+      const el = e.target.closest('[data-row-key]');
+      if (!el || el.dataset.rowKey === draggingUsage.key || fam.dataset.cardKey !== draggingUsage.family) return null;
+      const r = el.getBoundingClientRect();
+      return {el, key: el.dataset.rowKey, after: e.clientX > r.left + r.width / 2};
+    }
+    if (fam.dataset.cardKey === draggingUsage.key) return null;
+    const boxes = [...fam.children].map(x => x.getBoundingClientRect()), top = Math.min(...boxes.map(x => x.top)), bottom = Math.max(...boxes.map(x => x.bottom));
+    return {el: fam.querySelector('.usage-family-head'), key: fam.dataset.cardKey, after: e.clientY > (top + bottom) / 2};
   };
   document.addEventListener('dragstart', e => {
-    const el = e.target.closest?.('[draggable="true"][data-row-key], [data-card-key]');
-    if (!el || e.target.closest('button, input, a, .dd, label')) return;
+    const el = e.target.closest?.('[draggable="true"]'), fam = el?.closest('[data-card-key]');
+    if (!fam || e.target.closest('button, input, a, .dd, label, summary')) return;
     const row = el.dataset.rowKey !== undefined;
-    draggingUsage = {kind: row ? 'row' : 'card', key: row ? el.dataset.rowKey : el.dataset.cardKey, family: el.closest('[data-card-key]')?.dataset.cardKey};
+    draggingUsage = {kind: row ? 'row' : 'card', key: row ? el.dataset.rowKey : fam.dataset.cardKey, family: fam.dataset.cardKey};
     e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', draggingUsage.key);
     requestAnimationFrame(() => el.classList.add('dragging'));
   });
-  document.addEventListener('dragend', () => { draggingUsage = null; clearCardMarks(); document.querySelectorAll('.account-card.dragging, .acct-row.dragging').forEach(el => el.classList.remove('dragging')); });
+  document.addEventListener('dragend', () => { draggingUsage = null; clearCardMarks(); document.querySelectorAll('.usage-card.dragging, .usage-family-head.dragging').forEach(el => el.classList.remove('dragging')); });
   document.addEventListener('dragover', e => {
     const t = cardDrop(e);
     if (!t) return;
@@ -260,7 +343,7 @@
     const abilities = (p.abilities || []).length ? `<div class="ability-chips">${p.abilities.map(x => `<span class="${x.state === 'broken' ? 'off' : ''}" title="${x.state === 'broken' ? '這個版本暫時無法使用' : '可以使用'}">${x.state === 'broken' ? '✕' : '✓'} ${esc(x.name)}</span>`).join('')}</div>` : '<p class="muted small">沒有能力資料。</p>';
     const notes = [!p.tools ? '這個 CLI 只能純對話，不能使用 Zook 的工具。' : '', !(p.loginMethods || []).length && !p.terminalLogin && p.loginNote ? p.loginNote : ''].filter(Boolean).map(n => `<p class="muted small">${esc(n)}</p>`).join('');
     const manage = a ? `<button class="link danger" data-action="profile-delete" data-id="${esc(p.id)}" data-account="${esc(a.id)}" data-name="${esc(a.name)}">移除帳號</button>` : `${p.custom ? `<button class="secondary" data-action="provider-edit" data-id="${esc(p.id)}">編輯設定</button>` : ''}${p.status === 'logged_in' && p.canLogout ? `<button class="link danger" data-action="account-logout" data-id="${esc(p.id)}">登出</button>` : ''}${p.removable ? `<button class="link danger" data-action="provider-remove" data-id="${esc(p.id)}">從 Zook 移除</button>` : ''}`;
-    modal(`${cliShort(p)}${a ? '（' + a.name + '）' : ''}`, `<div class="modal-body account-detail"><p class="muted small">登入由各家官方 CLI 完成，Zook 不讀取帳密。</p><div class="detail-rows">${rows.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('')}</div>${loginButtons(p, a) ? `<div class="card-actions">${loginButtons(p, a)}</div>` : ''}<h3 class="modal-sub">版本</h3><div class="detail-version">${version}</div>${install ? `<div class="card-actions">${install}</div>` : ''}<h3 class="modal-sub">能力</h3>${abilities}${notes}${manage ? `<div class="detail-manage">${manage}</div>` : ''}</div>`);
+    modal(`${cliShort(p)}${a ? '（' + a.name + '）' : ''}`, `<div class="modal-body account-detail"><p class="muted small">登入由各家官方 CLI 完成，Zook 不讀取帳密。</p>${!a && p.issue ? `<p class="detail-issue">${esc(p.issue)}</p>` : ''}${!a && (p.changed || []).length ? `<p class="detail-issue">這個版本有變動，暫時關閉：${esc(p.changed.join('、'))}</p>` : ''}<div class="detail-rows">${rows.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('')}</div>${loginButtons(p, a) ? `<div class="card-actions">${loginButtons(p, a)}</div>` : ''}<h3 class="modal-sub">版本</h3><div class="detail-version">${version}</div>${install ? `<div class="card-actions">${install}</div>` : ''}<h3 class="modal-sub">能力</h3>${abilities}${notes}${manage ? `<div class="detail-manage">${manage}</div>` : ''}</div>`);
   }
   async function saveAutoAccount(input) {
     const id = input.dataset.autoAccount;
