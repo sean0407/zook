@@ -57,7 +57,7 @@ class GroupModes(unittest.TestCase):
         except ValueError: return resp.status, data
 
     def group(self, names=('Alpha', 'Beta', 'Gamma'), **fields):
-        status, group = self.req('POST', '/api/groups', dict({'botIds': [self.bots[n]['id'] for n in names]}, **fields)); self.assertEqual(status, 201, group); return group
+        status, group = self.req('POST', '/api/groups', dict({'botIds': [self.bots[n]['id'] for n in names], 'checkMode': 'none'}, **fields)); self.assertEqual(status, 201, group); return group
 
     def settle(self, group):
         for _ in range(150):
