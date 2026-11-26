@@ -2,6 +2,8 @@
   // Choices answered with one click: the options a Bot lists at the end of a reply, and a question it asks in the middle of its work.
   if (!state.answering) state.answering = {};
   if (!state.answerDraft) state.answerDraft = {};
+  // Questions closed with 知道了, kept in this browser so a reload does not bring them back (only a convenience: nothing depends on it).
+  if (!state.seenQuestions) { state.seenQuestions = {}; try { state.seenQuestions = JSON.parse(localStorage.getItem('zook-seen-questions') || '{}') || {}; } catch (_) {} }
   const choicesOn = () => state.data?.settings?.choiceButtons !== false;
 
   // Only under the newest reply, and only while nothing else is on its way.
@@ -17,7 +19,16 @@
     return pendingQuestions(botId).map(q => `<section class="question-card" aria-label="Bot 的提問"><strong>${esc(who)} 想問你</strong><p>${esc(q.question)}</p>
       ${(q.options || []).length ? `<div class="choice-row">${q.options.map(o => `<button type="button" class="choice-btn" data-answer="${esc(q.id)}" data-text="${esc(o)}" ${state.answering[q.id] ? 'disabled' : ''}>${esc(o)}</button>`).join('')}</div>` : ''}
       <form class="answer-form" data-answer-form="${esc(q.id)}"><input type="text" maxlength="2000" placeholder="${(q.options || []).length ? '或自己回答' : '輸入你的回答'}" aria-label="自己回答" value="${esc(state.answerDraft[q.id] || '')}" data-answer-draft="${esc(q.id)}"><button class="secondary" ${state.answering[q.id] ? 'disabled' : ''}>送出</button></form>
-      <small class="approval-reason">回答只會告訴 Bot 你的選擇；它之後要做的動作仍照你設定的主動性核准。</small></section>`).join('');
+      <small class="approval-reason">也可以直接在下面的輸入框打字送出，會當成這題的回答。回答只會告訴 Bot 你的選擇；它之後要做的動作仍照你設定的主動性核准。</small></section>`).join('');
+  }
+
+  // #248: a question the Bot stopped waiting for stays in sight, greyed, with why; Zook never answers in the user's place.
+  function goneQuestions(botId) {
+    const bot = state.data.bots.find(x => x.id === botId), who = bot?.name || 'Bot';
+    // A reply that ended on its own with the question open (not one you stopped) also stopped waiting for it (巡檢 H02).
+    const gone = jobsForBot(botId).filter(j => !j.chatId || !bot?.chatId || j.chatId === bot.chatId).flatMap(j => (j.questions || []).filter(q => q.status === 'expired' && (['timeout', 'gone', 'restart'].includes(q.expiredWhy) || q.expiredWhy === 'ended' && j.status !== 'cancelled' && j.status !== 'running') && !state.seenQuestions[q.id]));  // until 知道了
+    return gone.map(q => `<section class="question-card stale" role="status"><strong>${esc(q.expiredWhy === 'timeout' ? `${who} 等了 10 分鐘沒等到你的回答，已先停在這一步` : q.expiredWhy === 'gone' ? `${who} 已不再等這個問題的回答（它可能改用別的做法，或已經停下）` : q.expiredWhy === 'restart' ? `Zook 重新啟動，${who} 沒等到你的回答` : `${who} 沒等到你的回答就結束了這次回覆`)}</strong><p>${esc(q.question)}</p>
+      <small class="approval-reason">Zook 沒有替你選，Bot 也不會當成你拒絕。要回答的話，直接在下面輸入，Bot 會接著做。</small><div class="actions"><button class="secondary" data-action="dismiss-question" data-id="${esc(q.id)}">知道了</button></div></section>`).join('');
   }
 
   async function answerQuestion(id, text) {
@@ -45,9 +56,20 @@
       input.dispatchEvent(new Event('input', {bubbles: true}));  // the box grows to fit, as when typing
       return;
     }
+    const seen = e.target.closest('[data-action="dismiss-question"]');
+    if (seen) { state.seenQuestions[seen.dataset.id] = true; try { localStorage.setItem('zook-seen-questions', JSON.stringify(Object.fromEntries(Object.entries(state.seenQuestions).slice(-200)))); } catch (_) {} render(true); return; }
     const answer = e.target.closest('[data-answer]');
     if (answer) answerQuestion(answer.dataset.answer, answer.dataset.text);
   });
+  // User 11-26: while a 「想問你」 card waits, what is typed and sent from the message box is its answer (the card is marked answered).
+  // Runs before the other submit handlers (this file loads first); a message with files attached is sent as usual.
+  document.addEventListener('submit', e => {
+    if (e.target.id !== 'chat-form' || activeGroup() || pendingList().length) return;
+    const input = $('#chat-input'), text = (input?.value || '').trim(), q = text && pendingQuestions(state.selected)[0];
+    if (!q) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    input.value = ''; updateInputMirror(); answerQuestion(q.id, text);
+  }, true);
   document.addEventListener('input', e => { if (e.target.dataset.answerDraft) state.answerDraft[e.target.dataset.answerDraft] = e.target.value; });
   document.addEventListener('submit', e => {
     const id = e.target.dataset.answerForm;

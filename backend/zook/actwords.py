@@ -113,7 +113,11 @@ def _describe(command, depth=0):
         if not words or words[0] in SKIP_PARTS: continue
         word = words[0]; name = os.path.basename(word); args = words[1:]
         if word == '_' and not args: continue  # where a $( … ) stood: what ran inside it was read above
-        if '$' in word or '`' in word or word == '_': steps.append(UNREADABLE); continue
+        if '$' in word or '`' in word or word == '_':  # a program held in a variable: named when the line says what it holds (zook_gate.py)
+            known = (getattr(gate, '_resolve', None) or (lambda w: None))(word) if '`' not in word and word != '_' else None
+            tail = (known or word).rstrip('/').split('/')[-1]
+            if not ('$' not in tail and (tail in LANGUAGES or re.fullmatch(r'python[\d.]*', tail))): steps.append(UNREADABLE); continue
+            word = name = tail
         if name in GATED: continue  # always a safety line of its own (刪除檔案、對外送出 …), said above
         if name in gate.SHELLS or name == 'eval':
             script = next((args[i + 1] for i, a in enumerate(args[:-1]) if re.fullmatch(r'-[a-z]*c[a-z]*', a)), None) if name != 'eval' else ' '.join(args)
@@ -185,7 +189,7 @@ def plain_old_summary(summary):
     """An activity line saved by an earlier version, in today's words: 「執行指令：python3、from、print」 kept only the program names it
     knows (the rest may be words of code), and a 「執行無法判讀的指令」 line is said plainly."""
     if not isinstance(summary, str): return '執行指令'
-    labels = list(_gate().LABELS.values())
+    labels = list(_gate().LABELS.values()) + [LABELS_UNCLEAR]  # the old name of a command Zook could not read through
     old = summary.startswith(('執行指令：', '這個 curl', '一個 curl')) or any(summary.startswith(x + ' ') or summary.startswith(x + '（') for x in labels)
     if not old: return summary  # today's words (an earlier version wrote either the programs or approval lines, nothing else)
     lines = []
