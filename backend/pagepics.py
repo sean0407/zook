@@ -185,7 +185,8 @@ def mark_page_breaks(xml):
     page) written as PAGE_MARK text, which macOS's reader keeps. One pass over the paragraphs with plain searches: a malformed
     file cannot make it slow."""
     run = '<w:r><w:t>%s</w:t></w:r>' % PAGE_MARK
-    xml = re.sub(r'<w:br\b[^>]*?\bw:type="page"[^>]*/>', '<w:t>%s</w:t>' % PAGE_MARK, xml)
+    if len(xml) > 30 * 1024 * 1024: return xml  # a huge document is laid out as it is
+    xml = re.sub(r'<w:br\b[^<>]{0,200}/>', lambda m: '<w:t>%s</w:t>' % PAGE_MARK if 'w:type="page"' in m.group() else m.group(), xml)  # bounded: a malformed file cannot make it slow
     out = []
     for part in xml.split('</w:p>'):
         start = part.find('<w:pPr>'); end = part.find('</w:pPr>', start) if start >= 0 else -1

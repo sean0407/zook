@@ -59,6 +59,10 @@ class SheetTables(unittest.TestCase):
         wide = '<row r="1"><c r="%s1"><v>1</v></c><c r="A1" s="1"><v>0.5</v></c></row>' % ('A' * 5000)
         got = server.sheet_tables(xlsx([('x', wide)], styles='<numFmts><numFmt numFmtId="164" formatCode="0.%s"/></numFmts><cellXfs><xf numFmtId="0"/><xf numFmtId="164"/></cellXfs>' % ('0' * 5000)))['sheets'][0]
         self.assertTrue(got['wide']); self.assertEqual(got['rows'][0][1][0], '0.5000000000')
+        old = server.SHEET_STRINGS; server.SHEET_STRINGS = 2
+        try: self.assertTrue(server.sheet_tables(xlsx([('x', '<row r="1"><c r="A1" t="s"><v>2</v></c></row>')], shared=['a', 'b', 'c']))['partial'])  # says it is partial
+        finally: server.SHEET_STRINGS = old
+        self.assertFalse(server.sheet_tables(xlsx([('x', '<row r="1"><c r="A1"><v>1</v></c></row>')]))['partial'])
 
     def test_crafted_files_are_refused(self):
         bomb = '<!DOCTYPE x [<!ENTITY a "aaaaaaaa"><!ENTITY b "&a;&a;&a;&a;">]>'
@@ -120,7 +124,7 @@ class NamesAndNotes(unittest.TestCase):
                '<w:p><w:pPr><w:sectPr><w:type w:val="continuous"/></w:sectPr></w:pPr></w:p>'
                '<w:p><w:pPr><w:sectPr/></w:pPr><w:r><w:t>三</w:t></w:r></w:p><w:p><w:r><w:br/></w:r></w:p></w:body>')
         self.assertEqual(pagepics.mark_page_breaks(xml).count(pagepics.PAGE_MARK), 3)
-        slow = time.time(); pagepics.mark_page_breaks('<w:p><w:pPr>' * 200000); self.assertLess(time.time() - slow, 2)  # malformed: no long scan
+        slow = time.time(); pagepics.mark_page_breaks('<w:br ' * 200000); pagepics.mark_page_breaks('<w:p><w:pPr>' * 200000); self.assertLess(time.time() - slow, 2)  # malformed: no long scan
 
     @unittest.skipUnless(os.path.exists('/usr/bin/osascript') and not os.environ.get('CI'), "needs this Mac's text system")
     def test_real_word_file_breaks_into_pages(self):
@@ -153,9 +157,9 @@ class PageCode(unittest.TestCase):
         self.assertIn("default-src 'none'", policy); self.assertNotIn('http', policy); self.assertNotIn("'self'", policy)
         self.assertIn("kind === 'html'", code)
         frame = code[code.index('  function htmlFrame'):code.index('  async function previewBody')]
-        self.assertIn("new DOMParser().parseFromString(String(text), 'text/html')", frame)  # read inert, not cut with patterns (review: '>' inside quotes)
+        self.assertIn("document.createElement('template')", frame)  # read inert, not cut with patterns (review: '>' inside quotes; nothing loads while read)
         for tag in ('meta[http-equiv]', 'base', 'link', 'script', 'iframe', 'object', 'embed'): self.assertIn(tag, frame)
-        self.assertIn('(https?:\\/\\/|mailto:|#)', frame); self.assertIn("at.localName === 'href'", frame)  # a link to Zook's own addresses is taken out
+        self.assertIn('(https?:\\/\\/|mailto:|#)', frame); self.assertIn("at.localName === 'href'", frame); self.assertIn("'src', 'srcset'", frame)  # a link to Zook's own addresses is taken out
 
     def test_cards_icons_names_and_sizes(self):
         files, pages, groups = self.read('36b-files.js'), self.read('30-pages.js'), self.read('35-groups.js')

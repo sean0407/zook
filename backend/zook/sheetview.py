@@ -20,6 +20,9 @@ def keep_suffix(name, most):
     return name[:most - len(tail)].rstrip(' .') + tail
 
 
+_sheet_partial = [False]
+
+
 class _SheetStop(Exception): pass
 
 
@@ -42,6 +45,7 @@ def _sheet_xml(stream, start, end=None, text=None):
             if not chunk: break
             read += len(chunk); parser.Parse(chunk, False)
         if read < SHEET_XML: parser.Parse(b'', True)
+        else: _sheet_partial[0] = True  # a part bigger than Zook reads: what was read is shown, and said to be partial
     except _SheetStop: pass
     except xml.parsers.expat.ExpatError: raise SheetRefused('broken')
 
@@ -60,7 +64,7 @@ def _shared_strings(z):
         if name in depth: depth[name] -= 1
         if name == 'si':
             found.append(''.join(now)[:SHEET_TEXT])
-            if len(found) >= SHEET_STRINGS: raise _SheetStop()
+            if len(found) >= SHEET_STRINGS: _sheet_partial[0] = True; raise _SheetStop()
     def text(data):
         if depth['si'] and depth['t'] and not depth['rPh']: now.append(data)  # rPh: the pronunciation guide above Japanese text
     part = _sheet_part(z, 'xl/sharedStrings.xml')
@@ -172,6 +176,7 @@ def sheet_tables(data):
             part = _sheet_part(z, part_name)
             if part is None: raise SheetRefused('no workbook')
             with part: _sheet_xml(part, walk)
+        _sheet_partial[0] = False
         shared, styles, sheets = _shared_strings(z), _sheet_styles(z), []
         for title, rid in listed[:SHEET_TABS]:
             target = targets.get(rid, '')
@@ -179,7 +184,10 @@ def sheet_tables(data):
             target = os.path.normpath(target)
             if target not in names: continue
             sheets.append(dict(name=title[:100] or '工作表', **_read_sheet(z, target, shared, styles, flags['date1904'])))
-        return dict(sheets=sheets, more=len(listed) > SHEET_TABS, charts=any(n.startswith('xl/charts/chart') for n in names))
+        return dict(sheets=sheets, partial=_sheet_partial[0], more=len(listed) > SHEET_TABS, charts=any(n.startswith('xl/charts/chart') for n in names))
+
+
+_sheet_lock = threading.Lock()  # one at a time: _sheet_partial is shared
 
 
 def sheet_preview(path, strict=False):
@@ -190,6 +198,7 @@ def sheet_preview(path, strict=False):
         if info.st_size > MAX_UPLOAD: return dict(status='failed', reason='這個檔案超過 20 MB，無法在 Zook 裡預覽，請在 Finder 開啟。')
         with os.fdopen(os.dup(fd), 'rb') as f: data = f.read(MAX_UPLOAD + 1)
     finally: os.close(fd)
-    try: return dict(status='ready', **sheet_tables(data))
+    try:
+        with _sheet_lock: return dict(status='ready', **sheet_tables(data))
     except (SheetRefused, KeyError, ValueError, zipfile.BadZipFile, OSError, RuntimeError, NotImplementedError):
         return dict(status='failed', reason='這份試算表打不開，可能已損壞或用了特殊格式。可以下載後用 Excel 或 Numbers 開啟。')

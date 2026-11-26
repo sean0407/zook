@@ -42,20 +42,19 @@
   const officeShell = (url, name, kind) => `<div class="office-view" data-src="${esc(url)}" data-sheet="${isSheet(name) ? 1 : ''}" data-kind="${esc(kind || 'office')}"><p class="muted office-wait">正在產生預覽…</p></div>`;
   // #108④ #337③: a web page shown as a page, never run: no scripts, forms, pop-ups or plug-ins (sandbox with nothing allowed, so it
   // is also cut off from Zook's own pages and data), and nothing loaded from anywhere (its own policy allows only pictures,
-  // styles and fonts written into the file itself). The file is first read as an inert document (nothing runs or loads there)
+  // styles and fonts written into the file itself). The file is first read into an inert template (nothing runs or loads there)
   // and what could move or reload the frame is taken out: refresh and other http-equiv tags, <base>, <link>, and links that do
   // not go to a web page (a link inside the file would otherwise open Zook's own addresses in the frame).
   const HTML_POLICY = "default-src 'none'; img-src data:; style-src 'unsafe-inline'; font-src data:; media-src data:; form-action 'none'";
   function htmlFrame(text, name) {
-    const doc = new DOMParser().parseFromString(String(text), 'text/html');
-    doc.querySelectorAll('meta[http-equiv], base, link, script, noscript, iframe, frame, frameset, object, embed, portal').forEach(x => x.remove());
+    const box = document.createElement('template'); box.innerHTML = String(text);  // a template's contents are inert: nothing in it loads or runs
+    const doc = box.content;
+    doc.querySelectorAll('meta[http-equiv], base, link, script, noscript, iframe, frame, frameset, object, embed, portal, title').forEach(x => x.remove());
     for (const el of doc.querySelectorAll('*')) for (const at of [...el.attributes]) {  // every href (SVG's xlink:href too), form targets and pings
       const to = at.value.trim();
-      if (at.localName === 'href' && !/^(https?:\/\/|mailto:|#)/i.test(to) || ['action', 'formaction', 'ping'].includes(at.localName)) el.removeAttributeNode(at);
+      if (at.localName === 'href' && !/^(https?:\/\/|mailto:|#)/i.test(to) || ['action', 'formaction', 'ping'].includes(at.localName) || ['src', 'srcset', 'poster', 'background', 'data'].includes(at.localName) && !/^data:/i.test(to)) el.removeAttributeNode(at);  // only what the file itself holds
     }
-    const first = new DOMParser().parseFromString(`<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${HTML_POLICY}"><base target="_blank">`, 'text/html').head;
-    doc.head.prepend(...[...first.childNodes].map(x => doc.importNode(x, true)));  // the policy comes before anything of the file's own
-    const page = '<!doctype html>' + doc.documentElement.outerHTML;
+    const page = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${HTML_POLICY}"><base target="_blank"></head><body>` + box.innerHTML + '</body></html>';
     return `<div class="html-view"><p class="muted small office-note">網頁預覽：不執行程式、不連網，版面可能和瀏覽器略有不同。</p><iframe sandbox="" referrerpolicy="no-referrer" srcdoc="${esc(page)}" title="${esc(name)}"></iframe></div>`;
   }
   async function previewBody(url, kind, name) {
@@ -121,7 +120,7 @@
     if (info.status !== 'ready') { box.innerHTML = `<p class="muted">${esc(info.reason || info.error || '無法產生預覽，可以下載後用其他程式開啟。')}</p>`; return; }
     const sheets = info.sheets || [];
     if (!sheets.length) { box.innerHTML = '<p class="muted">這份試算表沒有內容。</p>'; return; }
-    const cut = sheets.some(t => t.more || t.wide), notes = ['顯示的是存檔時算好的數值', cut ? '每個工作表只顯示前 300 列、60 欄' : '', info.charts ? '圖表不會顯示' : '', info.more ? '只顯示前 30 個工作表' : ''].filter(Boolean);
+    const cut = sheets.some(t => t.more || t.wide) || info.partial, notes = ['顯示的是存檔時算好的數值', info.partial ? '這份試算表很大，只顯示了一部分，有些格子可能是空白' : cut ? '每個工作表只顯示前 300 列、60 欄' : '', info.charts ? '圖表不會顯示' : '', info.more ? '只顯示前 30 個工作表' : ''].filter(Boolean);
     const table = (t, i) => `<div class="sheet-table" data-sheet-index="${i}" ${i ? 'hidden' : ''}>${t.rows.length ? `<table><thead><tr><th></th>${Array.from({length: t.cols}, (_, c) => `<th>${columnName(c + 1)}</th>`).join('')}</tr></thead><tbody>${t.rows.map(([r, cells]) => `<tr><th>${r}</th>${Array.from({length: t.cols}, (_, c) => `<td>${esc(cells[c] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '<p class="muted">這個工作表是空的。</p>'}</div>`;
     const tabs = sheets.length > 1 ? `<div class="sheet-tabs" role="tablist">${sheets.map((t, i) => `<button type="button" role="tab" class="sheet-tab${i ? '' : ' active'}" aria-selected="${!i}" data-sheet-tab="${i}">${esc(t.name)}</button>`).join('')}</div>` : '';
     box.innerHTML = `<p class="muted small office-note">${esc(notes.join('；'))}${cut || info.charts ? '，完整內容請下載後查看' : ''}。</p>${tabs}${sheets.map(table).join('')}`;
