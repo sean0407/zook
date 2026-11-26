@@ -30,6 +30,23 @@ def _folders():
     return list(dict.fromkeys(found))
 
 
+def _in_quotes(text, at):
+    """Whether the place is inside '…' or "…" (no backslash or $'…' in the line: _values asks that first)."""
+    quote = ''
+    for c in text[:at]: quote = ('' if quote == c else quote) if quote else c if c in '\'"' else ''
+    return bool(quote)
+
+
+def _writes(f):
+    """The file may be written by another command of the line (> f, cp … f, sed -i …), or is named inside $( … ): read it now is not enough."""
+    for line in _LINES:
+        if any(f in x for x in _inner(line) if x): return True
+        for part in _split(_without_inner(line))[0]:
+            words, _, written = _redirects(part); words = _strip(words)
+            if f in written or words and os.path.basename(words[0]) in ('cp', 'mv', 'tee', 'install', 'ln', 'rsync', 'ditto', 'dd', 'sort', 'sed', 'gsed', 'perl', 'truncate', 'curl', 'wget', 'unzip', 'patch') + (TARS if any(re.fullmatch(r'-?[a-zA-Z]*x[a-zA-Z]*|--extract', w) for w in words[1:]) else ()) and any(f in w for w in words[1:]): return True
+    return False
+
+
 def _no_heredocs(text):
     """The line without what its here-documents hold: lines of text for a program, never commands or settings of the line."""
     out, i = '', 0
@@ -47,7 +64,9 @@ def _values(name):
     None when not known (set from outside, by read, by $( … ), or only for one command)."""
     if name == 'PWD': return None if any(re.search(r'\bPWD\+?=', x) for x in _LINES) else _folders()  # set by hand: not where it runs
     found = []
-    for line in map(_no_heredocs, _LINES):
+    for raw in _LINES:
+        line = _no_heredocs(raw)
+        if line != raw and (set(raw) & set('\\`') or "$'" in raw or any(_in_quotes(raw, m.start()) for m in re.finditer(HEREDOC, raw))): return None  # a <<word in quotes is text
         use = min([m.start() for m in re.finditer(r'\$\{?%s\b' % re.escape(name), line)] or [len(line)])
         for m in re.finditer(r'(?<![\w-])(?:(?:export|local|declare|readonly|typeset)\s+)?%s\+?=|\bfor\s+%s\s+in\b' % (re.escape(name), re.escape(name)), line):
             ahead = re.sub(r'\$\(\s*mktemp[^()]*\)', '', line[:m.start()])  # only set for sure, before it is read: not in if, ||, ( … ), a function
@@ -106,7 +125,7 @@ def _listed(files, prog, words=(), bases=None):
     one that is a key, a link or a pipe); the file itself when what is in it cannot be read. echo and printf open nothing."""
     out = [x for x in map(_secret_any, files) if x]
     marks = [v for i, w in enumerate(words) for v in [w.split('=', 1)[1] if w.startswith(('--delimiter=', '--colsep=')) else ''.join(words[i + 1:i + 2]) if w in ('--delimiter', '--colsep') else _short_value(words, i, set(), 'dC')] if v is not None]
-    out += ['（%s 列出的檔案）' % f for f in files if _LINES and (max(x.count(f) for x in _LINES) > 1 or any(x.count(f) > _LINES[-1].count(f) for x in _LINES))]  # named elsewhere on the line: it may be written first
+    out += ['（%s 列出的檔案）' % f for f in files if _writes(f)]  # written first on the line: what is in it now is not what is read
     for f in [] if out or prog in ('echo', 'printf') else files:
         where = [x for x in _resolved(f) or [] if os.path.isfile(_abs(x))]
         for one in where or [None]:  # every folder the line may run in: the list there
@@ -115,7 +134,7 @@ def _listed(files, prog, words=(), bases=None):
                 with os.fdopen(fd, 'rb') as h: raw = h.read(65537) if stat.S_ISREG(os.fstat(h.fileno()).st_mode) else None
                 text = raw.decode('utf-8', 'replace') if raw is not None and len(raw) <= 65536 else None  # longer: not all of it is seen
                 null = any(w in ('-0', '--null', '--from0') or re.fullmatch(r'-[^-]*0\w*', w) for w in words)
-                parts = set(text.split('\0') if null else [p for m in marks for p in re.split(m.encode().decode('unicode_escape') if len(m) <= 2 else m, text)] if marks else text.splitlines() + text.split())  # as the tool splits it
+                parts = set(text.split('\0') if null else [p for m in marks for p in re.split(m.encode().decode('unicode_escape') if len(m) <= 2 else m, text)] if marks else text.splitlines() + text.split() + (shlex.split(text) if set(text) & set('\'"\\') else []))  # as the tool splits it; xargs takes quotes and \\ away
                 if prog in TARS and any(x.startswith('-') for x in parts): parts = None  # tar -T: a line may be an option (-C ~): not followed here
                 parts = parts if bases is None else parts | {os.path.join(b, x.lstrip('/')) for b in bases for x in parts}  # rsync --files-from: under each source
             except (OSError, ValueError, IndexError, TypeError, AttributeError, re.error): parts = None

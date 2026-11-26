@@ -222,6 +222,17 @@ class GateHoles(unittest.TestCase):
         self.assertNotAsked('xargs -a args.txt cat')
         self.assertNotAsked("git commit -m \"$(cat <<'END-MSG'\nFix it (really)\nEND-MSG\n)\"")
 
+    def test_review_round_fourteen(self):
+        for line in ("F=notes.txt; echo '<<true'; F=~/.ssh/config; true; cat \"$F\"", 'F=notes.txt; echo "<<true"; F=~/.ssh/config; true; cat "$F"',
+                     'sort -boauth.json input.txt', 'sort -o .env input.txt'):
+            self.assertAsked(line)
+        Path(self.temp.name, 'q.txt').write_text("'/tmp/client_secret.json'\n"); Path(self.temp.name, 'bad.txt').write_text("'unclosed\n")
+        self.assertAsked('xargs -a q.txt cat'); self.assertAsked('xargs -a bad.txt cat')
+        Path(self.temp.name, 'list.txt').write_text('notes.txt\n')
+        self.assertNotAsked('cat list.txt; xargs -a list.txt cat')
+        for line in ('echo .env > list.txt; xargs -a list.txt cat', 'cp other list.txt && xargs -a list.txt cat', 'X=$(cp a list.txt); xargs -a list.txt cat'):
+            self.assertAsked(line)
+
     def test_cdpath_may_lead_to_keys(self):
         os.environ['CDPATH'] = os.path.expanduser('~')
         self.assertAsked('cd .ssh && rg x .')

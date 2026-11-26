@@ -695,6 +695,7 @@ def _argv_boundaries(argv, whole, depth):
         found.append(_hit('delete', '清空 %s 的內容' % _names([a for a in plain if a != '0'])))
     if name in ('cp', 'mv') and plain[:1] == ['/dev/null'] and len(plain) == 2 and _nonempty(plain[1]): found.append(_hit('delete', '清空 %s 的內容' % _names(plain[1:])))
     targets = [x for t in targets for x in _resolved(t) or [t]]; removed = [x for t in plain for x in _resolved(t) or [t]] if name in DELETE_COMMANDS else []
+    if any(map(_secret_any, targets)) and not any(k == 'secret' for k, _ in found): found.append(_hit('secret', '寫入 ' + _names(map(_secret_any, targets))))  # sort -boauth.json
     if any(_guard_path(t) for t in targets): found.append(_hit('guard', '修改 ' + _names([t for t in targets if _guard_path(t)])))
     elif name not in DELETE_COMMANDS and any(_system_path(t) for t in targets) and name not in ('touch', 'mkdir'): found.append(_hit('system', '寫入 ' + _names([t for t in targets if _system_path(t)])))
     if any(_guard_path(t) for t in removed): found.append(_hit('guard', '刪除 ' + _names([t for t in removed if _guard_path(t)])))
