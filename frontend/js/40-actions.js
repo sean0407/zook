@@ -327,6 +327,14 @@
           await post('privacy-settings', {pane: el.dataset.pane});
           toast('已打開系統設定。允許 Zook 後回來按「重試」');
           break;
+        case 'reply-version': {  // #305: ‹ › between the answers to the same question
+          const b = activeBot(), m = (b?.messages || []).find(x => x.id === el.dataset.id), n = (m?.versions || []).length;
+          if (!n) break;
+          const at = (state.versionAt ||= {})[m.id] ?? n, next = Math.max(0, Math.min(n, at + Number(el.dataset.step)));
+          if (next === n) delete state.versionAt[m.id]; else state.versionAt[m.id] = next;
+          render();
+          break;
+        }
         case 'redo-again': {
           const b = activeBot();
           if (await redoAllowed(b)) await redo(b, {mode: 'again'});
