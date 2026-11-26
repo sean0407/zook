@@ -1253,6 +1253,7 @@ button {
 .catalog-item code { font-size: 11px; background: #f4f4f4; padding: 1px 5px; border-radius: 4px; }
 .modal-sub { font-size: 15px; margin: 18px 0 4px; }
 .field small.muted { display: block; margin-top: 4px; font-size: 12px; line-height: 1.5; color: #6b6b6b; }  /* #253: 11.5px at 2.8:1 was hard to read */
+.field small.muted[hidden] { display: none; }  /* #333③: 自動配's line stayed under Claude, Codex… */
 .catalog-item .secondary { flex: none; white-space: nowrap; }
 
 /* Quota cards v2: aligned columns, account on its own lines, footer pinned to the bottom */
