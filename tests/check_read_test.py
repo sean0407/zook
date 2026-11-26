@@ -66,16 +66,20 @@ class TextVersions(unittest.TestCase):
     def test_a_pdf_says_its_pages_and_gets_pictures(self):
         (self.shared / '規格書.pdf').write_bytes(b'%PDF-1.4 big')
         def pictures(path, out):
-            for n in (1, 2): (Path(out) / ('p-%02d.png' % n)).write_bytes(b'png')
+            for n in (1, 3): (Path(out) / ('p-%02d.png' % n)).write_bytes(b'png')  # page 2 could not be pictured
         with mock.patch.object(server, 'group_text_pdf', return_value=(5, '【第 1 頁】\n規格一\n【第 2 頁】\n規格二')), mock.patch.object(server, 'group_text_pictures', side_effect=pictures):
             self.turn()
         text = (self.texts / '規格書.pdf.txt').read_text(encoding='utf-8')
         self.assertIn('共 5 頁', text); self.assertIn('規格二', text); self.assertIn('規格書.pdf-第01頁.png', text)
-        self.assertEqual(sorted(p.name for p in self.texts.iterdir()), ['規格書.pdf-第01頁.png', '規格書.pdf-第02頁.png', '規格書.pdf.txt'])
+        self.assertEqual(sorted(p.name for p in self.texts.iterdir()), ['規格書.pdf-第01頁.png', '規格書.pdf-第03頁.png', '規格書.pdf.txt'])
 
     def test_a_file_zook_cannot_read_says_so(self):
         (self.shared / '壞掉.xlsx').write_bytes(b'not a zip')
         self.turn()
+        import zlib
+        with mock.patch.object(server, '_text_xlsx', side_effect=zlib.error('bad')):
+            make_xlsx(self.shared / '壞掉2.xlsx'); self.turn()
+        self.assertIn('Zook 讀不到', (self.texts / '壞掉2.xlsx.txt').read_text(encoding='utf-8'))
         text = (self.texts / '壞掉.xlsx.txt').read_text(encoding='utf-8')
         self.assertIn('Zook 讀不到', text); self.assertIn('無法查核（讀不到檔案）', text)
 
