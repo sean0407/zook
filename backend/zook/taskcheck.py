@@ -108,6 +108,17 @@ def task_pick_verifier(store, group, run, task, working):
     return 'wait' if busy else 'none'
 
 
+TASK_LAYOUT_FILES = re.compile(r'\.(pptx|ppt|key|pdf|docx|doc|pages)(?![A-Za-z0-9])', re.I)
+
+
+def task_layout_rule(attempt):
+    """#164① (#114): a deck, PDF or document handed in is checked by its pictures, or the checker says plainly that the layout was not seen."""
+    said = ' '.join([str(attempt.get('summary') or '')] + [str(x) for x in attempt.get('files') or []])
+    if not TASK_LAYOUT_FILES.search(said) and not re.search(r'簡報|投影片|PDF|Word|文件|海報|傳單', said, re.I): return ''
+    return ('交回的是簡報、PDF 或文件時，版面要看過畫面才算數：用 /usr/bin/python3 "%s" 檔案 暫存資料夾（另開一個新的，不算修改檔案）把每一頁轉成圖片看過；'
+            '讀不到或失敗時改用 qlmanage -t -s 1600 -o 暫存資料夾 檔案（只有第一頁）。沒看到畫面的部分，reasons 要寫「版面未驗證」，不要說版面沒問題。' % PAGEPICS)
+
+
 def task_verify_prompt(store, group, run, task, bot):
     attempt = next((a for a in reversed(task['attempts']) if a.get('state') == 'reported'), {})
     rules = ['你負責驗收群組「%s」裡的一項工作。依「怎樣算完成」檢查成員交回的結果，只檢查，不要修改任何檔案，也不要自己重做。' % group['name'],
@@ -116,6 +127,7 @@ def task_verify_prompt(store, group, run, task, bot):
              'reasons 和回覆一律用繁體中文，不要用簡體字。']
     shared = [e.name for e in _plain_files(group_files_dir(store, group['id']))]
     if shared: rules.append('群組共用檔案在 %s：%s。用你的讀檔工具查看；讀不到時改用 zook_group_file_read。' % (group_copy_folder(store, bot['id']), '、'.join(shared[:40])))
+    if task_layout_rule(attempt): rules.append(task_layout_rule(attempt))
     known = ['使用者的決定：%s → %s' % (q, a) for q, a in task.get('decisions') or []]
     if task.get('question') and task.get('answer'): known.append('成員問主持人：%s；主持人回答：%s' % (task['question'], task['answer']))
     claims = ['工作 %d「%s」的回報：%s' % (t['n'], t['title'], ((t['attempts'] or [{}])[-1].get('summary') or '')) for t in run['tasks'] if t['n'] in (task.get('deps') or []) and t['status'] == 'done']
@@ -194,6 +206,7 @@ def task_redo_tool(app, store, group_id, locate, acted, schema, S, text):
             task = task_find(run, args.get('number'))
             if not task: raise RuntimeError('沒有這個工作編號。')
             if task['status'] != 'done': raise RuntimeError('工作 %d 還沒有完成，不能退回。' % task['n'])
+            if task_checkpoint_waiting(run): raise RuntimeError('使用者正在決定要不要繼續，先不要退回工作。')
             if task.get('sentBack', 0) >= TASK_SEND_BACK:
                 raise RuntimeError('工作 %d 已經退回過 %d 次，不能再自動退回。在總結最上面寫「未通過的地方」，交給使用者決定。' % (task['n'], task['sentBack']))
             if run['attempts'] >= task_limit(run, 'attempts'): raise RuntimeError('這個目標的嘗試次數已到上限，不能再退回。在總結最上面寫「未通過的地方」，交給使用者決定。')
@@ -245,10 +258,13 @@ def task_route(handler, store, group, parts):
         if run['status'] != 'running' and group['status'] == 'running': return handler.error(409, '這個任務正在結束，等幾秒再重試。')
         last = task['attempts'][-1] if task['attempts'] else {}
         reported = last.get('state') == 'reported' and last.get('outcome') == 'succeeded'
+        cut = bool(task.get('cut')) and task['status'] in ('stuck', 'unknown') and not reported  # #285: cut off by a restart, no report
         if accept:
-            # The user looked at the result and takes it as it is (nobody of another vendor could check it, or the check did not finish).
-            if not reported: return handler.error(409, '這項工作沒有可以接受的結果。')
-            task.update(status='done', note='你看過後接受了結果（沒有經過另一家驗收）。'); task['verify'] = dict(task.get('verify') or {}, state='accepted'); task.pop('reviewSince', None)
+            # The user looked at the result and takes it as it is (nobody of another vendor could check it, or the check did not finish),
+            # or at what a try cut off by a restart left behind (the user's call, 2026-11-25): it counts as done and what waits for it goes on.
+            if not reported and not cut: return handler.error(409, '這項工作沒有可以接受的結果。')
+            task.update(status='done', note=TASK_CUT_ACCEPTED if cut else '你看過後接受了結果（沒有經過另一家驗收）。'); task['verify'] = dict(task.get('verify') or {}, state='accepted'); task.pop('reviewSince', None)
+            if cut: task.update(acceptedCut=True, acceptedAt=NOW()); task.pop('resumed', None)
         elif reported and (task.get('verify') or {}).get('verdict') != 'fail':
             task.update(status='verifying', verify=dict(state='waiting')); task.pop('note', None)  # the work is done: only the check runs again
         else:
@@ -256,14 +272,16 @@ def task_route(handler, store, group, parts):
             task.update(status='pending' if task.get('deps') or task.get('gate') else 'ready', failures=0, confirmed=True if task['attempts'] else task.get('confirmed', True)); task.pop('note', None)  # never started: it still needs 「照這個做」
             gate = next((g for g in run.get('gates') or [] if g['id'] == task.get('gate')), None)
             if gate and gate['status'] in ('timeout', 'cancelled'): gate.update(status='pending', since=time.time())  # the decision it waited for is asked again
+        task.pop('cut', None)  # decided: retried or accepted
         run['bonusAttempts'] = run.get('bonusAttempts', 0) + TASK_FAILS; run['bonusWakes'] = run.get('bonusWakes', 0) + 2  # room the user gave for this try
         reopened, changed = {task['n']}, True
         while changed:  # A → B → C: retrying A reopens B and C
             changed = False
             for t in run['tasks']:
-                if t['n'] not in reopened and set(t.get('deps') or []) & reopened and t['status'] == 'failed' and t.get('note', '').startswith('前面的工作'):
-                    t['status'] = 'pending'; t.pop('note', None); reopened.add(t['n']); changed = True
-        group['messages'].append(dict(id=ID(), role='system', content='你%s工作 %d「%s」。' % ('接受了' if accept else '要求重試', task['n'], task['title']), createdAt=NOW()))
+                if t['n'] not in reopened and set(t.get('deps') or []) & reopened and (t['status'] == 'failed' and t.get('note', '').startswith('前面的工作') or
+                        t['status'] == 'cancelled' and t.get('before') in ('pending', 'ready')):  # stopped only by a restart too late to go on (task_recover)
+                    t['status'] = 'pending'; t.pop('note', None); t.pop('before', None); reopened.add(t['n']); changed = True
+        group['messages'].append(dict(id=ID(), role='system', content='你%s工作 %d「%s」。' % (('在中斷後手動接受了' if cut else '接受了') if accept else '要求重試', task['n'], task['title']), createdAt=NOW()))
         if group['status'] != 'running': app.task_resume(group)
         else: app.task_poke(group['id'])
         task_board_update(store, group); store.save()
@@ -275,6 +293,9 @@ def task_route(handler, store, group, parts):
         answer = handler.body().get('answer')
         if not isinstance(answer, str) or answer.strip() not in item['options']: return handler.error(400, '請從卡片上的選項選一個。')
         answer = answer.strip()
+        if item.get('kind') == 'checkpoint':  # every TASK_CHECK_EVERY rounds: go on or end here (#174)
+            task_checkpoint_answer(store, group, run, item, answer); store.save(); app.task_poke(group['id'])
+            return handler.respond(200, {'ok': True})
         item.update(status='answered', answer=answer, answeredAt=NOW())
         for t in run['tasks']:
             if t.get('gate') == item['id'] and t['status'] == 'waiting':
@@ -290,8 +311,9 @@ class TaskChecks:
     def task_resume(self, group):
         """Lock held. Start a run's loop again after it ended (the user asked to retry one of its tasks)."""
         run_id = ID(); run = group['taskRun']
-        group.update(status='running', runId=run_id, activeJobId=None, activeJobIds=[], runKind='steps')  # 插話 waits for the end of a task run
-        run.update(status='running', groupRunId=run_id, hostMissed=0)  # the counts stay as they are; the retry route gave its own room
+        group.update(status='running', runId=run_id, activeJobId=None, activeJobIds=[], runKind='steps')  # 插話 goes to the host while it runs (#94)
+        run.update(status='running', groupRunId=run_id, hostMissed=0); run.pop('stopWhy', None)  # the counts stay as they are; the retry route gave its own room
+        task_checkpoint_reset(run)  # pressing 重試 after the run stopped is going on: a check it stopped at is not asked again
         threading.Thread(target=self._task_resumed, args=(group['id'], run_id), daemon=True).start()
 
     def _task_resumed(self, group_id, run_id):

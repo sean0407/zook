@@ -521,10 +521,12 @@ class RuntimeSession:
             catalog = []
             if self.skills:
                 selected = [{'id': k, 'name': next((s['name'] for s in self.inventory['skills'] if s['id'] == k), k)} for k in sorted(self.skills)]
-                catalog += [_schema('zook_read_skill', 'Read selected Skill instructions. Selected Skills: ' + json.dumps(selected, ensure_ascii=False),
-                                    {'skill_id': _str('Selected Skill ID')}, ['skill_id']),
-                            _schema('zook_read_skill_resource', 'Read a selected Skill reference file relative to its directory.',
-                                    {'skill_id': _str('Selected Skill ID'), 'path': _str('Relative resource path')}, ['skill_id', 'path'])]
+                # #45: Antigravity first called it with skill_name and was refused; the argument and its value are spelled out.
+                pass_id = ' Pass skill_id set to the "id" of a Skill below, not the name; no other arguments.'
+                catalog += [_schema('zook_read_skill', 'Read selected Skill instructions.' + pass_id + ' Selected Skills: ' + json.dumps(selected, ensure_ascii=False),
+                                    {'skill_id': _str('Selected Skill ID (the "id", not the name)')}, ['skill_id']),
+                            _schema('zook_read_skill_resource', 'Read a selected Skill reference file relative to its directory. Pass skill_id (the "id" listed in zook_read_skill, not the name) and path.',
+                                    {'skill_id': _str('Selected Skill ID (the "id", not the name)'), 'path': _str('Relative resource path')}, ['skill_id', 'path'])]
             catalog += [copy.deepcopy(t[0]) for t in self.extras.values()]
             if 'builtin:workspace' in self.mcp_ids:
                 catalog += [_schema('zook_workspace_list', 'List files in the Bot workspace.', {'path': _str('Relative directory, default .')}),

@@ -97,17 +97,13 @@ final class AppModel: ObservableObject {
             UserDefaults.standard.set(seen, forKey: "seen")
         }
         Notifier.shared.prepare()
-        var told: Set<String> = []   // conversations a schedule result already speaks for
-        if let list = try? await api.notices(after: max(noticeSeq, 0)) {   // schedule results from the Mac
+        // Only what the Mac sends for the phone: a reply finished or failed, an approval or a question waits (each can be turned off in the Mac's 設定).
+        if let list = try? await api.notices(after: max(noticeSeq, 0)) {
             if noticeSeq >= 0 {
-                for item in list.items {
-                    if let target = item.targetId { told.insert(target) }
-                    if !(active && item.targetId != nil && openChat == item.targetId) { Notifier.shared.show(item.title, item.body) }
-                }
+                for item in list.items where !(active && item.targetId != nil && openChat == item.targetId) { Notifier.shared.show(item.title, item.body) }
             }
             noticeSeq = list.seq
         }
-        if let old = home { for (title, body) in homeNews(old: old, new: fresh, open: openChat, appActive: active, told: told) { Notifier.shared.show(title, body) } }
         if fresh != home { home = fresh }
     }
 

@@ -4,14 +4,16 @@ import datetime, http.client, importlib.util, json, os, signal, subprocess, sys,
 from pathlib import Path
 
 SERVER = Path(__file__).resolve().parents[1] / 'backend/server.py'
-# A Codex stand-in: a prompt with SLOW says which conversation it writes into, then works for a long time (Zook is stopped meanwhile).
+# A Codex stand-in: a message with SLOW (not the history sent with it) says which conversation it writes into, then works for a long time (Zook is stopped meanwhile).
 CODEX = r'''#!/usr/bin/env python3
 import json, os, sys, time
 a = sys.argv[1:]; here = os.path.dirname(sys.argv[0]); text = sys.stdin.read()
 with open(os.path.join(here, 'runs.jsonl'), 'a') as f: f.write(json.dumps(dict(args=a, prompt=text)) + '\n')
 n = len(open(os.path.join(here, 'runs.jsonl')).readlines())
 print(json.dumps(dict(type='thread.started', thread_id=a[a.index('resume') + 1] if 'resume' in a else 'thread-%d' % n)), flush=True)
-if 'SLOW' in text and '重新啟動' not in text: time.sleep(60)
+asked = text.split('對話紀錄：', 1)[1].rsplit('\n使用者：', 1)[-1] if '對話紀錄：' in text else text  # this message only, not the history sent with it
+if 'CMD' in asked and '重新啟動' not in text: print(json.dumps(dict(type='item.started', item=dict(id='i1', type='command_execution', command='curl -X POST x', status='in_progress'))), flush=True)
+if ('SLOW' in asked or 'CMD' in asked) and '重新啟動' not in text: time.sleep(60)
 print(json.dumps(dict(type='item.completed', item=dict(type='agent_message', text='接著做完了'))))
 '''
 
@@ -60,12 +62,15 @@ class ResumeAfterRestart(unittest.TestCase):
             time.sleep(0.1)
         self.fail('timed out')
 
-    def cut_off(self, hard=False):
+    def cut_off(self, hard=False, text='SLOW 做一份長報告', wait=None):
         """Ask for slow work, then stop Zook once its CLI has said which conversation it writes into."""
         self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': '先記住藍鯨'})
         self.until(lambda: self.state()['messages'][-1].get('status') == 'completed')
-        sent = self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': 'SLOW 做一份長報告'})[1]
-        self.until(lambda: any((j.get('cliSession') or {}).get('session') for j in self.data()['jobs'] if j['id'] == sent['jobId']))  # saved on the Mac, never sent to a window
+        sent = self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': text})[1]
+        self.until(lambda: any((j.get('cliSession') or {}).get('session') and (wait is None or j.get(wait)) for j in self.data()['jobs'] if j['id'] == sent['jobId']))  # saved on the Mac, never sent to a window
+        # A reply that goes on in a CLI conversation notes it before its CLI starts (resume_feed): Zook is stopped only once the CLI
+        # has its prompt. Stopped sooner, under load, the CLI never ran and the next message was sent the whole history.
+        self.until(lambda: any(text in r['prompt'] for r in self.runs()))
         self.assertNotIn('cliSession', self.req('GET', '/api/jobs/' + sent['jobId'])[1])
         self.stop(hard)
         return sent['jobId']
@@ -107,6 +112,28 @@ class ResumeAfterRestart(unittest.TestCase):
         self.assertEqual(len(self.runs()), 2)
         reply = self.state()['messages'][-1]
         self.assertTrue(reply.get('resumable')); self.assertIn('對外', reply.get('note', ''))
+
+    def test_a_reply_that_ran_a_command_waits_for_the_user(self):
+        # #285: the command is only in the CLI's own output until its turn ends; Zook notes that one started as soon as it is seen.
+        job = self.cut_off(text='CMD 寄出週報', wait='usedTools')
+        self.start(); time.sleep(1.5)
+        self.assertEqual(len(self.runs()), 2)  # not done again by itself
+        reply = self.state()['messages'][-1]
+        self.assertTrue(reply.get('resumable')); self.assertIn('指令', reply.get('note', ''))
+        self.assertEqual(self.req('POST', '/api/chat/resume', {'botId': self.bot['id'], 'messageId': reply['id']})[0], 202)  # the user decides
+        self.until(lambda: self.state()['messages'][-1].get('status') == 'completed')
+        self.assertIn('重新啟動', self.runs()[-1]['prompt'])
+
+    def test_a_reply_whose_tools_are_not_known_waits_for_the_user(self):
+        # A record from before #285 (or a try on a CLI whose output does not say when a tool starts): whether it ran one is not known.
+        job = self.cut_off(); data = self.data()
+        for j in data['jobs']:
+            if j['id'] == job: j.pop('toolWatch', None); j.pop('toolsOn', None); j['nativeAccess'][3] = True  # its CLI could use its own tools
+        (self.root / 'data/swarmr.json').write_text(json.dumps(data))
+        self.start(); time.sleep(1.5)
+        self.assertEqual(len(self.runs()), 2)
+        reply = self.state()['messages'][-1]
+        self.assertTrue(reply.get('resumable')); self.assertIn('無法確認', reply.get('note', ''))
 
     def test_after_a_day_it_waits_for_the_user(self):
         self.cut_off()
@@ -150,10 +177,107 @@ class TaskPickupTest(unittest.TestCase):
         app = App(); app.store = store
         app.task_pickup(group)
         tasks = group['taskRun']['tasks']
-        self.assertEqual([t['status'] for t in tasks], ['done', 'ready', 'verifying', 'pending'])
-        self.assertTrue(tasks[1]['resumed']); self.assertEqual(resumed, ['g'])
+        # #285: the one that was running stops for the user (it may have run commands Zook cannot see yet); the reported one is only checked.
+        self.assertEqual([t['status'] for t in tasks], ['done', 'stuck', 'verifying', 'pending'])
+        self.assertIn('按「重試」或「接受結果」', tasks[1]['note']); self.assertTrue(tasks[1]['resumed']); self.assertEqual(resumed, ['g'])
+        self.assertIn('停下來等你確認', group['messages'][-1]['content']); self.assertIn('工作 2', group['messages'][-1]['content'])
+        self.assertEqual(group['taskRun'].get('bonusAttempts', 0), 0)
         prompt = m.task_worker_prompt.__globals__['interrupt_note'](store.find('jobs', 'j1'))
         self.assertIn('寫入 report.md', prompt)
+
+    def cut_run(self, m, fresh=True):
+        class Store:
+            def __init__(self): self.stopped_at = datetime.datetime.now(datetime.timezone.utc).isoformat() if fresh else '2020-01-01T00:00:00+00:00'
+            data = {'jobs': [dict(id='j1', toolCalls=[])], 'settings': {'taskEngine': True}, 'bots': []}
+            def find(self, kind, x): return next((j for j in self.data['jobs'] if j['id'] == x), None)
+            def save(self): pass
+        store = Store()
+        group = dict(id='g', status='idle', messages=[], taskRun=dict(id='r', status='running', tasks=[
+            dict(id='b', n=1, title='寄信', assignee='x', status='running', attempts=[dict(state='running', jobId='j1')]),
+            dict(id='d', n=2, title='整理', assignee='x', status='pending', deps=[1], attempts=[])]))
+        g = m.task_route.__globals__; self.addCleanup(g.__setitem__, 'task_board_update', g['task_board_update']); g['task_board_update'] = lambda *a: None
+        m.task_recover(group, store)
+        class App(m.Resuming):
+            def task_resume(self, g): pass
+        app = App(); app.store = store
+        app.task_pickup(group)
+        return store, group
+
+    def press(self, m, store, group, what, task='b'):
+        said = []
+        class Handler:
+            command = 'POST'
+            class server:
+                @staticmethod
+                def task_resume(g): pass
+                @staticmethod
+                def task_poke(g): pass
+            def error(self, code, text): said.append((code, text))
+            def respond(self, code, body): said.append((code, body))
+        m.task_route(Handler(), store, group, ['api', 'groups', 'g', 'tasks', task, what])
+        return said[-1]
+
+    def test_a_task_cut_by_a_restart_can_be_accepted(self):
+        # The user's call (2026-11-25): work cut off by a restart waits; the user picks 「重試」 or 「接受結果」.
+        m = load()
+        store, group = self.cut_run(m)
+        run = group['taskRun']; b = run['tasks'][0]
+        self.assertEqual(b['status'], 'stuck'); self.assertIn('按「重試」或「接受結果」', b['note'])
+        self.assertIn('「重試」或「接受結果」', group['messages'][-1]['content'])
+        self.assertIn('按「重試」或「接受結果」', m.task_board_text(None, run))  # the phone's board says both too
+        self.assertEqual(self.press(m, store, group, 'accept')[0], 202)
+        self.assertEqual(b['status'], 'done'); self.assertTrue(b['acceptedCut']); self.assertEqual(b['verify']['state'], 'accepted')
+        self.assertIn('中斷後手動接受', b['note']); self.assertIn('中斷後手動接受了工作 1', group['messages'][-1]['content'])
+        m.task_resolve_deps(run)
+        self.assertEqual(run['tasks'][1]['status'], 'ready')  # what waited for it can start
+        self.assertIn('沒有回報完成', m.task_upstream_line(None, b))  # the next step is told it has no report to go on
+        self.assertIn('中斷後手動接受', m.task_line(None, b)); self.assertIn('中斷後手動接受', m.task_board_text(None, run))
+        self.assertEqual(self.press(m, store, group, 'accept')[0], 409)  # once
+
+    def test_a_task_cut_by_a_late_restart_can_be_accepted_too(self):
+        m = load()
+        store, group = self.cut_run(m, fresh=False)
+        b = group['taskRun']['tasks'][0]
+        self.assertEqual(b['status'], 'unknown'); self.assertIn('「重試」或「接受結果」', group['messages'][-1]['content'])
+        self.assertEqual(self.press(m, store, group, 'accept')[0], 202); self.assertEqual(b['status'], 'done')
+        self.assertEqual(group['taskRun']['tasks'][1]['status'], 'pending')  # stopped only by the restart: what waited for it goes on
+        m.task_resolve_deps(group['taskRun']); self.assertEqual(group['taskRun']['tasks'][1]['status'], 'ready')
+
+    def test_a_task_that_reported_failure_just_before_a_restart_can_only_be_retried(self):
+        m = load()
+        g = m.task_route.__globals__; self.addCleanup(g.__setitem__, 'task_recover', g['task_recover'])
+        real = g['task_recover']
+        def recover(group, store=None):  # its zook_task_done(failed) came in, the turn had not ended yet
+            group['taskRun']['tasks'][0]['attempts'][-1].update(state='reported', outcome='failed'); real(group, store)
+        g['task_recover'] = recover; m.task_recover = recover
+        for fresh in (True, False):
+            store, group = self.cut_run(m, fresh)
+            b = group['taskRun']['tasks'][0]
+            self.assertNotIn('cut', b); self.assertNotIn('接受結果', b.get('note', ''))
+            self.assertEqual(self.press(m, store, group, 'accept')[0], 409)
+
+    def test_a_retried_cut_task_is_no_longer_acceptable_without_a_report(self):
+        m = load()
+        store, group = self.cut_run(m)
+        b = group['taskRun']['tasks'][0]
+        self.assertEqual(self.press(m, store, group, 'retry')[0], 202); self.assertNotIn('cut', b)
+        b['status'] = 'stuck'; b['attempts'].append(dict(state='failed'))  # it failed on its own afterwards: nothing to accept
+        self.assertEqual(self.press(m, store, group, 'accept')[0], 409)
+
+    def test_a_running_task_without_any_record_of_tools_also_stops(self):
+        m = load()
+        class Store:
+            def __init__(self): self.stopped_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            data = {'jobs': [dict(id='j1', toolCalls=[])]}  # its commands would only be written when its turn ended
+            def find(self, kind, x): return next((j for j in self.data['jobs'] if j['id'] == x), None)
+        group = dict(id='g', status='idle', messages=[], taskRun=dict(id='r', status='running', tasks=[dict(id='b', n=1, status='running', attempts=[dict(state='running', jobId='j1')])]))
+        m.task_board_update = lambda *a: None
+        m.task_recover(group, Store())
+        class App(m.Resuming):
+            def task_resume(self, g): pass
+        app = App(); app.store = Store()
+        app.task_pickup(group)
+        self.assertEqual(group['taskRun']['tasks'][0]['status'], 'stuck')
 
     def test_a_finished_report_is_checked_again_even_after_an_outward_step(self):
         # #179: the work had already reported success; going on only checks it again, so nothing outward is repeated.
@@ -186,6 +310,47 @@ class TaskPickupTest(unittest.TestCase):
         app = App(); app.store = Store()
         app.task_pickup(group)
         self.assertEqual(group['taskRun']['tasks'][0]['status'], 'unknown'); self.assertIn('重試', group['messages'][-1]['content'])
+
+
+class ToolWatchTest(unittest.TestCase):
+    def test_each_cli_says_when_a_built_in_tool_starts(self):
+        m = load(); seen = m.native_tool_started
+        self.assertTrue(seen('claude', dict(type='assistant', message=dict(content=[dict(type='tool_use', name='Bash', id='1')]))))
+        self.assertFalse(seen('claude', dict(type='assistant', message=dict(content=[dict(type='tool_use', name='mcp__zook__zook_read_file', id='1')]))))
+        self.assertFalse(seen('claude', dict(type='assistant', message=dict(content=[dict(type='text', text='hi')]))))
+        self.assertTrue(seen('codex', dict(type='item.started', item=dict(type='command_execution'))))
+        self.assertTrue(seen('codex', dict(type='item.completed', item=dict(type='file_change'))))
+        self.assertTrue(seen('codex', dict(type='item.started', item=dict(type='mcp_tool_call', server='gmail'))))
+        self.assertFalse(seen('codex', dict(type='item.started', item=dict(type='mcp_tool_call', server='zook'))))
+        self.assertFalse(seen('codex', dict(type='item.completed', item=dict(type='agent_message'))))
+        self.assertTrue(seen('grok', dict(type='tool_call', toolName='run_terminal_cmd')))
+        self.assertTrue(seen('cursor', dict(type='tool_call', subtype='started', tool_call=dict(shellToolCall={}))))
+        self.assertFalse(seen('cursor', dict(type='tool_call', subtype='started', tool_call=dict(mcpToolCall={}))))
+        self.assertTrue(seen('antigravity', dict(step_update=dict(step_type='tool', tool_name='run_command'))))
+        self.assertFalse(seen('gemini', dict(type='tool_call')))
+
+    def test_a_reply_is_marked_once_and_saved_at_once(self):
+        m = load(); import threading
+        class Store:
+            lock = threading.RLock(); saves = 0; data = {'jobs': [dict(id='j')]}
+            def find(self, kind, x): return self.data['jobs'][0] if x == 'j' else None
+            def save(self): Store.saves += 1
+        got = []; feed = m.tool_watch(Store(), 'j', 'codex', got.append)
+        line = json.dumps(dict(type='item.started', item=dict(type='command_execution'))).encode()
+        feed(line[:10]); self.assertNotIn('usedTools', Store.data['jobs'][0])  # half a line
+        feed(line[10:] + b'\n' + line + b'\n')
+        self.assertTrue(Store.data['jobs'][0]['usedTools']); self.assertEqual(Store.saves, 1)
+        self.assertEqual(b''.join(got), line + b'\n' + line + b'\n')  # passed on untouched
+
+    def test_what_is_carried_on_by_itself(self):
+        m = load(); blocked = m.resume_blocked
+        self.assertEqual(blocked(dict(toolWatch=True, nativeAccess=['folder', '/x', 'ask', True], toolCalls=[dict(name='zook_read_file', category='read', status='completed')])), '')
+        self.assertEqual(blocked(dict(nativeAccess=['folder', '/x', 'ask', False], toolCalls=[])), '')  # no built-in tools at all
+        self.assertIn('指令', blocked(dict(toolWatch=True, usedTools=True, nativeAccess=['folder', '/x', 'ask', True])))
+        self.assertIn('無法確認', blocked(dict(toolWatch=False, nativeAccess=['folder', '/x', 'ask', True])))
+        self.assertIn('無法確認', blocked(dict()))  # older record
+        self.assertIn('無法確認', blocked(dict(toolWatch=False, toolsOn=True, nativeAccess=['folder', '/x', 'ask', False])))  # an earlier try could, on a CLI not watched
+        self.assertIn('對外', blocked(dict(toolWatch=True, nativeAccess=['folder', '/x', 'ask', True], toolCalls=[dict(name='gmail_send', category='external_write', status='running')])))
 
 
 if __name__ == '__main__':

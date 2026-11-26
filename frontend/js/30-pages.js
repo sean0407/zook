@@ -1,24 +1,68 @@
   // ---- Attachments: each file is uploaded as soon as it is added, then sent with the message.
-  if (!state.pendingBy) state.pendingBy = {};  // files waiting to be sent, per Bot or group
+  // #153①: the files already uploaded are kept in this window's sessionStorage, so reloading the page does not drop them silently.
+  const PENDING_STORE = 'zook-pending-files';
+  function keepPending() {
+    const kept = {};
+    for (const [key, list] of Object.entries(state.pendingBy || {})) {
+      const done = (list || []).filter(f => f.id && !f.uploading).map(f => ({key: f.key, id: f.id, name: f.name, size: f.size, kind: f.kind || '', fromPath: f.fromPath || ''}));
+      if (done.length) kept[key] = done;
+    }
+    try { Object.keys(kept).length ? sessionStorage.setItem(PENDING_STORE, JSON.stringify(kept)) : sessionStorage.removeItem(PENDING_STORE); } catch (_) {}
+  }
+  function restorePending() {
+    let saved = {};
+    try { saved = JSON.parse(sessionStorage.getItem(PENDING_STORE) || '{}') || {}; } catch (_) {}
+    const out = {};
+    for (const [key, list] of Object.entries(saved)) {
+      if (!Array.isArray(list)) continue;
+      out[key] = list.filter(f => f && /^[0-9a-f]{32}$/.test(String(f.id))).slice(0, 10).map(f => ({key: String(f.key || Math.random().toString(36).slice(2)), id: f.id, name: String(f.name || '檔案'), size: Number(f.size) || 0, kind: f.kind === 'image' ? 'image' : 'file', fromPath: String(f.fromPath || ''), uploading: false, url: f.kind === 'image' ? '/api/uploads/' + f.id : ''}));
+    }
+    return out;
+  }
+  // × in the message box: the file is taken out, and Zook deletes its upload (it keeps one that a sent message uses).
+  function dropPending(key) {
+    const list = pendingList(), at = list.findIndex(f => f.key === key);
+    if (at < 0) return;
+    const [f] = list.splice(at, 1); keepPending();
+    if (f.id) api('uploads/' + encodeURIComponent(f.id), {method: 'DELETE'}).catch(() => {});
+  }
+  if (!state.pendingBy) state.pendingBy = restorePending();  // files waiting to be sent, per Bot or group
   const pendingKey = () => activeGroup() ? effortKey() : effortKey() + ':' + ((state.data?.bots || []).find(b => b.id === state.selected)?.chatId || '');  // each conversation has its own
   const pendingList = () => state.pendingBy[pendingKey()] || (state.pendingBy[pendingKey()] = []);
   const kb = n => n < 1024 * 1024 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1024 / 1024).toFixed(1) + ' MB';
+  // #108: what a Bot can make sense of, a program file that it cannot, and an icon for each kind of file.
+  const ATTACH_HINT = 'Bot 看得懂文字、PDF、Word、Excel、簡報和圖片；程式或安裝檔（例如 .exe、.dmg）只能收下，讀不懂內容。';
+  const UNREADABLE = /\.(exe|msi|dll|dmg|pkg|app|bin|iso|apk|bat|cmd)$/i;
+  const unreadableNote = names => names.length ? `${names.map(n => midName(n)).join('、')} 是程式或安裝檔，Bot 讀不懂內容（仍已收下）` : '';
+  function fileIcon(name) {
+    const ext = (String(name || '').match(/\.([A-Za-z0-9]{1,8})$/) || [])[1]?.toLowerCase() || '';
+    if (/^(png|jpe?g|gif|webp|heic|bmp|tiff?|svg)$/.test(ext)) return '🖼';
+    if (ext === 'pdf') return '📕';
+    if (/^(xlsx?|xlsm|csv|numbers)$/.test(ext)) return '📊';
+    if (/^(pptx?|key)$/.test(ext)) return '📽';
+    if (/^(docx?|pages|rtf)$/.test(ext)) return '📘';
+    if (/^(md|markdown|txt|log)$/.test(ext)) return '📝';
+    if (/^(zip|rar|7z|gz|tar)$/.test(ext)) return '🗜';
+    if (UNREADABLE.test(String(name || ''))) return '⚙️';
+    return '📄';
+  }
   function pendingFiles() {
     if (!pendingList().length) return '';
-    return `<div class="pending-files">${pendingList().map(f => `<div class="pending-file">${f.url ? `<img src="${esc(f.url)}" alt="">` : '<span class="file-icon">📄</span>'}<span class="pending-name">${esc(f.name)}<small>${f.uploading ? '上傳中…' : kb(f.size)}</small></span><button type="button" class="icon-btn mini" data-action="unattach" data-id="${esc(f.key)}" aria-label="移除 ${esc(f.name)}">×</button></div>`).join('')}</div>`;
+    return `<div class="pending-files">${pendingList().map(f => `<div class="pending-file">${f.url ? `<img src="${esc(f.url)}" alt="">` : `<span class="file-icon">${fileIcon(f.name)}</span>`}<span class="pending-name" title="${esc(f.name)}">${esc(midName(f.name, 24))}<small>${f.uploading ? '上傳中…' : kb(f.size)}</small></span><button type="button" class="icon-btn mini" data-action="unattach" data-id="${esc(f.key)}" aria-label="移除 ${esc(f.name)}">×</button></div>`).join('')}</div>`;
   }
   function attachmentsView(m) {
     if (!m.attachments || !m.attachments.length) return '';
     return `<div class="attachments">${m.attachments.map(a => a.kind === 'image'
       ? `<button type="button" class="att-image" data-action="view-image" data-id="${esc(a.id)}" data-name="${esc(a.name)}"><img src="/api/uploads/${esc(a.id)}" alt="${esc(a.name)}"></button>`
-      : `<a class="att-file" href="/api/uploads/${esc(a.id)}" download="${esc(a.name)}">📄 ${esc(a.name)}</a>`).join('')}</div>`;
+      : `<a class="att-file" href="/api/uploads/${esc(a.id)}" download="${esc(a.name)}">${fileIcon(a.name)} ${esc(a.name)}</a>`).join('')}</div>`;
   }
   async function addFiles(files) {
-    const list = pendingList();
+    const list = pendingList(), failed = [], renamed = [], odd = []; let ok = 0;
     for (const f of files) {
-      if (list.length >= 10) { toast('每則訊息最多 10 個檔案'); break; }
-      if (f.size > 20 * 1024 * 1024) { toast(`「${f.name}」超過 20 MB，沒有加入`); continue; }
-      if (!f.size) { toast(`「${f.name}」是空的`); continue; }
+      if (list.length >= 10) { failed.push({name: f.name, reason: '每則訊息最多 10 個檔案'}); continue; }
+      if (f.name && f.name !== 'image.png' && list.some(x => x.name === f.name && x.size === f.size && !x.fromPath)) { failed.push({name: f.name, reason: '已經附上同一個檔案'}); continue; }
+      if (f.size > 20 * 1024 * 1024) { failed.push({name: f.name, reason: '超過 20 MB'}); continue; }
+      if (!f.size) { failed.push({name: f.name, reason: '檔案是空的'}); continue; }
       const stamp = new Date().toTimeString().slice(0, 8).replace(/:/g, '');
       const name = f.name && f.name !== 'image.png' ? f.name : `截圖-${stamp}.png`;
       const item = {key: Math.random().toString(36).slice(2), name, size: f.size, uploading: true, url: /^image\//.test(f.type) ? URL.createObjectURL(f) : ''};
@@ -27,15 +71,28 @@
         const res = await fetch('/api/uploads', {method: 'POST', headers: {'X-File-Name': encodeURIComponent(name), 'Content-Type': 'application/octet-stream'}, body: f});
         const meta = await res.json();
         if (!res.ok) throw new Error(meta.error || '上傳失敗');
-        Object.assign(item, {id: meta.id, kind: meta.kind, uploading: false});
-      } catch (e) { if (list.includes(item)) list.splice(list.indexOf(item), 1); toast(`「${name}」${e.message}`); }
+        Object.assign(item, {id: meta.id, kind: meta.kind, uploading: false}); ok++;
+        if (meta.name && meta.name !== name) { item.name = meta.name; renamed.push(`「${midName(name)}」已改名為「${midName(meta.name)}」`); }  // #153③: a name the Mac cannot keep as it is
+        if (!list.includes(item)) api('uploads/' + encodeURIComponent(meta.id), {method: 'DELETE'}).catch(() => {});  // × pressed while it was uploading
+        if (UNREADABLE.test(name)) odd.push(name);
+      } catch (e) { if (list.includes(item)) list.splice(list.indexOf(item), 1); failed.push({name, reason: e.message || '上傳失敗'}); }
       render(true);
     }
+    keepPending();
+    if (failed.length || renamed.length || odd.length) toast([failed.length ? fileSummary(ok, failed, '附上') : '', renamed.length ? renamed.join('、') + '（檔名裡有不能用的字元或太長）' : '', unreadableNote(odd)].filter(Boolean).join('；'));  // one summary at the end (#150), not one note per file that the next one covers
   }
   // A file path typed or pasted into the message box: offer to attach that file. Nothing is read until the user clicks 附上.
   state.pathSkip = state.pathSkip || new Set();
-  const typedPaths = text => [...new Set(String(text || '').slice(0, 20000).split(/[\s`'"<>()（）\[\]「」『』，、。：；！？*|]+/)
-    .map(w => w.replace(/[。，.,:：;]+$/, '')).filter(w => /^\/(?!\/)/.test(w) && w.length < 300 && /\/[^/]+\.[A-Za-z0-9]{1,8}$/.test(w)))].slice(0, 3);
+  // #176: a folder or file name with spaces (Finder's 「Claude code」, or Terminal's 「Claude\ code」) is found too. Its words are
+  // joined by single spaces, and a word that looks like a file name ends the path, so 「/tmp/a.txt 和 b/c.txt」 stays apart.
+  const PATH_WORD = '[^\\s/`\'"<>()（）\\[\\]「」『』，、。：；！？*|]+';
+  const SPACED_PATH = new RegExp('(?:^|[\\s`\'"<>()（）\\[\\]「」『』，、。：；！？*|])(\\/(?:(?:(?![^\\s/]*\\.[A-Za-z0-9]{1,8} )' + PATH_WORD + ' )*' + PATH_WORD + '\\/)+(?:' + PATH_WORD + ' )*?[^\\s/`\'"<>()（）\\[\\]「」『』，、。：；！？*|]*\\.[A-Za-z0-9]{1,8})(?=$|[\\s`\'"<>()（）\\[\\]「」『』，、。：；！？*|])', 'g');
+  const typedPaths = text => {
+    text = String(text || '').slice(0, 20000);
+    const plain = text.split(/[\s`'"<>()（）\[\]「」『』，、。：；！？*|]+/).map(w => w.replace(/[。，.,:：;]+$/, ''));
+    const spaced = [...text.replace(/\\ /g, ' ').matchAll(SPACED_PATH)].map(m => m[1]).filter(p => p.includes(' '));
+    return [...new Set([...spaced, ...plain].filter(w => /^\/(?!\/)/.test(w) && w.length < 300 && /\/[^/]+\.[A-Za-z0-9]{1,8}$/.test(w)))].slice(0, 3);
+  };
   function showPathOffers() {
     const input = $('#chat-input'), form = $('#chat-form');
     let bar = $('#path-offers');
@@ -59,8 +116,9 @@
     try {
       const meta = await post('uploads/path', {path});
       Object.assign(item, {id: meta.id, name: meta.name, size: meta.size, kind: meta.kind, uploading: false, url: meta.kind === 'image' ? '/api/uploads/' + meta.id : ''});
+      if (!list.includes(item)) api('uploads/' + encodeURIComponent(meta.id), {method: 'DELETE'}).catch(() => {});  // × pressed while it was copied
     } catch (err) { if (list.includes(item)) list.splice(list.indexOf(item), 1); toast(err.message || '附上失敗'); }  // removed already if the user pressed ×
-    render(true); showPathOffers();
+    keepPending(); render(true); showPathOffers();
   });
   document.addEventListener('paste', e => {
     const files = [...(e.clipboardData?.files || [])];
@@ -184,10 +242,6 @@
     modal(x.id ? '編輯排程' : '新增排程', `<form id="schedule-form"><div class="modal-body"><label class="field">名稱（可不填）<input name="name" maxlength="60" value="${esc(x.name || '')}" placeholder="例如：早上整理信件；不填就用要做的事開頭幾個字"></label><div class="field">對象${dropdown('target', target, scheduleTargets())}</div><label class="field">要做的事<textarea name="content" required placeholder="例如：整理今天的行事曆和未讀信件，列出三件最重要的事">${esc(x.content || '')}</textarea></label><div class="field">觸發方式${dropdown('trigger', x.trigger || 'time', TRIGGER_OPTIONS)}</div><div class="trig-folder"><div class="field">要看的資料夾<div class="watch-pick"><input type="hidden" name="watchFolder" value="${esc(x.watchFolder || '')}"><span class="watch-path">${esc(x.watchFolder || '尚未選擇')}</span><button type="button" class="secondary small-btn" data-up="pick-watch">選擇資料夾</button></div><small class="muted">只看這一層的檔案，現有的檔案不算。Bot 的存取範圍要包含這個資料夾。</small></div></div><div class="trig-mail"><label class="field">寄件者包含（可不填）<input name="mailFrom" maxlength="200" value="${esc(x.mailFrom || '')}" placeholder="例如：boss@company.com"></label><label class="field">主旨包含（可不填）<input name="mailSubject" maxlength="200" value="${esc(x.mailSubject || '')}" placeholder="例如：報價"></label><small class="muted">只把寄件者和主旨交給 Bot；要寄信或改動仍會先問你。</small></div><div class="sched-when" data-repeat="${esc(x.repeat || 'daily')}"><div class="field">重複${dropdown('repeat', x.repeat || 'daily', REPEATS.map(r => ({id: r[0], name: r[1]})))}</div><div class="field when-date">日期${dropdown('date', date, dates)}</div><div class="field when-day">日${dropdown('day', String(x.day || new Date().getDate()), Array.from({length: 31}, (_, i) => ({id: String(i + 1), name: (i + 1) + ' 號', hint: i >= 28 ? '沒有這天的月份在月底執行' : ''})))}</div><div class="field when-hour">時${dropdown('hour', h, Array.from({length: 24}, (_, i) => ({id: two(i), name: two(i)})))}</div><div class="field">分${dropdown('minute', m, minutes.map(v => ({id: v, name: v})))}</div></div><div class="setting-list in-form">${settingRow('啟用', '關閉後不會自動執行。', toggle('name="on"', x.on !== false, '啟用'))}${settingRow('沒有新消息時不通知', '只適用於 Bot。沒有新消息時 Bot 只回一句話，不跳通知。', toggle('name="quiet"', x.id ? !!x.quiet : true, '沒有新消息時不通知'))}<div class="catchup-row">${settingRow('錯過時補跑', '錯過時，24 小時內開啟會補做一次。', toggle('name="catchUp"', x.catchUp !== false, '錯過時補跑'))}</div></div><small class="error-text sched-err" role="alert" hidden></small></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">儲存</button></div></form>`);
     $('#schedule-form').dataset.id = x.id || ''; $('#schedule-form').dataset.trigger = x.trigger || 'time';
   }
-  function noteModal(n = {}) {
-    modal(n.id ? '編輯知識' : '新增知識', `<form id="note-form"><div class="modal-body"><label class="field">標題<input name="title" required value="${esc(n.title||'')}"></label><label class="field">內容<textarea name="content" required>${esc(n.content||'')}</textarea></label><label class="field">標籤（以逗號分隔）<input name="tags" value="${esc((n.tags||[]).join(', '))}"></label><label class="field">關聯 Bot<select name="botId"><option value="">共用知識</option>${state.data.bots.map(b=>`<option value="${esc(b.id)}" ${(n.botId||(!n.id&&state.page==='chat'?state.selected:''))===b.id?'selected':''}>${esc(b.name)}</option>`).join('')}</select></label></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">儲存</button></div></form>`);
-    $('#note-form').dataset.id = n.id || ''
-  }
   function startPollers() {
     for (const j of state.data.jobs || [])
       if ((j.status === 'running' || j.status === 'queued') && !j.groupId && !state.pollers[j.id]) poll(j.id, j.botId);
@@ -214,7 +268,7 @@
   }
   function applyState(data) {
     state.data = data; state.loads = (state.loads || 0) + 1;
-    if (!state.providers) api('providers').then(r => { state.providers = r.providers; }).catch(() => {});
+    if (!state.providers) api('providers').then(r => { state.providers = r.providers; render(true); }).catch(() => {});  // names in words (Antigravity, not antigravity)
     if (!state.data.bots) state.data.bots = [];
     if (!state.data.knowledge) state.data.knowledge = [];
     if (!state.data.schedules) state.data.schedules = [];
@@ -222,6 +276,7 @@
     if (!state.lastRestored) {  // after a reload, the conversation or group that was open before
       state.lastRestored = true;
       restoreLastOpen();
+      if (location.hash === '#settings') { state.page = 'settings'; setTimeout(() => loadPage('settings')); }  // reloaded on the settings page (#188④)
       restorePage();
     }
     if (state.groupId && !activeGroup()) state.groupId = null;
@@ -272,6 +327,8 @@
     return all.length ? all.map(x => `<div class="card"><h3>${esc(x.name)}</h3><p>${esc(x.description||x.source||x.kind)}</p><span class="status">${esc(x.status|| (x.installed?'已偵測':'設定狀態未知'))}</span></div>`).join('') : '<div class="blank">沒有符合的項目。</div>'
   }
 
+  // A date in names of downloaded files (#51), so several exports do not look alike: 20261125.
+  const fileDay = () => { const d = new Date(); return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`; };
   function download(content, name, type) {
     let url = URL.createObjectURL(new Blob([content], {
       type
@@ -313,6 +370,14 @@
     }
   }
   // Dropdown: open/close, pick an option, close on outside click or Escape.
+  // Where a dropdown's menu opens and how tall it may be: whole when the window has room below or above the button (so the
+  // last choice and its hint are never cut off, #96④/#53③), otherwise on the roomier side, scrolling, inside the window.
+  function menuPlace(top, bottom, natural, height) {
+    const below = height - bottom - 14, above = top - 14, want = Math.min(natural, 520);
+    if (want <= below) return {top: bottom + 6, maxHeight: want};
+    if (want <= above) return {top: top - 6 - want, maxHeight: want};
+    return below >= above ? {top: bottom + 6, maxHeight: Math.max(below, 0)} : {top: 8, maxHeight: Math.max(above, 0)};
+  }
   const closeDropdowns = except => document.querySelectorAll('.dd.open').forEach(d => { if (d !== except) { d.classList.remove('open'); d.querySelector('.dd-btn').setAttribute('aria-expanded', 'false'); } });
   // The launcher menu closes when anything outside it is clicked, or Escape is pressed.
   // Listened for on the way down, so a click that another handler stops (a dropdown) still closes it.
@@ -336,10 +401,12 @@
       closeDropdowns(dd); dd.classList.toggle('open', open); btn.setAttribute('aria-expanded', String(open));
       if (open) {
         const r = btn.getBoundingClientRect(), menu = dd.querySelector('.dd-menu');
+        setTimeout(() => { if (dd.classList.contains('open')) (dd.querySelector('.dd-opt.selected:not([hidden])') || dd.querySelector('.dd-opt:not([hidden])'))?.focus({preventScroll: true}); });  // the arrow keys start from the current choice
         menu.style.minWidth = Math.max(r.width, 220) + 'px';
-        menu.style.top = (r.bottom + 6) + 'px';
+        menu.style.maxHeight = '';
+        const at = menuPlace(r.top, r.bottom, menu.scrollHeight + menu.offsetHeight - menu.clientHeight, innerHeight);  // with its border
+        Object.assign(menu.style, {top: at.top + 'px', maxHeight: at.maxHeight + 'px'});
         menu.style.left = Math.max(8, Math.min(r.right - Math.max(menu.offsetWidth, r.width, 220), innerWidth - menu.offsetWidth - 8)) + 'px';
-        if (r.bottom + 6 + menu.offsetHeight > innerHeight - 8) menu.style.top = Math.max(8, r.top - 6 - menu.offsetHeight) + 'px';
       }
       e.stopPropagation(); return;
     }
@@ -348,12 +415,31 @@
       dd.querySelectorAll('.dd-opt').forEach(o => { o.classList.toggle('selected', o === opt); o.setAttribute('aria-selected', String(o === opt)); });
       dd.querySelector('.dd-label').textContent = opt.dataset.label;
       closeDropdowns();
+      dd.querySelector('.dd-btn').focus({preventScroll: true});  // the keyboard stays on this menu, not back at the top of the page (#188⑤)
       if (input.value !== opt.dataset.value) { input.value = opt.dataset.value; input.dispatchEvent(new Event('change', {bubbles: true})); }
       e.stopPropagation(); return;
     }
     if (!e.target.closest?.('.dd-menu')) closeDropdowns();
   }, true);
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.querySelector('.dd.open')) { closeDropdowns(); e.stopPropagation(); } }, true);
+  document.addEventListener('keydown', e => {
+    const openDd = document.querySelector('.dd.open');
+    if (e.key === 'Escape' && openDd) { closeDropdowns(); openDd.querySelector('.dd-btn').focus({preventScroll: true}); e.stopPropagation(); }
+  }, true);
+  // Arrow keys move through an open menu, and open a closed one from its button; Home and End go to the ends; Tab closes it (#76②, #188⑤).
+  document.addEventListener('keydown', e => {
+    const dd = e.target.closest?.('.dd');
+    if (!dd || !e.target.closest('.dd-btn, .dd-menu') || e.isComposing || e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    const opts = [...dd.querySelectorAll('.dd-opt')].filter(o => !o.hidden), open = dd.classList.contains('open');
+    if (!opts.length) return;
+    if (e.key === 'Tab') { if (open) { closeDropdowns(); if (e.target.closest('.dd-menu')) { e.preventDefault(); dd.querySelector('.dd-btn').focus(); } } return; }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+    if (!open && (e.key === 'Home' || e.key === 'End')) return;
+    e.preventDefault();
+    if (!open) { dd.querySelector('.dd-btn').click(); return; }
+    const i = opts.indexOf(document.activeElement);
+    const next = e.key === 'Home' ? opts[0] : e.key === 'End' ? opts.at(-1) : e.key === 'ArrowDown' ? opts[i < 0 ? 0 : Math.min(opts.length - 1, i + 1)] : opts[i < 0 ? opts.length - 1 : Math.max(0, i - 1)];
+    next.focus({preventScroll: true}); next.scrollIntoView({block: 'nearest'});
+  });
   document.addEventListener('scroll', e => { if (!e.target.closest?.('.dd-menu')) closeDropdowns(); }, true);
 
   // Sidebar drag and drop.
