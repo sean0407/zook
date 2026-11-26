@@ -463,8 +463,6 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
                 job['ranOn'] = provider  # this attempt's CLI, for 任務引擎's checks (a backup that takes over writes its own)
                 if bot is None: bot = copy.deepcopy(store.find('bots', job['botId']))
                 added = list(job.get('addedText') or [])
-            # Messages the user added while an earlier attempt was answering: a new attempt is told them too.
-            if added: prompt += '\n\n使用者在回覆途中補充了以下訊息，請一併照做：\n' + '\n'.join('- ' + x for x in added)
             kind = provider_kind(provider)
             effort = job.get('effort') if ability_on(store, provider, 'effort') else 'standard'  # a CLI version without the option just uses its default
             if not kind: raise RuntimeError('找不到這個提供者，請到「各模型使用量」頁確認。')
@@ -495,6 +493,8 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
             keep_session = bool(job.get('chatId')) and kind in PLAN_KINDS
             with store.lock: job['resumed'] = bool(resume)
             if resume: prompt = self.__dict__.get('short_prompts', {}).get(job_id, prompt)
+            # Messages the user added while an earlier attempt was answering: a new attempt is told them too, also after the short prompt of a CLI conversation that goes on (#277).
+            if added: prompt += '\n\n使用者在回覆途中補充了以下訊息，請一併照做%s：\n' % ('（這段對話裡已經收到過的，不要重複做）' if resume else '') + '\n'.join('- ' + x for x in added)
             if selected:
                 runtime = runtime_module(); inventory = inventory or inventory_for(store)
                 with store.lock: skill_ids = shared_skill_ids(store, inventory); mcp_ids = shared_mcp_ids(store, inventory)
@@ -724,6 +724,7 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
                 raise RuntimeError('Antigravity 想讀取目前權限不允許的檔案，所以沒有回覆。請再傳一次，或到 Bot 設定放寬存取範圍。')
             if not content and not job.get('taskReported'): raise RuntimeError('CLI 沒有回傳內容。')  # a task reply may end in silence after its report (taskrun.py fills it in)  # a task reply may end in silence after its report (taskrun.py fills it in)
             if not account and (store.data.get('providerIssues') or {}).get(provider, {}).get('issue'): self.note_provider_issue(provider, '')
+            missing = [] if job.get('groupId') else reply_missing_links(content)  # looked up before the lock: a slow disk must not hold everyone up
             with store.lock:
                 job = store.find('jobs', job_id)
                 if parsed['usage'] and kind == 'codex' and not model: parsed['usage']['model'] = codex_default_model(env) or parsed['usage'].get('model')  # so the reply can be priced
@@ -735,6 +736,7 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
                     job.update(status='completed', content=content, finishedAt=NOW())
                     self.remember_session(job, provider, model, account, cli_cwd, cli_session(kind, output.decode('utf-8', errors='replace')))
                     store.finish_message(job, content, 'completed')
+                    if missing: (find_message(store.find('bots', job['botId']), job['messageId']) or {})['missingFiles'] = missing  # #258 (outputs.py)
                     if options: (find_message(store.find('bots', job['botId']), job['messageId']) or {})['options'] = options
                     if isinstance(kept, LiveTurn) and (kept.pending or kept.__dict__.get('unsure')): (find_message(store.find('bots', job['botId']), job['messageId']) or {})['note'] = '回覆途中補充的訊息它沒有讀到，請再傳一次。' if kept.pending else '回覆途中補充的訊息，Zook 關閉前不確定它有沒有讀到；回覆沒提到的話，請再傳一次。'
                     store.save()
@@ -750,7 +752,7 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
                     job.update(status='failed', error=message, finishedAt=NOW())
                     store.finish_message(job, '', 'failed'); store.save()
         finally:
-            partial_end(job_id)  # only now: the words stay on screen until the reply is marked finished, or another model starts
+            with store.lock: partial_end(job_id, (store.find('jobs', job_id) or {}).get('status') == 'running')  # under the lock, like 停止 (cancel_job); only now: the words stay on screen until the reply is marked finished, or another model starts
             with store.lock:
                 self.processes.pop(job_id, None); progress_end(job_id)
                 self.expire_job(job_id); store.save()
@@ -933,7 +935,7 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
     def cancel_job(self, job, force=False):
         # Caller holds the store lock. force (強制停止, progress.py): a stopped reply whose CLI has not ended yet is killed now.
         if job['status'] == 'running':
-            job.update(status='cancelled', finishedAt=NOW()); self.store.finish_message(job, '', 'cancelled'); self.store.save()
+            job.update(status='cancelled', finishedAt=NOW()); self.store.finish_message(job, partial_kept(job['id']).strip(), 'cancelled'); self.store.save()  # #264: what was already on screen stays
             worker = self.expire_job(job['id']); self.store.save()
             if worker: threading.Thread(target=worker['session'].close, daemon=True).start()
             proc = self.processes.get(job['id'])
