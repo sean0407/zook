@@ -344,7 +344,7 @@ def _split(command):
     """(simple commands, whether the quoting could be read). A simple command is a list of words; redirections stay in it."""
     clear = True
     command = re.sub(r'(^|[\s;&|(])\d+(?=[<>])', r'\1', command)  # the 2 of 2>/dev/null is which output, not a file: only when written right before it
-    if not set(command) & set('\\`') and "$'" not in command:  # ; | & ( ) < > in quotes are text, not where a command ends ('|')
+    if not set(command) & set('\\`') and "$'" not in command and '$(' not in command:  # ; | & ( ) < > in quotes are text, not where a command ends ('|')
         out, quote = [], ''
         for c in command:
             out.append(chr(0xE000 + ord(c)) if quote and c != quote and c in ';&|()<>' else c)
