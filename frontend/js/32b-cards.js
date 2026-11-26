@@ -173,7 +173,6 @@
     return (state.data?.bots || []).filter(b => (b.provider || dflt) === p.id && (b.account || '') === acct);
   }
   document.addEventListener('toggle', e => { if (e.target.dataset?.bound) (state.boundOpen ||= {})[e.target.dataset.bound] = e.target.open; }, true);
-  const accountName = a => a ? a.name : '預設帳號';
   function usageCard(r, slots, many, st) {
     const {p, a} = r, who = a || p, q = quotaFor(p.id, a ? a.id : undefined), lv = r.lv, key = r.key;
     const name = a ? a.name : p.email || '預設帳號', method = a ? (a.type === 'key' ? 'API 金鑰' : a.method || '登入帳號') : p.method || 'CLI 自己的登入';
@@ -191,20 +190,8 @@
   function familyGroup(f, statuses) {
     const p = f.p, many = f.rows.length > 1, slots = familySlots(f.rows);
     const add = p.installed && (p.canAddLogin || p.canAddKey) ? `<button class="secondary small-btn" data-action="profile-add" data-id="${esc(p.id)}">＋ 帳號</button>` : '';
-    return `<div class="usage-family" data-card-key="${esc(f.key)}"><div class="usage-family-head" draggable="true" title="拖動可以調整各家的順序"><h3>${esc(cliShort(p))}${p.custom ? ' <span class="pill">自訂</span>' : ''}</h3><span class="muted small">${f.rows.length} 個帳號</span><span class="family-tools">${p.version?.updateAvailable ? `<span class="new-version" title="有新版 ${esc(p.version.latest)}">有新版</span>` : ''}${add}</span></div>${f.rows.map(r => usageCard(r, slots, many, statuses.get(r.key))).join('')}</div>`;
-  }
-  // #301: one plain sentence on top: which accounts can be used now, which are nearly or quite used up, which cannot be used.
-  function usageSummary(fams, statuses) {
-    const parts = {ok: [], low: [], out: [], off: []};  // each account in one of them only
-    for (const f of fams) {
-      const name = cliShort(f.p);
-      for (const kind of Object.keys(parts)) {
-        const rows = f.rows.filter(r => { const c = statuses.get(r.key).cls; return c === kind; });
-        if (rows.length) parts[kind].push(rows.length === f.rows.length ? (rows.length > 1 ? `${name} ${rows.length} 個帳號` : name) : `${name}（${rows.map(r => accountName(r.a)).join('、')}）`);
-      }
-    }
-    const said = [['現在能用', parts.ok], ['快用完（還能用）', parts.low], ['已用完', parts.out], ['無法使用', parts.off]].filter(([, x]) => x.length).map(([k, x]) => `${k}：${x.join('、')}`);
-    return (parts.ok.length || parts.low.length ? '' : '現在沒有能用的帳號；') + said.join('；') + '。';
+    const name = cliShort(p), handle = `<span class="drag-handle" role="button" tabindex="0" data-family-handle="${esc(f.key)}" aria-label="調整 ${esc(name)} 的順序：拖動，或按上下鍵移動" title="拖動或按上下鍵調整順序"><svg viewBox="0 0 10 16" width="10" height="16" aria-hidden="true"><circle cx="2.5" cy="3" r="1.4"/><circle cx="7.5" cy="3" r="1.4"/><circle cx="2.5" cy="8" r="1.4"/><circle cx="7.5" cy="8" r="1.4"/><circle cx="2.5" cy="13" r="1.4"/><circle cx="7.5" cy="13" r="1.4"/></svg></span>`;
+    return `<div class="usage-family" data-card-key="${esc(f.key)}"><div class="usage-family-head" draggable="true" title="拖動可以調整各家的順序">${handle}<h3>${esc(cliShort(p))}${p.custom ? ' <span class="pill">自訂</span>' : ''}</h3><span class="muted small">${f.rows.length} 個帳號</span><span class="family-tools">${p.version?.updateAvailable ? `<span class="new-version" title="有新版 ${esc(p.version.latest)}">有新版</span>` : ''}${add}</span></div>${f.rows.map(r => usageCard(r, slots, many, statuses.get(r.key))).join('')}</div>`;
   }
   // The order: dragged by the user (自訂), or most left first (自動); kept in the settings so the phone lists them the same way.
   // The setting stays a list of account keys ('codex', 'codex::<id>'), as before the families: a family comes where its first
@@ -257,6 +244,12 @@
     }
     return fams.flatMap(f => f.rows);
   }
+  // #317: the arrow keys on a CLI's handle move it one place up (-1) or down (1); null when it is already first or last.
+  function usageOrderStep(fams, key, dir) {
+    const at = fams.findIndex(f => f.key === key), to = at + dir;
+    if (at < 0 || to < 0 || to >= fams.length) return null;
+    return usageOrderAfterMove(fams, 'card', key, fams[to].key, dir > 0);
+  }
   async function saveCardOrder(change) {
     const before = {...state.data.settings};
     Object.assign(state.data.settings, change); render(true);
@@ -271,19 +264,17 @@
     const sort = `<div class="card-sort"><span class="usage-auto-label">排序</span>${dropdown('usageCardSort', state.data?.settings?.usageCardSort === 'auto' ? 'auto' : 'custom', CARD_SORTS, 'data-card-sort')}</div>`;
     const fams = usageFamilies(shown), statuses = new Map();
     for (const f of fams) for (const r of f.rows) { r.lv = r.p.installed ? accountLevel(r.p.id, r.a ? r.a.id : '') : {level: ''}; statuses.set(r.key, cardStatus(r.p, r.a, r.lv)); }
-    const summary = state.quota && !state.quota.error ? `<p class="usage-summary">${esc(usageSummary(fams, statuses))}</p>` : '';
-    const help = '<p class="muted small usage-help">一個帳號一張卡，同一家的排在一起。「5 小時」「每週」是訂閱方案的兩種用量上限，用完要等重置；任一種用完，這個帳號就暫時不能用。API 金鑰依用量計費，沒有這兩種上限。「自動選用」打開時，Bot 選「自動」就可能用到這個帳號。</p>';
-    return `<section class="usage-block"><div class="overview-head"><h2>剩餘額度</h2>${shown.length ? sort : ''}</div>${shown.length ? summary + help : ''}${shown.length ? `<div class="usage-grid">${fams.map(f => familyGroup(f, statuses)).join('')}</div>` : '<div class="blank">還沒有安裝任何模型，按右上角「＋ 新增模型」。</div>'}${waiting ? `<p class="muted small">另有 ${waiting} 個已加入但尚未安裝的模型，可在「＋ 新增模型」安裝。</p>` : ''}</section>`;
+    return `<section class="usage-block"><div class="overview-head"><h2>剩餘額度</h2>${shown.length ? sort : ''}</div>${shown.length ? `<div class="usage-grid">${fams.map(f => familyGroup(f, statuses)).join('')}</div>` : '<div class="blank">還沒有安裝任何模型，按右上角「＋ 新增模型」。</div>'}${waiting ? `<p class="muted small">另有 ${waiting} 個已加入但尚未安裝的模型，可在「＋ 新增模型」安裝。</p>` : ''}</section>`;
   }
   document.addEventListener('change', e => {
     if (e.target.dataset?.cardSort === undefined) return;
     saveCardOrder({usageCardSort: e.target.value === 'auto' ? 'auto' : 'custom'});
     toast(e.target.value === 'auto' ? '剩餘額度依剩下多少自動排序' : '剩餘額度照你拖動的順序');
   });
-  // Dragging: a card goes before or after another card of the same CLI; a CLI's title row moves all its cards before or after
-  // another CLI. Either way the order becomes 自訂.
+  // Dragging: a card goes before or after another card of the same CLI; a CLI's title row (its handle) moves all its cards before or
+  // after another CLI, and the line above or below the whole CLI shows where it lands (#317). Either way the order becomes 自訂.
   let draggingUsage = null;
-  const clearCardMarks = () => document.querySelectorAll('.usage-family-head:is(.drop-before, .drop-after), .usage-card:is(.drop-before, .drop-after)').forEach(el => el.classList.remove('drop-before', 'drop-after'));
+  const clearCardMarks = () => document.querySelectorAll('.usage-family:is(.drop-before, .drop-after), .usage-card:is(.drop-before, .drop-after)').forEach(el => el.classList.remove('drop-before', 'drop-after'));
   const cardDrop = e => {
     const fam = draggingUsage && e.target.closest?.('[data-card-key]');
     if (!fam) return null;
@@ -294,8 +285,8 @@
       return {el, key: el.dataset.rowKey, after: e.clientX > r.left + r.width / 2};
     }
     if (fam.dataset.cardKey === draggingUsage.key) return null;
-    const boxes = [...fam.children].map(x => x.getBoundingClientRect()), top = Math.min(...boxes.map(x => x.top)), bottom = Math.max(...boxes.map(x => x.bottom));
-    return {el: fam.querySelector('.usage-family-head'), key: fam.dataset.cardKey, after: e.clientY > (top + bottom) / 2};
+    const r = fam.getBoundingClientRect();
+    return {el: fam, key: fam.dataset.cardKey, after: e.clientY > r.top + r.height / 2};
   };
   document.addEventListener('dragstart', e => {
     const el = e.target.closest?.('[draggable="true"]'), fam = el?.closest('[data-card-key]');
@@ -303,9 +294,10 @@
     const row = el.dataset.rowKey !== undefined;
     draggingUsage = {kind: row ? 'row' : 'card', key: row ? el.dataset.rowKey : fam.dataset.cardKey, family: fam.dataset.cardKey};
     e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', draggingUsage.key);
-    requestAnimationFrame(() => el.classList.add('dragging'));
+    const faded = row ? el : fam;
+    requestAnimationFrame(() => faded.classList.add('dragging'));
   });
-  document.addEventListener('dragend', () => { draggingUsage = null; clearCardMarks(); document.querySelectorAll('.usage-card.dragging, .usage-family-head.dragging').forEach(el => el.classList.remove('dragging')); });
+  document.addEventListener('dragend', () => { draggingUsage = null; clearCardMarks(); document.querySelectorAll('.usage-card.dragging, .usage-family.dragging').forEach(el => el.classList.remove('dragging')); });
   document.addEventListener('dragover', e => {
     const t = cardDrop(e);
     if (!t) return;
@@ -322,12 +314,26 @@
   });
   // Also what the drop above does; usable without a mouse (and by the browser tests).
   const shownFamilies = () => [...document.querySelectorAll('[data-card-key]')].map(el => ({key: el.dataset.cardKey, rows: [...el.querySelectorAll('[data-row-key]')].map(r => r.dataset.rowKey)}));
-  const moveUsage = kind => (moving, target, after) => {
-    const keys = moving ? usageOrderAfterMove(shownFamilies(), kind, moving, target, after) : null;
-    if (keys) saveCardOrder({usageCardOrder: keys, usageCardSort: 'custom'});
+  const saveMoved = keys => {
+    if (!keys) return false;
+    if (state.data?.settings?.usageCardSort === 'auto') toast('已改成自訂順序');
+    saveCardOrder({usageCardOrder: keys, usageCardSort: 'custom'});
+    return true;
   };
+  const moveUsage = kind => (moving, target, after) => saveMoved(moving ? usageOrderAfterMove(shownFamilies(), kind, moving, target, after) : null);
   window.moveUsageCard = moveUsage('card');
   window.moveUsageRow = moveUsage('row');
+  // The keyboard: up and down on a CLI's handle move the whole CLI; the handle keeps the focus and says where it went.
+  document.addEventListener('keydown', e => {
+    const key = e.target.dataset?.familyHandle;
+    if (key === undefined || !['ArrowUp', 'ArrowDown'].includes(e.key) || e.altKey || e.metaKey || e.ctrlKey) return;
+    e.preventDefault();
+    const fams = shownFamilies(), dir = e.key === 'ArrowUp' ? -1 : 1;
+    if (!saveMoved(usageOrderStep(fams, key, dir))) return;
+    const handle = [...document.querySelectorAll('[data-family-handle]')].find(x => x.dataset.familyHandle === key), place = fams.findIndex(f => f.key === key) + dir + 1;
+    handle?.focus(); handle?.scrollIntoView?.({block: 'nearest'});
+    toast(`${handle?.closest('.usage-family-head')?.querySelector('h3')?.textContent || ''} 移到第 ${place} 個`);
+  });
   // 詳細: everything about one account that is not about what is left.
   function accountDetail(id, account) {
     const p = (state.accounts?.providers || []).find(x => x.id === id);

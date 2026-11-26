@@ -3,7 +3,8 @@
 the same order: the head (CLI, account, sign-in method, 預設), one status badge (可用／快用完／已用完／無法使用), the limit bars
 (the same bars in the same order for every account of a CLI, 不提供 where an account has no figure), the reset times, a 下一步
 line only when one is needed, 綁定 Bot, and at the foot 自動選用 and 詳細. API keys and CLIs without figures use the same card.
-The cards of one CLI come together under a title row with ＋ 帳號, and a plain sentence on top says which accounts can be used.
+The cards of one CLI come together under a title row with ＋ 帳號 and a drag handle (#317: no sentence or help text on top;
+the CLIs are put in order by dragging or with the arrow keys on the handle).
 The saved order (usageCardOrder / usageCardSort) keeps working and stays a list of the same keys (#242)."""
 import importlib.util, json, re, shutil, subprocess, sys, unittest
 from pathlib import Path
@@ -143,12 +144,27 @@ class Cards(unittest.TestCase):
         self.assertIn('綁定 Bot：1 個', c['codex::w']); self.assertIn('綁定 Bot：1 個', c['antigravity::agw'])
         self.assertIn('綁定 Bot：0 個', c['claude']); self.assertNotIn('還在配', self.html)  # 自動選擇 is not bound to an account
 
-    def test_plain_summary_on_top(self):  # every account in one place only (review)
-        m = re.search(r'class="usage-summary">(.*?)</p>', self.html)
-        self.assertTrue(m)
-        self.assertEqual(m.group(1), '現在能用：Codex（預設帳號、金鑰）、Gemini（sean@x）、Cursor；快用完（還能用）：Antigravity（Waifdance）、Claude；'
-                         '已用完：Codex（Waifdance）、Antigravity（預設帳號）、Grok；無法使用：Codex（新帳號）、Gemini（預設帳號）。')
-        self.assertLess(self.html.index('usage-summary'), self.html.index('<article'))
+    def test_no_summary_or_help_text_on_top(self):  # #317: the user took out the overview sentence and the paragraph under it
+        for gone in ('usage-summary', 'usage-help', '現在能用', '一個帳號一張卡', '自動選用」打開時'): self.assertNotIn(gone, self.html, gone)
+        cards = (JS / '32b-cards.js').read_text(encoding='utf-8')
+        self.assertNotIn('usageSummary', cards); self.assertNotIn('一個帳號一張卡', cards)
+        self.assertIn('綁定 Bot：', self.cards['codex'])
+
+    def test_each_cli_has_a_drag_handle_that_takes_the_keyboard(self):  # #317
+        heads = re.findall(r'<div class="usage-family-head"[^>]*>(.*?)<h3', self.html)
+        self.assertEqual(len(heads), 6)
+        for h in heads:
+            self.assertIn('class="drag-handle"', h); self.assertIn('tabindex="0"', h); self.assertIn('role="button"', h); self.assertIn('上下鍵', h)
+        fams = "const fams = [{key: 'claude', rows: ['claude', 'claude::sub']}, {key: 'codex', rows: ['codex', 'codex::w']}, {key: 'grok', rows: ['grok']}];"
+        got = run(SETUP + fams + """console.log(JSON.stringify([usageOrderStep(fams, 'codex', -1), usageOrderStep(fams, 'codex', 1),
+          usageOrderStep(fams, 'claude', -1), usageOrderStep(fams, 'grok', 1), usageOrderStep(fams, 'gone', 1)]))""")
+        self.assertEqual(got[0], ['codex', 'codex::w', 'claude', 'claude::sub', 'grok'])
+        self.assertEqual(got[1], ['claude', 'claude::sub', 'grok', 'codex', 'codex::w'])
+        self.assertEqual(got[2:], [None, None, None])  # already first / last / not shown: nothing to save
+
+    def test_a_new_cli_comes_last(self):  # #317: a CLI added after the order was saved goes after the saved ones
+        got = run(SETUP + "state.data.settings = {usageCardOrder: ['claude', 'codex', 'codex::w', 'codex::k', 'codex::n', 'grok', 'gemini', 'gemini::g1', 'antigravity', 'antigravity::agw']}; console.log(JSON.stringify(keysOf(usageFamilies(P)).map(f => f[0])))")
+        self.assertEqual(got, ['claude', 'codex', 'grok', 'gemini', 'antigravity', 'cursor'])
 
     def test_saved_order_and_auto_sort_still_apply(self):
         got = run(SETUP + "state.data.settings = {usageCardOrder: ['grok', 'codex::w', 'claude', 'codex', 'gone::x'], usageCardSort: 'custom'}; console.log(JSON.stringify(keysOf(usageFamilies(P)).slice(0, 3)))")
@@ -172,6 +188,9 @@ class Cards(unittest.TestCase):
         self.assertIn('grid-template-columns:repeat(auto-fill, minmax(', grid); self.assertNotIn('align-items:start', grid)
         self.assertRegex(css, r'@media \(max-width: *\d+px\) \{ *\.usage-grid \{ *grid-template-columns: *1fr')
         self.assertRegex(css, r'\.usage-family-head \{[^}]*grid-column: *1 */ *-1')
+        fam = re.search(r'\.usage-family \{([^}]*)\}', css).group(1)  # #317: a CLI is one box, so the drop mark goes above or below the whole group
+        self.assertNotIn('display:contents', fam.replace(' ', '')); self.assertIn('subgrid', fam)
+        self.assertRegex(css, r'\.usage-family\.drop-before'); self.assertRegex(css, r'\.usage-family\.drop-after')
         cards = (JS / '32b-cards.js').read_text(encoding='utf-8')
         self.assertNotIn('<select', cards); self.assertIn("dropdown('usageCardSort'", cards)
 
