@@ -66,7 +66,7 @@ def _shared_strings(z):
             found.append(''.join(now)[:SHEET_TEXT])
             if len(found) >= SHEET_STRINGS: _sheet_partial[0] = True; raise _SheetStop()
     def text(data):
-        if depth['si'] and depth['t'] and not depth['rPh']: now.append(data)  # rPh: the pronunciation guide above Japanese text
+        if depth['si'] and depth['t'] and not depth['rPh']: _add_text(now, data)  # rPh: the pronunciation guide above Japanese text
     part = _sheet_part(z, 'xl/sharedStrings.xml')
     if part:
         with part: _sheet_xml(part, start, end, text)
@@ -94,9 +94,16 @@ def _plain_code(code):
     return re.sub(r'"[^"]*"|\\.|\[[^\]]*\]', '', code or '')
 
 
+def _add_text(parts, data):
+    """Text gathered for one cell or string, never more than SHEET_TEXT characters however long the file makes it."""
+    have = sum(map(len, parts))
+    if have < SHEET_TEXT: parts.append(data[:SHEET_TEXT - have])
+
+
 def _sheet_number(raw, style, date1904):
     try: value = float(raw)
     except ValueError: return raw
+    if value != value or value in (float('inf'), float('-inf')): return raw  # 1e999, NaN: shown as written
     fid, code = style
     plain = _plain_code(code).split(';')[0]; low = plain.lower()
     timed = fid in (18, 19, 20, 21, 22, 45, 46, 47) or bool(re.search(r'[hs]', low))
@@ -149,8 +156,8 @@ def _read_sheet(z, name, shared, styles, date1904):
                 line.extend([''] * (col - len(line))); line[col - 1] = str(value)[:SHEET_TEXT]
             cell.clear()
     def text(data):
-        if state['in'] == 'v': cell['v'].append(data)
-        elif state['in'] == 'is': cell['text'].append(data)
+        if state['in'] == 'v': _add_text(cell['v'], data)
+        elif state['in'] == 'is': _add_text(cell['text'], data)
     part = _sheet_part(z, name)
     if part:
         with part: _sheet_xml(part, start, end, text)

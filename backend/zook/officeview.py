@@ -9,6 +9,7 @@ OFFICE_TYPES = {'.docx': 'application/vnd.openxmlformats-officedocument.wordproc
 PREVIEW_SECONDS = 150    # one file's pictures; a longer wait says so instead of 「正在產生預覽…」 for ever
 PREVIEW_PAGES = 80       # pictures kept and shown for one file
 PREVIEW_KEEP = 60        # files whose pictures are kept; the oldest go first
+PREVIEW_BYTES = 600 * 1024 * 1024  # and at most this much on disk in all; the oldest go first
 PREVIEW_RETRY = 600      # a failed preview is tried again after this many seconds (the Mac may just have been busy)
 PREVIEW_SWEEP_EVERY = 3600
 PREVIEW_WAITING = 3      # files waiting for pictures at once; more are asked to try again shortly
@@ -143,7 +144,8 @@ def office_render(source, out):
     try: made = sorted((n for n in os.listdir(out) if n.lower().endswith('.png')), key=number)
     except OSError: made = []
     if not made: raise RuntimeError('這份檔案沒辦法轉成預覽圖，可能已損壞或用了特殊格式。可以下載後用其他程式開啟。')
-    note = '有幾頁沒有轉出預覽圖，完整內容請下載後查看。' if proc.returncode else '只預覽了第一頁，完整內容請下載後查看。' if '只能轉第一頁' in said else ''  # pagepics ends with 1 when pages are missing
+    lost = re.search(r'無法預覽的頁：第 ([\d、]+) 頁', said)
+    note = ('第 %s 頁無法預覽，完整內容請下載後查看。' % lost.group(1)) if lost else '有幾頁沒有轉出預覽圖，完整內容請下載後查看。' if proc.returncode else '只預覽了第一頁，完整內容請下載後查看。' if '只能轉第一頁' in said else ''  # pagepics ends with 1 when pages are missing
     if source.lower().endswith('.xlsx'): note = '試算表只能預覽第一個工作表的開頭，完整內容請下載後查看。'  # Quick Look pictures one sheet's first screen
     whole = re.search(r'共 (\d+) 頁，只轉了前', said)  # a longer file: only its first PREVIEW_PAGES pages were pictured
     return [os.path.join(out, n) for n in made], note, int(whole.group(1)) if whole else len(made)
@@ -196,6 +198,17 @@ def preview_page(store, path, number, strict=False):
     return _cache_read(store, key, '%s.png' % number)
 
 
+def _folder_bytes(folder):
+    """The size of the files straight inside one preview folder (links not followed)."""
+    total = 0
+    try:
+        for entry in os.scandir(folder):
+            try: total += entry.stat(follow_symlinks=False).st_size
+            except OSError: pass
+    except OSError: pass
+    return total
+
+
 def sweep_previews(store, force=False):
     """Pictures of a file that was deleted, moved or changed are removed; beyond PREVIEW_KEEP files, the oldest too."""
     now = time.time()
@@ -221,7 +234,10 @@ def sweep_previews(store, force=False):
         if info is None or not stat.S_ISREG(info.st_mode) or _preview_key(meta['path'], info) != entry.name:
             removed += drop(entry.path)
         else: kept.append((entry.stat(follow_symlinks=False).st_mtime, entry.path))
-    for _, old in sorted(kept, reverse=True)[PREVIEW_KEEP:]: removed += drop(old)
+    total = 0
+    for rank, (_, old) in enumerate(sorted(kept, reverse=True)):  # newest first
+        total += _folder_bytes(old)
+        if rank >= PREVIEW_KEEP or total > PREVIEW_BYTES: removed += drop(old)
     return removed
 
 

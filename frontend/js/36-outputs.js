@@ -38,6 +38,7 @@
   // fitted to the window, never turned dark with the dark look, no thumbnail column, no black box while it loads). Excel as its
   // real tables, every sheet and column (#320). The window opens at once with 「正在產生預覽…」; the pages come in when ready
   // (fillOfficeView), or a plain reason when they cannot be made.
+  const sheetsRead = new Map();  // an Excel file's tables already fetched for the window being opened
   const isSheet = name => /\.xlsx$/i.test(String(name || ''));
   const officeShell = (url, name, kind) => `<div class="office-view" data-src="${esc(url)}" data-sheet="${isSheet(name) ? 1 : ''}" data-kind="${esc(kind || 'office')}"><p class="muted office-wait">正在產生預覽…</p></div>`;
   // #108④ #337③: a web page shown as a page, never run: no scripts, forms, pop-ups or plug-ins (sandbox with nothing allowed, so it
@@ -60,6 +61,7 @@
   async function previewBody(url, kind, name) {
     if (kind === 'office') {
       let res = null; try { res = await fetch(url + (isSheet(name) ? '/pages/sheets' : '/pages')); } catch (_) {}  // an Excel file never starts Quick Look pictures
+      if (res && res.ok && isSheet(name)) { try { sheetsRead.set(url, await res.json()); } catch (_) {} }  // read once: fillSheetView shows this answer
       return res && res.status === 404 ? {missing: true, body: '<p class="error-text">找不到這個檔案，可能已經被移走或刪除。</p>'} : {body: officeShell(url, name)};
     }
     let res = null;
@@ -114,8 +116,9 @@
   // #320 #337⑤: an Excel file as tables, a tab per sheet, every column (scrolls sideways), first 300 rows of each.
   const columnName = n => { let s = ''; for (; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + (n - 1) % 26) + s; return s; };
   async function fillSheetView(box, src) {
-    let info = {};
-    try { const res = await fetch(src + '/pages/sheets'); info = await res.json(); if (res.status === 404) info = {reason: '找不到這個檔案，可能已經被移走或刪除。'}; } catch (_) {}
+    let info = sheetsRead.get(src); sheetsRead.delete(src);
+    if (!info) try { const res = await fetch(src + '/pages/sheets'); info = await res.json(); if (res.status === 404) info = {reason: '找不到這個檔案，可能已經被移走或刪除。'}; } catch (_) {}
+    info = info || {};
     if (!box.isConnected) return;
     if (info.status !== 'ready') { box.innerHTML = `<p class="muted">${esc(info.reason || info.error || '無法產生預覽，可以下載後用其他程式開啟。')}</p>`; return; }
     const sheets = info.sheets || [];

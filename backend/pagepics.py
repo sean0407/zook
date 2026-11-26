@@ -16,7 +16,12 @@ PML = ('http://schemas.openxmlformats.org/presentationml/2006/main', 'http://pur
 
 
 MOST = [0]      # --pages N: picture only the first N pages (Zook's preview); 0 is every page
-SKIPPED = [0]   # pages left out by --pages
+SKIPPED = [0]   # pages left out by --pages or by the budget below
+# One run draws at most this much (about 35 A4 pages at 1600 wide), whatever the file asks for: a small PDF whose pages repeat a
+# huge picture cannot fill the disk or the memory. Pages past it are left out and said to be (「只轉了前 N 頁」).
+MAX_PIXELS = 130 * 1000 * 1000
+MAX_BYTES = 200 * 1024 * 1024
+USED = {'pixels': 0, 'bytes': 0}
 _children = []  # Quick Look or osascript running now: ended with pagepics
 
 
@@ -82,14 +87,18 @@ def pdf_pages(path, out, width=1600):
     if not doc: raise SystemExit('讀不到這個 PDF：%s' % path)
     png_type, space, done, missing = cf.CFStringCreateWithCString(None, b'public.png', 0x08000100), cg.CGColorSpaceCreateDeviceRGB(), [], []
     stem = os.path.splitext(os.path.basename(path))[0]
-    for n in range(1, _first(cg.CGPDFDocumentGetNumberOfPages(doc)) + 1):
+    last = _first(cg.CGPDFDocumentGetNumberOfPages(doc))
+    for n in range(1, last + 1):
         page = cg.CGPDFDocumentGetPage(doc, n)
         box, turn = cg.CGPDFPageGetBoxRect(page, 1), cg.CGPDFPageGetRotationAngle(page) % 360  # 1 = crop box
         w, h = (box.h, box.w) if turn in (90, 270) else (box.w, box.h)
         scale = width / w
         pw, ph = int(round(w * scale)), int(round(h * scale))
+        if w > 0 and 0 < ph <= 20 * width and (USED['pixels'] + pw * ph > MAX_PIXELS or USED['bytes'] > MAX_BYTES):
+            SKIPPED[0] += last - n + 1; break  # the budget is spent: the rest is left out, and said to be
         ctx = cg.CGBitmapContextCreate(None, pw, ph, 8, 0, space, 1) if w > 0 and 0 < ph <= 20 * width else None  # premultiplied last; a page 20 times taller than wide is not drawn
         if not ctx: missing.append(n); continue
+        USED['pixels'] += pw * ph
         cg.CGContextSetRGBFillColor(ctx, 1, 1, 1, 1); cg.CGContextFillRect(ctx, _Rect(0, 0, pw, ph))
         cg.CGContextScaleCTM(ctx, scale, scale)
         if turn: cg.CGContextTranslateCTM(ctx, w / 2, h / 2); cg.CGContextRotateCTM(ctx, -turn * 3.141592653589793 / 180); cg.CGContextTranslateCTM(ctx, -box.w / 2, -box.h / 2)
@@ -103,7 +112,10 @@ def pdf_pages(path, out, width=1600):
         cf.CFRelease(dest_url)
         if image: cg.CGImageRelease(image)
         if ctx: cg.CGContextRelease(ctx)
-        if written: done.append((target, w, h))
+        if written:
+            try: USED['bytes'] += os.path.getsize(target)
+            except OSError: pass
+            done.append((target, w, h))
         else:
             missing.append(n)
             try: os.remove(target)  # a half-written picture is not a page
@@ -220,7 +232,7 @@ def docx_pages(path, out, width=1600):
             if most and len(done) >= most: SKIPPED[0] = max(SKIPPED[0], len(parts) - i); break
             MOST[0] = most - len(done) if most else 0
             try: made, lost = pdf_pages(os.path.join(work, name), work, width)
-            except SystemExit: continue  # an unreadable piece
+            except SystemExit: missing.append(len(done) + len(missing) + 1); continue  # an unreadable piece: its page is said to be missing
             for target, w, h in made:
                 final = os.path.join(out, '%s-%02d.png' % (stem, len(done) + len(missing) + 1)); shutil.move(target, final); done.append((final, w, h))
             for _ in lost: missing.append(len(done) + len(missing) + 1)
@@ -265,8 +277,10 @@ def main(argv):
         pages, missing = [(made, 0, 0)] if made else [], []
         if made: print('（這個格式只能轉第一頁；其餘內容請直接讀檔確認）')
     for target, w, h in pages: print('%s\t比例 %s' % (target, ratio(w, h)))
-    if SKIPPED[0]: print('（共 %d 頁，只轉了前 %d 頁）' % (SKIPPED[0] + MOST[0], MOST[0]))
-    if missing: raise SystemExit('這幾頁沒有轉出圖片：第 %s 頁（%s）。請改讀這幾頁的內容確認，並告訴使用者哪些版面沒有看到。'
+    if SKIPPED[0]: print('（共 %d 頁，只轉了前 %d 頁）' % (SKIPPED[0] + len(pages) + len(missing), len(pages) + len(missing)))
+    if missing:
+        print('（無法預覽的頁：第 %s 頁）' % '、'.join(map(str, missing[:20])))
+        raise SystemExit('這幾頁沒有轉出圖片：第 %s 頁（%s）。請改讀這幾頁的內容確認，並告訴使用者哪些版面沒有看到。'
                                  % ('、'.join(map(str, missing)), path))
     if not pages: raise SystemExit('沒有轉出圖片：%s' % path)
 
