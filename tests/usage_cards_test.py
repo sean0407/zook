@@ -62,7 +62,7 @@ const P = state.accounts.providers, keysOf = fams => fams.map(f => [f.key, f.row
 const cardOf = (html, key) => {{ const i = html.indexOf('data-row-key="' + key + '"'); if (i < 0) throw new Error('no card ' + key); return html.slice(html.lastIndexOf('<article', i), html.indexOf('</article>', i)); }};
 """
 KEYS = ['codex', 'codex::w', 'codex::k', 'codex::n', 'antigravity', 'antigravity::agw', 'gemini', 'gemini::g1', 'grok', 'claude', 'cursor']
-BLOCKS = ['class="uc-head', 'class="uc-status', 'class="uc-quota', 'class="uc-reset', 'class="uc-bots', 'class="account-foot']
+BLOCKS = ['class="uc-head', 'class="uc-quota', 'class="uc-reset', 'class="uc-bots', 'class="account-foot']
 
 
 @unittest.skipUnless(shutil.which('node'), 'node is needed to run the page code')
@@ -84,6 +84,10 @@ class Cards(unittest.TestCase):
             self.assertTrue(all(i >= 0 for i in at), (key, at))
             self.assertEqual(at, sorted(at), key)
             self.assertEqual(card.count('class="status-badge'), 1, key)
+            # the badge sits beside the account name in the head, not on a row of its own (#316 follow-up)
+            name_row = re.search(r'<div class="uc-name-row">(.*?)</div>', card).group(1)
+            self.assertIn('class="uc-name"', name_row); self.assertIn('class="status-badge', name_row)
+            self.assertLess(card.index('class="status-badge'), card.index('</header>')); self.assertNotIn('uc-status', card)
             self.assertEqual(card.count('role="switch"'), 1, key)  # 自動選用 on every card, also where it cannot be turned on
             self.assertEqual(card.count('data-action="account-detail"'), 1, key)
             self.assertNotIn('data-action="profile-add"', card)  # ＋ 帳號 is on the CLI's title row
@@ -91,7 +95,7 @@ class Cards(unittest.TestCase):
             if nxt >= 0: self.assertTrue(card.find('class="uc-reset') < nxt < card.find('class="uc-bots'), key)
 
     def test_status_badges(self):
-        badge = {k: re.search(r'class="status-badge [a-z]+">([^<]+)<', c).group(1) for k, c in self.cards.items()}
+        badge = {k: re.search(r'class="status-badge [a-z]+"[^>]*>([^<]+)<', c).group(1) for k, c in self.cards.items()}
         self.assertEqual(badge, {'codex': '可用', 'codex::w': '已用完', 'codex::k': '可用', 'codex::n': '無法使用', 'antigravity': '已用完', 'antigravity::agw': '快用完',
                                  'gemini': '無法使用', 'gemini::g1': '可用', 'grok': '已用完', 'claude': '快用完', 'cursor': '可用'})
         for k in ('codex::w', 'grok', 'codex::n', 'gemini'): self.assertIn('class="uc-next', self.cards[k], k)  # used up: what to do next

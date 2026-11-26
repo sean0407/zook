@@ -2216,8 +2216,8 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .uc-name, .uc-method { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
 .uc-name { font-size:14px; }
 .uc-method { color:var(--muted); font-size:12px; }
-.uc-status { display:flex; align-items:baseline; gap:8px; min-width:0; font-size:12px; }
-.uc-status small { color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.uc-name-row { display:flex; align-items:center; gap:8px; min-width:0; }
+.uc-note { color:var(--muted); }
 .status-badge { flex:none; padding:1px 9px; border-radius:99px; font-size:11.5px; font-weight:600; }
 .status-badge.ok { background:#e3f4e8; color:#1d6b36; }
 .status-badge.low { background:#fff1d6; color:#8a5300; }
