@@ -173,7 +173,7 @@
         const what = {skill: '這個 Skill', mcp: '這個連接器', plugin: '這個插件'}[kind] || '';
         const name = kind === 'skill' ? (state.integrations?.skills || []).find(x => x.id === id)?.name : '';
         render(true);
-        toast(name ? (turnOn ? `已開啟「${name}」，移到「已開啟」，所有 Bot 都能用` : `已關閉「${name}」，移到「未啟用」，所有 Bot 都不會再用它`)
+        toast(name ? (turnOn ? `已開啟「${name}」，移到「已開啟」，所有 Bot 都能用` : `已關閉「${name}」，移到「已關閉」，所有 Bot 都不會再用它`)
           : turnOn ? `已開放${what}給所有 Bot` : `已停用${what}，所有 Bot 都不會再用它`);
       } catch (err) { e.target.checked = !turnOn; e.target.disabled = false; toast(err.message); }
       return;
@@ -395,11 +395,13 @@
         for (const [k, v] of d.entries()) if (k.startsWith('more:') && String(v).trim()) more[k.slice(5)] = String(v).trim();
         if (Object.keys(more).length) body.moreSecrets = more;
         let made;
+        const button = form.querySelector('.primary'); button.disabled = true; if (!id) button.textContent = '正在測試連線…';
         try { made = await post(id ? 'connectors/' + encodeURIComponent(id) : 'connectors', body, id ? 'PATCH' : 'POST'); }
-        catch (error) { problem(error.message, /網址/.test(error.message) ? 'url' : /指令/.test(error.message) ? 'command' : 'name'); return; }
+        catch (error) { button.disabled = false; button.textContent = id ? '儲存' : '新增'; problem(error.message, /網址/.test(error.message) ? 'url' : /指令/.test(error.message) ? 'command' : 'name'); return; }
         closeModal(); delete state.mcpTests[made.id];
+        if (made.test) state.mcpTests[made.id] = made.test;  // a new one is tested at once and switched on only when it worked (#303)
         state.integrations = await api('integrations'); await refresh();
-        toast(id ? '已儲存。按「測試連線」確認能不能用' : '已新增。按「測試連線」確認能不能用');
+        toast(id ? '已儲存。按「測試連線」確認能不能用' : connectorAddedNote(made), id ? 3000 : 6000);
       } else if (form.id === 'profile-form') {
         const d = new FormData(form), type = d.get('accountType');
         if (type === 'key' && !d.get('key').trim()) { toast('請貼上 API 金鑰'); return; }

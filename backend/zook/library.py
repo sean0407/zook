@@ -119,7 +119,7 @@ def forget_discovered():
     _discovered.clear()
 
 
-def inventory_for(store, tokens=True):
+def inventory_for(store, tokens=True, testing=''):
     """Discovered Skills/MCP minus anything from disabled plugins (also removed from the private config). tokens=False leaves out the
     sign-ins that may have to be renewed over the network: enough to check a Bot's choices, not to run a reply (marked '_light')."""
     data = discovered()
@@ -151,7 +151,7 @@ def inventory_for(store, tokens=True):
         else:
             config = dict(transport='http', url=record['url'], headers=dict(record.get('headers') or {}))
             if secret: config['headers']['Authorization'] = 'Bearer ' + secret
-            elif record.get('oauth') and tokens and ident in shared_on:  # a sign-in is refreshed only for a connector the user turned on here
+            elif record.get('oauth') and tokens and (ident in shared_on or ident == testing):  # a sign-in is refreshed only for a connector the user turned on here, or is testing (#303: tested before it is on)
                 access = oauth_access(store, record)
                 if access: config['headers']['Authorization'] = 'Bearer ' + access
             config['noCredentials'] = 'Authorization' not in config['headers']  # nothing to be refused: it has simply never been signed in
@@ -170,6 +170,7 @@ def inventory_for(store, tokens=True):
     for item in data['mcp']:
         if item['id'] in copied: item['copied'] = True  # Zook now has its own copy, so this one is no longer handed to Bots
         elif item.get('source') in ('codex', 'claude'): item['copyable'] = True
+        if item.get('source') != 'builtin': item['about'] = catalog_about(item.get('name'), (item.get('config') or {}).get('url', ''))
     with store.lock: mine = copy.deepcopy(store.data.get('skills') or [])
     names = set()
     for record in mine:  # Skills kept in Zook's own folder; they stay even when the tool they came from is removed
@@ -177,7 +178,8 @@ def inventory_for(store, tokens=True):
         if not (root / 'SKILL.md').is_file(): continue
         name, description = skill_title(root, record['name']); ident = ZOOK_SKILL + record['id']
         data['_private']['skills'][ident] = {'path': str(root / 'SKILL.md'), 'root': str(root), 'shared': record.get('origin') == 'shared'}
-        data['skills'].append({'id': ident, 'name': name, 'description': description[:1500], 'path': str(root / 'SKILL.md'), 'source': 'zook', 'origin': record.get('origin', ''), 'removable': True})
+        data['skills'].append({'id': ident, 'name': name, 'description': description[:1500], 'path': str(root / 'SKILL.md'), 'source': 'zook', 'origin': record.get('origin', ''), 'removable': True,
+                               'editable': not record.get('originPath')})  # written in Zook (by hand, a template, a pack); an imported one follows its source
         names.add(same_name(name))
     for item in data['skills']:
         if item['source'] != 'zook' and same_name(item['name']) in names: item['imported'] = True
