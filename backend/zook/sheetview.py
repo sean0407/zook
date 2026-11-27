@@ -47,9 +47,25 @@ def _sheet_xml(stream, start, end=None, text=None):
     except KnowledgeUnreadable: raise SheetRefused('broken')
 
 
+class _SheetPart:
+    """One part of the workbook as Zook's own ZIP reader unpacks it (knowledge_zip_stream: real sizes counted, checks verified)."""
+    def __init__(self, pieces): self.pieces, self.left = pieces, b''
+    def __enter__(self): return self
+    def __exit__(self, *_): self.pieces.close()
+
+    def read(self, n=65536):
+        while not self.left:
+            self.left = next(self.pieces, b'')
+            if not self.left: return b''
+        out, self.left = self.left[:n], self.left[n:]
+        return out
+
+
 def _sheet_part(z, name):
-    try: return z.open(name)
+    try: z.getinfo(name)
     except KeyError: return None
+    if not hasattr(z, '_zook_budget'): z._zook_budget = [PREVIEW_UNPACKED]  # what the whole file may unpack to
+    return _SheetPart(knowledge_zip_stream(z, name, z._zook_budget))
 
 
 def _shared_strings(z):
@@ -169,6 +185,8 @@ def sheet_tables(data):
     with z:
         parts = z.infolist()
         if len(parts) > 5000 or sum(p.file_size for p in parts) > PREVIEW_UNPACKED: raise SheetRefused('too big')
+        try: knowledge_zip_layout(z)  # #240: every part's own header agrees with the directory, inside the file, none sharing bytes
+        except KnowledgeUnreadable: raise SheetRefused('broken')
         names = set(z.namelist())
         targets, listed, flags = {}, [], {'date1904': False}
         def rel(tag, attrs):

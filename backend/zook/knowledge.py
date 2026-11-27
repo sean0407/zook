@@ -290,7 +290,8 @@ def knowledge_zip_layout(book):
     broken = KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
     layout, spans = {}, []
     with _zip_source(book) as f:
-        end = min(os.fstat(f.fileno()).st_size, book.start_dir if isinstance(getattr(book, 'start_dir', None), int) else os.fstat(f.fileno()).st_size)  # no part may reach into the directory
+        f.seek(0, 2); end = f.tell()
+        if isinstance(getattr(book, 'start_dir', None), int): end = min(end, book.start_dir)  # no part may reach into the directory
         for info in book.infolist():
             f.seek(info.header_offset); head = f.read(30)
             if len(head) != 30 or head[:4] != b'PK\x03\x04': raise broken
@@ -314,40 +315,50 @@ def knowledge_zip_layout(book):
     return layout
 
 
-def knowledge_zip_read(book, name, budget, keep=True):
-    """One part of a ZIP, unpacked here from its own stored bytes (zipfile's reader stops at the size a part claims, so a part that lies
-    about its size and check would pass it), counted by what really comes out: stopped as soon as budget[0] (what is left for the whole
-    file) runs out, and refused when what came out is not the size and check it claims. Only stored and deflated parts are read.
-    keep=False only counts (nothing is held)."""
+def knowledge_zip_stream(book, name, budget, cancel=None):
+    """One part of a ZIP, unpacked here a piece (at most 1 MB) at a time from its own stored bytes and handed over as it comes: nothing
+    of it is kept here (zipfile's reader stops at the size a part claims, so a part that lies about its size and check would pass it).
+    Counted by what really comes out: stopped as soon as budget[0] (what is left for the whole file) runs out, or cancel is set (a
+    stopped turn, a deadline), and refused at its end when what came out is not the size and check it claims (whoever reads it
+    then fails too). Only stored and deflated parts are read."""
     import zlib as _kzlib
     too_big = lambda: KnowledgeUnreadable('檔案解開後太大，請拆成幾個檔案再上傳。')
-    broken = KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
+    broken = lambda: KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
     info = book.getinfo(name)
-    if info.flag_bits & 0x1 or info.compress_type not in (_kzip.ZIP_STORED, _kzip.ZIP_DEFLATED): raise broken  # locked, or packed some other way
+    if info.flag_bits & 0x1 or info.compress_type not in (_kzip.ZIP_STORED, _kzip.ZIP_DEFLATED): raise broken()  # locked, or packed some other way
     if info.file_size > budget[0]: raise too_big()
     start = knowledge_zip_layout(book).get(id(info))
-    if start is None: raise broken
-    with _zip_source(book) as f:
-        f.seek(start); raw = f.read(info.compress_size)
-    if len(raw) != info.compress_size: raise broken
+    if start is None: raise broken()
     unpack = _kzlib.decompressobj(-15) if info.compress_type == _kzip.ZIP_DEFLATED else None
-    chunks, size, crc = [], 0, 0
+    state = dict(size=0, crc=0)
     def take(chunk):
-        nonlocal size, crc
-        size += len(chunk); budget[0] -= len(chunk)
-        if budget[0] < 0 or size > info.file_size: raise too_big() if budget[0] < 0 else broken
-        crc = _kzlib.crc32(chunk, crc)
-        if keep: chunks.append(chunk)
+        state['size'] += len(chunk); budget[0] -= len(chunk)
+        if budget[0] < 0: raise too_big()
+        if state['size'] > info.file_size: raise broken()
+        state['crc'] = _kzlib.crc32(chunk, state['crc']); return chunk
+    at, left = start, info.compress_size
     try:
-        for at in range(0, len(raw), 1 << 16):
-            data = raw[at:at + (1 << 16)]
-            if unpack is None: take(data); continue
+        while left > 0:
+            if cancel is not None and cancel.is_set(): raise KnowledgeUnreadable('已停止')
+            with _zip_source(book) as f:  # opened (or found) again for each piece: whoever reads the pieces may read another part meanwhile
+                f.seek(at); data = f.read(min(1 << 16, left))
+            if not data: raise broken()
+            at += len(data); left -= len(data)
+            if unpack is None: yield take(data); continue
             while data:
-                take(unpack.decompress(data, 1 << 20)); data = unpack.unconsumed_tail
-        if unpack is not None: take(unpack.flush())
-    except _kzlib.error: raise broken
-    if size != info.file_size or crc != info.CRC: raise broken
-    return b''.join(chunks)
+                chunk = unpack.decompress(data, 1 << 20); data = unpack.unconsumed_tail
+                if chunk: yield take(chunk)
+                if data and cancel is not None and cancel.is_set(): raise KnowledgeUnreadable('已停止')
+        if unpack is not None:
+            chunk = unpack.flush()
+            if chunk: yield take(chunk)
+    except _kzlib.error: raise broken()
+    if state['size'] != info.file_size or state['crc'] != info.CRC: raise broken()
+
+
+def knowledge_zip_read(book, name, budget, cancel=None):
+    """A small part whole (what knowledge_zip_stream hands over, joined)."""
+    return b''.join(knowledge_zip_stream(book, name, budget, cancel))
 
 
 KNOWLEDGE_NODES = 2000000   # elements of one XML part of a file read for Zook
@@ -444,7 +455,7 @@ def knowledge_xml_records(chunks, tags, cancel=None, nodes=None, depth=None):
 
 def _knowledge_xml(book, name, budget, tags, cancel=None):
     """The records (tags) of one part of an Office file, read through knowledge_zip_read and knowledge_xml_records."""
-    return knowledge_xml_records(knowledge_zip_read(book, name, budget), tags, cancel)
+    return knowledge_xml_records(knowledge_zip_stream(book, name, budget, cancel), tags, cancel)
 
 
 def _knowledge_column(ref):

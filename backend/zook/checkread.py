@@ -111,8 +111,7 @@ def _text_zip(path, kind):
         with _kzip.ZipFile(str(path)) as z:
             parts = z.infolist(); left = KNOWLEDGE_UNPACKED
             if len(parts) > GROUP_TEXT_PARTS or sum(p.file_size for p in parts) > left: raise KnowledgeUnreadable('檔案解開後太大')
-            budget = [left]
-            for info in parts: knowledge_zip_read(z, info.filename, budget, keep=False)  # every part unpacked once, counted by what really comes out (nothing is kept)
+            knowledge_zip_layout(z)  # its structure; each part is unpacked only when it is read, counted then by what really comes out
     except KnowledgeUnreadable: raise
     except (_kzip.BadZipFile, OSError, ValueError, EOFError, RuntimeError, NotImplementedError, _xzlib.error): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔' % kind)
 
@@ -122,8 +121,7 @@ def _text_docx(path, cancel):
     _text_zip(path, 'Word')
     with _kzip.ZipFile(str(path)) as book:
         if 'word/document.xml' not in book.namelist(): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 Word 檔')
-        data = knowledge_zip_read(book, 'word/document.xml', [GROUP_TEXT_DOCX])
-    return _docx_stream(data, cancel)
+        return _docx_stream(knowledge_zip_stream(book, 'word/document.xml', [GROUP_TEXT_DOCX], cancel), cancel)  # unpacked as it is read
 
 
 class _DocxDone(Exception): pass

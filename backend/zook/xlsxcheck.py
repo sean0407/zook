@@ -84,7 +84,8 @@ class _XDeadline:
 def _xparse(z, part, deadline, budget, tags):
     """('end', record) for each element of part whose tag is in tags, with what is inside it: Zook's one safe XML reader
     (knowledge.py: the bytes really unpacked are counted, DOCTYPE and entities refused, elements and depth capped, nothing else kept)."""
-    for record in knowledge_xml_records(knowledge_zip_read(z, part, budget), tags, _XDeadline(deadline)): yield 'end', record
+    late = _XDeadline(deadline)
+    for record in knowledge_xml_records(knowledge_zip_stream(z, part, budget, late), tags, late): yield 'end', record  # the deadline holds while it unpacks too
 
 
 def _xsheets(z, deadline, budget):

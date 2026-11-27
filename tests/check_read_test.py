@@ -260,7 +260,7 @@ class TextVersions(unittest.TestCase):
         self.lie(path, 'word/document.xml', 100, zlib.crc32(b'x' * 100))
         with zipfile.ZipFile(str(path)) as z: self.assertEqual(z.read('word/document.xml'), b'x' * 100)  # what zipfile alone would let through
         with zipfile.ZipFile(str(path)) as z, self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_read(z, 'word/document.xml', [1000])
-        with self.assertRaises(server.KnowledgeUnreadable): server._text_zip(path, 'Word')
+        with self.assertRaises(server.KnowledgeUnreadable): server._text_docx(path, __import__('threading').Event())  # caught where the part is read
         with zipfile.ZipFile(str(path)) as z, self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_read(z, 'word/document.xml', [100 << 20])  # more came out than it claims
 
     def test_a_word_file_is_read_here(self):
@@ -379,6 +379,37 @@ class TextVersions(unittest.TestCase):
         data[18:22] = (100).to_bytes(4, 'little'); data[central + 20:central + 24] = (100).to_bytes(4, 'little')  # it claims to be packed into 100 bytes
         path.write_bytes(bytes(data))
         with zipfile.ZipFile(str(path)) as z, self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_read(z, 'a.xml', [10000])
+
+    def test_unpacking_never_holds_the_whole_part(self):
+        import tracemalloc
+        w = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        path = Path(self.tmp.name) / 'big.docx'
+        with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as z:
+            z.writestr('word/document.xml', ('<w:document %s><w:body><w:p><w:r><w:t>開頭</w:t></w:r></w:p>' % w).encode() + b' ' * (15 << 20) + b'</w:body></w:document>')
+        tracemalloc.start()
+        try: text = server._text_docx(path, __import__('threading').Event()); peak = tracemalloc.get_traced_memory()[1]
+        finally: tracemalloc.stop()
+        self.assertIn('開頭', text); self.assertLess(peak, 6 << 20)  # 15 MB went through, a few MB at most at once
+
+    def test_unpacking_stops_when_asked(self):
+        path = Path(self.tmp.name) / 'stop.zip'
+        with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as z: z.writestr('a.xml', b'x' * (8 << 20))
+        stop = __import__('threading').Event()
+        with zipfile.ZipFile(str(path)) as z:
+            pieces = server.knowledge_zip_stream(z, 'a.xml', [100 << 20], stop)
+            next(pieces); stop.set()
+            with self.assertRaises(server.KnowledgeUnreadable) as caught: list(pieces)
+        self.assertIn('已停止', str(caught.exception))
+
+    def test_the_sheet_preview_refuses_a_zip_made_to_fool_a_reader(self):
+        make_xlsx(self.shared / 'p.xlsx')
+        self.assertTrue(server.sheet_tables((self.shared / 'p.xlsx').read_bytes())['sheets'])
+        data = (self.shared / 'p.xlsx').read_bytes().replace(b'xl/workbook.xml', b'xl/workbooX.xml', 1)  # a part's own header names another file
+        with self.assertRaises(server.SheetRefused): server.sheet_tables(data)
+        import zlib
+        lie = self.shared / 'lie.xlsx'; make_xlsx(lie); self.rewrite(lie, 'xl/sharedStrings.xml', '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>' + 'y' * 5000 + '</t></si></sst>')
+        self.lie(lie, 'xl/sharedStrings.xml', 100, zlib.crc32(b'x' * 100))
+        with self.assertRaises((server.SheetRefused, ValueError)): server.sheet_tables(lie.read_bytes())
 
     def test_what_a_file_says_is_marked_as_data(self):
         make_xlsx(self.shared / '報價單.xlsx'); self.turn()
