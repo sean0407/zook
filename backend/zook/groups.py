@@ -33,7 +33,7 @@ MODERATOR_RULES = {
                    '分工寫完後，在這一則回覆裡接著把你自己那一份做完（另起一段，標題寫「我負責的部分」）；成員那幾份留給他們，不要替他們做。分工的部分保持簡短。', _NO_MENTION],
     'split_work': ['只完成分派給你的那一部分，其他成員正同時做各自的部分。用重點條列，附上依據。', _NO_MENTION],
     'split_merge': ['你負責彙整。把成員各自完成的部分和你自己那一份合併成一份完整的成果，指出遺漏或互相矛盾的地方。',
-                    '彙整前核對每位成員交的東西和他說的是否一致（例如說有公式卻是寫死的數字、說已預覽卻沒有），有檔案就打開看。'
+                    '彙整前核對每位成員交的東西和他說的是否一致（例如說有公式卻是寫死的數字、說已預覽卻沒有），有檔案就打開看（原檔打不開時讀文字版）；都讀不到的寫「沒驗到：檔名（讀不到檔案）」，不要因為讀不到就判不通過或退回。'
                     '不一致、需要那位成員修的，在回覆最前面每位寫一行「【退回】成員名稱：要修的地方」，Zook 會請他修一次，再請你彙整；其餘照常彙整。',
                     _NO_MENTION, GROUP_SUMMARY_FORMAT + '。', _ONLY_SAID],
     'split_redo': ['主持人驗收後退回你的部分，要你修正。只修主持人寫的地方，其餘保留。',
@@ -47,7 +47,7 @@ MODERATOR_RULES = {
     'compare': ['其他成員正同時回答同一個問題，你看不到他們的內容。用你自己的判斷完整作答，不要猜測或引用他們。', _NO_MENTION],
     'compare_diff': ['成員已經各自回答同一個問題。比較他們的答案：哪裡相同、哪裡不同、各自的強項，以及哪一個最值得採用。', _NO_MENTION, GROUP_SUMMARY_FORMAT + '。', _ONLY_SAID],
 }
-MODERATOR_RULES['verify'] = ['你負責查核下面這則回覆的事實、推理和遺漏。第一行只寫【判定】同意、【判定】有疑慮 或 【判定】有錯誤 其中之一。',
+MODERATOR_RULES['verify'] = ['你負責查核下面這則回覆的事實、推理和遺漏。第一行只寫【判定】同意、【判定】有疑慮、【判定】有錯誤 或 【判定】無法查核 其中之一；要查的檔案原檔和文字版都讀不到時寫【判定】無法查核並寫明哪個沒讀到，不要因為讀不到就判有疑慮或有錯誤。',
                              '接著用最多 4 點說明依據，同類問題合併成一點。沒有把握的地方要直接說沒有把握。確認有錯就判有錯誤，證據不足判有疑慮。',
                              '來源、受眾和判定都由你自己核對，不要採用被查回覆對它自己的說法。',
                              '要給客戶或外部的內容（含附件），核對正文裡有沒有內部註記、依據、計算過程、內部折扣或報價規則、【待確認】。',
@@ -100,31 +100,11 @@ def split_send_back(content, bots, tag='退回'):
 
 
 def group_verdict(content):
-    found = re.search(r'【判定】\s*(同意|有疑慮|有錯誤)', str(content or ''))
+    found = re.search(r'【判定】\s*(同意|有疑慮|有錯誤|無法查核)', str(content or ''))
     return found.group(1) if found else ''
 
 
-def group_verifier(store, group, message):
-    """Who checks a reply: (member, provider, model, same vendor as the author). None when nobody can."""
-    job = next((j for j in reversed(store.data['jobs']) if j.get('messageId') == message['id']), {})
-    author = store.find('bots', message.get('botId')) or {}
-    origin = (job.get('fallback') or {}).get('provider') or (job.get('usage') or {}).get('provider') or ((job.get('autoChain') or [[None]])[0][0]) or (bot_model(store, author)[0] if author else '')
-    options = []
-    for bot in [b for b in (store.find('bots', x) for x in group['botIds']) if b and b['id'] != message.get('botId')]:
-        if any(j['botId'] == bot['id'] and j['status'] == 'running' for j in store.data['jobs']): continue
-        try: models = pick_auto(store, '請查核', plan=True)[0] if bot.get('provider') == AUTO else [list(bot_model(store, bot))]
-        except ValueError: continue
-        options += [(bot['id'], x[0], x[1], provider_kind(x[0]) == provider_kind(origin), x[2] if len(x) > 2 else None) for x in models if provider_kind(x[0]) in PLAN_KINDS and find_cli(x[0])]
-    return next((x for x in options if not x[3]), options[0] if options else None)
-
-
-def verifier_missing(store, group, message):
-    """Why nobody can check this reply, said plainly. Lock held."""
-    others = [b for b in (store.find('bots', x) for x in group['botIds']) if b and b['id'] != message.get('botId')]
-    if not others: return '群組裡沒有其他成員，無法查核這則回覆。'
-    busy = [b['name'] for b in others if any(j['botId'] == b['id'] and j['status'] == 'running' for j in store.data['jobs'])]
-    if len(busy) == len(others): return '%s 正在其他對話中工作，請等完成後再試一次。' % '、'.join(busy)
-    return '其他成員的模型沒辦法用只讀的方式查核（或這台 Mac 沒有安裝），無法查核這則回覆。'
+# group_verifier and verifier_missing (請其他成員查核) are in checkread.py.
 
 
 def group_skip_turn(group, bot, why, step):
@@ -180,6 +160,7 @@ def group_prompt(store, group, bot, broadcast, moderator=None, moderated=False, 
             rules.append('這則回覆提到的檔案已換成你讀得到的位置（群組共用檔案）。查核前要實際打開這些檔案；有檔案沒打開，就寫明哪個沒看，不能判定通過。')
     copy_folder = group_copy_folder(store, bot['id'])
     if shared: rules.append('群組共用檔案在 %s：%s。用你的讀檔工具查看；讀不到時改用 zook_group_file_read，名稱寫完整檔名。' % (copy_folder, '、'.join(shared[:40])))
+    if shared: rules += group_read_notes(store, group, bot['id'], shared)  # #240: text versions; #273②: paths out of reach
     rules.append('要給群組的產出請存到 %s（只放在這一層）；使用者另外指定的存放位置也要存一份。' % copy_folder if writable else '群組共用檔案這次只能讀取，不能修改或新增。')
     if group_standing(group): rules.append(group_standing(group))  # #294
     if broadcast and not moderator and not moderated: rules.append('這則訊息沒有指定回覆者。只要內容和你的角色或專長有關，就一定要回覆；只有在明顯與你無關、或其他成員已完整回答時，才只回覆 PASS 這個字。')
@@ -545,6 +526,7 @@ class GroupRuns:
                 else: seen = sync_group_files_in(store, group_id, bot['id'], turn['skipFiles'])
                 lost = [n for n, digest in need.items() if seen.get(n) != digest]
                 if lost: turn['job']['lostFiles'] = lost; raise RuntimeError('要查核的檔案 %s 在查核開始前不見了（可能被刪掉），這次沒有查核。' % '、'.join(lost))
+                group_text_turn(store, group_id, bot['id'], seen, turn['job']['id'])  # #240: text versions of the Office files and PDFs it has
                 if turn.get('check'): turn['prompt'] += named_check_copy(store, group_id, bot['id'], turn['job'], turn['check'])
             except (OSError, ValueError, RuntimeError) as exc:
                 return self._group_stage_failed(turn['job']['id'], str(exc) if isinstance(exc, RuntimeError) else '')

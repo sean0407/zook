@@ -127,8 +127,8 @@ def export_verdict(group, m, job):
     task = next((t for t in (group.get('taskRun') or {}).get('tasks') or [] if t.get('id') == m['taskId']), {})
     check = task.get('verify') or {}
     if check.get('jobId') != job.get('id'): return ''
-    if check.get('verdict') not in ('pass', 'fail'): return ''
-    return '驗收判定：%s%s' % ('通過' if check['verdict'] == 'pass' else '不通過', '。' + ' '.join(str(check.get('reasons') or '').split()) if check.get('reasons') else '')
+    if check.get('verdict') not in ('pass', 'fail', 'unreadable'): return ''
+    return '驗收判定：%s%s' % ({'pass': '通過', 'fail': '不通過', 'unreadable': '無法查核（讀不到檔案）'}[check['verdict']], '。' + ' '.join(str(check.get('reasons') or '').split()) if check.get('reasons') else '')
 
 
 def export_group(data, group, now=None):

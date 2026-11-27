@@ -517,6 +517,7 @@ def agy_read_paths(store, bot_id, job):
     sources = [(m.get('origName') or m['name'], m['name'], store.dir / 'uploads' / m['id'] / 'file') for m in metas] + shared
     secret = runtime_module().secret_name
     sources = [s for s in dict((x[2], x) for x in sources).values() if not secret(s[1], s[0])][:AGY_READ_MAX]  # this turn's attachments first
+    sources += [(n, n, path) for x in sources if x in shared for n, path in group_text_sources(store, group_id, [x[1]]) if n.endswith('.txt')][:AGY_READ_MAX]  # #240: their text versions, counted on their own
     blocked = agy_blocked(store, bot_id)
     if not sources: return [], '', blocked
     try: folder, fd = agy_turn_folder(store, bot_id, job['id'])
@@ -524,6 +525,7 @@ def agy_read_paths(store, bot_id, job):
     rules, lines = [], []
     try:
         for i, (_, name, source) in enumerate(sources, 1):
+            name = ''.join('_' if unicodedata.category(c) in ('Cc', 'Cf', 'Zl', 'Zp') else c for c in name)  # #240: one line in the prompt
             safe = '%d-%s' % (i, ''.join('_' if c in AGY_UNSAFE or c == '/' or ord(c) < 32 else c for c in name)[:120])
             data = read_group_file(source)  # a plain file of its own, or None
             if data is None: continue
@@ -532,7 +534,7 @@ def agy_read_paths(store, bot_id, job):
             path = str(folder / safe); lines.append('- %s：%s' % (name, path))
             rules += [p for p in dict.fromkeys((path, os.path.realpath(path))) if not set(p) & AGY_UNSAFE]
     finally: os.close(fd)
-    return rules, ('\n這一輪只能讀下面這些副本（內容和附件或群組檔案相同，請讀這些路徑）：\n' + '\n'.join(lines)) if lines else '', blocked
+    return rules, ('\n這一輪只能讀下面這些副本（內容和附件或群組檔案相同，請讀這些路徑；group-files 資料夾和其他位置這一輪讀不到）：\n' + '\n'.join(lines)) if lines else '', blocked
 
 
 def agy_turn_folder(store, bot_id, job_id):

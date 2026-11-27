@@ -148,7 +148,7 @@
   function groupChecks(g, m) {
     const checks = checksOf(g, m), note = (state.verifyNotes || {})[m.id];
     if (!checks.length && !note) return '';
-    const cls = {'同意': 'ok', '有疑慮': 'warn', '有錯誤': 'bad'};
+    const cls = {'同意': 'ok', '有疑慮': 'warn', '有錯誤': 'bad', '無法查核': 'warn'}, label = {'無法查核': '無法查核（讀不到檔案）'};
     return `<div class="group-checks">${checks.map(c => {
       const b = state.data.bots.find(x => x.id === c.botId);
       if (c.status === 'running') return `<div class="group-check"><strong>${esc(b?.name || '成員')}</strong> 正在查核…</div>`;
@@ -156,7 +156,7 @@
         const why = c.error || (c.status === 'cancelled' ? '查核已停止。' : '') || Object.values(state.jobDetails).find(j => j.messageId === c.id)?.error || '查核沒有完成。';
         return `<div class="group-check failed"><div class="group-check-head"><strong>${esc(b?.name || '成員')} 查核失敗</strong></div><p>${esc(why)}</p>${g.status !== 'running' && othersIn(g, m) && !(state.verifyNotes || {})[m.id] ? `<button type="button" class="link" data-action="group-verify" data-id="${esc(m.id)}">再試一次</button>` : ''}</div>`;
       }
-      return `<div class="group-check"><div class="group-check-head"><strong>${esc(b?.name || '成員')} 查核</strong><span class="pill ${cls[c.verdict] || ''}">${esc(c.verdict || '未判定')}</span></div><div class="md">${markdown(c.content.replace(/【判定】\s*(同意|有疑慮|有錯誤)/, '').trim())}</div></div>`;
+      return `<div class="group-check"><div class="group-check-head"><strong>${esc(b?.name || '成員')} 查核</strong><span class="pill ${cls[c.verdict] || ''}">${esc(label[c.verdict] || c.verdict || '未判定')}</span></div><div class="md">${markdown(c.content.replace(/【判定】\s*(同意|有疑慮|有錯誤|無法查核)/, '').trim())}</div></div>`;
     }).join('')}${note ? `<div class="group-check failed"><p>${esc(note.text)}</p>${note.confirm && othersIn(g, m) ? `<button type="button" class="link" data-action="group-verify-anyway" data-id="${esc(m.id)}">仍要查核</button> ` : ''}<button type="button" class="link" data-action="group-verify-dismiss" data-id="${esc(m.id)}">${note.confirm ? '取消' : '知道了'}</button></div>` : ''}</div>`;
   }
   // One button per reply, and none when nobody else is in the group, while a check runs, or when the failed check already offers 再試一次.

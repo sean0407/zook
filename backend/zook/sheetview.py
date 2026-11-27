@@ -3,7 +3,7 @@
 # Values are the ones Excel saved (formulas are not worked out again). Only the first SHEET_ROWS rows and SHEET_COLS columns
 # of each sheet are shown. The file is read from a private copy, as data: an XML part that declares a DOCTYPE or entities is
 # refused, so a crafted file cannot make Zook expand entities. Loaded by backend/server.py into one shared namespace.
-import io, xml.parsers.expat
+import io
 SHEET_ROWS = 300       # rows shown per sheet
 SHEET_COLS = 60        # columns shown per sheet (A … BH)
 SHEET_TABS = 30        # sheets shown
@@ -30,29 +30,42 @@ class SheetRefused(Exception): pass
 
 
 def _sheet_xml(stream, start, end=None, text=None):
-    """Walk one XML part with expat, calling start(name, attrs), end(name) and text(data) with names stripped of their namespace.
-    A handler raises _SheetStop to finish early. A DOCTYPE or entity declaration is refused (SheetRefused)."""
-    parser = xml.parsers.expat.ParserCreate(namespace_separator=' ')
-    def refuse(*_): raise SheetRefused('doctype')
-    parser.StartDoctypeDeclHandler = refuse; parser.EntityDeclHandler = refuse
-    parser.StartElementHandler = lambda name, attrs: start(name.rsplit(' ', 1)[-1], {k.rsplit(' ', 1)[-1]: v for k, v in attrs.items()})
-    if end: parser.EndElementHandler = lambda name: end(name.rsplit(' ', 1)[-1])
-    if text: parser.CharacterDataHandler = text
-    read = 0
-    try:
-        while read < SHEET_XML:
+    """Walk one XML part with Zook's one safe XML reader (knowledge_xml_walk: DOCTYPE and entities refused, elements and depth capped,
+    nothing kept), calling start(name, attrs), end(name) and text(data) with names stripped of their namespace. A handler raises
+    _SheetStop to finish early; a part bigger than SHEET_XML is read that far and said to be partial."""
+    local = lambda name: name.rsplit('}', 1)[-1]
+    def chunks():
+        read = 0
+        while True:
             chunk = stream.read(65536)
-            if not chunk: break
-            read += len(chunk); parser.Parse(chunk, False)
-        if read < SHEET_XML: parser.Parse(b'', True)
-        else: _sheet_partial[0] = True  # a part bigger than Zook reads: what was read is shown, and said to be partial
+            if not chunk: return
+            read += len(chunk); yield chunk
+            if read >= SHEET_XML: _sheet_partial[0] = True; raise _SheetStop()  # what was read is shown, and said to be partial
+    try: knowledge_xml_walk(chunks(), lambda name, attrs: start(local(name), {local(k): v for k, v in attrs.items()}), (lambda name: end(local(name))) if end else None, text)
     except _SheetStop: pass
-    except xml.parsers.expat.ExpatError: raise SheetRefused('broken')
+    except KnowledgeUnsafeXML: raise SheetRefused('doctype')
+    except KnowledgeUnreadable: raise SheetRefused('broken')
+
+
+class _SheetPart:
+    """One part of the workbook as Zook's own ZIP reader unpacks it (knowledge_zip_stream: real sizes counted, checks verified)."""
+    def __init__(self, pieces): self.pieces, self.left = pieces, b''
+    def __enter__(self): return self
+    def __exit__(self, *_): self.pieces.close()
+
+    def read(self, n=65536):
+        while not self.left:
+            self.left = next(self.pieces, b'')
+            if not self.left: return b''
+        out, self.left = self.left[:n], self.left[n:]
+        return out
 
 
 def _sheet_part(z, name):
-    try: return z.open(name)
+    try: z.getinfo(name)
     except KeyError: return None
+    if not hasattr(z, '_zook_budget'): z._zook_budget = [PREVIEW_UNPACKED]  # what the whole file may unpack to
+    return _SheetPart(knowledge_zip_stream(z, name, z._zook_budget))
 
 
 def _shared_strings(z):
@@ -167,11 +180,15 @@ def _read_sheet(z, name, shared, styles, date1904):
 
 def sheet_tables(data):
     """{'sheets': [{'name', 'rows': [[row number, [cell text, …]]], 'cols', 'more', 'wide'}], 'charts': bool} for an .xlsx file's bytes."""
+    try: knowledge_zip_precheck(data)  # #240: before zipfile reads its directory
+    except KnowledgeUnreadable: raise SheetRefused('not a zip')
     try: z = zipfile.ZipFile(io.BytesIO(data))
     except (zipfile.BadZipFile, ValueError): raise SheetRefused('not a zip')
     with z:
         parts = z.infolist()
         if len(parts) > 5000 or sum(p.file_size for p in parts) > PREVIEW_UNPACKED: raise SheetRefused('too big')
+        try: knowledge_zip_layout(z)  # #240: every part's own header agrees with the directory, inside the file, none sharing bytes
+        except KnowledgeUnreadable: raise SheetRefused('broken')
         names = set(z.namelist())
         targets, listed, flags = {}, [], {'date1904': False}
         def rel(tag, attrs):

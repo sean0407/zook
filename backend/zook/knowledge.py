@@ -15,7 +15,7 @@
 #   .xlsx .xlsm .pptx  unzipped and read here (standard library)
 import zipfile as _kzip
 from html.parser import HTMLParser as _KHTMLParser
-import xml.etree.ElementTree as _KET
+import xml.parsers.expat as _kexpat
 
 KNOWLEDGE_FILES = 50                # files in the knowledge base at once
 KNOWLEDGE_TEXT = 100000             # characters kept from one file (the same limit as typed text)
@@ -216,11 +216,39 @@ def knowledge_extract(path):
         with open(path, 'rb') as f: head = f.read(8)
         looks = {'.docx': head.startswith(b'PK'), '.odt': head.startswith(b'PK'), '.doc': head.startswith(b'\xd0\xcf\x11\xe0'), '.rtf': head.startswith(b'{\\rtf')}[suffix]
         if not looks: raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔。' % suffix[1:].upper())  # textutil would read anything (HTML too, through WebKit)
-        done = subprocess.run(['/usr/bin/textutil', '-convert', 'txt', '-stdout', '--', str(path)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=KNOWLEDGE_SECONDS)
-        if done.returncode != 0: raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔。' % suffix[1:].upper())
-        return done.stdout.decode('utf-8', 'replace')
+        limit = _KnowledgeDeadline(KNOWLEDGE_SECONDS)
+        try:
+            if suffix == '.docx': return _text_docx(path, limit)  # #240: read here, as the group text version is (checkread.py); textutil never unpacks it
+            if suffix == '.odt': _knowledge_zip_count(path, limit)  # every part unpacked once and counted by what really comes out, before textutil unpacks it
+            return _knowledge_textutil(path, suffix, limit)
+        except KnowledgeUnreadable:
+            if limit.is_set(): raise KnowledgeUnreadable('處理逾時')
+            raise
     if suffix in KNOWLEDGE_ZIP_TYPES: return _knowledge_office(path, suffix)
     raise KnowledgeUnreadable('不支援這種檔案。')
+
+
+def _knowledge_zip_count(path, limit):
+    """A ZIP whose parts, unpacked here and counted by what really comes out, stay within KNOWLEDGE_UNPACKED (nothing is kept)."""
+    knowledge_zip_precheck(path)
+    try:
+        with _kzip.ZipFile(str(path)) as z:
+            budget = [KNOWLEDGE_UNPACKED]
+            for info in z.infolist():
+                for _ in knowledge_zip_stream(z, info, budget, limit): pass
+    except KnowledgeUnreadable: raise
+    except (_kzip.BadZipFile, OSError, ValueError, EOFError, RuntimeError, NotImplementedError): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
+
+
+def _knowledge_textutil(path, suffix, limit):
+    """textutil's text of one file, written to a file of its own whose size is watched while it is written (_text_run), never a pipe."""
+    folder = pathlib.Path(tempfile.mkdtemp(prefix='zook-knowledge-')); out = folder / 'text.txt'
+    try:
+        try: _text_run(['/usr/bin/textutil', '-convert', 'txt', '-output', str(out), '--', str(path)], limit, out=out)
+        except OSError: raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔。' % suffix[1:].upper())
+        if not out.is_file(): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔。' % suffix[1:].upper())
+        with open(str(out), 'rb') as f: return f.read(KNOWLEDGE_TEXT * 4).decode('utf-8', 'replace')[:KNOWLEDGE_TEXT]
+    finally: shutil.rmtree(str(folder), ignore_errors=True)
 
 
 def _knowledge_decode(raw):
@@ -269,11 +297,251 @@ def _knowledge_pdf(path):
         except OSError: pass
 
 
-def _knowledge_xml(book, name, budget):
-    info = book.getinfo(name)
-    budget[0] -= info.file_size
-    if budget[0] < 0: raise KnowledgeUnreadable('檔案解開後太大，請拆成幾個檔案再上傳。')
-    return _KET.fromstring(book.read(name))
+@contextlib.contextmanager
+def _zip_source(book):
+    """The ZIP's own bytes: its file, opened again by name, or the handle it was opened from (put back where it was)."""
+    if isinstance(getattr(book, 'filename', None), str):  # a ZipFile opened from a handle may carry its descriptor number here
+        with open(book.filename, 'rb') as f: yield f
+        return
+    if getattr(book, 'fp', None) is None: raise KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
+    at = book.fp.tell()
+    try: yield book.fp
+    finally: book.fp.seek(at)
+
+
+KNOWLEDGE_PARTS = 5000  # parts of one ZIP Zook reads
+KNOWLEDGE_DIRECTORY = 4 * 1024 * 1024  # bytes its directory may take
+
+
+def knowledge_zip_precheck(source):
+    """Before zipfile reads a ZIP's whole directory (which nothing can stop): its end record, read here, must be there and sound, and
+    say at most KNOWLEDGE_PARTS parts and a directory of at most KNOWLEDGE_DIRECTORY bytes (ZIP64's records too). source: a path,
+    bytes, or an open file (put back where it was). ZIP64 in any form is refused. Raises KnowledgeUnreadable."""
+    broken = lambda: KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
+    too_big = lambda: KnowledgeUnreadable('檔案解開後太大，請拆成幾個檔案再上傳。')
+    if isinstance(source, (bytes, bytearray)): source = io.BytesIO(source)
+    own = not hasattr(source, 'read')
+    f = open(str(source), 'rb') if own else source
+    back_to = None if own else f.tell()
+    try:
+        f.seek(0, 2); size = f.tell()
+        if size < 22: raise broken()
+        back = min(size, 65536 + 22); f.seek(size - back); tail = f.read(back)
+        pos = tail.rfind(b'PK\x05\x06')
+        while pos >= 0 and pos + 22 + int.from_bytes(tail[pos + 20:pos + 22], 'little') != len(tail): pos = tail.rfind(b'PK\x05\x06', 0, pos)  # the record ends the file, after its comment
+        if pos < 0: raise broken()
+        u16 = lambda b, o: int.from_bytes(b[o:o + 2], 'little'); u32 = lambda b, o: int.from_bytes(b[o:o + 4], 'little'); u64 = lambda b, o: int.from_bytes(b[o:o + 8], 'little')
+        end_at = size - back + pos
+        parts, here, directory, offset = u16(tail, pos + 10), u16(tail, pos + 8), u32(tail, pos + 12), u32(tail, pos + 16)
+        if u16(tail, pos + 4) or u16(tail, pos + 6) or here != parts: raise broken()  # split over several disks
+        if tail[max(0, pos - 20):pos - 16] == b'PK\x06\x07' or tail[max(0, pos - 76):pos - 72] == b'PK\x06\x06' or 0xFFFF in (parts, here) or 0xFFFFFFFF in (directory, offset):
+            raise broken()  # ZIP64 is refused: no Office file under 20 MB needs it, and zipfile and this check could read different directories
+        if parts > KNOWLEDGE_PARTS or directory > KNOWLEDGE_DIRECTORY: raise too_big()
+        if offset + directory > end_at: raise broken()
+        if directory > end_at: raise broken()
+        f.seek(end_at - directory); listing = f.read(directory)  # where zipfile will read it: just before the end record
+        if len(listing) != directory: raise broken()
+        seen, at, names = 0, 0, set()
+        while at < directory:  # walked record by record, as zipfile would, never trusting the count the end record gave
+            if listing[at:at + 4] != b'PK\x01\x02' or at + 46 > directory: raise broken()
+            name_len, extra_len = u16(listing, at + 28), u16(listing, at + 30)
+            name = bytes(listing[at + 46:at + 46 + name_len])
+            if name in names: raise broken()  # two parts of one name: which one a reader gets is not the one counted
+            names.add(name)
+            if 0xFFFFFFFF in (u32(listing, at + 20), u32(listing, at + 24), u32(listing, at + 42)): raise broken()  # sizes or place left to ZIP64
+            extra, x = listing[at + 46 + name_len:at + 46 + name_len + extra_len], 0
+            while x + 4 <= len(extra):
+                if u16(extra, x) == 0x0001: raise broken()  # a ZIP64 field
+                x += 4 + u16(extra, x + 2)
+            at += 46 + name_len + extra_len + u16(listing, at + 32)
+            if at > directory: raise broken()
+            seen += 1
+            if seen > KNOWLEDGE_PARTS: raise too_big()
+        if seen != parts: raise broken()
+    except OSError: raise broken()
+    finally:
+        if own: f.close()
+        else: f.seek(back_to)
+
+
+def knowledge_zip_layout(book, cancel=None):
+    """{id(ZipInfo): where its packed bytes start}, checked once per opened ZIP: every part's own header names it as the directory does
+    (and, without a trailing descriptor, claims the same size and check), lies inside the file, and no two parts share bytes. Raises
+    KnowledgeUnreadable for a ZIP made to fool a reader."""
+    layout = getattr(book, '_zook_layout', None)
+    if layout is not None: return layout
+    broken = KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
+    layout, spans = {}, []
+    if len({i.filename for i in book.infolist()}) != len(book.infolist()): raise broken  # two parts of one name
+    if len(book.infolist()) > KNOWLEDGE_PARTS: raise KnowledgeUnreadable('檔案解開後太大，請拆成幾個檔案再上傳。')  # right after its directory was read
+    with _zip_source(book) as f:
+        f.seek(0, 2); end = f.tell()
+        if isinstance(getattr(book, 'start_dir', None), int): end = min(end, book.start_dir)  # no part may reach into the directory
+        for n, info in enumerate(book.infolist()):
+            if n % 50 == 0 and cancel is not None and cancel.is_set(): raise KnowledgeUnreadable('已停止')
+            f.seek(info.header_offset); head = f.read(30)
+            if len(head) != 30 or head[:4] != b'PK\x03\x04': raise broken
+            size_name, size_extra = int.from_bytes(head[26:28], 'little'), int.from_bytes(head[28:30], 'little')
+            local = f.read(size_name)
+            if local != info.orig_filename.encode('utf-8' if info.flag_bits & 0x800 else 'cp437', 'replace'): raise broken  # the directory and the part disagree
+            flags = int.from_bytes(head[6:8], 'little')
+            if not flags & 0x8 and (int.from_bytes(head[14:18], 'little') != info.CRC or int.from_bytes(head[18:22], 'little') != info.compress_size or int.from_bytes(head[22:26], 'little') != info.file_size): raise broken
+            start = info.header_offset + 30 + size_name + size_extra; stop = start + info.compress_size  # with a descriptor, what comes out is checked against the directory's size and check
+            if stop > end: raise broken
+            if flags & 0x8:  # sizes and check written after the data: they must be the directory's too
+                f.seek(stop); tail = f.read(16); signed = tail[:4] == b'PK\x07\x08'
+                if signed: tail = tail[4:]
+                if len(tail) < 12 or int.from_bytes(tail[0:4], 'little') != info.CRC or int.from_bytes(tail[4:8], 'little') != info.compress_size or int.from_bytes(tail[8:12], 'little') != info.file_size: raise broken
+                stop += 16 if signed else 12
+                if stop > end: raise broken
+            layout[id(info)] = start; spans.append((info.header_offset, stop))
+    spans.sort()
+    if any(spans[i][0] < spans[i - 1][1] for i in range(1, len(spans))): raise broken  # two parts sharing bytes
+    book._zook_layout = layout
+    return layout
+
+
+def knowledge_zip_stream(book, name, budget, cancel=None):
+    """One part of a ZIP, unpacked here a piece (at most 1 MB) at a time from its own stored bytes and handed over as it comes: nothing
+    of it is kept here (zipfile's reader stops at the size a part claims, so a part that lies about its size and check would pass it).
+    Counted by what really comes out: stopped as soon as budget[0] (what is left for the whole file) runs out, or cancel is set (a
+    stopped turn, a deadline), and refused at its end when what came out is not the size and check it claims (whoever reads it
+    then fails too). Only stored and deflated parts are read."""
+    import zlib as _kzlib
+    too_big = lambda: KnowledgeUnreadable('檔案解開後太大，請拆成幾個檔案再上傳。')
+    broken = lambda: KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
+    info = name if isinstance(name, _kzip.ZipInfo) else book.getinfo(name)  # the very part given, never another of the same name
+    if info.flag_bits & 0x1 or info.compress_type not in (_kzip.ZIP_STORED, _kzip.ZIP_DEFLATED): raise broken()  # locked, or packed some other way
+    if info.file_size > budget[0]: raise too_big()
+    start = knowledge_zip_layout(book, cancel).get(id(info))
+    if start is None: raise broken()
+    unpack = _kzlib.decompressobj(-15) if info.compress_type == _kzip.ZIP_DEFLATED else None
+    state = dict(size=0, crc=0)
+    def take(chunk):
+        state['size'] += len(chunk); budget[0] -= len(chunk)
+        if budget[0] < 0: raise too_big()
+        if state['size'] > info.file_size: raise broken()
+        state['crc'] = _kzlib.crc32(chunk, state['crc']); return chunk
+    at, left = start, info.compress_size
+    try:
+        while left > 0:
+            if cancel is not None and cancel.is_set(): raise KnowledgeUnreadable('已停止')
+            with _zip_source(book) as f:  # opened (or found) again for each piece: whoever reads the pieces may read another part meanwhile
+                f.seek(at); data = f.read(min(1 << 16, left))
+            if not data: raise broken()
+            at += len(data); left -= len(data)
+            if unpack is None: yield take(data); continue
+            while data:
+                chunk = unpack.decompress(data, 1 << 20); data = unpack.unconsumed_tail
+                if chunk: yield take(chunk)
+                if data and cancel is not None and cancel.is_set(): raise KnowledgeUnreadable('已停止')
+        if unpack is not None:
+            chunk = unpack.flush()
+            if chunk: yield take(chunk)
+    except _kzlib.error: raise broken()
+    if state['size'] != info.file_size or state['crc'] != info.CRC: raise broken()
+
+
+def knowledge_zip_read(book, name, budget, cancel=None):
+    """A small part whole (what knowledge_zip_stream hands over, joined)."""
+    return b''.join(knowledge_zip_stream(book, name, budget, cancel))
+
+
+KNOWLEDGE_NODES = 2000000   # elements of one XML part of a file read for Zook
+KNOWLEDGE_DEPTH = 256       # how deep they may nest
+KNOWLEDGE_RECORD = 100000   # elements one record (a paragraph, a cell, a row) may hold
+
+
+class KnowledgeUnsafeXML(KnowledgeUnreadable):
+    """An XML part that declares a DOCTYPE or an entity (#240: entity expansion, billion laughs)."""
+
+
+def _knowledge_tag(name):
+    uri, _, local = name.rpartition(' ')
+    return '{%s}%s' % (uri, local) if uri else local
+
+
+def _knowledge_walk_steps(chunks, start, end=None, text=None, cancel=None, nodes=None, depth=None):
+    """The one way Zook reads XML from a file it did not make (#240): expat, streaming, nothing kept. chunks: bytes, or an iterable of
+    bytes; yields after each piece it parsed. start(tag, attrs), end(tag) and text(data) get names written {uri}local
+    ({uri}local). Refused (KnowledgeUnreadable) when it declares a DOCTYPE or an entity (in any encoding: expat itself looks), has more
+    than KNOWLEDGE_NODES elements or nests deeper than KNOWLEDGE_DEPTH; stopped when cancel is set (looked at every 1 MB and every
+    10,000 elements). A handler's own exception ends the walk and is passed on."""
+    parser = _kexpat.ParserCreate(namespace_separator=' ')
+    most, deepest, state = KNOWLEDGE_NODES if nodes is None else nodes, KNOWLEDGE_DEPTH if depth is None else depth, [0, 0]
+    def refuse(*_): raise KnowledgeUnsafeXML('這個檔案裡有不安全的 XML 設定（DOCTYPE 或實體定義），Zook 不讀。')
+    def opened(name, attrs):
+        state[0] += 1; state[1] += 1
+        if state[1] > deepest or state[0] > most: raise KnowledgeUnreadable('檔案結構太大或太深，Zook 不讀。')
+        if state[0] % 10000 == 0 and cancel is not None and cancel.is_set(): raise KnowledgeUnreadable('已停止')
+        start(_knowledge_tag(name), {_knowledge_tag(k): v for k, v in attrs.items()})
+    def closed(name):
+        state[1] -= 1
+        if end: end(_knowledge_tag(name))
+    parser.StartDoctypeDeclHandler = refuse; parser.EntityDeclHandler = refuse
+    parser.StartElementHandler, parser.EndElementHandler = opened, closed
+    if text: parser.CharacterDataHandler = text
+    pieces = (chunks[i:i + (1 << 20)] for i in range(0, len(chunks), 1 << 20)) if isinstance(chunks, (bytes, bytearray)) else chunks
+    try:
+        for piece in pieces:
+            if cancel is not None and cancel.is_set(): raise KnowledgeUnreadable('已停止')
+            parser.Parse(piece, False); yield
+        parser.Parse(b'', True); yield
+    except _kexpat.ExpatError: raise KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
+
+
+def knowledge_xml_walk(chunks, start, end=None, text=None, cancel=None, nodes=None, depth=None):
+    for _ in _knowledge_walk_steps(chunks, start, end, text, cancel, nodes, depth): pass
+
+
+class KnowledgeNode:
+    """A small piece of a part (one record: a paragraph, a cell, a row), with the few element methods the readers here use."""
+    __slots__ = ('tag', 'attrib', 'text', 'children')
+
+    def __init__(self, tag, attrib): self.tag, self.attrib, self.text, self.children = tag, attrib, None, []
+    def get(self, key, default=None): return self.attrib.get(key, default)
+    def __iter__(self): return iter(self.children)
+    def clear(self): self.attrib, self.text, self.children = {}, None, []
+
+    def iter(self, tag=None):
+        if tag is None or self.tag == tag: yield self
+        for child in self.children: yield from child.iter(tag)
+
+    def find(self, path):
+        node = self
+        for step in re.split(r'/(?=\{)', path):
+            node = next((c for c in node.children if c.tag == step), None)
+            if node is None: return None
+        return node
+
+
+def knowledge_xml_records(chunks, tags, cancel=None, nodes=None, depth=None):
+    """The records of a part, one at a time: each outermost element whose tag is in tags, with what is inside it (at most
+    KNOWLEDGE_RECORD elements). Nothing else is kept, and a record is let go once handed over."""
+    import collections
+    ready, stack, size = collections.deque(), [], [0]
+    def start(tag, attrs):
+        if not stack and tag not in tags: return
+        node = KnowledgeNode(tag, attrs)
+        if stack:
+            size[0] += 1
+            if size[0] > KNOWLEDGE_RECORD: raise KnowledgeUnreadable('檔案結構太大或太深，Zook 不讀。')
+            stack[-1].children.append(node)
+        else: size[0] = 1
+        stack.append(node)
+    def end(tag):
+        if stack:
+            node = stack.pop()
+            if not stack: ready.append(node)
+    def text(data):
+        if stack and not stack[-1].children: stack[-1].text = (stack[-1].text or '') + data  # the text before its first child
+    for _ in _knowledge_walk_steps(chunks, start, end, text, cancel, nodes, depth):
+        while ready: yield ready.popleft()
+
+
+def _knowledge_xml(book, name, budget, tags, cancel=None):
+    """The records (tags) of one part of an Office file, read through knowledge_zip_read and knowledge_xml_records."""
+    return knowledge_xml_records(knowledge_zip_stream(book, name, budget, cancel), tags, cancel)
 
 
 def _knowledge_column(ref):
@@ -284,11 +552,31 @@ def _knowledge_column(ref):
     return n - 1
 
 
-def _knowledge_office(path, suffix):
+KNOWLEDGE_OFFICE_SECONDS = 30  # one .xlsx or .pptx read for the knowledge base; longer is 「處理逾時」
+
+
+class _KnowledgeDeadline:
+    def __init__(self, seconds): self.at = time.monotonic() + seconds
+    def is_set(self): return time.monotonic() > self.at
+
+
+def _knowledge_office(path, suffix, cancel=None):
+    """_knowledge_office_read with a stop: cancel when given (a group turn's), else KNOWLEDGE_OFFICE_SECONDS from now (#240)."""
+    stop = cancel if cancel is not None else _KnowledgeDeadline(KNOWLEDGE_OFFICE_SECONDS)
+    try: return _knowledge_office_read(path, suffix, stop)
+    except KnowledgeUnreadable:
+        if cancel is None and stop.is_set(): raise KnowledgeUnreadable('處理逾時')
+        raise
+
+
+def _knowledge_office_read(path, suffix, cancel):
     """Slides' and sheets' text. Every piece counts against KNOWLEDGE_TEXT as it is added, so a small file cannot grow into a huge text;
     page and sheet headings alone do not count as content."""
-    try: book = _kzip.ZipFile(str(path))
+    knowledge_zip_precheck(path)  # too many parts, or a directory too big, refused before zipfile reads it
+    try: book = _kzip.ZipFile(str(path))  # the clock (cancel) started before this
     except (_kzip.BadZipFile, OSError): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔。' % suffix[1:].upper())
+    try: knowledge_zip_layout(book, cancel)  # too many parts refused at once; the scan of each part's header stops in time
+    except KnowledgeUnreadable: book.close(); raise
     budget, lines, names, total, found = [KNOWLEDGE_UNPACKED], [], set(book.namelist()), [0], [False]
     def add(line, content=True):  # True: enough text
         lines.append(line); total[0] += len(line) + 1; found[0] = found[0] or content; return total[0] > KNOWLEDGE_TEXT
@@ -298,24 +586,25 @@ def _knowledge_office(path, suffix):
         if suffix == '.pptx':
             ns = '{http://schemas.openxmlformats.org/drawingml/2006/main}'
             for i, name in enumerate(sorted((n for n in names if re.fullmatch(r'ppt/slides/slide\d+\.xml', n)), key=number), 1):
-                paras = [''.join(t.text or '' for t in p.iter(ns + 't')) for p in _knowledge_xml(book, name, budget).iter(ns + 'p')]
-                if add('【第 %d 頁】' % i, False) or any(add(p) for p in paras if p.strip()): break
+                if add('【第 %d 頁】' % i, False): break
+                paras = (''.join(t.text or '' for t in p.iter(ns + 't')) for p in _knowledge_xml(book, name, budget, {ns + 'p'}, cancel))
+                if any(add(p) for p in paras if p.strip()): break
             return result()
         ns = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
         shared = []
         if 'xl/sharedStrings.xml' in names:
-            shared = [''.join(t.text or '' for t in si.iter(ns + 't')) for si in _knowledge_xml(book, 'xl/sharedStrings.xml', budget).iter(ns + 'si')]
+            shared = [''.join(t.text or '' for t in si.iter(ns + 't')) for si in _knowledge_xml(book, 'xl/sharedStrings.xml', budget, {ns + 'si'}, cancel)]
         titles = {}
         try:
-            rels = {r.get('Id'): r.get('Target') for r in _knowledge_xml(book, 'xl/_rels/workbook.xml.rels', budget)}
-            for sheet in _knowledge_xml(book, 'xl/workbook.xml', budget).iter(ns + 'sheet'):
+            rels = {r.get('Id'): r.get('Target') for r in _knowledge_xml(book, 'xl/_rels/workbook.xml.rels', budget, {'{http://schemas.openxmlformats.org/package/2006/relationships}Relationship'}, cancel)}
+            for sheet in _knowledge_xml(book, 'xl/workbook.xml', budget, {ns + 'sheet'}, cancel):
                 target = rels.get(sheet.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')) or ''
                 titles['xl/' + target.lstrip('/').replace('xl/', '', 1)] = sheet.get('name') or ''
-        except (KeyError, _KET.ParseError): pass
+        except KeyError: pass
         sheets = [n for n in titles if n in names] or sorted((n for n in names if re.fullmatch(r'xl/worksheets/sheet\d+\.xml', n)), key=number)
         for name in sheets:
             if add('【工作表 %s】' % (titles.get(name) or number(name)), False): break
-            for row in _knowledge_xml(book, name, budget).iter(ns + 'row'):
+            for row in _knowledge_xml(book, name, budget, {ns + 'row'}, cancel):
                 cells, size = [], 0
                 for c in row.iter(ns + 'c'):
                     kind, value = c.get('t'), c.find(ns + 'v')

@@ -273,7 +273,7 @@ def pick_effort(value, fallback='standard'):
 
 
 def upload_name(name):
-    name = re.sub(r'[\x00-\x1f/\\:]+', '', str(name or '').replace('\\', '/').split('/')[-1]).strip().lstrip('.')
+    name = re.sub(r'[\x00-\x1f\x7f-\x9f\u2028\u2029\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff/\\:]+', '', str(name or '').replace('\\', '/').split('/')[-1]).strip().lstrip('.')
     return keep_suffix(name, 120) or 'file'  # #336①: a long name keeps its extension (sheetview.py)
 
 

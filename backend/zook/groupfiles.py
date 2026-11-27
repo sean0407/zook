@@ -1,4 +1,5 @@
 # Files a group shares. Each Bot gets its own copy for a turn, so no Bot's access is widened. Loaded by backend/server.py into one shared namespace.
+import io
 GROUP_FILES_TOTAL = 200 * 1024 * 1024
 GROUP_FILES_FOLDER = 'group-files'  # inside a Bot's workspace attachments folder
 _group_files_lock = threading.Lock()  # choosing a name and saving a file happen as one step
@@ -200,8 +201,8 @@ def sync_group_files_in(store, group_id, bot_id, skip=()):
         clear_folder(fd)
         for entry in _plain_files(group_files_dir(store, group_id)):
             if entry.name in skip: continue
-            with open(entry.path, 'rb') as source: write_into_folder(fd, entry.name, source)
-            seen[entry.name] = _file_hash(entry.path)
+            with open(entry.path, 'rb') as source: data = source.read()  # one read: the copy and its hash are the same content (#240)
+            write_into_folder(fd, entry.name, io.BytesIO(data)); seen[entry.name] = hashlib.sha256(data).hexdigest()
     remember_uploaded_names(store, bot_id, {n: group_original(store, group_id, n) for n in seen if group_original(store, group_id, n)})  # for the key-file check
     return seen
 
@@ -269,6 +270,7 @@ def drop_group_files(store, server, group):
                 finally: lock.release()
         finally:
             shutil.rmtree(str(aside), ignore_errors=True)
+            shutil.rmtree(str(group_text_root(store, group['id'])), ignore_errors=True)  # its text versions (checkread.py)
             for old in aside.parent.glob('.deleting-*'):  # left by an earlier deletion that Zook quit in the middle of
                 try:
                     if old.is_dir() and not old.is_symlink() and time.time() - old.stat().st_mtime > 3600: shutil.rmtree(str(old), ignore_errors=True)
@@ -354,6 +356,7 @@ def group_file_tool(store, group_id, runtime):
             group = store.find('groups', group_id)
             found = group_file_path(store, group, args['name']) if group else None
         if not found: raise RuntimeError('找不到這個共用檔案。')
+        if found.suffix.lower() in GROUP_TEXT_KINDS: return group_text_read(store, group_id, found.name)  # #240: Excel, Word, PowerPoint, PDF as their text version
         if found.stat().st_size > runtime.MAX_TEXT: raise RuntimeError('這個檔案超過 128 KB。謹慎模式讀不到，請把這個 Bot 的主動性改成自動後再試。')
         try: return {'name': args['name'], 'content': found.read_text(encoding='utf-8')}
         except UnicodeDecodeError: raise RuntimeError('這個檔案不是文字檔。謹慎模式讀不到，請把這個 Bot 的主動性改成自動後再試。')
