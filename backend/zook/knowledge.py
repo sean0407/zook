@@ -316,6 +316,17 @@ def knowledge_zip_precheck(source):
         elif 0xFFFF in (parts,) or 0xFFFFFFFF in (directory, offset): raise broken()  # says ZIP64 without its records
         if parts > KNOWLEDGE_PARTS or directory > KNOWLEDGE_DIRECTORY: raise too_big()
         if offset + directory > end_at: raise broken()
+        if directory > end_at: raise broken()
+        f.seek(end_at - directory); listing = f.read(directory)  # where zipfile will read it: just before the end record
+        if len(listing) != directory: raise broken()
+        seen, at = 0, 0
+        while at < directory:  # walked record by record, as zipfile would, never trusting the count the end record gave
+            if listing[at:at + 4] != b'PK\x01\x02' or at + 46 > directory: raise broken()
+            at += 46 + u16(listing, at + 28) + u16(listing, at + 30) + u16(listing, at + 32)
+            if at > directory: raise broken()
+            seen += 1
+            if seen > KNOWLEDGE_PARTS: raise too_big()
+        if seen != parts: raise broken()
     except OSError: raise broken()
     finally:
         if own: f.close()

@@ -470,6 +470,24 @@ class TextVersions(unittest.TestCase):
         self.turn()
         self.assertIn('Zook 讀不到', (self.texts / '巨量.xlsx.txt').read_text(encoding='utf-8'))
 
+    def test_a_directory_holding_more_parts_than_its_end_record_says_is_refused(self):
+        path = self.shared / '藏.xlsx'; make_xlsx(path)
+        with zipfile.ZipFile(str(path), 'a') as z:
+            for n in range(6000): z.writestr('x/%d' % n, b'')
+        data = bytearray(path.read_bytes()); end = data.rfind(b'PK\x05\x06')
+        data[end + 8:end + 12] = (100).to_bytes(2, 'little') * 2  # it says 100; its directory (under 4 MB) holds 6,005
+        path.write_bytes(bytes(data))
+        with mock.patch.object(zipfile, 'ZipFile', side_effect=AssertionError('zipfile was asked to read it')) as opened:
+            with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_precheck(path)
+            with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_extract(path)
+            with self.assertRaises(server.SheetRefused): server.sheet_tables(bytes(data))
+            self.assertEqual(server.xlsx_scan(str(path)), [])
+        self.assertFalse(opened.called)
+        small = self.shared / '少.xlsx'; make_xlsx(small)
+        data = bytearray(small.read_bytes()); end = data.rfind(b'PK\x05\x06')
+        data[end + 8:end + 12] = (3).to_bytes(2, 'little') * 2  # it says 3; there are 5
+        with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_precheck(bytes(data))
+
     def test_a_missing_or_broken_end_record_is_refused(self):
         make_xlsx(self.shared / 'ok.xlsx'); server.knowledge_zip_precheck(self.shared / 'ok.xlsx')
         cut = (self.shared / 'ok.xlsx').read_bytes()[:-10]
