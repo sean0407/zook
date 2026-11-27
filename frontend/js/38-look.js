@@ -27,7 +27,7 @@
   const slash = {items: [], index: 0, dismissed: false};  // dismissed: closed with Esc or a click away, until the text changes
   const slashCommands = () => [
     {cmd: '/goal', key: 'long', name: '長任務', desc: '這則訊息最長可以跑 4 小時，結束時通知你'},
-    {cmd: '/plan', key: 'plan', name: '先規劃', desc: effortSupported() ? '這則訊息只請 Bot 提出計畫，不動手' : '這個 Bot 的模型不支援先規劃', off: !effortSupported()}];
+    {cmd: '/plan', key: 'plan', name: '先規劃', desc: planSupported() ? '這則訊息只請 Bot 提出計畫，不動手' : '這個 Bot 的模型不支援先規劃', off: !planSupported()}];
   function hideSlash(dismiss) { const menu = $('#slash-menu'); if (menu) menu.hidden = true; slash.items = []; if (dismiss) slash.dismissed = true; }
   // A redraw (a new Bot's greeting arriving, a reply streaming in) rebuilds the box: the list comes back if it was open (#197).
   function refreshSlash() { if (!slash.dismissed && document.activeElement?.id === 'chat-input') showSlash(); }

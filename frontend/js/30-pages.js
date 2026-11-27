@@ -401,7 +401,9 @@
       closeDropdowns(dd); dd.classList.toggle('open', open); btn.setAttribute('aria-expanded', String(open));
       if (open) {
         const r = btn.getBoundingClientRect(), menu = dd.querySelector('.dd-menu');
-        setTimeout(() => { if (dd.classList.contains('open')) (dd.querySelector('.dd-opt.selected:not([hidden])') || dd.querySelector('.dd-opt:not([hidden])'))?.focus({preventScroll: true}); });  // the arrow keys start from the current choice
+        const search = dd.querySelector('.dd-search');  // #220: a long menu opens on its search box, showing everything again
+        if (search) { search.value = ''; ddFilter(search); }
+        setTimeout(() => { if (dd.classList.contains('open')) (search || dd.querySelector('.dd-opt.selected:not([hidden])') || dd.querySelector('.dd-opt:not([hidden])'))?.focus({preventScroll: true}); });  // the arrow keys start from the current choice
         menu.style.minWidth = Math.max(r.width, 220) + 'px';
         menu.style.maxHeight = '';
         const at = menuPlace(r.top, r.bottom, menu.scrollHeight + menu.offsetHeight - menu.clientHeight, innerHeight);  // with its border
@@ -429,7 +431,9 @@
   document.addEventListener('keydown', e => {
     const dd = e.target.closest?.('.dd');
     if (!dd || !e.target.closest('.dd-btn, .dd-menu') || e.isComposing || e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
-    const opts = [...dd.querySelectorAll('.dd-opt')].filter(o => !o.hidden), open = dd.classList.contains('open');
+    if (e.target.classList.contains('dd-search') && (e.key === 'Home' || e.key === 'End')) return;  // they move in the typed words
+    if (e.target.classList.contains('dd-search') && e.key === 'Enter') { e.preventDefault(); [...dd.querySelectorAll('.dd-opt')].find(o => !o.hidden && !o.dataset.miss)?.click(); return; }  // the first match, not the form's button
+    const opts = [...dd.querySelectorAll('.dd-opt')].filter(o => !o.hidden && !o.dataset.miss), open = dd.classList.contains('open');
     if (!opts.length) return;
     if (e.key === 'Tab') { if (open) { closeDropdowns(); if (e.target.closest('.dd-menu')) { e.preventDefault(); dd.querySelector('.dd-btn').focus(); } } return; }
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
@@ -441,6 +445,16 @@
     next.focus({preventScroll: true}); next.scrollIntoView({block: 'nearest'});
   });
   document.addEventListener('scroll', e => { if (!e.target.closest?.('.dd-menu')) closeDropdowns(); }, true);
+  // #220: typing in a long menu's search box keeps only the choices whose words have it, and the family names that still have one.
+  function ddFilter(input) {
+    const words = input.value.trim().toLowerCase(), menu = input.closest('.dd-menu');
+    menu.querySelectorAll('.dd-opt').forEach(o => { const hit = !words || (o.dataset.label + ' ' + o.dataset.value).toLowerCase().includes(words); if (hit) delete o.dataset.miss; else o.dataset.miss = '1'; });
+    let head = null, seen = false;
+    const close = () => { if (head) head.hidden = !seen; };
+    [...menu.children].forEach(el => { if (el.classList.contains('dd-group')) { close(); head = el; seen = false; } else if (el.classList.contains('dd-opt') && !el.hidden && !el.dataset.miss) seen = true; });
+    close();
+  }
+  document.addEventListener('input', e => { if (e.target.classList?.contains('dd-search')) ddFilter(e.target); });
 
   // Sidebar drag and drop.
   let dragging = null;

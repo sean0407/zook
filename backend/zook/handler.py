@@ -368,7 +368,7 @@ class Handler(BaseHTTPRequestHandler):
                 params = parse_qs(urlsplit(self.path).query)
                 provider = params.get('provider', [''])[0]
                 if not P.spec(store.data, provider): return self.error(400, '供應商無效。')
-                return self.respond(200, model_list(provider))
+                return self.respond(200, model_view(provider))  # clitable.py: the list with each model's family
             if self.command == 'GET' and path == '/api/integrations': return self.respond(200, integrations(self.server.store))
             if self.command == 'GET' and len(parts) == 3 and parts[:2] == ['api', 'icons']:
                 png = icon_png(self.server.store, parts[2])

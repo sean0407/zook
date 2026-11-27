@@ -136,7 +136,7 @@ def _team_role_for(subject, roles):
 def team_effort_ok(store, provider):
     """Lock held. Whether the thinking level can be set for this CLI (自動選擇: each message's model uses it when it can)."""
     if provider == AUTO: return True
-    return 'effort' in ABILITY_CHECKS.get(provider_kind(provider), {}) and 'effort' not in ((store.data.get('abilityChecks') or {}).get(provider) or {}).get('missing', {})
+    return len(cli_row_view(store, provider)['efforts']) > 1  # clitable.py, with what this version lost
 
 
 def team_provider_problem(store, provider):

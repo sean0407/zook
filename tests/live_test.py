@@ -12,7 +12,8 @@ if '--help' in sys.argv: print('--print --output-format --mcp-config --allowedTo
 if '--version' in sys.argv: print('9.9.9 (fake)'); sys.exit(0)
 here = os.path.dirname(sys.argv[0]); live = '--input-format' in sys.argv
 session = sys.argv[sys.argv.index('--resume') + 1] if '--resume' in sys.argv else 'sess-' + uuid.uuid4().hex[:8]
-open(os.path.join(here, 'starts.log'), 'a').write(json.dumps(dict(pid=os.getpid(), live=live, resume='--resume' in sys.argv, web='WebSearch' in ' '.join(sys.argv), pwd_ok=os.path.realpath(os.environ.get('PWD', '')) == os.path.realpath(os.getcwd()))) + '\n')
+late_call = '--late-call' in sys.argv  # the helper below that makes the call after the answer (not a start of the CLI)
+if not late_call: open(os.path.join(here, 'starts.log'), 'a').write(json.dumps(dict(pid=os.getpid(), live=live, resume='--resume' in sys.argv, web='WebSearch' in ' '.join(sys.argv), pwd_ok=os.path.realpath(os.environ.get('PWD', '')) == os.path.realpath(os.getcwd()))) + '\n')
 def tool():
     if not os.path.exists(os.path.join(here, 'call.json')) or '--mcp-config' not in sys.argv: return ''
     config = json.loads(sys.argv[sys.argv.index('--mcp-config') + 1])['mcpServers']['zook']
@@ -24,6 +25,8 @@ def tool():
     out = rpc(2, 'tools/call', json.load(open(os.path.join(here, 'call.json'))))
     proc.stdin.close(); proc.wait(timeout=5)
     return ' TOOL:' + json.dumps(out.get('result') or out.get('error'), ensure_ascii=False)
+if late_call:  # written whole, then put in place: the test waits for the file, never for a half-written one
+    said = tool(); open(os.path.join(here, 'late.tmp'), 'w').write(said); os.replace(os.path.join(here, 'late.tmp'), os.path.join(here, 'late.log')); sys.exit(0)
 count = 0
 def answer(text):
     global count; count += 1
@@ -42,7 +45,10 @@ if live:
         answer(text)
         import time
         if os.path.exists(os.path.join(here, 'late.flag')):  # goes on working after it has answered
-            os.remove(os.path.join(here, 'late.flag')); time.sleep(0.4); open(os.path.join(here, 'late.log'), 'w').write(tool())
+            # #346: Zook closes this CLI as soon as the call is refused, which could cut the note short under load. The call is
+            # made by a helper in its own process group, so the refusal it got is always written down.
+            os.remove(os.path.join(here, 'late.flag')); time.sleep(0.4)
+            subprocess.Popen([sys.executable, sys.argv[0], '--late-call'] + sys.argv[1:], start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         if os.path.exists(os.path.join(here, 'stray.flag')):  # says something more after it has answered
             os.remove(os.path.join(here, 'stray.flag')); time.sleep(0.3)
             print(json.dumps({'type': 'result', 'result': 'STRAY', 'is_error': False, 'session_id': session, 'usage': {'input_tokens': 1, 'output_tokens': 1}}), flush=True)
@@ -176,13 +182,14 @@ class LiveTest(unittest.TestCase):
         self.ask()
         (self.root / 'bin/call.json').write_text(json.dumps(dict(name='zook_remember', arguments=dict(content='偷偷記下', scope='shared'))))
         (self.root / 'bin/late.flag').write_text('x')
-        self.ask(); self.assertTrue(wait_for(lambda: (self.root / 'bin/late.log').exists() and (self.root / 'bin/late.log').stat().st_size > 0))  # the file is opened before its words are written; (self.root / 'bin/call.json').unlink()  # in the reply itself the call is fine (and is saved once); the one after it is not
+        self.ask(); self.assertTrue(wait_for(lambda: (self.root / 'bin/late.log').exists()))  # put in place only once the answer to the late call is written whole (#346)
         self.assertIn('連線已中斷', (self.root / 'bin/late.log').read_text(encoding='utf-8'))  # a tool call while no reply is running reaches nothing
         self.assertNotIn('偷偷記下', json.dumps(self.req('GET', '/api/state')[1]['memories'], ensure_ascii=False).replace('偷偷記下', '', 1))
         job = self.ask()
         self.assertNotIn('kept', job); self.assertEqual(len(self.starts()), 2)  # and that CLI is replaced
         (self.root / 'bin/stray.flag').write_text('x')
-        self.ask(); self.assertTrue(wait_for(lambda: (self.root / 'bin/stray.done').exists())); time.sleep(0.3)  # let Zook read the stray line
+        self.ask(); self.assertTrue(wait_for(lambda: (self.root / 'bin/stray.done').exists()))
+        self.assertTrue(wait_for(lambda: not alive(self.starts()[1]['pid'])))  # Zook has read the stray line: that CLI is closed (not a guessed pause, #346)
         job = self.ask()
         self.assertNotEqual(job['content'], 'STRAY'); self.assertIn('reply 1 from', job['content']); self.assertEqual(len(self.starts()), 3)  # words after the answer are no reply either
 

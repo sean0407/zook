@@ -100,7 +100,7 @@ def pdf_pages(path, out, width=1600):
         w, h = (box.h, box.w) if turn in (90, 270) else (box.w, box.h)
         scale = width / w
         pw, ph = int(round(w * scale)), int(round(h * scale))
-        if w > 0 and 0 < ph <= 20 * width and (USED['pixels'] + pw * ph > MAX_PIXELS or USED['bytes'] > MAX_BYTES):
+        if w > 0 and 0 < ph <= 20 * width and (USED['pixels'] + pw * ph > MAX_PIXELS or USED['bytes'] >= MAX_BYTES):
             SKIPPED[0] += last - n + 1; break  # the budget is spent: the rest is left out, and said to be
         ctx = cg.CGBitmapContextCreate(None, pw, ph, 8, 0, space, 1) if w > 0 and 0 < ph <= 20 * width else None  # premultiplied last; a page 20 times taller than wide is not drawn
         if not ctx: missing.append(n); continue
@@ -120,9 +120,16 @@ def pdf_pages(path, out, width=1600):
         cf.CFRelease(dest_url)
         if image: cg.CGImageRelease(image)
         if ctx: cg.CGContextRelease(ctx)
+        size = None
         if written:
-            try: USED['bytes'] += os.path.getsize(target)
+            try: size = os.path.getsize(target)
+            except OSError: written = False
+        if written and USED['bytes'] + size > MAX_BYTES:  # #354: a hard limit, this page included: it is removed and the rest left out
+            try: os.remove(target)
             except OSError: pass
+            SKIPPED[0] += last - n + 1; break
+        if written:
+            USED['bytes'] += size
             done.append((target, w, h))
         else:
             missing.append(n)
@@ -251,9 +258,12 @@ def docx_pages(path, out, width=1600):
             MOST[0] = most - len(done) if most else 0
             try: made, lost = pdf_pages(os.path.join(work, name), work, width)
             except SystemExit: missing.append(len(done) + len(missing) + 1); continue  # an unreadable piece: its page is said to be missing
-            for target, w, h in made:
-                final = os.path.join(out, '%s-%02d.png' % (stem, len(done) + len(missing) + 1)); shutil.move(target, final); done.append((final, w, h))
-            for _ in lost: missing.append(len(done) + len(missing) + 1)
+            # #354: the piece's own page numbers, so a page missing in its middle does not move the ones after it up
+            before, lost = len(done) + len(missing), set(lost)
+            drawn = [n for n in range(1, len(made) + len(lost) + 1) if n not in lost]
+            for (target, w, h), n in zip(made, drawn):
+                final = os.path.join(out, '%s-%02d.png' % (stem, before + n)); shutil.move(target, final); done.append((final, w, h))
+            missing.extend(before + n for n in sorted(lost))
         MOST[0] = most
         if most and len(done) >= most and SKIPPED[0]: SKIPPED[0] = max(SKIPPED[0], 1)
         return done, missing

@@ -84,7 +84,8 @@ def _cache_read(store, key, name):
     except OSError: return None
     finally: os.close(root_fd)
     with os.fdopen(fd, 'rb') as f:
-        return f.read(MAX_UPLOAD) if stat.S_ISREG(os.fstat(f.fileno()).st_mode) else None
+        info = os.fstat(f.fileno())
+        return f.read(MAX_UPLOAD) if stat.S_ISREG(info.st_mode) and info.st_size <= MAX_UPLOAD else None  # #354: never cut short
 
 
 def _preview_json(store, key, name):
@@ -109,7 +110,12 @@ def office_preview(store, path, strict=False):
         done = _preview_json(store, key, 'done.json')
         pages, total = done and done.get('pages'), done and done.get('total')
         if type(pages) is int and 1 <= pages <= PREVIEW_PAGES:
-            return dict(status='ready', pages=pages, total=total if type(total) is int and pages <= total <= 100000 else pages, note=str(done.get('note') or '')[:200], version=key)
+            total = total if type(total) is int and pages <= total <= 100000 else pages
+            ready = dict(status='ready', pages=pages, total=total, note=str(done.get('note') or '')[:200], version=key)
+            numbers, big = done.get('numbers'), done.get('big')  # #354: real page numbers, and pages too big to send
+            if isinstance(numbers, list) and len(numbers) == pages and all(type(n) is int and 1 <= n <= total for n in numbers): ready['numbers'] = numbers
+            if isinstance(big, list) and all(type(n) is int and 1 <= n <= pages for n in big): ready['big'] = big[:PREVIEW_PAGES]
+            return ready
         failed = _preview_json(store, key, 'failed.json')
         at = failed and failed.get('at')
         if type(at) in (int, float) and -1e12 < at < 1e12 and 0 <= time.time() - at < PREVIEW_RETRY: return dict(status='failed', reason=str(failed.get('reason') or ''))
@@ -179,8 +185,17 @@ def _make_preview(store, root, key, path, suffix, data):
                 except RuntimeError as exc: pages, note, total, reason = [], '', 0, str(exc)
                 except Exception: pages, note, total, reason = [], '', 0, '無法產生預覽，可以下載後用其他程式開啟。'
                 _remove_preview(store, key); folder.mkdir(mode=0o700)
-                for n, picture in enumerate(pages[:PREVIEW_PAGES], 1): os.replace(picture, str(folder / ('%d.png' % n)))
-                if pages: _preview_write_json(folder / 'done.json', dict(pages=min(len(pages), PREVIEW_PAGES), total=max(total, len(pages)), note=note, path=path))
+                pages = pages[:PREVIEW_PAGES]; big = []
+                for n, picture in enumerate(pages, 1):
+                    if os.path.getsize(picture) > MAX_UPLOAD: big.append(n); continue  # #354: said to be too big, never sent cut short
+                    os.replace(picture, str(folder / ('%d.png' % n)))
+                found = [re.search(r'-(\d{1,5})\.png$', os.path.basename(p)) for p in pages]  # pagepics names each picture by its page
+                numbers = [int(m.group(1)) if m else n for n, m in enumerate(found, 1)]
+                if pages:
+                    if numbers != sorted(set(numbers)) or numbers[0] < 1: numbers = list(range(1, len(pages) + 1))  # not page numbers after all
+                    done = dict(pages=len(pages), total=max(total, len(pages), numbers[-1]), note=note, path=path, big=big)
+                    if numbers != list(range(1, len(pages) + 1)): done['numbers'] = numbers
+                    _preview_write_json(folder / 'done.json', done)
                 else: _preview_write_json(folder / 'failed.json', dict(reason=reason, path=path, at=time.time()))
             finally: _remove_preview(store, work.name)
     except OSError: pass  # the disk is full or the folder went away: the next look tries again
