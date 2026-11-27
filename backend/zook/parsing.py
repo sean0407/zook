@@ -386,9 +386,19 @@ def group_alive(proc):
 def kill_group(proc): signal_group(proc, signal.SIGKILL)
 
 
+def kill_and_collect(proc):
+    """SIGKILL, then a CLI Zook started itself is collected. Nothing else may wait for it any more (強制停止 stops waiting, progress.py):
+    uncollected it would stay in the process list as <defunct> until Zook next starts a program. A runner's CLI is its runner's."""
+    kill_group(proc)
+    inner = getattr(getattr(proc, 'cli', None), 'proc', None) or proc
+    if isinstance(inner, subprocess.Popen):
+        try: inner.wait(timeout=10)  # its own child, by its Popen: never a number another program may have now
+        except subprocess.TimeoutExpired: pass
+
+
 def terminate_tree(proc):
     if not signal_group(proc, signal.SIGTERM): return
     # Kill the process group even if its leader exited; descendants may still run.
-    timer = threading.Timer(2.0, kill_group, (proc,)); timer.daemon = True; timer.start()
+    timer = threading.Timer(2.0, kill_and_collect, (proc,)); timer.daemon = True; timer.start()
 
 

@@ -89,7 +89,7 @@ class GroupFilesTab(unittest.TestCase):
 @unittest.skipUnless(NODE, 'needs node to run the page code')
 class ModelLine(unittest.TestCase):
     def line(self, bot, jobs=(), settings=None):
-        stub = 'const esc = s => s; const state = %s;\nconst EFFORTS = [{id: "standard", name: "標準"}, {id: "fast", name: "快速"}, {id: "medium", name: "中"}, {id: "deep", name: "深入"}];\n' % json.dumps({
+        stub = 'const esc = s => s; const state = %s;\nconst efforts = () => [{id: "standard", name: "標準"}, {id: "fast", name: "快速"}, {id: "medium", name: "中"}, {id: "deep", name: "深入"}];\n' % json.dumps({
             'data': {'settings': settings or {'provider': 'codex'}, 'jobs': list(jobs)}, 'modelNames': {},
             'providers': [{'id': 'codex', 'name': 'Codex', 'accounts': [{'id': 'w', 'name': 'Waifdance'}]}, {'id': 'claude', 'name': 'Claude'}]}, ensure_ascii=False)
         stub += 'const providerList = () => state.providers; const providerShort = id => id === "auto" ? "自動選擇" : providerList().find(p => p.id === id)?.name || id;\n'
