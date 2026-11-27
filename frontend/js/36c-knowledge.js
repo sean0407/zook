@@ -15,9 +15,50 @@
   function knowledgeCard(n) {
     const status = n.status || 'ready', chars = knowChars(n), text = String(n.content || '');
     const meta = [n.source ? '📄 ' + n.source + (n.size ? '（' + fileKB(n.size) + '）' : '') : '', status === 'ready' ? chars.toLocaleString() + ' 字' : '', formatDate(n.updatedAt || n.createdAt)].filter(Boolean).join(' · ');
-    return `<article class="card know-card"><div class="know-head"><h3>${esc(n.title)}</h3><span class="know-state ${esc(status)}">${esc(KNOW_STATE[status] || status)}</span></div>${status === 'failed' ? `<p class="error-text">失敗：${esc(n.error || '讀不到這個檔案的內容。')}</p>` : status === 'processing' ? '<p class="muted">正在讀取檔案內容…</p>' : `<p class="know-text">${esc(text.slice(0, 300))}${chars > 300 ? '…' : ''}</p>`}${n.note ? `<p class="muted small">${esc(n.note)}</p>` : ''}<div class="know-meta"><span class="status know-who ${n.botId ? 'one' : 'all'}">${esc(knowWho(n))}</span><small>${esc(meta)}</small></div><div class="actions"><button class="link" data-action="edit-note" data-id="${esc(n.id)}">編輯</button><button class="link" data-action="delete-note" data-id="${esc(n.id)}">刪除</button></div></article>`;
+    return `<article class="card know-card"><div class="know-head"><h3>${esc(n.title)}</h3><span class="know-state ${esc(status)}">${esc(KNOW_STATE[status] || status)}</span></div>${status === 'failed' ? `<p class="error-text">失敗：${esc(n.error || '讀不到這個檔案的內容。')}</p>` : status === 'processing' ? '<p class="muted">正在讀取檔案內容…</p>' : `<p class="know-text">${esc(text.slice(0, 300))}${chars > 300 ? '…' : ''}</p>`}${n.note ? `<p class="muted small">${esc(n.note)}</p>` : ''}${knowSameName(n.title, n.id) ? '<p class="muted small know-dup">還有另一則同名的知識，Bot 引用時會分不清，建議改個名字。</p>' : ''}<div class="know-meta"><span class="status know-who ${n.botId ? 'one' : 'all'}">${esc(knowWho(n))}</span><small>${esc(meta)}</small></div><div class="actions">${status === 'failed' && n.source ? `<button class="link" data-action="know-reupload" data-id="${esc(n.id)}">重新上傳</button>` : ''}<button class="link" data-action="edit-note" data-id="${esc(n.id)}">編輯</button><button class="link" data-action="delete-note" data-id="${esc(n.id)}">刪除</button></div></article>`;
+  }
+  // #123④/#339④: another item with the same title (spaces and case aside). Saving is not stopped; it is said beside the title.
+  const knowKey = s => String(s || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const knowSameName = (title, id = '') => knowKey(title) ? state.data.knowledge.find(x => x.id !== id && knowKey(x.title) === knowKey(title)) : null;
+  // #339②: what is typed into a new item survives a reload of the page; the window opens again with it (KNOW_DRAFT in sessionStorage).
+  const KNOW_DRAFT = 'swarmr-know-draft';
+  const knowDraft = () => { try { const d = JSON.parse(sessionStorage.getItem(KNOW_DRAFT) || 'null'); return d && (d.title || d.content) ? d : null; } catch (_) { return null; } };
+  const knowDraftSave = form => { try { sessionStorage.setItem(KNOW_DRAFT, JSON.stringify({title: form.elements.title.value, content: form.elements.content?.value || '', botId: form.elements.botId?.value || ''})); } catch (_) {} };
+  const knowDraftDrop = () => { try { sessionStorage.removeItem(KNOW_DRAFT); } catch (_) {} };
+  // #339③: why saving or uploading did not work stays in the window, under the part it is about, until the next try.
+  function knowError(form, text) {
+    form.querySelector('.know-error')?.remove();
+    if (!text) return;
+    const part = [...form.querySelectorAll('.know-part')].find(p => !p.hidden) || form.elements.title.closest('.field');
+    part.insertAdjacentHTML('beforeend', `<p class="form-error know-error" role="alert">${esc(text)}</p>`);
+    part.querySelector('.know-error').scrollIntoView({block: 'nearest'});
+  }
+  // One file to the knowledge base (the window's 上傳檔案, and 重新上傳 on a card whose file could not be read).
+  async function knowUpload(f, title, botId) {
+    if (!f.size) throw Error('檔案是空的，請選擇有內容的檔案。');
+    if (f.size > KNOW_MB * 1048576) throw Error(`單一檔案不能超過 ${KNOW_MB} MB。`);
+    const res = await fetch('/api/knowledge/file', {method: 'POST', headers: {'X-File-Name': encodeURIComponent(f.name), 'X-Title': encodeURIComponent(title), 'X-Bot-Id': encodeURIComponent(botId), 'Content-Type': 'application/octet-stream'}, body: f});
+    if (!res.ok) throw Error((await res.json().catch(() => ({}))).error || '上傳失敗');
+    return res.json();
+  }
+  // 重新上傳: the same title and 「給誰用」 with another file; the failed card goes once the new one is in.
+  function knowReupload(id) {
+    const old = state.data.knowledge.find(n => n.id === id);
+    if (!old) return;
+    const pick = document.createElement('input'); pick.type = 'file'; pick.accept = KNOW_ACCEPT;
+    pick.addEventListener('change', async () => {
+      const f = pick.files[0]; if (!f) return;
+      try {
+        await knowUpload(f, old.title, old.botId || '');
+        const gone = await api('knowledge/' + encodeURIComponent(id), {method: 'DELETE'}).then(() => true, () => false);
+        await refresh(); render(true);
+        toast(gone ? '已重新上傳，正在讀取檔案內容' : '已重新上傳，但舊的失敗卡沒有刪掉，請手動刪除');
+      } catch (err) { toast('重新上傳失敗：' + err.message); }
+    });
+    pick.click();
   }
   function knowledgePage() {
+    if (!state.knowDraftShown) { state.knowDraftShown = true; if (knowDraft()) setTimeout(() => { if (state.page === 'knowledge' && !document.querySelector('.modal')) noteModal(); }); }
     const notes = state.data.knowledge.filter(n => !state.query || matches(n.title) || matches(n.content) || matches(n.source || '') || (n.tags || []).some(matches));
     knowWatch();
     return `<p class="muted know-intro">放公司規定、產品資料等參考資料，Bot 回覆時會自動參考。預設所有 Bot 共用，也可以指定只給某個 Bot。</p><p class="muted small know-intro">可以貼上文字，或上傳檔案（${KNOW_TYPES}），每個檔案 ${KNOW_MB} MB 以內，最多 ${KNOW_FILES} 個檔案。每次回覆，Zook 會依問題從整個知識庫找出相關段落給 Bot（最多約 ${KNOW_BUDGET.toLocaleString()} 字），並標明出處，Bot 可以說出依據。</p>`
@@ -62,9 +103,28 @@
     const file = isNew ? `<div class="know-part" data-part="file" hidden><div class="field">檔案<div class="watch-pick"><input type="file" name="file" accept="${KNOW_ACCEPT}" style="display:none" disabled><span class="watch-path know-file-name">尚未選擇</span><button type="button" class="secondary small-btn" data-know-pick>選擇檔案</button></div><small class="muted">支援 ${KNOW_TYPES}。每個檔案 ${KNOW_MB} MB 以內，知識庫最多 ${KNOW_FILES} 個檔案。上傳後 Zook 會讀出文字，卡片顯示「處理中」，完成後變成「Bot 可使用」。</small></div></div>` : '';
     modal(isNew ? '新增知識' : '編輯知識', `<form id="note-form"><div class="modal-body">${source}<label class="field">標題<input name="title" maxlength="300" required value="${esc(n.title || '')}"></label>${text}${file}<div class="field">給誰用${dropdown('botId', n.botId || '', knowAudience())}</div></div><div class="modal-foot"><button type="button" class="secondary" data-action="close-modal">取消</button><button class="primary">儲存</button></div></form>`);
     const form = $('#note-form'); form.dataset.id = n.id || '';
+    const dup = form.elements.title.closest('.field');
+    dup.insertAdjacentHTML('beforeend', '<small class="field-hint know-dup" hidden></small>');
+    const sameName = () => {  // the title, or the file's name when the title is left empty
+      const file = form.elements.file?.files?.[0], upload = form.elements.source?.value === 'file';
+      const title = form.elements.title.value.trim() || (upload && file ? file.name.replace(/\.[^.]+$/, '') : ''), other = knowSameName(title, n.id || '');
+      const box = form.querySelector('.know-dup'); box.hidden = !other; box.textContent = other ? `已經有一則叫「${other.title}」的知識。仍可儲存，但 Bot 引用時會分不清，建議改個名字。` : '';
+    };
+    const draft = isNew ? knowDraft() : null;
+    if (draft) {  // brought back after a reload; giving it up asks first, like any change (21b-unsaved.js)
+      form.elements.title.value = draft.title || ''; if (form.elements.content) form.elements.content.value = draft.content || '';
+      if (draft.botId && state.data.bots.some(b => b.id === draft.botId)) setDropdown(form, 'botId', draft.botId);
+      form.querySelector('.modal-body').insertAdjacentHTML('afterbegin', '<p class="muted small">已帶回重新整理前還沒儲存的內容。</p>');
+      modalEdit.snap = ''; modalEdit.touched = true;
+    }
+    sameName();
     const count = () => { const box = form.querySelector('.know-count'), len = form.elements.content?.value.length || 0; if (box) box.textContent = `目前 ${len.toLocaleString()} 字。內容長也沒關係，回覆時 Zook 會挑出和問題相關的段落給 Bot。`; };
     if (!fromFile) count();
-    form.addEventListener('input', e => { if (e.target.name === 'content') count(); });
+    form.addEventListener('input', e => {
+      if (e.target.name === 'content') count();
+      if (e.target.name === 'title') sameName();
+      if (isNew && (e.target.name === 'title' || e.target.name === 'content')) knowDraftSave(form);
+    });
     form.addEventListener('change', e => {
       if (e.target.name === 'source') {  // 輸入文字 or 上傳檔案: only the fields of the one chosen count
         const upload = e.target.value === 'file';
@@ -72,6 +132,8 @@
         form.elements.title.required = !upload; form.elements.title.placeholder = upload ? '不填就用檔名' : '';
       }
       if (e.target.name === 'file') form.querySelector('.know-file-name').textContent = e.target.files[0]?.name || '尚未選擇';
+      if (e.target.name === 'file' || e.target.name === 'source') { sameName(); knowError(form, ''); }
+      if (isNew && e.target.name === 'botId') knowDraftSave(form);
     });
     form.querySelector('[data-know-pick]')?.addEventListener('click', () => form.elements.file.click());
   }
@@ -81,10 +143,8 @@
     if (!id && d.get('source') === 'file') {
       const f = form.elements.file.files[0];
       if (!f) throw Error('請先選擇要上傳的檔案。');
-      if (f.size > KNOW_MB * 1048576) throw Error(`單一檔案不能超過 ${KNOW_MB} MB。`);
-      const res = await fetch('/api/knowledge/file', {method: 'POST', headers: {'X-File-Name': encodeURIComponent(f.name), 'X-Title': encodeURIComponent(String(d.get('title') || '').trim()), 'X-Bot-Id': encodeURIComponent(botId), 'Content-Type': 'application/octet-stream'}, body: f});
-      if (!res.ok) throw Error((await res.json().catch(() => ({}))).error || '上傳失敗');
-      closeModal(); await refresh(); render(true);
+      await knowUpload(f, String(d.get('title') || '').trim(), botId);
+      knowDraftDrop(); closeModal(); await refresh(); render(true);
       toast('已上傳，正在讀取檔案內容');
       return;
     }
@@ -92,6 +152,7 @@
     if (form.elements.content && !form.elements.content.disabled) data.content = d.get('content');
     if (clientId) data.clientId = clientId;
     await post(id ? 'knowledge/' + encodeURIComponent(id) : 'knowledge', data, id ? 'PATCH' : 'POST');
+    if (!id) knowDraftDrop();
     closeModal(); await refresh();
     toast('已儲存知識');
   }

@@ -634,7 +634,7 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
                 if not job or job['status'] != 'running' or self.__dict__.get('no_starts'): return  # Zook closing: left to bg_closing (background.py)
                 started_at = time.time()
                 if streaming: partial_start(job)
-                progress_start(job_id)  # progress.py
+                progress_start(job_id, kind)  # progress.py
                 # A conversation's CLI may be kept open between messages (live.py); otherwise it is started for this one reply.
                 kept = live_turn(self, job, provider, kind, args, cli_cwd, env, resume, prompt, feed)
                 proc = kept or bg_popen(self, job, args, cli_cwd, env, stdin_prompt, kind)  # under a runner when it may go on while Zook is closed (background.py)
@@ -743,6 +743,7 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
                     self.remember_session(job, provider, model, account, cli_cwd, cli_session(kind, output.decode('utf-8', errors='replace')))
                     store.finish_message(job, content, 'completed')
                     if missing: (find_message(store.find('bots', job['botId']), job['messageId']) or {})['missingFiles'] = missing  # #258 (outputs.py)
+                    if not job.get('groupId') and claimed_unrendered(content, job.get('toolCalls'), kind): (find_message(store.find('bots', job['botId']), job['messageId']) or {})['unseenLayout'] = True  # #355: as a group's (groupfiles.py)
                     if options: (find_message(store.find('bots', job['botId']), job['messageId']) or {})['options'] = options
                     if isinstance(kept, LiveTurn) and (kept.pending or kept.__dict__.get('unsure')): (find_message(store.find('bots', job['botId']), job['messageId']) or {})['note'] = '回覆途中補充的訊息它沒有讀到，請再傳一次。' if kept.pending else '回覆途中補充的訊息，Zook 關閉前不確定它有沒有讀到；回覆沒提到的話，請再傳一次。'
                     store.save()

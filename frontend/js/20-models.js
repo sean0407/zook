@@ -43,7 +43,7 @@
     return html.endsWith('</p>') ? `${html.slice(0, -4)} ${mark}</p>` : `${html}<p class="auto-mark-line">${mark}</p>`;
   };
   const skippedNote = m => (m.skipped || []).length ? '這次沒用到的連接器：' + m.skipped.join('、') : '';
-  const noteLine = m => { const parts = [m.status === 'cancelled' ? '已停止回覆' : '', EFFORT_LABEL[m.effort], autoInfo(m) && !m.auto ? '' : m.note, skippedNote(m)].filter(Boolean); return parts.length ? `<small class="msg-note">${esc(parts.join(' · '))}</small>` : ''; };  // #264: the words kept from a stopped reply say it stopped
+  const noteLine = m => { const parts = [m.status === 'cancelled' ? '已停止回覆' : '', EFFORT_LABEL[m.effort], autoInfo(m) && !m.auto ? '' : m.note, skippedNote(m)].filter(Boolean); return (parts.length ? `<small class="msg-note">${esc(parts.join(' · '))}</small>` : '') + (m.unseenLayout ? '<small class="msg-note msg-warn">Zook 檢查：這則回覆說逐頁看過版面，但這次沒有把任何一頁轉成圖片，版面其實還沒看過。可以請它轉成圖片再檢查一次。</small>' : ''); };  // #264: the words kept from a stopped reply say it stopped; #355: a look at the pages it never took (app.py)
   // 思考強度 beside the message box: remembered per Bot or group while Zook is open; starts at the Bot's default.
   const EFFORTS = [{id: 'standard', name: '標準', hint: '交給模型自己決定，不另外指定'}, {id: 'fast', name: '快速', hint: '想得少一點，回得快'}, {id: 'medium', name: '中', hint: '比快速仔細，用量比深入少'}, {id: 'deep', name: '深入', hint: '想得更久、更仔細，用量較多'}];
   if (!state.effort) state.effort = {};

@@ -469,7 +469,8 @@
       } else if (form.id === 'know-search-form') {
         await knowSearch(form);  // 試搜尋 (36c-knowledge.js)
       } else if (form.id === 'note-form') {
-        await saveNote(form, form.dataset.id ? '' : onceId(form));  // 36c-knowledge.js; a typed one is made once however often 儲存 is pressed
+        try { knowError(form, ''); await saveNote(form, form.dataset.id ? '' : onceId(form)); }  // 36c-knowledge.js; a typed one is made once however often 儲存 is pressed
+        catch (err) { if (!form.isConnected) throw err; knowError(form, err.message); }  // said beside the field, and the window stays (#339③)
       } else if (form.id === 'settings-form') {
         await saveModelSettings(form);  // Enter in the typed model name: saved like any change (38c-settings.js)
       }

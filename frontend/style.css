@@ -2343,3 +2343,32 @@ label.attach-btn { display: inline-flex; align-items: center; justify-content: c
 .reply-versions .version-step:disabled { opacity: .35; cursor: default; }
 .plan-tag { flex-basis: 100%; text-align: right; margin-top: 4px; font-size: 12px; color: #6b4d00; }
 .plan-tag::before { content: '📝 '; }
+/* #339①: why it did not work, inside the question; #123④ same title; #355 a look at the pages that was never taken */
+.modal.ask .modal-body p.ask-error { margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: #fdecec; color: #b42318; }
+.know-dup:not([hidden]) { display: block; margin-top: 6px; color: #9a6a00; }
+.know-error { margin: 8px 0 0; }
+.msg-note.msg-warn { color: #b42318; }
+/* #325: a setting row never makes the form wider than the window (a grid column is at least as wide as its widest row otherwise) */
+.setting-list.in-form { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 699px) {
+  /* #325 */
+  .bot-preview input { width: 100%; }
+}
+@media (max-width: 699px) {
+  /* #337⑥ #350②: the sidebar on top keeps to 40% of the real screen when the text is enlarged (zoom made it more than half) */
+  html.zoomed .sidebar { max-height: calc(40dvh / var(--zoom, 1)); }
+  /* #84⑦: the file row of the 知識 window wraps instead of pushing 選擇檔案 out */
+  .know-part .watch-pick { flex-wrap: wrap; min-width: 0; }
+  .know-part .know-file-name { min-width: 0; overflow-wrap: anywhere; }
+}
+@media (max-width: 480px) {
+  /* #350③: the message box takes a whole line; the buttons (attach, 自動／自由, voice, send) go under it, so the hint is not cut to 「傳送訊息:」 */
+  .composer .input-wrap, .composer > textarea { order: -1; flex: 1 0 100%; min-width: 0; }
+  .composer > .send { margin-left: auto; }
+}
+@media (max-width: 699px) {
+  /* #325: a long choice (備用模型「預設（目前是不換別家，只換同一家其他帳號）」) wraps inside the window instead of being cut */
+  .modal .setting-control .dd, .modal .setting-control .dd-btn { max-width: 100%; }
+  .modal .setting-control .dd-btn { height: auto; min-height: 34px; }
+  .modal .setting-control .dd-label { white-space: normal; overflow-wrap: anywhere; text-align: left; }
+}
