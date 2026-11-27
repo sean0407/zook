@@ -186,43 +186,7 @@ def recover_data(store):
     return dict(at=NOW(), backup='', backupAt='', kept=kept)
 
 
-# ---- Activity: who changed or approved what. Kept in its own file so restoring a backup does not rewrite history.
-ACTIVITY_KEEP = 1000
-ACTIVITY_KINDS = {'approval': '核准', 'tool': '對外動作', 'bot': 'Bot 與群組', 'setting': '設定', 'connector': 'Skills 與連接器', 'schedule': '排程', 'data': '知識與記憶', 'backup': '備份與同步', 'device': '裝置'}
-_activity_lock = threading.Lock()
-
-
-def activity_path(store): return store.dir / 'activity.jsonl'
-
-
-def log_activity(store, kind, text, by=''):
-    """Add one line. Never raises: a full disk must not break the action being recorded."""
-    line = json.dumps(dict(id=ID(), at=NOW(), kind=kind, text=' '.join(str(text).split())[:300], by=str(by or '這台 Mac')[:60]), ensure_ascii=False)
-    try:
-        with _activity_lock:
-            path = activity_path(store)
-            fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-            with os.fdopen(fd, 'a', encoding='utf-8') as f: f.write(line + '\n')
-            if path.stat().st_size > 1024 * 1024:
-                lines = path.read_text(encoding='utf-8').splitlines()[-ACTIVITY_KEEP:]
-                path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-    except OSError: pass
-
-
-def activity_list(store, kind='', result=''):
-    """Newest first: approvals a Bot waits for now, then the saved lines; each says how it ended (actlog.py). Lock held."""
-    try:
-        with _activity_lock: lines = activity_path(store).read_text(encoding='utf-8').splitlines()[-ACTIVITY_KEEP:]
-    except OSError: lines = []
-    result = result if result in ACTIVITY_RESULTS else ''
-    out = [x for x in activity_waiting(store) if kind in ('', 'approval') and result in ('', 'waiting')]
-    for line in reversed(lines):
-        try: item = json.loads(line)
-        except ValueError: continue
-        if not isinstance(item, dict) or (kind and item.get('kind') != kind): continue
-        item.update(activity_outcome(item))
-        if not result or item['result'] == result: out.append(item)
-    return dict(items=out, kinds=[dict(id=k, name=v) for k, v in ACTIVITY_KINDS.items()], results=[dict(id=k, name=v) for k, v in ACTIVITY_RESULTS.items()])
+# ---- Activity: who changed or approved what, and what each reply did: auditlog.py.
 
 
 # ---- CLIs Zook no longer supports. Data from before (or a restored backup) may still name them.
@@ -466,9 +430,7 @@ def upkeep_route(handler, store, parts, path):
     """Backups, the activity record and budgets. Only this Mac may use them. Lock held."""
     if handler.device: return handler.error(403, '這項功能只能在 Mac 上使用。')
     method, n = handler.command, len(parts)
-    if path == '/api/activity' and method == 'GET':
-        query = parse_qs(urlsplit(handler.path).query); kind = (query.get('kind') or [''])[0]
-        return handler.respond(200, activity_list(store, kind if kind in ACTIVITY_KINDS else '', (query.get('result') or [''])[0]))
+    if path == '/api/activity' and method == 'GET': return activity_route(handler, store)  # auditlog.py
     if path == '/api/budget' and method == 'GET': return handler.respond(200, budget_view(store))
     if parts[:2] == ['api', 'backups']:
         if backup_route(handler, store, parts, path): return

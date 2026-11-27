@@ -1724,6 +1724,18 @@ button.group-file-name:hover strong { text-decoration: underline; }
 .act-line p { margin: 0; color: #222; overflow-wrap: anywhere; }
 .act-go { padding-left: 82px; }
 @media (max-width: 520px) { .act-row { gap: 10px; } .act-line { grid-template-columns: 1fr; gap: 0; } .act-go { padding-left: 0; } }
+.act-result.r-stopped { background: #f0f0f0; color: #555; }  /* #304 */
+.act-filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px 12px; margin: 14px 0 10px; }
+.act-filter { display: grid; gap: 4px; min-width: 0; font-size: 12px; color: #666; }
+.act-filter .dd, .act-filter .dd-btn { width: 100%; min-width: 0; }
+.act-search { width: 100%; box-sizing: border-box; margin: 0 0 12px; padding: 9px 12px; border: 1px solid #ddd; border-radius: 10px; font: inherit; background: #fff; }
+.act-head { display: flex; align-items: stretch; border-bottom: 1px solid #efefef; }
+.act-head .act-row { flex: 1; min-width: 0; border-bottom: 0; }
+.act-back { flex: none; align-self: center; padding: 0 12px; white-space: nowrap; font-size: 13px; }
+.act-more { margin: 0; padding-left: 18px; }
+.act-more-btn { display: flex; align-items: center; gap: 12px; margin: 14px 0; flex-wrap: wrap; }
+.act-count { margin: 12px 0; }
+@media (max-width: 520px) { .act-filters { grid-template-columns: 1fr 1fr; } .act-head { flex-wrap: wrap; } .act-back { padding: 0 12px 10px; } .act-row .plain-copy strong { overflow-wrap: anywhere; } }
 .rules-form { max-width: 760px; }
 .rules-form textarea { width: 100%; min-height: 110px; padding: 12px 14px; border: 1px solid #e3e3e3; border-radius: 12px; font: inherit; font-size: 14px; line-height: 1.6; resize: vertical; background: #fff; }
 .backup-actions { margin: 10px 0 4px; }

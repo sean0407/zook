@@ -112,8 +112,10 @@ class UpkeepTest(unittest.TestCase):
         self.req('PATCH', '/api/settings', {'permissionMode': 'auto'})
         self.ask('這句話不該出現在紀錄裡')
         self.req('DELETE', '/api/bots/' + self.bot['id'])
-        out = self.req('GET', '/api/activity')[1]
+        out = self.req('GET', '/api/activity?kind=admin')[1]  # changes and approvals; each reply has a line of its own (#304)
         texts = [x['text'] for x in out['items']]
+        work = self.req('GET', '/api/activity?kind=work')[1]['items']
+        self.assertEqual([(x['text'], x['result']) for x in work], [('回覆你的訊息', 'ok')])
         self.assertEqual(texts[:4], ['刪除 Bot「小幫手」', '變更設定：主動性', '修改 Bot「小幫手」：人格檔案', '新增 Bot「小幫手」'])
         self.assertFalse(any('這句話' in t for t in texts))
         self.assertTrue(all(x['by'] == '這台 Mac' for x in out['items']))
@@ -122,7 +124,7 @@ class UpkeepTest(unittest.TestCase):
         self.assertEqual(oct((self.root / 'data/activity.jsonl').stat().st_mode & 0o777), '0o600')
         # A failed request leaves no line.
         self.req('PATCH', '/api/settings', {'permissionMode': 'nope'})
-        self.assertEqual(len(self.req('GET', '/api/activity')[1]['items']), len(texts))
+        self.assertEqual(len(self.req('GET', '/api/activity?kind=admin')[1]['items']), len(texts))
 
     def test_rules_reach_every_bot(self):
         self.assertEqual(self.req('PATCH', '/api/settings', {'rules': 'x' * 10001})[0], 400)
