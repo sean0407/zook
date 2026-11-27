@@ -1,7 +1,7 @@
 
   // How the window looks (light or dark, text size), and the commands typed into the message box.
   const LOOKS = [{id: 'system', name: '跟隨系統'}, {id: 'light', name: '淺色'}, {id: 'dark', name: '深色'}];
-  const TEXT_SIZES = [{id: 'small', name: '小', zoom: 0.9}, {id: 'normal', name: '標準', zoom: 1}, {id: 'large', name: '大', zoom: 1.12}, {id: 'xlarge', name: '特大', zoom: 1.25}];
+  const TEXT_SIZES = [{id: 'small', name: '小', zoom: 0.9}, {id: 'normal', name: '標準', zoom: 1}, {id: 'large', name: '大', zoom: 1.12}, {id: 'xlarge', name: '特大', zoom: 1.35}];
   const systemDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
   let lookApplied = '';
   function applyLook() {

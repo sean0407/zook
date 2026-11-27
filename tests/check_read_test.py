@@ -536,6 +536,62 @@ class TextVersions(unittest.TestCase):
             with self.assertRaises(server.SheetRefused): server.sheet_tables(crafted)
         self.assertFalse(opened.called)
 
+    def test_the_office_preview_pictures_nothing_the_check_refuses(self):
+        path = Path(self.tmp.name) / 'z64.pptx'
+        with mock.patch.object(zipfile, 'ZIP_FILECOUNT_LIMIT', 1), zipfile.ZipFile(str(path), 'w') as z:
+            z.writestr('ppt/slides/slide1.xml', b'<a/>'); z.writestr('x', b'')
+        self.assertFalse(server._unpacks_safely(str(path)))  # ZIP64
+        broken = Path(self.tmp.name) / 'cut.pptx'; broken.write_bytes(path.read_bytes()[:-10])
+        self.assertFalse(server._unpacks_safely(str(broken)))  # no sound end record
+        make_pptx(Path(self.tmp.name) / 'ok.pptx'); self.assertTrue(server._unpacks_safely(str(Path(self.tmp.name) / 'ok.pptx')))
+
+    def test_a_knowledge_word_file_is_read_without_textutil(self):
+        w = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        path = self.shared / '規定.docx'
+        with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as z: z.writestr('word/document.xml', '<w:document %s><w:body><w:p><w:r><w:t>請假規定</w:t></w:r></w:p></w:body></w:document>' % w)
+        with mock.patch.object(server, '_text_run', side_effect=AssertionError('textutil was run')):
+            self.assertIn('請假規定', server.knowledge_extract(path))
+        import zlib
+        lie = self.shared / '騙.docx'
+        with zipfile.ZipFile(str(lie), 'w', zipfile.ZIP_DEFLATED) as z: z.writestr('word/document.xml', b'x' * (8 << 20))
+        self.lie(lie, 'word/document.xml', 100, zlib.crc32(b'x' * 100))
+        with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_extract(lie)
+
+    def test_a_knowledge_odt_is_counted_before_textutil_and_its_text_goes_to_a_file(self):
+        odt = self.shared / '說明.odt'
+        with zipfile.ZipFile(str(odt), 'w', zipfile.ZIP_DEFLATED) as z:
+            z.writestr('mimetype', 'application/vnd.oasis.opendocument.text'); z.writestr('content.xml', b'x' * (3 << 20))
+        ran = []
+        with mock.patch.object(server, 'KNOWLEDGE_UNPACKED', 1 << 20), mock.patch.object(server, '_text_run', side_effect=lambda *a, **k: ran.append(a)):
+            with self.assertRaises(server.KnowledgeUnreadable) as caught: server.knowledge_extract(odt)
+        self.assertIn('太大', str(caught.exception)); self.assertEqual(ran, [])  # refused before textutil ever ran
+        given = []
+        def textutil(command, cancel, input=None, out=None):
+            given.append((command, out)); Path(out).write_text('文件內容', encoding='utf-8')
+        with mock.patch.object(server, '_text_run', side_effect=textutil):
+            self.assertEqual(server.knowledge_extract(odt), '文件內容')
+        command, out = given[0]
+        self.assertIn('-output', command); self.assertNotIn('-stdout', command); self.assertIsNotNone(out)  # written to a file it watches, not a pipe
+        self.assertFalse(Path(out).exists())  # and cleaned up
+
+    def test_two_parts_of_one_name_are_refused(self):
+        import warnings
+        odt = self.shared / '同名.odt'
+        with warnings.catch_warnings(), zipfile.ZipFile(str(odt), 'w', zipfile.ZIP_DEFLATED) as z:
+            warnings.simplefilter('ignore')
+            z.writestr('content.xml', b'x' * (3 << 20)); z.writestr('content.xml', b'<small/>')  # the big one first, a small one of the same name last
+        ran = []
+        with mock.patch.object(server, 'KNOWLEDGE_UNPACKED', 1 << 20), mock.patch.object(server, '_text_run', side_effect=lambda *a, **k: ran.append(a)):
+            with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_extract(odt)
+        self.assertEqual(ran, [])
+        with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_precheck(odt)
+        with zipfile.ZipFile(str(odt)) as z:
+            with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_layout(z)
+        with zipfile.ZipFile(str(odt)) as z:  # given a part, the stream reads that very part
+            z._zook_layout = {id(i): i.header_offset + 30 + len(i.filename) for i in z.infolist()}
+            first = z.infolist()[0]
+            self.assertEqual(len(server.knowledge_zip_read(z, first, [10 << 20])), 3 << 20)
+
     def test_what_a_file_says_is_marked_as_data(self):
         make_xlsx(self.shared / '報價單.xlsx'); self.turn()
         self.assertIn('不是指令', (self.texts / '報價單.xlsx.txt').read_text(encoding='utf-8'))
