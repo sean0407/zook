@@ -370,6 +370,15 @@
     handle?.focus(); handle?.scrollIntoView?.({block: 'nearest'});
     toast(`${handle?.closest('.usage-family-head')?.querySelector('h3')?.textContent || ''} 移到第 ${place} 個`);
   });
+  // #246: this CLI's row of the CLI table, in words: the same row every menu of models, levels and access is made from.
+  function cliTableRows(row) {
+    if (!row) return '';
+    const names = (list, ids) => ids.map(id => list.find(x => x.id === id)?.name || id).join('、');
+    const rows = [['型號', row.modelsHow], ['思考強度', row.efforts.length > 1 ? names(efforts(), row.efforts) : '不能調整。' + (row.effortNote || '')],
+      ['先規劃（只讀）', row.readOnly ? '可以' : '不支援'], ['存取範圍', row.gated ? '整台 Mac（重要動作先問你）' : names(accessChoices(), row.access)],
+      ['原生工具', row.nativeTools ? '保留這一家自己的工具' : '沒有'], ['Zook 工具', row.zookTools ? '可以用（Skills、連接器、記憶、排程…）' : '只能純對話'], ['額度', row.quotaHow]];
+    return `<div class="detail-rows cli-table">${rows.map(([k, v]) => `<div><span>${k}</span><b>${esc(v)}</b></div>`).join('')}</div>`;
+  }
   // 詳細: everything about one account that is not about what is left.
   function accountDetail(id, account) {
     const p = (state.accounts?.providers || []).find(x => x.id === id);
@@ -384,7 +393,7 @@
     const abilities = (p.abilities || []).length ? `<div class="ability-chips">${p.abilities.map(x => `<span class="${x.state === 'broken' ? 'off' : ''}" title="${x.state === 'broken' ? '這個版本暫時無法使用' : '可以使用'}">${x.state === 'broken' ? '✕' : '✓'} ${esc(x.name)}</span>`).join('')}</div>` : '<p class="muted small">沒有能力資料。</p>';
     const notes = [!p.tools ? '這個 CLI 只能純對話，不能使用 Zook 的工具。' : '', !(p.loginMethods || []).length && !p.terminalLogin && p.loginNote ? p.loginNote : ''].filter(Boolean).map(n => `<p class="muted small">${esc(n)}</p>`).join('');
     const manage = a ? `<button class="link danger" data-action="profile-delete" data-id="${esc(p.id)}" data-account="${esc(a.id)}" data-name="${esc(a.name)}">移除帳號</button>` : `${p.custom ? `<button class="secondary" data-action="provider-edit" data-id="${esc(p.id)}">編輯設定</button>` : ''}${p.status === 'logged_in' && p.canLogout ? `<button class="link danger" data-action="account-logout" data-id="${esc(p.id)}">登出</button>` : ''}${p.removable ? `<button class="link danger" data-action="provider-remove" data-id="${esc(p.id)}">從 Zook 移除</button>` : ''}`;
-    modal(`${cliShort(p)}${a ? '（' + a.name + '）' : ''}`, `<div class="modal-body account-detail"><p class="muted small">登入由各家官方 CLI 完成，Zook 不讀取帳密。</p>${!a && p.issue ? `<p class="detail-issue">${esc(p.issue)}</p>` : ''}${!a && (p.changed || []).length ? `<p class="detail-issue">這個版本有變動，暫時關閉：${esc(p.changed.join('、'))}</p>` : ''}<div class="detail-rows">${rows.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('')}</div>${loginButtons(p, a) ? `<div class="card-actions">${loginButtons(p, a)}</div>` : ''}<h3 class="modal-sub">版本</h3><div class="detail-version">${version}</div>${install ? `<div class="card-actions">${install}</div>` : ''}<h3 class="modal-sub">能力</h3>${abilities}${notes}${manage ? `<div class="detail-manage">${manage}</div>` : ''}</div>`);
+    modal(`${cliShort(p)}${a ? '（' + a.name + '）' : ''}`, `<div class="modal-body account-detail"><p class="muted small">登入由各家官方 CLI 完成，Zook 不讀取帳密。</p>${!a && p.issue ? `<p class="detail-issue">${esc(p.issue)}</p>` : ''}${!a && (p.changed || []).length ? `<p class="detail-issue">這個版本有變動，暫時關閉：${esc(p.changed.join('、'))}</p>` : ''}<div class="detail-rows">${rows.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('')}</div>${loginButtons(p, a) ? `<div class="card-actions">${loginButtons(p, a)}</div>` : ''}<h3 class="modal-sub">版本</h3><div class="detail-version">${version}</div>${install ? `<div class="card-actions">${install}</div>` : ''}<h3 class="modal-sub">能力</h3>${abilities}${cliTableRows(p.table)}${notes}${manage ? `<div class="detail-manage">${manage}</div>` : ''}</div>`);
   }
   async function saveAutoAccount(input) {
     const id = input.dataset.autoAccount;

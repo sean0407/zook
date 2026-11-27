@@ -78,7 +78,7 @@
   // 長任務 and 先規劃 as switches in 更多選項 (#196), next to the 思考強度 menu; typing /goal or /plan still works.
   function longPlanRows() {
     if (activeGroup() || !state.selected) return '';
-    const id = state.selected, planOk = effortSupported();
+    const id = state.selected, planOk = planSupported();  // #246: from the CLI table (a Cursor Bot can plan, though its level is in the model name)
     return settingRow('長任務', '下一則訊息最長可以跑 4 小時，結束時通知你', toggle('data-long', state.long[id], '長任務'))
       + settingRow('先規劃', planOk ? '下一則訊息只請 Bot 提出計畫，不動手' : '這個 Bot 的模型不支援先規劃', toggle('data-plan' + (planOk ? '' : ' disabled'), planOk && state.plan[id], '先規劃'));
   }

@@ -68,15 +68,15 @@ def ability_view(store, provider):
     kind = provider_kind(provider); offered = ABILITY_CHECKS.get(kind)
     report = ability_report(store, provider) if offered else None
     missing = (report or {}).get('missing') or {}
-    if not offered: return dict(abilities=[dict(id='chat', name='對話', state='on')], changed=[])
+    if not offered: return dict(abilities=[dict(id='chat', name='對話', state='on')], changed=[], table=cli_row_view(store, provider))
     items = [dict(id=key, name=name, state='broken' if key in missing else 'on') for key, name in ABILITIES if key in offered]
-    return dict(abilities=items, changed=[name for key, name in ABILITIES if key in missing])
+    return dict(abilities=items, changed=[name for key, name in ABILITIES if key in missing], table=cli_row_view(store, provider))
 
 
 # Special features a Bot can turn on. Each was tried on the real CLI: a CLI's own browser control is not offered because none could complete it
 # (Zook's built-in browser, browser.py, works through Zook tools instead),
 # and Antigravity's image generation often ended in a capacity error before it could reply.
-FEATURES = dict(multi=('codex', 'claude', 'grok', 'cursor'), image=('codex', 'grok'), browser=PLAN_KINDS)  # browser: Zook's own, through Zook tools (browser.py)
+FEATURES = {f: tuple(k for k, row in CLI_TABLE.items() if f in row['features']) for f in ('multi', 'image', 'browser')}  # clitable.py; browser: Zook's own, through Zook tools (browser.py)
 FEATURE_NAMES = dict(multi='多代理協作', image='圖片生成', browser='內建瀏覽器')
 FEATURE_NEEDS_WHOLE_MAC = dict(image=('grok',))  # these only finish the job with full access
 

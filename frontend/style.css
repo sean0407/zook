@@ -1844,6 +1844,15 @@ body[data-voice="on"] [data-action="voice"] { color: #c0564f; background: #fdece
 .account-card.quota-out .account-head, .account-card.quota-out .quota-row { opacity:.55; }
 .quota-warn { color:#a26200; }
 .dd-opt[hidden] { display:none; }
+.dd-opt[data-miss], .dd-group[hidden] { display:none; }
+.dd-search { position: sticky; top: -6px; z-index: 1; width: 100%; margin: 0 0 4px; padding: 7px 10px; border: 1px solid #e3e3e3; border-radius: 9px; background: #fff; font-size: 13px; }
+.dd-group { padding: 8px 12px 2px; font-size: 11.5px; font-weight: 600; color: #6b6b6b; }
+.dd-group:empty { padding: 0; margin: 4px 0; border-top: 1px solid #eee; }
+.model-picker select[hidden] { display: none; }
+.form-grid .model-picker .dd { display: block; margin-top: 7px; }
+.form-grid .model-picker .dd-btn { width: 100%; height: 41px; justify-content: space-between; padding: 10px; border: 1px solid #e4e4e4; border-radius: 8px; background: white; font-size: 14px; }
+.form-grid .model-picker .dd-label { overflow: hidden; text-overflow: ellipsis; }
+.effort-hint { margin: -4px 0 8px; }
 .left-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:12px; }
 .left-card { padding:14px 16px; border:1px solid var(--line); border-radius:12px; display:flex; flex-direction:column; gap:10px; }
 .left-card h3 { margin:0; font-size:14px; }
@@ -2302,6 +2311,8 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .html-view iframe { display: block; width: 100%; height: 62vh; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 html.dark .html-view iframe { filter: invert(1) hue-rotate(180deg); }  /* the page as its author made it, like pictures */
 label.attach-btn { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.cli-table span { flex: none; }
+.cli-table b { text-align: right; font-weight: 500; }
 
 /* 常用 in the sidebar, 從這裡開始, 說明 (#308 #66① #272) */
 .side-nav { margin-bottom: 4px; }
