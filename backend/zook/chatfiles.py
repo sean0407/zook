@@ -278,7 +278,7 @@ def backup_read(path):
     with open(str(path), encoding='utf-8') as f: return json.load(f)
 
 
-class Store(ChatFiles, StoreBase):
+class Store(AuditTrail, ChatFiles, StoreBase):  # AuditTrail: auditlog.py
     """The data in memory and on disk. StoreBase (core.py) loads and upgrades it; this part keeps the conversations in their files."""
     def load_conversations(self, existed, layout, recovered):
         """Called while loading, before the upgrades. Decides where the conversations come from."""
