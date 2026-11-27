@@ -11,6 +11,7 @@ PPTX_SUFFIXES = ('.pptx',)
 PPTX_SLIDES = 300
 PPTX_FILES = 3  # decks looked at per reply
 PPTX_SIZE_WRONG = (0, 1)  # in a scan: the deck's size is named for one shape and drawn in another (#164②); slide 0 = the whole deck
+PPTX_SIZE_LABEL = (0, 2)  # #326②: named for one shape, drawn as another usual one (16:9 from python-pptx keeps type="screen4x3"): it opens right, only the Bot is told
 _PSIZES = {'screen4x3': (4 / 3, '4:3'), 'screen16x9': (16 / 9, '16:9'), 'screen16x10': (16 / 10, '16:10')}
 
 
@@ -32,7 +33,8 @@ def _psize_wrong(z, deadline, budget):
         want = _PSIZES.get(el.get('type') or '')
         try: cx, cy = int(el.get('cx') or 0), int(el.get('cy') or 0)
         except ValueError: return False
-        return bool(want and cx > 0 and cy > 0 and abs(cx / cy - want[0]) / want[0] > 0.02)
+        if not (want and cx > 0 and cy > 0 and abs(cx / cy - want[0]) / want[0] > 0.02): return False
+        return PPTX_SIZE_LABEL if any(abs(cx / cy - r) / r <= 0.02 for r, _ in _PSIZES.values()) else PPTX_SIZE_WRONG
     return False
 
 
@@ -54,7 +56,8 @@ def pptx_scan(path):
             if not stat.S_ISREG(info.st_mode) or info.st_size > XLSX_MAX_BYTES: return []
             knowledge_zip_precheck(handle)  # #240: before zipfile reads its directory
             with _xzip.ZipFile(handle) as z:
-                if _psize_wrong(z, deadline, budget): found.append(PPTX_SIZE_WRONG)
+                size = _psize_wrong(z, deadline, budget)
+                if size: found.append(size)
                 for index, part in enumerate(_pslides(z, deadline, budget)[:PPTX_SLIDES]):
                     try: z.getinfo(part)
                     except KeyError: continue
@@ -82,7 +85,7 @@ def pptx_render(scan, for_bot=False):
     slides = [x for x in whole if all(v > 0 for v in x)]
     out = ['投影片大小標示的比例（例如 4:3）和實際長寬不一致，用 PowerPoint 開啟時「投影片大小」會顯示錯的比例，改設定時可能把每頁拉變形'
            + ('。請把 ppt/presentation.xml 的 p:sldSz 改成和實際長寬一致（16:9 寬螢幕拿掉 type 或用 custom），再轉圖確認比例' if for_bot else '')] \
-        if any(tuple(x) == PPTX_SIZE_WRONG for x in whole) else []
+        if any(tuple(x) == PPTX_SIZE_WRONG for x in whole) or (for_bot and any(tuple(x) == PPTX_SIZE_LABEL for x in whole)) else []
     if not slides: return out
     count = sum(n for _, n in slides); pages = '、'.join(str(s) for s, _ in slides[:8]) + ('…' if len(slides) > 8 else '')
     line = '有 %d 段文字的字級、顏色或字型只設在段落預設，文字本身沒有格式，用 PowerPoint 開啟可能變回預設字級和顏色而跑版（第 %s 頁）' % (count, pages)

@@ -152,7 +152,8 @@ class TaskRuns:
             for t in run['tasks']:
                 if t['status'] in ('asked', 'blocked') and task_key(t) in delivered: t['status'] = 'failed'; t.setdefault('note', '主持人沒有回答，這項工作停在這裡。')
             task_resolve_deps(run)
-        chosen = [] if waiting else self._task_choose(store, run, running, ready)
+        due = task_replies_due(store, group, run)  # #312: the replies of ten rounds are used: nothing new starts before the host sums up
+        chosen = [] if waiting or due else self._task_choose(store, run, running, ready)
         working = {j['botId'] for j in store.data['jobs'] if j.get('status') == 'running'} | {t['assignee'] for t, _, _ in chosen}
         most, per_cli = task_limits(store); lanes = task_busy_lanes(store)
         for _, lane, _ in chosen: lanes[tuple(lane)] = lanes.get(tuple(lane), 0) + 1
@@ -172,10 +173,10 @@ class TaskRuns:
         news = [t for t in run['tasks'] if t['status'] in TASK_SETTLED + ('asked', 'blocked') and task_key(t) not in delivered]
         checking = [t for t in run['tasks'] if t['status'] in ('verifying', 'review')]  # a result still being checked or looked at belongs to this batch
         busy = running or chosen or checking
-        if not host_busy and not waiting and news and (any(t['status'] in ('asked', 'blocked') for t in news) or not busy):
+        if not host_busy and not waiting and ((news and (any(t['status'] in ('asked', 'blocked') for t in news) or not busy)) or (due and not running and not checking and ready)):
             # No count of wakes stops a run (#174): every TASK_CHECK_EVERY rounds the host sums up first and the user decides.
             out['wake'] = True
-            if task_rounds(run) >= task_round_cap(run): run['checkpoint'] = dict(state='converging'); out['wake'] = 'converge'
+            if task_rounds(run) >= task_round_cap(run) or task_replies_due(store, group, run): run['checkpoint'] = dict(state='converging'); run['replyMark'] = task_reply_count(store, run); out['wake'] = 'converge'
             run['wakes'] += 1; run['wakeFor'] = [t['id'] for t in news]; run['delivered'] = sorted(delivered | {task_key(t) for t in news}); run.pop('goOn', None)
         if not host_busy and not out['wake'] and run.get('goOn'):  # the user said 繼續: the host goes on from where it summed up
             run.pop('goOn'); run['wakes'] += 1; run['wakeFor'] = []; out['wake'] = 'resume'

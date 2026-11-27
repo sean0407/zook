@@ -221,7 +221,7 @@ class StoreBase:
         (self.dir / 'runs').mkdir(mode=0o700, exist_ok=True)  # replies' runners (background.py): there from the start, so what a Bot may read does not change after its first reply
         self.stopped_at = str(self.data.get('savedAt') or '')  # when the last run last saved: a restored backup keeps its own old time
         for group in self.data['groups']:
-            group.pop('compacting', None); task_recover(group, self)
+            group.pop('compacting', None); task_recover(group, self); group_settle_running(self, group)  # #291
             if group.get('status') == 'running':
                 group.update(status='idle', activeJobId=None, activeJobIds=[], runId=None)
         for job in self.data.get('jobs', []):
