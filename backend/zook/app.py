@@ -186,6 +186,7 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
         msg = resume_reply(place) if place else dict(id=ID(), role='assistant', content='', createdAt=NOW(), status='running')
         redo_who = None
         if use and not place: msg['note'], redo_who = redo_note(store, bot, replaces, provider, model)  # 原本：X／這次：Y (redonote.py, #143)
+        if use and replaces and not place: redo_versions(store, bot, replaces, content, msg, provider, model)  # 換模型重答: the answers before stay (#305)
         msg.update(auto_mark)
         if effort != 'standard': msg['effort'] = effort
         if plan: msg['plan'] = True
@@ -733,7 +734,7 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
                 if parsed['usage'] and kind == 'codex' and not model: parsed['usage']['model'] = codex_default_model(env) or parsed['usage'].get('model')  # so the reply can be priced
                 if parsed['usage']: parsed['usage'] = live_usage(kept, parsed['usage'])
                 if parsed['usage']: job['usage'] = dict(parsed['usage'], provider=provider, account=account['id'] if account else ''); budget_add(self, provider, parsed['usage']); compact_note_usage(store, job, kind, parsed['usage']); (job.get('autoNamed') or model) or auto_pin_model(store, job['botId'], provider, parsed['usage'])
-                if parsed['usage'] and job.get('redoWho'): redo_model_seen(store, job, provider, parsed['usage'])
+                if parsed['usage'] and (job.get('redoWho') or job.get('redoOf')): redo_model_seen(store, job, provider, parsed['usage'])
                 if job['status'] == 'running':
                     content, options = split_choices(content) if choices_for(store, job) else (content, None)
                     job.update(status='completed', content=content, finishedAt=NOW())
