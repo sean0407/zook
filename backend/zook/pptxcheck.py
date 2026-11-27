@@ -52,6 +52,7 @@ def pptx_scan(path):
         with os.fdopen(fd, 'rb') as handle:
             info = os.fstat(handle.fileno())
             if not stat.S_ISREG(info.st_mode) or info.st_size > XLSX_MAX_BYTES: return []
+            knowledge_zip_precheck(handle)  # #240: before zipfile reads its directory
             with _xzip.ZipFile(handle) as z:
                 if _psize_wrong(z, deadline, budget): found.append(PPTX_SIZE_WRONG)
                 for index, part in enumerate(_pslides(z, deadline, budget)[:PPTX_SLIDES]):

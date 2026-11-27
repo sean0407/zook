@@ -107,6 +107,7 @@ def group_text_pictures(path, out, cancel):
 
 def _text_zip(path, kind, cancel=None):
     """An Office file is a ZIP: one that unpacks to too much, or into too many parts, is not read."""
+    knowledge_zip_precheck(path)  # before zipfile reads its directory (each Word, Excel, PowerPoint text version starts here)
     try:
         with _kzip.ZipFile(str(path)) as z:
             parts = z.infolist(); left = KNOWLEDGE_UNPACKED

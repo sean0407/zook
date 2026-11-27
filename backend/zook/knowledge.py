@@ -216,6 +216,7 @@ def knowledge_extract(path):
         with open(path, 'rb') as f: head = f.read(8)
         looks = {'.docx': head.startswith(b'PK'), '.odt': head.startswith(b'PK'), '.doc': head.startswith(b'\xd0\xcf\x11\xe0'), '.rtf': head.startswith(b'{\\rtf')}[suffix]
         if not looks: raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔。' % suffix[1:].upper())  # textutil would read anything (HTML too, through WebKit)
+        if suffix in ('.docx', '.odt'): knowledge_zip_precheck(path)  # #240: a ZIP's directory checked before textutil unpacks it
         done = subprocess.run(['/usr/bin/textutil', '-convert', 'txt', '-stdout', '--', str(path)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=KNOWLEDGE_SECONDS)
         if done.returncode != 0: raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔。' % suffix[1:].upper())
         return done.stdout.decode('utf-8', 'replace')
@@ -282,6 +283,43 @@ def _zip_source(book):
 
 
 KNOWLEDGE_PARTS = 5000  # parts of one ZIP Zook reads
+KNOWLEDGE_DIRECTORY = 4 * 1024 * 1024  # bytes its directory may take
+
+
+def knowledge_zip_precheck(source):
+    """Before zipfile reads a ZIP's whole directory (which nothing can stop): its end record, read here, must be there and sound, and
+    say at most KNOWLEDGE_PARTS parts and a directory of at most KNOWLEDGE_DIRECTORY bytes (ZIP64's records too). source: a path,
+    bytes, or an open file (put back where it was). Raises KnowledgeUnreadable."""
+    broken = lambda: KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
+    too_big = lambda: KnowledgeUnreadable('檔案解開後太大，請拆成幾個檔案再上傳。')
+    if isinstance(source, (bytes, bytearray)): source = io.BytesIO(source)
+    own = not hasattr(source, 'read')
+    f = open(str(source), 'rb') if own else source
+    at = None if own else f.tell()
+    try:
+        f.seek(0, 2); size = f.tell()
+        if size < 22: raise broken()
+        back = min(size, 65536 + 22); f.seek(size - back); tail = f.read(back)
+        pos = tail.rfind(b'PK\x05\x06')
+        while pos >= 0 and pos + 22 + int.from_bytes(tail[pos + 20:pos + 22], 'little') != len(tail): pos = tail.rfind(b'PK\x05\x06', 0, pos)  # the record ends the file, after its comment
+        if pos < 0: raise broken()
+        u16 = lambda b, o: int.from_bytes(b[o:o + 2], 'little'); u32 = lambda b, o: int.from_bytes(b[o:o + 4], 'little'); u64 = lambda b, o: int.from_bytes(b[o:o + 8], 'little')
+        end_at = size - back + pos
+        parts, here, directory, offset = u16(tail, pos + 10), u16(tail, pos + 8), u32(tail, pos + 12), u32(tail, pos + 16)
+        if u16(tail, pos + 4) or u16(tail, pos + 6) or here != parts: raise broken()  # split over several disks
+        if pos >= 20 and tail[pos - 20:pos - 16] == b'PK\x06\x07':  # ZIP64: its own end record holds the real numbers
+            at64 = u64(tail, pos - 12)
+            if at64 + 56 > end_at: raise broken()
+            f.seek(at64); record = f.read(56)
+            if len(record) != 56 or record[:4] != b'PK\x06\x06': raise broken()
+            parts, directory, offset, end_at = u64(record, 32), u64(record, 40), u64(record, 48), at64
+        elif 0xFFFF in (parts,) or 0xFFFFFFFF in (directory, offset): raise broken()  # says ZIP64 without its records
+        if parts > KNOWLEDGE_PARTS or directory > KNOWLEDGE_DIRECTORY: raise too_big()
+        if offset + directory > end_at: raise broken()
+    except OSError: raise broken()
+    finally:
+        if own: f.close()
+        else: f.seek(at)
 
 
 def knowledge_zip_layout(book, cancel=None):
@@ -491,6 +529,7 @@ def _knowledge_office(path, suffix, cancel=None):
 def _knowledge_office_read(path, suffix, cancel):
     """Slides' and sheets' text. Every piece counts against KNOWLEDGE_TEXT as it is added, so a small file cannot grow into a huge text;
     page and sheet headings alone do not count as content."""
+    knowledge_zip_precheck(path)  # too many parts, or a directory too big, refused before zipfile reads it
     try: book = _kzip.ZipFile(str(path))  # the clock (cancel) started before this
     except (_kzip.BadZipFile, OSError): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔。' % suffix[1:].upper())
     try: knowledge_zip_layout(book, cancel)  # too many parts refused at once; the scan of each part's header stops in time

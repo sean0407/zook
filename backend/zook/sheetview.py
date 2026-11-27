@@ -180,6 +180,8 @@ def _read_sheet(z, name, shared, styles, date1904):
 
 def sheet_tables(data):
     """{'sheets': [{'name', 'rows': [[row number, [cell text, …]]], 'cols', 'more', 'wide'}], 'charts': bool} for an .xlsx file's bytes."""
+    try: knowledge_zip_precheck(data)  # #240: before zipfile reads its directory
+    except KnowledgeUnreadable: raise SheetRefused('not a zip')
     try: z = zipfile.ZipFile(io.BytesIO(data))
     except (zipfile.BadZipFile, ValueError): raise SheetRefused('not a zip')
     with z:
