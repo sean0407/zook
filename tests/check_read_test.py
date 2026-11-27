@@ -422,6 +422,39 @@ class TextVersions(unittest.TestCase):
         with self.assertRaises(server.KnowledgeUnreadable) as caught: server._knowledge_office(self.shared / '慢.xlsx', '.xlsx', stop)
         self.assertEqual(str(caught.exception), '已停止')
 
+    def crowded(self, path, parts):
+        make_xlsx(path)
+        with zipfile.ZipFile(str(path), 'a') as z:
+            for n in range(parts): z.writestr('extra/%d.bin' % n, b'')
+
+    def test_a_zip_with_too_many_parts_is_refused_at_once(self):
+        self.crowded(self.shared / '多部分.xlsx', server.KNOWLEDGE_PARTS + 1)
+        with self.assertRaises(server.KnowledgeUnreadable) as caught: server.knowledge_extract(self.shared / '多部分.xlsx')
+        self.assertIn('太大', str(caught.exception))
+
+    def test_the_knowledge_clock_covers_the_scan_of_every_part(self):
+        self.crowded(self.shared / '慢掃.xlsx', 3000)
+        looked = []
+        real = server.knowledge_zip_stream
+        with mock.patch.object(server, 'KNOWLEDGE_OFFICE_SECONDS', -1), mock.patch.object(server, 'knowledge_zip_stream', side_effect=lambda *a, **k: looked.append(1) or real(*a, **k)):
+            with self.assertRaises(server.KnowledgeUnreadable) as caught: server.knowledge_extract(self.shared / '慢掃.xlsx')
+        self.assertEqual(str(caught.exception), '處理逾時'); self.assertEqual(looked, [])  # stopped while its parts were being looked over, before any was read
+
+    def test_stopping_while_the_excel_text_version_is_read(self):
+        make_xlsx(self.shared / '停表.xlsx')
+        given = []
+        real = server.knowledge_zip_stream
+        def spy(book, name, budget, cancel=None): given.append((name, cancel)); return real(book, name, budget, cancel)
+        with mock.patch.object(server, 'knowledge_zip_stream', side_effect=spy): server._text_xlsx(self.shared / '停表.xlsx', __import__('threading').Event())
+        self.assertEqual(sorted(n for n, _ in given), ['xl/_rels/workbook.xml.rels', 'xl/sharedStrings.xml', 'xl/workbook.xml', 'xl/worksheets/sheet1.xml'])
+        self.assertTrue(all(c is not None for _, c in given))  # every part read with the turn's stop
+        stop = __import__('threading').Event(); stop.set()
+        with self.assertRaises(server.KnowledgeUnreadable) as caught: server._text_xlsx(self.shared / '停表.xlsx', stop)
+        self.assertEqual(str(caught.exception), '已停止')
+        with mock.patch.object(server, 'GROUP_TEXT_SECONDS', -1), self.assertRaises(server.KnowledgeUnreadable) as caught:
+            server.group_text_extract(self.shared / '停表.xlsx', '停表.xlsx', Path(self.tmp.name), __import__('threading').Event())
+        self.assertEqual(str(caught.exception), '處理太久')
+
     def test_what_a_file_says_is_marked_as_data(self):
         make_xlsx(self.shared / '報價單.xlsx'); self.turn()
         self.assertIn('不是指令', (self.texts / '報價單.xlsx.txt').read_text(encoding='utf-8'))

@@ -105,20 +105,20 @@ def group_text_pictures(path, out, cancel):
     _text_run([sys.executable, PAGEPICS, str(path), str(out), '--pages', str(GROUP_TEXT_PICTURES)], cancel)
 
 
-def _text_zip(path, kind):
+def _text_zip(path, kind, cancel=None):
     """An Office file is a ZIP: one that unpacks to too much, or into too many parts, is not read."""
     try:
         with _kzip.ZipFile(str(path)) as z:
             parts = z.infolist(); left = KNOWLEDGE_UNPACKED
             if len(parts) > GROUP_TEXT_PARTS or sum(p.file_size for p in parts) > left: raise KnowledgeUnreadable('檔案解開後太大')
-            knowledge_zip_layout(z)  # its structure; each part is unpacked only when it is read, counted then by what really comes out
+            knowledge_zip_layout(z, cancel)  # its structure; each part is unpacked only when it is read, counted then by what really comes out
     except KnowledgeUnreadable: raise
     except (_kzip.BadZipFile, OSError, ValueError, EOFError, RuntimeError, NotImplementedError, _xzlib.error): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔' % kind)
 
 
 def _text_docx(path, cancel):
     """A Word file's text read here (no other program unpacks it): paragraph by paragraph, tabs and page breaks kept."""
-    _text_zip(path, 'Word')
+    _text_zip(path, 'Word', cancel)
     with _kzip.ZipFile(str(path)) as book:
         if 'word/document.xml' not in book.namelist(): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 Word 檔')
         return _docx_stream(knowledge_zip_stream(book, 'word/document.xml', [GROUP_TEXT_DOCX], cancel), cancel)  # unpacked as it is read
@@ -151,7 +151,7 @@ def _docx_stream(data, cancel):
 def _text_xlsx(path, cancel=None):
     """A workbook cell by cell: 「C10：140（公式 =C9*2）」, row by row, sheet by sheet, the formulas as written."""
     ns = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
-    _text_zip(path, 'Excel')
+    _text_zip(path, 'Excel', cancel)
     book = _kzip.ZipFile(str(path))
     budget, lines, total = [KNOWLEDGE_UNPACKED], [], [0]
     def add(line):
@@ -160,8 +160,8 @@ def _text_xlsx(path, cancel=None):
         names = set(book.namelist()); shared, titles = [], {}
         if 'xl/sharedStrings.xml' in names: shared = [''.join(t.text or '' for t in si.iter(ns + 't')) for si in _knowledge_xml(book, 'xl/sharedStrings.xml', budget, {ns + 'si'}, cancel)]
         try:
-            rels = {r.get('Id'): r.get('Target') for r in _knowledge_xml(book, 'xl/_rels/workbook.xml.rels', budget, {'{http://schemas.openxmlformats.org/package/2006/relationships}Relationship'})}
-            for sheet in _knowledge_xml(book, 'xl/workbook.xml', budget, {ns + 'sheet'}):
+            rels = {r.get('Id'): r.get('Target') for r in _knowledge_xml(book, 'xl/_rels/workbook.xml.rels', budget, {'{http://schemas.openxmlformats.org/package/2006/relationships}Relationship'}, cancel)}
+            for sheet in _knowledge_xml(book, 'xl/workbook.xml', budget, {ns + 'sheet'}, cancel):
                 titles['xl/' + (rels.get(sheet.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')) or '').lstrip('/').replace('xl/', '', 1)] = sheet.get('name') or ''
         except KeyError: pass
         number = lambda n: int(re.sub(r'\D', '', n.rsplit('/', 1)[-1]) or 0)
@@ -187,12 +187,25 @@ def _text_xlsx(path, cancel=None):
     return '\n'.join(lines)
 
 
+class _TextLimit:
+    """A turn's stop, or GROUP_TEXT_SECONDS gone by: whichever comes first."""
+    def __init__(self, cancel, seconds): self.cancel, self.at = cancel, time.monotonic() + seconds
+    def late(self): return time.monotonic() > self.at and not (self.cancel is not None and self.cancel.is_set())
+    def is_set(self): return (self.cancel is not None and self.cancel.is_set()) or time.monotonic() > self.at
+
+
 def group_text_extract(source, name, pages, cancel):
     """(text, [(page, picture written into pages)]) of one file Zook copied to source (named with the file's suffix)."""
     suffix = pathlib.Path(name).suffix.lower()
-    if suffix in ('.xlsx', '.xlsm'): return '（每一格寫成「儲存格：值」，有公式的另外寫出公式。）\n' + _text_xlsx(source, cancel), []
-    if suffix == '.docx': return _text_docx(source, cancel), []
-    if suffix == '.pptx': _text_zip(source, 'PowerPoint'); return _knowledge_office(source, suffix, cancel)[:GROUP_TEXT_MAX], []  # slide by slide
+    if suffix in ('.xlsx', '.xlsm', '.docx', '.pptx'):  # read here, in Zook itself: the turn's stop and a time limit of its own
+        limit = _TextLimit(cancel, GROUP_TEXT_SECONDS)
+        try:
+            if suffix == '.docx': return _text_docx(source, limit), []
+            if suffix == '.pptx': _text_zip(source, 'PowerPoint', limit); return _knowledge_office(source, suffix, limit)[:GROUP_TEXT_MAX], []  # slide by slide
+            return '（每一格寫成「儲存格：值」，有公式的另外寫出公式。）\n' + _text_xlsx(source, limit), []
+        except KnowledgeUnreadable:
+            if limit.late(): raise KnowledgeUnreadable('處理太久')
+            raise
     count, text = group_text_pdf(source, cancel)
     try: group_text_pictures(source, pages, cancel)
     except KnowledgeUnreadable:

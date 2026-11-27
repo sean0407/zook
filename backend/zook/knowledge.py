@@ -281,7 +281,10 @@ def _zip_source(book):
     finally: book.fp.seek(at)
 
 
-def knowledge_zip_layout(book):
+KNOWLEDGE_PARTS = 5000  # parts of one ZIP Zook reads
+
+
+def knowledge_zip_layout(book, cancel=None):
     """{id(ZipInfo): where its packed bytes start}, checked once per opened ZIP: every part's own header names it as the directory does
     (and, without a trailing descriptor, claims the same size and check), lies inside the file, and no two parts share bytes. Raises
     KnowledgeUnreadable for a ZIP made to fool a reader."""
@@ -289,10 +292,12 @@ def knowledge_zip_layout(book):
     if layout is not None: return layout
     broken = KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
     layout, spans = {}, []
+    if len(book.infolist()) > KNOWLEDGE_PARTS: raise KnowledgeUnreadable('檔案解開後太大，請拆成幾個檔案再上傳。')  # right after its directory was read
     with _zip_source(book) as f:
         f.seek(0, 2); end = f.tell()
         if isinstance(getattr(book, 'start_dir', None), int): end = min(end, book.start_dir)  # no part may reach into the directory
-        for info in book.infolist():
+        for n, info in enumerate(book.infolist()):
+            if n % 50 == 0 and cancel is not None and cancel.is_set(): raise KnowledgeUnreadable('已停止')
             f.seek(info.header_offset); head = f.read(30)
             if len(head) != 30 or head[:4] != b'PK\x03\x04': raise broken
             size_name, size_extra = int.from_bytes(head[26:28], 'little'), int.from_bytes(head[28:30], 'little')
@@ -327,7 +332,7 @@ def knowledge_zip_stream(book, name, budget, cancel=None):
     info = book.getinfo(name)
     if info.flag_bits & 0x1 or info.compress_type not in (_kzip.ZIP_STORED, _kzip.ZIP_DEFLATED): raise broken()  # locked, or packed some other way
     if info.file_size > budget[0]: raise too_big()
-    start = knowledge_zip_layout(book).get(id(info))
+    start = knowledge_zip_layout(book, cancel).get(id(info))
     if start is None: raise broken()
     unpack = _kzlib.decompressobj(-15) if info.compress_type == _kzip.ZIP_DEFLATED else None
     state = dict(size=0, crc=0)
@@ -486,8 +491,10 @@ def _knowledge_office(path, suffix, cancel=None):
 def _knowledge_office_read(path, suffix, cancel):
     """Slides' and sheets' text. Every piece counts against KNOWLEDGE_TEXT as it is added, so a small file cannot grow into a huge text;
     page and sheet headings alone do not count as content."""
-    try: book = _kzip.ZipFile(str(path))
+    try: book = _kzip.ZipFile(str(path))  # the clock (cancel) started before this
     except (_kzip.BadZipFile, OSError): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔。' % suffix[1:].upper())
+    try: knowledge_zip_layout(book, cancel)  # too many parts refused at once; the scan of each part's header stops in time
+    except KnowledgeUnreadable: book.close(); raise
     budget, lines, names, total, found = [KNOWLEDGE_UNPACKED], [], set(book.namelist()), [0], [False]
     def add(line, content=True):  # True: enough text
         lines.append(line); total[0] += len(line) + 1; found[0] = found[0] or content; return total[0] > KNOWLEDGE_TEXT
