@@ -106,6 +106,8 @@ class Front(unittest.TestCase):
         js = ''.join(JS.values())
         for gone in (r'\bEFFORTS\b', r'\bACCESS\b', r'\bGATED_CLIS\b'): self.assertIsNone(re.search(gone, js), gone)  # nor left in use anywhere (31-team.js had one)
         self.assertIn('cliRow(', JS['20-models.js'])
+        self.assertIn('planOk = planSupported()', JS['46-botform-more.js'])  # 先規劃 follows readOnly, not the thinking level (a Cursor Bot can plan)
+        self.assertNotIn('planOk = effortSupported()', js)
 
     @unittest.skipUnless(shutil.which('node'), 'needs node')
     def test_menus_from_the_table(self):
