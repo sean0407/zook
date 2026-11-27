@@ -2317,3 +2317,9 @@ label.attach-btn { display: inline-flex; align-items: center; justify-content: c
   .nav-row.active { background: #222; color: #fff; }
   .nav-ico { display: none; }
 }
+/* #305: 第 1／2 版 under a reply answered again; #265: 先規劃 on the question */
+.reply-versions { display: flex; flex-basis: 100%; align-items: center; gap: 6px; margin: 2px 0 6px 44px; color: var(--muted); font-size: 12.5px; }
+.reply-versions .version-step { width: 24px; height: 24px; font-size: 16px; line-height: 1; }
+.reply-versions .version-step:disabled { opacity: .35; cursor: default; }
+.plan-tag { flex-basis: 100%; text-align: right; margin-top: 4px; font-size: 12px; color: #6b4d00; }
+.plan-tag::before { content: '📝 '; }
