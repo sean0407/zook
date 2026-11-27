@@ -13,7 +13,31 @@ _PDF_BOXES = re.compile(rb'/([^\s/<>\[\]()]+)\s+[\d.]+\s+Tf|\((n+)\)\s*Tj')  # f
 PDF_OBJSTM = 100000  # objects read from one object stream
 _PDF_ZAPF = re.compile(rb'/BaseFont\s*/ZapfDingbats\b')
 _PDF_EMBEDDED = re.compile(rb'/FontFile[23]?\b')
-_PDF_FONTS = {'boxes', 'cid'}
+_PDF_FONTS = {'boxes', 'cid', 'tiny'}
+# #101⑧ #211: chart labels and table text drawn too small to read. The size is the font size times the text matrix's scale (Chrome writes
+# 1 Tf with a 12-times Tm; only its vertical part); a few such runs are said, one footnote is not. A page-wide scale (cm) is not followed. Pictures of charts (PNG inside the PDF) cannot be read this way.
+_PDF_TEXT = re.compile(rb'(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+-?[\d.]+\s+-?[\d.]+\s+Tm\b|/[^\s/<>\[\]()]+\s+(-?[\d.]+)\s+Tf\b|\b(BT)\b|[)\]>]\s*(?:Tj|TJ|\'|")')
+PDF_TINY_PT = 6
+PDF_TINY_RUNS = 3
+# #211 #101①④⑧: a PDF said to be checked had a blank cover, small chart labels and a header column gone. Looked at as pictures, every time.
+FILE_DELIVERY_NOTE += ('PDF 交件前和每次改版後都用上面的轉圖指令逐頁看過再交：封面或中間頁不要留大片空白（轉圖結果會列出空白過多的頁），'
+                       '圖表的標籤和數字字級至少 8 pt，表格表頭和下面的欄位對齊、標籤欄沒有消失；說看過版面，就要真的轉過圖。')
+
+
+def _pdf_tiny(streams, deadline):
+    """How many text runs are drawn smaller than PDF_TINY_PT points."""
+    tiny = 0
+    for s in streams:
+        if time.monotonic() > deadline: raise _XSlow()
+        size, scale = None, 1.0
+        for m in _PDF_TEXT.finditer(s):
+            try:
+                if m.group(1) is not None: c, d = float(m.group(3)), float(m.group(4)); scale = (c * c + d * d) ** 0.5  # the height of a letter: text narrowed sideways is not smaller
+                elif m.group(5) is not None: size = float(m.group(5))
+                elif m.group(6): scale = 1.0  # a new text object starts from the plain matrix; the font stays
+                elif size is not None and 0 < size * scale < PDF_TINY_PT: tiny += 1
+            except ValueError: continue
+    return tiny
 
 
 def _pdf_ref(body, key):
@@ -110,6 +134,8 @@ def pdf_scan(path):
                     if m.group(1) is not None: font = m.group(1)
                     elif font in names: boxes += len(m.group(2))
             if boxes: found.append(['boxes', boxes])
+        tiny = _pdf_tiny(streams, deadline)
+        if tiny >= PDF_TINY_RUNS: found.append(['tiny', tiny])
     except (_XSlow, _xzlib.error, OSError, ValueError, LookupError, RuntimeError, MemoryError, OverflowError, RecursionError):
         return []
     return found
@@ -123,6 +149,8 @@ def pdf_render(scan, for_bot=False):
     if 'boxes' in kinds: lines.append('有 %d 個字顯示成黑色方塊（中文用了沒有中文字的字型），打開就是亂碼' % kinds['boxes'])
     if 'cid' in kinds: lines.append('中文字型沒有內嵌在檔案裡，換一台電腦或在手機上打開可能變成亂碼或空白')
     if lines and for_bot: lines[-1] += '。請改用內嵌的中文字型重新產生（例如 reportlab 用 TTFont 註冊 .ttf 中文字型檔，不用 Helvetica 或 UnicodeCIDFont），存好後轉圖看過沒有亂碼'
+    if 'tiny' in kinds: lines.append('有 %d 段文字小於 %d pt（例如圖表標籤），印出來或在手機上看不清楚%s' % (kinds['tiny'], PDF_TINY_PT,
+                                     '。請把圖表標籤和表格文字放大到至少 8 pt，存好後轉圖確認看得清楚' if for_bot else ''))
     return lines
 
 
