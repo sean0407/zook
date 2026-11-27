@@ -66,15 +66,24 @@
     const st = state.data.settings, provider = form.elements.provider.value || 'codex', model = form.elements.model.value || '';
     if (form.elements.modelSelect.value === '__custom__' && !model) return;  // nothing typed yet
     if (provider === (st.provider || 'codex') && model === (st.model || '')) return;
-    lastChanged = {title: provider !== (st.provider || 'codex') ? '預設用哪家 AI' : '預設型號', at: Date.now()};
-    try { state.data.settings = await post('settings', {provider, model}, 'PATCH'); } catch (err) { toast(err.message); }
+    await autoSave(provider !== (st.provider || 'codex') ? '預設用哪家 AI' : '預設型號', {provider, model});
+  }
+  // Saves in a row: only the last answer is kept and marked, so one that comes back late cannot put back an older value or mark the wrong row.
+  async function autoSave(title, change) {
+    const seq = autoSave.seq = (autoSave.seq || 0) + 1;
+    lastChanged = null;
+    try {
+      const out = await post('settings', change, 'PATCH');
+      if (seq !== autoSave.seq) return false;
+      state.data.settings = out; state.savedFlash = {title, at: Date.now()}; setTimeout(showSavedFlash);
+      return true;
+    } catch (err) { if (seq === autoSave.seq) toast(err.message); return false; }
   }
   async function saveRules(box) {
     clearTimeout(saveRules.timer);
     const value = box.value;
     if (value.trim() === (state.data.settings.rules || '')) { state.rulesDraft = null; return; }
-    lastChanged = {title: '固定規則', at: Date.now()};
-    try { state.data.settings = await post('settings', {rules: value}, 'PATCH'); if (box.value === value) state.rulesDraft = null; } catch (err) { toast(err.message); }
+    if (await autoSave('固定規則', {rules: value}) && box.value === value) state.rulesDraft = null;
   }
   const soon = (fn, ms) => { clearTimeout(soon.timer); soon.timer = setTimeout(fn, ms); };
   document.addEventListener('change', e => {

@@ -72,5 +72,13 @@ class SettingsPage(unittest.TestCase):
         self.assertIn('function saveRules(', JS)
         self.assertIn('✓ 已儲存', JS)
 
+    def test_only_the_last_of_several_saves_counts(self):
+        save = body('autoSave')
+        self.assertIn('if (seq !== autoSave.seq) return false;', save)  # a late answer neither restores an older value nor marks a row
+        self.assertIn('state.savedFlash = {title,', save)
+        for fn in ('saveModelSettings', 'saveRules'):
+            self.assertIn('autoSave(', body(fn))
+            self.assertNotIn("post('settings'", body(fn))
+
 
 if __name__ == '__main__': unittest.main()
