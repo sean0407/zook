@@ -116,6 +116,28 @@ class QuotaSourceTest(unittest.TestCase):
         self.store.data['autoStatus']['codex@' + x] = dict(signedIn=True, billed=True, checkedAt=time.time(), signIn=m.auth_fingerprint('codex@' + x))
         self.assertIn('API', m.run_problem(self.store, bot, 'codex', x, True))
 
+    def test_an_old_check_is_asked_again_right_before_a_backup_runs(self):
+        # #132: Codex's check counts 10 minutes, a stalled member switches after 15: the backup is asked again then, not skipped.
+        m = self.m; bot = dict(id='b', provider='claude')
+        self.store.data['autoStatus'] = {'codex': dict(signedIn=True, billed=False, checkedAt=time.time() - 900, signIn=m.auth_fingerprint('codex'))}
+        with mock.patch.object(m, 'auto_recheck') as asked:
+            m.auto_recheck_live(self.store, bot, 'codex', None); asked.assert_called_once_with(self.store, ['codex'])
+            self.store.data['autoStatus']['codex']['checkedAt'] = time.time(); asked.reset_mock()
+            m.auto_recheck_live(self.store, bot, 'codex', None); asked.assert_not_called()  # checked just now: not asked again
+
+    def test_a_sign_in_that_changes_during_the_check_is_not_recorded(self):
+        m, folder = self.m, Path(self.temp.name) / 'codexhome'; folder.mkdir()
+        with mock.patch.dict(os.environ, {'CODEX_HOME': str(folder)}):
+            self.assertEqual(m.auth_fingerprint('codex')[0][0], str(folder / 'auth.json'))  # where this Codex really keeps its sign-in
+            calls = []
+            def switching():
+                calls.append(1); (folder / 'auth.json').write_text(str(len(calls))); os.utime(folder / 'auth.json', (time.time() + len(calls), time.time() + len(calls)))
+                return dict(signedIn=True, billed=False)
+            self.assertIsNone(m.sign_in_checked('codex', switching)['signedIn']); self.assertEqual(len(calls), 3)  # kept changing: not known
+            calls.clear(); once = lambda: calls.append(1) or (switching() if len(calls) == 1 else dict(signedIn=True, billed=False))
+            state = m.sign_in_checked('codex', once)
+            self.assertEqual((state['signedIn'], state['signIn']), (True, m.auth_fingerprint('codex')))  # asked again once it stayed still
+
     def add_codex_accounts(self):
         now, data = time.time(), self.store.data
         data['accounts'] = [dict(id='w1', provider='codex', name='Waifdance', type='login'), dict(id='w2', provider='codex', name='Home', type='login'),
@@ -160,6 +182,11 @@ class QuotaSourceTest(unittest.TestCase):
         self.assertEqual(m.next_backup(self.store, bot), 'Codex（Waifdance）')  # API billing is never tried
         data['autoStatus']['codex@w1']['billed'] = True; data['autoStatus']['codex@w2']['billed'] = True
         self.assertEqual(m.next_backup(self.store, bot), '')
+        data['autoStatus']['claude']['billed'] = False; data['quota']['claude']['windows'][0]['usedPercent'] = 100
+        data['autoStatus']['codex@w1']['billed'] = False; data['quota']['codex@w1']['windows'][0]['usedPercent'] = 100; data['quota']['codex@w2']['windows'][0]['usedPercent'] = 100
+        self.assertEqual(m.next_backup(self.store, bot), 'Claude')  # every one used up: the reply still tries the last one, and so does the page
+        data['autoStatus']['codex@w1']['billed'] = True; data['autoStatus']['claude']['billed'] = True
+        data['quota']['claude']['windows'][0]['usedPercent'] = 40; data['quota']['codex@w2']['windows'][0]['usedPercent'] = 90
         data['autoStatus']['codex@w2']['billed'] = False; data['bots'].append(dict(bot, messages=[]))
         self.assertEqual(m.state_view(self.store)['bots'][-1]['nextBackup'], 'Codex（Home）')  # sent with every state; the page only shows it
         self.assertNotIn('nextBackup', data['bots'][-1])  # never written into the saved Bot

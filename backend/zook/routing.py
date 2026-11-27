@@ -131,14 +131,10 @@ AUTO_FRESH = 600  # seconds a sign-in check counts as current, for a Bot whose f
 def refresh_auto_status(store, wait=False):
     if not _auto_checking.acquire(blocking=wait): return  # one check at a time; wait=True waits for the one under way
     try:
-        found = {p: auto_status(p) for p in AUTO_MODELS if P.spec(store.data, p) and find_cli(p)}
+        found = {p: sign_in_checked(p, lambda p=p: auto_status(p)) for p in AUTO_MODELS if P.spec(store.data, p) and find_cli(p)}
         with store.lock: extras = [dict(a) for a in auto_accounts(store) if P.spec(store.data, a['provider'])]
         for account in extras:
-            if find_cli(account['provider']):
-                try: found[auto_account_key(account)] = auto_account_status(account)
-                except (OSError, ValueError, RuntimeError): pass
-        for key, state in found.items():
-            if state.get('signedIn') is not None: state.update(checkedAt=time.time(), signIn=auth_fingerprint(key))  # a check that finished
+            if find_cli(account['provider']): found[auto_account_key(account)] = sign_in_checked(auto_account_key(account), lambda a=account: auto_account_status(a))
         with store.lock:
             store.data['autoStatus'] = merge_auto_status(store.data.get('autoStatus') or {}, found)
             try: store.save()
@@ -360,9 +356,7 @@ def auto_recheck(store, keys):
     for key in dict.fromkeys(keys):
         provider, _, account_id = key.partition('@')
         with store.lock: account = dict(find_account(account_id, provider) or {}) if account_id else None
-        try: state = auto_account_status(account) if account else auto_status(provider) if not account_id else dict(signedIn=None, billed=True)
-        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError): state = dict(signedIn=None, billed=True)
-        if state.get('signedIn') is not None: state.update(checkedAt=time.time(), signIn=auth_fingerprint(key))
+        state = sign_in_checked(key, lambda: auto_account_status(account) if account else auto_status(provider) if not account_id else dict(signedIn=None, billed=True))
         with store.lock:
             status = store.data.setdefault('autoStatus', {})
             if state.get('signedIn') is None: (status.get(key) or {}).pop('checkedAt', None)  # could not say: not used until it can
@@ -396,9 +390,23 @@ def auto_unwatched(key): return provider_kind(str(key).partition('@')[0]) in UNW
 
 
 def auto_recheck_live(store, bot, provider, account):
-    """Right before a request of a Bot whose model must not run on API billing: ask a CLI Zook cannot watch which sign-in it uses now."""
-    with store.lock: key = auto_billing_keys(store, bot, [(provider, '', account, False)])[0]
-    if auto_unwatched(key): auto_recheck(store, [key])
+    """Right before a request of a Bot whose model must not run on API billing: ask a CLI Zook cannot watch which sign-in it uses now,
+    and any other whose check is old (a backup taking over 15 minutes into a reply, #132), instead of skipping it as unconfirmed."""
+    with store.lock: key = auto_billing_keys(store, bot, [(provider, '', account, False)])[0]; stale = auto_billing_stale(store, [key])
+    if auto_unwatched(key) or stale: auto_recheck(store, [key])
+
+
+def sign_in_checked(key, ask, tries=3):
+    """Runs ask() (the CLI says which sign-in it uses) between two readings of the sign-in files. Only an answer with the files unchanged
+    meanwhile is kept, with that fingerprint, so a sign-in switched during the check is never recorded as the one checked (#132)."""
+    for _ in range(tries):
+        before = auth_fingerprint(key)
+        try: state = ask()
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError): return dict(signedIn=None, billed=True)
+        if auth_fingerprint(key) == before:
+            if state.get('signedIn') is not None: state.update(checkedAt=time.time(), signIn=before)
+            return state
+    return dict(signedIn=None, billed=True)  # it kept changing: not known
 
 
 def _auto_stale(state, key):
@@ -415,6 +423,7 @@ def auth_fingerprint(key):
     if account_id:  # an extra account signs in inside its own folder; a key account has nothing on disk to watch
         try: files = [account_dir(account['id'])] if account and account.get('type') == 'login' and provider in ACCOUNT_HOME else []
         except ValueError: files = []
+    elif provider_kind(provider) == 'codex' and provider_env(provider).get('CODEX_HOME'): files = [pathlib.Path(provider_env(provider)['CODEX_HOME']).expanduser() / 'auth.json']  # where the CLI really keeps it (#132)
     else: files = [pathlib.Path(os.path.expanduser(p)) for p in AUTH_FILES.get(provider_kind(provider) or '', ())]
     out = []
     for f in files:

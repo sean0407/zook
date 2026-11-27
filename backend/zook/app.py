@@ -202,6 +202,8 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
         if replaces: job.update(redoOf=replaces, askedId=asked['id'])
         if redo_who and not model: job.update(redoWho=redo_who, redoNote=msg['note'])  # the model is added when the CLI says which it ran
         job['effort'] = effort
+        if use and replaces: job['userNamed'] = True  # 換模型重答 with a model the user picked: never held to the checks of Zook's own picks (#132)
+        if use and place and (use[0], ((resume_of.get('ran') or ['', '', ''])[2:3] or [''])[0] or '') != (bot.get('provider') or store.data['settings'].get('provider', 'codex'), bot.get('account') or ''): job['resumedBackup'] = True  # it was answering with a backup Zook picked: checked as one again (#132)
         if use and bot.get('provider') == AUTO: job.update(autoChain=[[provider, model, (resume_of.get('ran') or ['', '', ''])[2] if place else '']], autoNamed=True)  # 換模型重答 stays on the model the user named, on its own sign-in
         if auto_chain: job['autoChain'] = auto_chain; refresh_auto(self)
         if plan: job['plan'] = True
@@ -376,7 +378,7 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
             if not job or job['status'] != 'running': return
             if bot is None: bot = copy.deepcopy(store.find('bots', job['botId']))
             raw = [list(x) for x in job['autoChain']] if job.get('autoChain') else [list(x) for x in provider_chain(store, bot, provider, model)] + auto_backups(store, bot, provider, job)
-            auto, named = bot.get('provider') == AUTO, bool(job.get('autoNamed') and job.get('redoOf'))  # only the user's own 換模型重答 names a model
+            auto, named = bot.get('provider') == AUTO, bool(job.get('userNamed') or job.get('autoNamed') and job.get('redoOf'))  # only the user's own 換模型重答 names a model
             fixed = bool(bot.get('autoAssigned') or bot.get('syncedModel')) and not named  # matched here, or set on another Mac: never on API billing (routing.py)
             # (CLI, model, account, check). The account is the one 自動選擇 picked ('' its CLI's own sign-in); a 自動選擇 Bot never uses an
             # account of its own, any other Bot keeps its own (None). A pick is checked again right before it runs: the user may have
@@ -400,12 +402,12 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
             if budget_blocks(store, chain[0][0]) == 'stop' and not job.get('reattach'):
                 job.update(status='failed', error='這個月的用量預算已用完。可到「各模型使用量」調整上限。', finishedAt=NOW())
                 store.finish_message(job, '', 'failed'); store.save(); return
-            billing_keys = auto_billing_keys(store, bot, [x for x in chain if fixed or not job.get('reattach') and (x != first or auto and not named)]); stale = auto_billing_stale(store, billing_keys)  # #33 #132: nothing Zook picks runs on API billing
+            billing_keys = auto_billing_keys(store, bot, [x for x in chain if fixed or not job.get('reattach') and (x != first or auto and not named or job.get('resumedBackup'))]); stale = auto_billing_stale(store, billing_keys)  # #33 #132: nothing Zook picks runs on API billing
         if stale: auto_recheck(store, [k for k in billing_keys if auto_billing_stale(store, [k]) and not auto_unwatched(k)])  # watched sign-ins, checked now
         why, compacted, reattach = skipped.get(first), bool(job.get('reattach')), bool(job.get('reattach'))
         for index, (p, m, a, check) in enumerate(chain):
             final = index == len(chain) - 1
-            run_bot = bot if a is None else dict(bot, account=a); backup = not auto and not fixed and not reattach and (p, a) != (first[0], first[2]); guard = fixed or backup or auto and not reattach and not (named and (p, a) == (first[0], first[2])); guard and auto_recheck_live(store, bot, p, a)  # the account picked; asked of the CLI now when Zook cannot watch it
+            run_bot = bot if a is None else dict(bot, account=a); backup = not auto and not fixed and not reattach and (p, a) != (first[0], first[2]); guard = fixed or backup or not reattach and (auto and not (named and (p, a) == (first[0], first[2])) or bool(job.get('resumedBackup'))); guard and auto_recheck_live(store, bot, p, a)  # the account picked; asked of the CLI now when Zook cannot watch it
             with store.lock:
                 problem = run_problem(store, bot, p, a, check or a is not None) if guard else ''  # #132: everything Zook picked, and every backup, checked lately to be a subscription (quotasource.py)
                 if problem:

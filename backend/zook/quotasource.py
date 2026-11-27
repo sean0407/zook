@@ -172,16 +172,17 @@ def next_backup(store, bot):
     first = (provider, bot.get('model') or '', None, False)
     raw = [list(x) for x in provider_chain(store, bot, provider, first[1])][1:] + auto_backups(store, bot, provider)
     chain = [x for x in held_backups(bot, provider, [first] + [(x[0], x[1], x[2] if len(x) > 2 else None, len(x) > 2) for x in raw]) if x != first]
-    status, ok = store.data.get('autoStatus') or {}, []
-    for p, m, a, check in chain:
+    status, kept = store.data.get('autoStatus') or {}, [first] + chain
+    for p, m, a, check in [first] + chain:  # as _run_job: one that cannot be used is dropped, but the last one left is still tried
         own = None if a is not None else find_account(bot.get('account'), p)
-        if not find_cli(p) or quota_exhausted(store, p + '@' + (a or own['id']) if a or own else p) or budget_blocks(store, p): continue
+        if (not find_cli(p) or quota_exhausted(store, p + '@' + (a or own['id']) if a or own else p) or budget_blocks(store, p)) and len(kept) > 1: kept.remove((p, m, a, check))
+    rest = backups_with_room(store, bot, kept[1:] if kept[0] == first else kept)
+    for p, m, a, check in rest:  # the first that passes the check right before it runs (run_problem); a check that is only old counts, as it is asked again then
         if check and auto_choice_problem(store, p, a or ''): continue
         known = status.get(auto_billing_keys(store, bot, [(p, m, a, check)])[0]) or {}
-        if known.get('signedIn') is True and known.get('billed') is False: ok.append((p, m, a, check))
-    if not ok: return ''
-    p, _, a, _ = backups_with_room(store, bot, ok)[0]
-    return auto_choice_name(p, a if a is not None else (find_account(bot.get('account'), p) or {}).get('id', ''))
+        if known.get('signedIn') is True and known.get('billed') is False:
+            return auto_choice_name(p, a if a is not None else (find_account(bot.get('account'), p) or {}).get('id', ''))
+    return ''
 
 
 def bots_with_backup(store, bots):

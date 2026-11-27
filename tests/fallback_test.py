@@ -98,5 +98,29 @@ class FallbackTest(unittest.TestCase):
         (self.root / 'bin/console').unlink()  # signed in with the subscription again: the backup answers
         self.assertEqual(self.ask('hello')[0]['content'], 'claude says hi')
 
+    def test_a_model_the_user_names_for_a_redo_is_never_held_back(self):
+        # #132: a Bot 自動選擇 matched to Claude, whose Claude is now Anthropic Console: its own replies stop (Zook's pick is never paid
+        # by use), but 換模型重答 with Claude, named by the user, runs.
+        (self.root / 'bin/console').write_text('')
+        data = self.root / 'data/swarmr.json'
+        self.proc.terminate(); self.proc.wait(timeout=5); self.proc.stdout.close(); self.proc.stderr.close()
+        state = json.loads(data.read_text())
+        for b in state['bots']:
+            if b['id'] == self.bot['id']: b.update(provider='claude', autoAssigned=True, autoReason='一般問答，配 Claude', fallbacks=[])
+        data.write_text(json.dumps(state))
+        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1')
+        self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')],
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
+        message, job = self.ask('hello')
+        self.assertEqual(message['status'], 'failed')  # Zook's own pick: not on API billing
+        self.assertEqual(self.req('POST', '/api/chat/redo', {'botId': self.bot['id'], 'mode': 'again', 'provider': 'claude', 'model': ''})[0], 202)
+        end = time.time() + 20
+        while time.time() < end:
+            last = next(b for b in self.req('GET', '/api/state')[1]['bots'] if b['id'] == self.bot['id'])['messages'][-1]
+            if last.get('status') != 'running': break
+            time.sleep(0.2)
+        self.assertEqual((last['status'], last['content']), ('completed', 'claude says hi'))  # the user's own choice
+
 
 if __name__ == '__main__': unittest.main()
