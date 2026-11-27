@@ -154,9 +154,11 @@ def office_render(source, out):
 def _unpacks_safely(path):
     """An Office file whose parts unpack to a sensible size: a small ZIP that unpacks to gigabytes would fill the Mac's memory."""
     try:
+        with open(path, 'rb') as f: zip_like = f.read(4) == b'PK\x03\x04'
+        if not zip_like and not zipfile.is_zipfile(path): return True  # not a ZIP by its start or its end: Quick Look says it cannot read it
         knowledge_zip_precheck(path)  # #240: before zipfile reads its directory
         with zipfile.ZipFile(path) as z: parts = z.infolist()
-    except KnowledgeUnreadable as exc: return '太大' not in str(exc)  # too many parts or too big a directory: not pictured; not a ZIP at all: Quick Look says it cannot read it
+    except KnowledgeUnreadable: return False  # #240: anything the check refuses (too many parts, ZIP64, a broken end record) is never pictured
     except (OSError, zipfile.BadZipFile, ValueError): return True  # not a ZIP: Quick Look says it cannot read it
     return len(parts) <= 5000 and sum(p.file_size for p in parts) <= PREVIEW_UNPACKED
 

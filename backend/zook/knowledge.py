@@ -216,12 +216,39 @@ def knowledge_extract(path):
         with open(path, 'rb') as f: head = f.read(8)
         looks = {'.docx': head.startswith(b'PK'), '.odt': head.startswith(b'PK'), '.doc': head.startswith(b'\xd0\xcf\x11\xe0'), '.rtf': head.startswith(b'{\\rtf')}[suffix]
         if not looks: raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔。' % suffix[1:].upper())  # textutil would read anything (HTML too, through WebKit)
-        if suffix in ('.docx', '.odt'): knowledge_zip_precheck(path)  # #240: a ZIP's directory checked before textutil unpacks it
-        done = subprocess.run(['/usr/bin/textutil', '-convert', 'txt', '-stdout', '--', str(path)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=KNOWLEDGE_SECONDS)
-        if done.returncode != 0: raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔。' % suffix[1:].upper())
-        return done.stdout.decode('utf-8', 'replace')
+        limit = _KnowledgeDeadline(KNOWLEDGE_SECONDS)
+        try:
+            if suffix == '.docx': return _text_docx(path, limit)  # #240: read here, as the group text version is (checkread.py); textutil never unpacks it
+            if suffix == '.odt': _knowledge_zip_count(path, limit)  # every part unpacked once and counted by what really comes out, before textutil unpacks it
+            return _knowledge_textutil(path, suffix, limit)
+        except KnowledgeUnreadable:
+            if limit.is_set(): raise KnowledgeUnreadable('處理逾時')
+            raise
     if suffix in KNOWLEDGE_ZIP_TYPES: return _knowledge_office(path, suffix)
     raise KnowledgeUnreadable('不支援這種檔案。')
+
+
+def _knowledge_zip_count(path, limit):
+    """A ZIP whose parts, unpacked here and counted by what really comes out, stay within KNOWLEDGE_UNPACKED (nothing is kept)."""
+    knowledge_zip_precheck(path)
+    try:
+        with _kzip.ZipFile(str(path)) as z:
+            budget = [KNOWLEDGE_UNPACKED]
+            for info in z.infolist():
+                for _ in knowledge_zip_stream(z, info.filename, budget, limit): pass
+    except KnowledgeUnreadable: raise
+    except (_kzip.BadZipFile, OSError, ValueError, EOFError, RuntimeError, NotImplementedError): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
+
+
+def _knowledge_textutil(path, suffix, limit):
+    """textutil's text of one file, written to a file of its own whose size is watched while it is written (_text_run), never a pipe."""
+    folder = pathlib.Path(tempfile.mkdtemp(prefix='zook-knowledge-')); out = folder / 'text.txt'
+    try:
+        try: _text_run(['/usr/bin/textutil', '-convert', 'txt', '-output', str(out), '--', str(path)], limit, out=out)
+        except OSError: raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔。' % suffix[1:].upper())
+        if not out.is_file(): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔。' % suffix[1:].upper())
+        with open(str(out), 'rb') as f: return f.read(KNOWLEDGE_TEXT * 4).decode('utf-8', 'replace')[:KNOWLEDGE_TEXT]
+    finally: shutil.rmtree(str(folder), ignore_errors=True)
 
 
 def _knowledge_decode(raw):
