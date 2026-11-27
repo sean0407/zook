@@ -121,7 +121,7 @@ class Server(unittest.TestCase):
         e = self.estimate(g, '@Alpha 再改一下', 'split')
         self.assertEqual(e['most'], 9); self.assertIn('預計最多 9 次回覆', e['text'])
         e = self.estimate(g, '@Beta 改一下', 'split')
-        self.assertEqual(e['replies'], 2); self.assertIn('含查核', e['text'])  # Beta works, Gamma checks
+        self.assertEqual((e['replies'], e['most']), (2, 4)); self.assertIn('含查核', e['text'])  # Beta works, Gamma checks; Beta saves again, Gamma checks again
 
     def test_the_place_the_user_named_reaches_every_member(self):
         """#273④, #266①: every member is told where the user wants the results."""
@@ -153,6 +153,7 @@ class Units(unittest.TestCase):
         self.assertIn('報價單.xlsx', m.delivery_claims('已存好 報價單.xlsx，請 B-查核 看一下', ['B-查核'], 'split_work'))  # naming who checks next is still its own claim
         self.assertEqual(m.delivery_claims('報價單.xlsx 已交付，但尚未存到群組檔案。', [], 'split_work'), '')  # not done after all
         self.assertEqual(m.delivery_claims('報價單.xlsx 工作已完成。', [], 'split_work'), '')  # the work, not a file handed over
+        self.assertEqual(m.delivery_claims('報價單.xlsx 已存好，但沒有成功。', [], 'split_work'), '')
         said = m.delivery_claims('已存到群組檔案：\n- 報價單.xlsx\n- 說明.docx\n\n後續請主持人確認 草稿.md', [], 'split_work')
         self.assertIn('說明.docx', said); self.assertNotIn('草稿.md', said)
 
@@ -193,6 +194,10 @@ class Units(unittest.TestCase):
         self.assertEqual(m.asked_places(dict(messages=[dict(id='u', role='user', content='做一份報價單')])), [])
         self.assertEqual(m.asked_places(dict(messages=[dict(id='u', role='user', content='存到「/tmp/zk place/Q4 報價」')])), ['/tmp/zk place/Q4 報價'])  # quoted: spaces kept
         self.assertEqual(m.asked_places(dict(messages=[dict(id='u', role='user', content='存到 /System/x/y')])), [])  # the Mac's own folders never
+        self.assertEqual(m.asked_places(dict(messages=[dict(id='u', role='user', content='存到 /tmp/../etc/x')])), [])  # not by going up either
+        link = self.root / 'sys'; os.symlink('/System', str(link))
+        self.assertEqual(m.asked_places(dict(messages=[dict(id='u', role='user', content='存到 %s/Library' % link)])), [])  # nor through a link
+        self.assertEqual(m.asked_places(dict(messages=[dict(id='u', role='user', content='存到「/tmp/我的資料夾」')])), ['/tmp/我的資料夾'])  # quoted: taken as it is
         rules = ' '.join(m.asked_place_rules(g, True, 'split_work'))
         self.assertIn('/tmp/zk-place/尾牙企劃', rules); self.assertIn('另存一份', rules); self.assertIn('不要說下一則再存', rules)
         self.assertIn('確認成品也存到', ' '.join(m.asked_place_rules(g, False, 'split_check')))
@@ -209,14 +214,28 @@ class Units(unittest.TestCase):
         (place / '舊版.xlsx').write_text('x')
         self.assertEqual(m.asked_place_missed(store, 'g1', dict(turn, kept=[('舊版.xlsx', '舊版.xlsx')]), []), '')  # kept as the group's file with the same content: still handed in
         (place / '報價單.xlsx').write_text('x')
+        self.assertEqual(m.asked_place_missed(store, 'g1', turn, ['報價單.xlsx', '說明.docx']), str(place))  # one of the two is not there
         self.assertEqual(m.asked_place_missed(store, 'g1', turn, ['報價單.xlsx']), '')
         self.assertEqual(m.asked_place_missed(store, 'g1', turn, []), '')  # nothing handed in to the group: nothing to look for
 
     def test_a_host_asking_first_is_told_apart(self):
         for text in ('確認完再交給專員開工', '【先問你】\n1. 預算？', '等你回覆後再開始分工', '我先問你幾件事'):
             self.assertTrue(m.host_asks_first(text), text)
-        for text in ('Beta：做報價單，完成後等你確認後再寄出', '專員：整理名單', '做完請你確認'):
+        for text in ('Beta：做報價單，完成後等你確認後再寄出', '專員：整理名單', '做完請你確認', '資料夠了，不用先問你，直接分工'):
             self.assertFalse(m.host_asks_first(text), text)
+
+    def test_a_check_asked_for_after_a_pause_keeps_the_pause(self):
+        """A check asked for after the ask paused at its rounds never takes the place of what 「繼續」 goes on with."""
+        group = dict(paused=dict(kind='free', pending=[['a', False, None]]), messages=[])
+        m.GroupRuns._pause_group(None, group, 4, dict(kind='steps', steps=[dict(role='check_final', bots=['h'])]))
+        self.assertEqual(group['paused']['kind'], 'free'); self.assertIn('回合上限已用完', group['messages'][-1]['content'])
+
+    def test_a_reply_still_running_is_not_marked_failed(self):
+        store = m.Store(self.root / 'data')
+        group = dict(id='g1', messages=[dict(id='c', role='assistant', status='running', checkOf='a'), dict(id='d', role='assistant', status='running')])
+        store.data['jobs'].append(dict(id='j', messageId='c', status='running'))
+        m.group_settle_running(store, group)
+        self.assertEqual([x['status'] for x in group['messages']], ['running', 'failed'])
 
     def test_a_check_left_running_is_marked_failed(self):
         """#291: after a restart a check still marked 「正在查核」 with no reply running fails, and says so."""

@@ -8,7 +8,7 @@
 
 # ---- 說交了但沒有 (#319, #326) ----
 CLAIM_DONE = re.compile(r'已(?:經)?(?:另存|存|上傳|交付|交出|產出|輸出|匯出|放|寫入)|存(?:好|妥)|(?:存|放|寫)(?:到|進|入|成)了|交付了|交了|交出了|產出了')
-CLAIM_UNDONE = re.compile(r'尚未|還沒|沒(?:有)?(?:存|放|上傳|交|產出)|未(?:存|放|上傳|交|產出)|失敗|存不|放不|不了')  # 「已交付，但尚未存到群組檔案」
+CLAIM_UNDONE = re.compile(r'尚未|還沒|沒(?:有)?(?:存|放|上傳|交|產出|成功)|未(?:存|放|上傳|交|產出|成功)|其實沒|並沒|不成功|失敗|存不|放不|不了')  # 「已交付，但尚未存到群組檔案」
 CLAIM_NOT = re.compile(r'請|麻煩|需要|要|會|將|預計|準備|打算|記得|負責|應該|必須|可以|待|還沒|尚未|沒有|沒|未|無法|不能|不要|是否|嗎|@')
 CLAIM_ROLES_NOT = ('kickoff', 'moderate', 'verify', 'split_check', 'check_final', 'split_follow')  # handing work out or checking it
 _CLAIM_CUT = re.compile(r'[。；;！!？?]')
@@ -67,13 +67,16 @@ def asked_places(group):
     words, so a file the user only gave to be read is not one. A quoted path keeps its spaces."""
     found, home = [], os.path.expanduser('~')
     for hit in _PLACE_SAID.finditer(str(group_asked(group).get('content') or '')[:20000]):
-        path = next(x for x in hit.groups() if x).strip().rstrip('。，.,:：;；')
+        quoted = not hit.group(4); path = next(x for x in hit.groups() if x).strip()
+        if not quoted:  # words of the sentence after a bare path; a quoted path is taken as it is
+            path = path.rstrip('。，.,:：;；')
+            for tail in _PLACE_TAIL:
+                if path.endswith(tail) and len(path) > len(tail) + 2: path = path[:-len(tail)]; break
         if path.startswith('~/'): path = home + path[1:]
         if path.startswith('file:///'): path = path[7:]
-        for tail in _PLACE_TAIL:
-            if path.endswith(tail) and len(path) > len(tail) + 2: path = path[:-len(tail)]; break
-        path = path.rstrip('/')
-        if not path.startswith('/') or path.startswith('//') or path.count('/') < 2 or _folder_never(path) or path in found: continue
+        if not path.startswith('/') or path.startswith('//'): continue
+        path = os.path.normpath(path)  # 「/tmp/../etc」 is /etc
+        if path.count('/') < 2 or _folder_never(path) or _folder_never(os.path.realpath(path)) or path in found: continue  # the Mac's own folders, also through a link
         found.append(path)
     return found[:5]
 
@@ -102,8 +105,8 @@ def asked_place_missed(store, group_id, turn, saved):
     if not places or start is None: return ''
     for place in places:
         try:
-            if os.path.isdir(place):
-                if any(os.path.isfile(os.path.join(place, n)) and os.stat(os.path.join(place, n)).st_mtime >= start - 1 for n in saved): return ''
+            if os.path.isdir(place):  # every file handed in, saved there during this reply
+                if all(os.path.isfile(os.path.join(place, n)) and os.stat(os.path.join(place, n)).st_mtime >= start - 1 for n in saved): return ''
             elif os.path.isfile(place) and os.stat(place).st_mtime >= start - 1: return ''
         except OSError: continue
     return places[0]
@@ -117,7 +120,11 @@ ASK_FIRST = re.compile(r'【先問你】|(?:確認|回覆|答覆|回答|決定|�
 
 def host_asks_first(text):
     """Whether the host's planning reply says it must ask the user before anyone starts."""
-    return bool(ASK_FIRST.search(str(text or '')[:4000]))
+    text = str(text or '')[:4000]
+    return any(not ASK_NOT.search(text[max(0, hit.start() - 6):hit.start()]) for hit in ASK_FIRST.finditer(text))  # 「不用先問你，直接分工」 hands work out
+
+
+ASK_NOT = re.compile(r'不用|不必|不需|無需|無須|免|沒必要|不再')
 
 
 def ask_first_hold(store, group_id, run_id):

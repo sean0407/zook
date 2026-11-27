@@ -290,7 +290,9 @@ def group_estimate(store, group, content, mode):
     checks = estimate_checks(store, group, members, mode)
     checking = group_checkers(store, group)
     if not everyone and mode == 'split' and len(members) > 1 and targets == [group_host(store, group)]: count, open_ended, more = len(members) + 1, True, (2 * (len(members) - 1) + 1 if checking else len(members))  # #71: the host may hand out work, then merges; #312: 補存 and its check, redo, check, merge again
-    elif not everyone: count = len(targets) + (len([x for x in checking if x not in targets]) if [x for x in targets if x not in checking] else 0)  # #312: a 查核員 checks the work of those named
+    elif not everyone:  # #312: a 查核員 checks the work of those named; a file to save again first means another reply each
+        named, checks = [x for x in targets if x not in checking], [x for x in checking if x not in targets]
+        count = len(targets) + (len(checks) if named else 0); more = len(named) + len(checks) if named and checks else 0
     elif mode == 'auto' and len(members) > 1: count, open_ended = len(members) + 1 + checks, True  # the host plans, each member works and another vendor checks it (#312), the host sums up
     elif mode != 'free' and len(members) > 1:
         steps = group_steps(store, group, mode); count = sum(len(s['bots']) for s in steps)
