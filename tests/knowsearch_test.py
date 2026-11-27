@@ -13,7 +13,7 @@ FILLER = '這是一般的公司說明文字，介紹部門分工與日常作業�
 
 def load():
     ns = {'__file__': str(SERVER)}
-    for part in ('core', 'knowledge', 'knowsearch'):
+    for part in ('clitable', 'core', 'knowledge', 'knowsearch'):
         f = ROOT / 'backend/zook' / (part + '.py'); exec(compile(f.read_text(encoding='utf-8'), str(f), 'exec'), ns)
     return ns
 

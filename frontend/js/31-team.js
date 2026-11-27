@@ -15,8 +15,8 @@
   }
   const teamEffortOk = r => !r.provider || (state.team.choices || []).find(c => c.id === r.provider)?.effort !== false;
   function teamModelRow(r) {
-    const effort = teamEffortOk(r) ? dropdown('effort', r.effort || '', [{id: '', name: '預設'}, ...EFFORTS], 'aria-label="思考強度"') : '<span class="muted small">不能調整</span>';
-    return `<div class="team-model"><label><span>模型</span>${dropdown('provider', r.provider ?? 'auto', teamModelOptions(r), 'data-team-provider aria-label="模型"')}</label><label><span>思考強度</span>${effort}</label></div>${r.problem && !r.provider ? `<p class="error-text small">${esc(r.problem)}</p>` : ''}${GATED_CLIS.includes(r.provider) ? '<p class="muted small">整台 Mac；刪除檔案、對外送出等動作前會先問你</p>' : ''}`;
+    const effort = teamEffortOk(r) ? dropdown('effort', r.effort || '', [{id: '', name: '預設'}, ...effortsFor(r.provider || 'auto')], 'aria-label="思考強度"') : '<span class="muted small">不能調整</span>';
+    return `<div class="team-model"><label><span>模型</span>${dropdown('provider', r.provider ?? 'auto', teamModelOptions(r), 'data-team-provider aria-label="模型"')}</label><label><span>思考強度</span>${effort}</label></div>${r.problem && !r.provider ? `<p class="error-text small">${esc(r.problem)}</p>` : ''}${(!!r.provider && gatedCli(r.provider)) ? '<p class="muted small">整台 Mac；刪除檔案、對外送出等動作前會先問你</p>' : ''}`;
   }
   function teamCard(r, i) {
     return `<article class="team-card ${i === 0 ? 'lead' : ''}" data-team-role="${i}"><header>${avatar({color: TEAM_COLORS[(state.data.bots.length + i) % 8], shape: (state.data.bots.length + i) % 13})}<div class="team-names"><input name="name" maxlength="20" required aria-label="名稱" value="${esc(r.name)}"><input name="jobTitle" maxlength="12" required aria-label="職稱" value="${esc(r.jobTitle)}"></div>${i === 0 ? '<span class="pill">統籌</span>' : `<button type="button" class="icon-btn" data-team="remove" data-id="${i}" aria-label="移除 ${esc(r.name)}" title="移除這個角色">×</button>`}</header>${teamModelRow(r)}${TEAM_PARTS.map(([k, label]) => r[k] ? `<p><span>${label}</span>${esc(r[k])}</p>` : '').join('')}</article>`;
