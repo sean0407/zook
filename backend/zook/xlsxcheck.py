@@ -25,6 +25,12 @@ _XSIMPLE = re.compile(r'^=?SUM\(\s*(%s(?:\s*,\s*%s)*)\s*\)$' % (_XRANGE, _XRANGE
 _XBROKEN = re.compile(r'!\s*[:),]|[(,]\s*:|:\s*[),]|!\s*$')
 _XERROR = re.compile(r'^#[A-Z0-9/!?]{1,8}$')
 _XAREA = 20000  # a range bigger than this is matched against the known cells instead of walked
+# #347: a conditional total or count over a table (SUMIFS, COUNTIF …) whose ranges stop before the table does: 原始明細!$G$2:$G$55 with
+# sales down to row 57. Only these functions: a plain SUM of the first rows may be meant (a quarter), a SUMIFS over part of a table hardly ever.
+_XCOND = re.compile(r'(?<![A-Z0-9_.])(?:SUMIFS?|COUNTIFS?|AVERAGEIFS?|MAXIFS|MINIFS)\(')
+_XQREF = re.compile(r"(?:(?:'((?:[^']|'')+)'|([^\s'!(),;=+\-*/^&<>{}\":\[\]$]+))!)?(?<![A-Z0-9_.$:])(\$?[A-Z]{1,3}\$?[0-9]{1,7}:\$?[A-Z]{1,3}\$?[0-9]{1,7})(?![A-Z0-9_(!])")
+_XSHORT_ROWS = 10000  # rows looked at past a range's end
+_XSHORT_COLS = 50
 # #227: what a formula should take from a cell but has written in: a cell matched against a fixed item code with a number in the formula
 # (IF(A8="X100",C8*0.1,0)), or only numbers and arithmetic (=1200*3). 0 and 1 are left alone (IF(...,1,0)).
 _XCODE = re.compile(r'(?<![A-Za-z0-9_$.!])\$?[A-Za-z]{1,3}\$?[0-9]{1,7}\s*(?:=|<>)\s*"(?:[^"]|"")+"|"(?:[^"]|"")+"\s*(?:=|<>)\s*\$?[A-Za-z]{1,3}\$?[0-9]{1,7}(?![0-9])')
@@ -93,6 +99,56 @@ def _xbare(text):
     return ''.join(out).upper()
 
 
+def _xnamed(text):
+    """Like _xbare, but quoted sheet names are kept ('原始 明細'!G2:G9 stays as it is, upper-cased like the rest)."""
+    out, i = [], 0
+    while i < len(text):
+        q = text[i]
+        if q in '"\'':
+            j = i + 1
+            while j < len(text):
+                if text[j] == q and text[j + 1:j + 2] == q: j += 2; continue
+                if text[j] == q: break
+                j += 1
+            out.append('""' if q == '"' else text[i:j + 1]); i = j + 1
+        else: out.append(q); i += 1
+    return ''.join(out).upper()
+
+
+def _xcond_ranges(raw):
+    """[[(sheet name upper-cased or None for its own sheet, first, last)] for each SUMIFS-like call] with ranges of two rows or more;
+    a call naming another workbook ([1]Sheet!) is left out."""
+    text, calls = _xnamed(raw), []
+    for m in _XCOND.finditer(text):
+        depth, i = 1, m.end()
+        while i < len(text) and depth:
+            depth += {'(': 1, ')': -1}.get(text[i], 0); i += 1
+        args, ranges = text[m.end():i - 1], []
+        for r in _XQREF.finditer(args):
+            if r.start() and args[r.start() - 1] == ']': ranges = None; break
+            a, _, b = r.group(3).partition(':'); first, last = _xpos(a), _xpos(b)
+            if not first or not last: continue
+            first, last = (min(first[0], last[0]), min(first[1], last[1])), (max(first[0], last[0]), max(first[1], last[1]))
+            sheet = r.group(1).replace("''", "'") if r.group(1) is not None else r.group(2)
+            if last[0] > first[0]: ranges.append((sheet, first, last))
+        if ranges: calls.append(ranges)
+    return calls
+
+
+def _xpast(cells, first, last, deadline, totals=()):
+    """How many rows right after a range hold a value in every one of its columns. A SUM in any of them or in the call's other columns
+    of that sheet (totals) is a total row and ends the table; a blank cell ends it too: rows after a gap are not counted."""
+    if last[1] - first[1] >= _XSHORT_COLS: return 0
+    n = 0
+    while n < _XSHORT_ROWS:
+        row = last[0] + n + 1
+        if n % 500 == 0 and time.monotonic() > deadline: raise _XSlow()
+        if not all((x := cells.get((row, c))) and x[3] and not x[1] for c in range(first[1], last[1] + 1)): break
+        if any((cells.get((row, c)) or (0, False))[1] for c in totals): break
+        n += 1
+    return n
+
+
 def _xparse(z, part, deadline, budget):
     info = z.getinfo(part)
     if info.compress_type not in (_xzip.ZIP_STORED, _xzip.ZIP_DEFLATED) or info.file_size > budget[0]: raise _XSlow()  # checked before anything is unpacked
@@ -113,8 +169,9 @@ def _xsheets(z, deadline, budget):
 
 
 def _xread_sheet(z, part, deadline, budget):
-    """{(row, col): (number or None, is a SUM formula, is a formula)}, {pos: [ranges of its SUM]} and [(pos, bare formula, saved number, saved text, type)]."""
-    cells, sums, formulas, shared, shared_fixed = {}, {}, [], {}, {}
+    """{(row, col): (number or None, is a SUM formula, is a formula, holds a value)}, {pos: [ranges of its SUM]},
+    [(pos, bare formula, saved number, saved text, type)] and [(pos, SUMIFS-like calls)]."""
+    cells, sums, formulas, shared, shared_fixed, conds = {}, {}, [], {}, {}, []
     for n, (_, el) in enumerate(_xparse(z, part, deadline, budget)):
         if n % 2000 == 0 and time.monotonic() > deadline: raise _XSlow()
         if el.tag == _XM + 'row': el.clear(); continue  # the cells read so far are let go
@@ -125,6 +182,7 @@ def _xread_sheet(z, part, deadline, budget):
         except ValueError: number = None
         if number is not None and not _xmath.isfinite(number): number = None
         pos = _xpos(el.get('r'))
+        held = saved not in (None, '') or el.find(_XM + 'is') is not None
         if f is not None:
             raw = (f.text or '').strip(); text = _xbare(raw); si = f.get('si')
             is_sum = bool(_XSUM.search(text)) if text else shared.get(si, False)
@@ -132,11 +190,12 @@ def _xread_sheet(z, part, deadline, budget):
             if f.get('t') == 'shared' and text and si is not None: shared[si] = is_sum; shared_fixed[si] = fixed
             formulas.append((pos, text, number, saved, kind, fixed))
             if pos:
-                cells[pos] = (number, is_sum, True)
+                cells[pos] = (number, is_sum, True, held)
                 if text and is_sum: sums[pos] = [r for args in _xsum_args(text) for r in _xrefs(args)]
-        elif pos: cells[pos] = (number, False, False)
+                if text and _XCOND.search(text): conds.append((pos, _xcond_ranges(raw)))
+        elif pos: cells[pos] = (number, False, False, held)
         el.clear()
-    return cells, sums, formulas
+    return cells, sums, formulas, conds
 
 
 def _xrefs(args):
@@ -181,10 +240,12 @@ def xlsx_scan(path):
             info = os.fstat(handle.fileno())
             if not stat.S_ISREG(info.st_mode) or info.st_size > XLSX_MAX_BYTES: return []
             with _xzip.ZipFile(handle) as z:
+                books, pending = {}, []  # every sheet's cells by its name, for ranges on another sheet (#347)
                 for index, (name, part) in enumerate(_xsheets(z, deadline, budget)[:XLSX_SHEETS]):
                     try: z.getinfo(part)
                     except KeyError: continue
-                    cells, sums, formulas = _xread_sheet(z, part, deadline, budget)
+                    cells, sums, formulas, conds = _xread_sheet(z, part, deadline, budget)
+                    books.setdefault(name.upper(), cells); pending += [(index, name, pos, calls) for pos, calls in conds if pos]
                     at = lambda pos, saved=None, redo=None: (index + 1, name, _xname(pos) if pos else '', saved, redo)
                     for pos, text, number, saved, kind, fixed in formulas:
                         if time.monotonic() > deadline: raise _XSlow()
@@ -206,6 +267,18 @@ def xlsx_scan(path):
                         off = redo is not None and abs(redo - number) > max(1e-6, 1e-12 * abs(redo))
                         if stacked: found['double'].append(at(pos, number if off else None, redo if off else None))
                         elif off: found['wrong'].append(at(pos, number, redo))
+                seen = {}  # the same range in many formulas is walked once
+                for index, name, pos, calls in pending:
+                    for ranges in calls:
+                        keys = [((sheet if sheet is not None else name).upper(), first, last) for sheet, first, last in ranges]
+                        if any(k[0] not in books for k in keys): continue  # a sheet this workbook does not have (or one not read): cannot tell
+                        walked = []
+                        for k in keys:
+                            cols = tuple(sorted({c for s, f, l in keys if s == k[0] for c in range(f[1], min(l[1], f[1] + _XSHORT_COLS) + 1)}))
+                            if (k, cols) not in seen: seen[k, cols] = _xpast(books[k[0]], k[1], k[2], deadline, cols)
+                            walked.append((seen[k, cols], k[2][0]))
+                        past, end = max(walked)  # any range short (the sum or a condition): rows are missed
+                        if past: found['short'].append((index + 1, name, _xname(pos), end, end + past)); break
     except (_XSlow, _xzip.BadZipFile, _XET.ParseError, _xzlib.error, KeyError, OSError, ValueError, LookupError, RuntimeError, EOFError,
             NotImplementedError, OverflowError, RecursionError, UnicodeError):
         return []
@@ -226,7 +299,7 @@ def _xstacked(cells, sums, pos):
     return False
 
 
-_XKINDS = ('missing', 'double', 'wrong', 'broken', 'error', 'fixed')
+_XKINDS = ('missing', 'double', 'wrong', 'broken', 'error', 'fixed', 'short')
 
 
 def xlsx_render(scan, for_bot=False):
@@ -242,6 +315,9 @@ def xlsx_render(scan, for_bot=False):
             nums = [x for x in p[3:5] if isinstance(x, (int, float)) and not isinstance(x, bool) and _xmath.isfinite(x)]
             if kind in ('double', 'wrong') and len(nums) == 2: line += '：存的是 %s，Excel 重算會是 %s' % (_xnum(nums[0]), _xnum(nums[1]))
             if kind == 'error' and not for_bot and isinstance(p[3], str) and _XERROR.match(p[3]): line += '（%s）' % p[3]
+            if kind == 'short':
+                if not all(isinstance(x, int) and not isinstance(x, bool) and 0 < x < 10 ** 8 for x in p[3:5]) or p[4] <= p[3]: continue
+                line += '：範圍只到第 %d 列，資料到第 %d 列' % (p[3], p[4])
             shown.append(line)
         if not shown: continue
         if kind == 'missing': out.append('有 %d 格公式沒有算好的值，預覽和手機會顯示 0（例如 %s）' % (count, '、'.join(shown)))
@@ -249,6 +325,8 @@ def xlsx_render(scan, for_bot=False):
         if kind == 'wrong': out.append('有 %d 格公式存的值和重算結果不符（%s）' % (count, '；'.join(shown)))
         if kind == 'broken': out.append('公式看起來不完整，可能有參照被吃掉（例如 %s）' % '、'.join(shown))
         if kind == 'error': out.append('有 %d 格公式算出錯誤（例如 %s）' % (count, '、'.join(shown)))
+        if kind == 'short': out.append('有 %d 格條件加總或計數的範圍沒涵蓋到最後的資料，Excel 重算會少算（%s）%s' % (count, '；'.join(shown),
+                                       '，請把範圍延伸到最後一筆資料（或用整欄，例如 $G:$G），存好後回讀公式確認' if for_bot else ''))
         if kind == 'fixed': out.append('有 %d 格公式把數字或品號直接寫在公式裡，改數量或品項不會跟著變（例如 %s）%s' % (count, '、'.join(shown),
                                        '，請把單價、折扣率等放進儲存格，公式改成引用那一格' if for_bot else ''))
     return out

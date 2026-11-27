@@ -1,3 +1,4 @@
+import datetime
 import importlib.util
 import os
 from pathlib import Path
@@ -196,7 +197,7 @@ class ScheduleToolsTest(unittest.TestCase):
         self.assertEqual(say('zook_create_schedule', {'content': '討論行情給我結論', 'repeat': 'daily', 'time': '10:00'}, 'g1'),
                          '建立排程：每天 10:00，在「行情小組」執行「討論行情給我結論」')
         self.assertEqual(say('zook_create_schedule', {'target': '研究助手', 'content': '月報', 'repeat': 'once', 'date': '2026-12-01', 'time': '08:00'}),
-                         '建立排程：2026-12-01 08:00（只一次），在「研究助手」執行「月報」')
+                         '建立排程：%s 08:00（只一次），在「研究助手」執行「月報」' % ('12/1（週二）' if datetime.date.today().year == 2026 else '2026/12/1（週二）'))  # #77④
         self.assertEqual(say('zook_update_schedule', {'schedule_id': 's1', 'time': '10:15'}), '修改排程「整理未讀信件」（週一到週五 09:30），改成週一到週五 10:15')
         self.assertEqual(say('zook_delete_schedule', {'schedule_id': 's1'}), '刪除排程「整理未讀信件」（週一到週五 09:30）')
 

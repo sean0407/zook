@@ -79,8 +79,8 @@ def intro_blocked(store, bot, provider, account_id):
     problem = auto_billing_problem(store, provider, account_id)  # checked recently, as before any reply of a Bot whose model is fixed
     if problem: return problem
     if budget_state(store, provider) == 'over': return '用量預算已用完'
-    snap = (store.data.get('quota') or {}).get(key) or {}
-    if quota_exhausted(store, key) or limit_reached_now(snap): return '額度已用完'
+    view = quota_view(store, provider, account_id if account else '')  # the shared reading (#323): 無法確定 does not stop it
+    if quota_exhausted(store, key) or view['limitNow'] and view['level'] != 'unknown': return '額度已用完'
     return ''
 
 

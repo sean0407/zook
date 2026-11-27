@@ -112,8 +112,10 @@ class UpkeepTest(unittest.TestCase):
         self.req('PATCH', '/api/settings', {'permissionMode': 'auto'})
         self.ask('這句話不該出現在紀錄裡')
         self.req('DELETE', '/api/bots/' + self.bot['id'])
-        out = self.req('GET', '/api/activity')[1]
+        out = self.req('GET', '/api/activity?kind=admin')[1]  # changes and approvals; each reply has a line of its own (#304)
         texts = [x['text'] for x in out['items']]
+        work = self.req('GET', '/api/activity?kind=work')[1]['items']
+        self.assertEqual([(x['text'], x['result']) for x in work], [('回覆你的訊息', 'ok')])
         self.assertEqual(texts[:4], ['刪除 Bot「小幫手」', '變更設定：主動性', '修改 Bot「小幫手」：人格檔案', '新增 Bot「小幫手」'])
         self.assertFalse(any('這句話' in t for t in texts))
         self.assertTrue(all(x['by'] == '這台 Mac' for x in out['items']))
@@ -122,7 +124,7 @@ class UpkeepTest(unittest.TestCase):
         self.assertEqual(oct((self.root / 'data/activity.jsonl').stat().st_mode & 0o777), '0o600')
         # A failed request leaves no line.
         self.req('PATCH', '/api/settings', {'permissionMode': 'nope'})
-        self.assertEqual(len(self.req('GET', '/api/activity')[1]['items']), len(texts))
+        self.assertEqual(len(self.req('GET', '/api/activity?kind=admin')[1]['items']), len(texts))
 
     def test_rules_reach_every_bot(self):
         self.assertEqual(self.req('PATCH', '/api/settings', {'rules': 'x' * 10001})[0], 400)
@@ -154,7 +156,7 @@ class UpkeepTest(unittest.TestCase):
         self.assertEqual(self.req('GET', '/api/state')[1]['settings']['budgets'], {})
 
     def test_budget_switches_to_backup_model(self):
-        cli = self.root / 'bin/claude'; cli.write_text('#!/usr/bin/env python3\nimport json, sys\nif "--help" in sys.argv or "--version" in sys.argv: sys.exit(0)\nprint(json.dumps({"result": "ok from claude", "usage": {"input_tokens": 5, "output_tokens": 5}}))\n'); cli.chmod(0o755)
+        cli = self.root / 'bin/claude'; cli.write_text('#!/usr/bin/env python3\nimport json, sys\nif "auth" in sys.argv: print(json.dumps({"loggedIn": True, "authMethod": "claude.ai"})); sys.exit(0)\nif "--help" in sys.argv or "--version" in sys.argv: sys.exit(0)\nprint(json.dumps({"result": "ok from claude", "usage": {"input_tokens": 5, "output_tokens": 5}}))\n'); cli.chmod(0o755)
         self.req('PATCH', '/api/settings', {'budgets': {'codex': 1000000}, 'budgetOver': 'switch', 'fallbacks': ['claude']})
         for job in (self.ask(), self.ask()): self.assertEqual(job['status'], 'completed', job)  # both are needed to use up the budget
         job = self.ask()
@@ -325,7 +327,7 @@ class UpkeepTest(unittest.TestCase):
         self.assertEqual([m['content'] for m in back['messages']], ['以前的對話', 'ok from codex'])
 
     def test_stop_also_holds_for_a_backup_model_over_budget(self):
-        cli = self.root / 'bin/claude'; cli.write_text('#!/usr/bin/env python3\nimport json, sys\nif "--help" in sys.argv or "--version" in sys.argv: sys.exit(0)\nprint(json.dumps({"type": "result", "result": "ok from claude", "is_error": False, "usage": {"input_tokens": 700000, "output_tokens": 400000}}))\n'); cli.chmod(0o755)
+        cli = self.root / 'bin/claude'; cli.write_text('#!/usr/bin/env python3\nimport json, sys\nif "auth" in sys.argv: print(json.dumps({"loggedIn": True, "authMethod": "claude.ai"})); sys.exit(0)\nif "--help" in sys.argv or "--version" in sys.argv: sys.exit(0)\nprint(json.dumps({"type": "result", "result": "ok from claude", "is_error": False, "usage": {"input_tokens": 700000, "output_tokens": 400000}}))\n'); cli.chmod(0o755)
         self.req('PATCH', '/api/settings', {'budgets': {'codex': 1000000, 'claude': 1000000}, 'budgetOver': 'stop', 'fallbacks': ['claude']})
         for job in (self.ask(), self.ask()): self.assertEqual(job['status'], 'completed', job)  # codex is over its budget now
         job = self.ask()

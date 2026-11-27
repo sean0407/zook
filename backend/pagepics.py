@@ -22,6 +22,12 @@ SKIPPED = [0]   # pages left out by --pages or by the budget below
 MAX_PIXELS = 130 * 1000 * 1000
 MAX_BYTES = 200 * 1024 * 1024
 USED = {'pixels': 0, 'bytes': 0}
+# #101④ #211: a PDF page with a long empty stretch (a cover or page 2 left mostly blank, content pushed to the next page) is named after
+# the pictures, so the Bot looks again. The last page may end early; a stretch of near-white rows this tall (share of the page) is said.
+BLANK_SHARE = 0.6
+BLANK = []  # [(page number, share of its height that is one empty stretch)] for the PDF pages drawn
+PAGES = [0]  # how many pages the PDF has
+_WHITE = bytes(range(0xF0, 0x100))
 _children = []  # Quick Look or osascript running now: ended with pagepics
 
 
@@ -77,7 +83,7 @@ def pdf_pages(path, out, width=1600):
                          (cg.CGContextSetRGBFillColor, None, [vp, db, db, db, db]), (cg.CGContextFillRect, None, [vp, _Rect]),
                          (cg.CGContextScaleCTM, None, [vp, db, db]), (cg.CGContextTranslateCTM, None, [vp, db, db]),
                          (cg.CGContextRotateCTM, None, [vp, db]), (cg.CGContextDrawPDFPage, None, [vp, vp]),
-                         (cg.CGBitmapContextCreateImage, vp, [vp]), (cg.CGContextRelease, None, [vp]), (cg.CGImageRelease, None, [vp]),
+                         (cg.CGBitmapContextCreateImage, vp, [vp]), (cg.CGBitmapContextGetData, vp, [vp]), (cg.CGBitmapContextGetBytesPerRow, sz, [vp]), (cg.CGContextRelease, None, [vp]), (cg.CGImageRelease, None, [vp]),
                          (io.CGImageDestinationCreateWithURL, vp, [vp, vp, sz, vp]), (io.CGImageDestinationAddImage, None, [vp, vp, vp]),
                          (io.CGImageDestinationFinalize, ctypes.c_bool, [vp])):
         f.restype, f.argtypes = res, args
@@ -87,7 +93,7 @@ def pdf_pages(path, out, width=1600):
     if not doc: raise SystemExit('讀不到這個 PDF：%s' % path)
     png_type, space, done, missing = cf.CFStringCreateWithCString(None, b'public.png', 0x08000100), cg.CGColorSpaceCreateDeviceRGB(), [], []
     stem = os.path.splitext(os.path.basename(path))[0]
-    last = _first(cg.CGPDFDocumentGetNumberOfPages(doc))
+    PAGES[0] = cg.CGPDFDocumentGetNumberOfPages(doc); last = _first(PAGES[0])
     for n in range(1, last + 1):
         page = cg.CGPDFDocumentGetPage(doc, n)
         box, turn = cg.CGPDFPageGetBoxRect(page, 1), cg.CGPDFPageGetRotationAngle(page) % 360  # 1 = crop box
@@ -104,6 +110,8 @@ def pdf_pages(path, out, width=1600):
         if turn: cg.CGContextTranslateCTM(ctx, w / 2, h / 2); cg.CGContextRotateCTM(ctx, -turn * 3.141592653589793 / 180); cg.CGContextTranslateCTM(ctx, -box.w / 2, -box.h / 2)
         cg.CGContextTranslateCTM(ctx, -box.x, -box.y)
         cg.CGContextDrawPDFPage(ctx, page)
+        share = blank_share(cg.CGBitmapContextGetData(ctx), cg.CGBitmapContextGetBytesPerRow(ctx), pw, ph)
+        if share >= BLANK_SHARE: BLANK.append((n, share))
         image = cg.CGBitmapContextCreateImage(ctx)
         target = os.path.join(out, '%s-%02d.png' % (stem, n))
         dest_url = url(target); dest = io.CGImageDestinationCreateWithURL(dest_url, png_type, 1, None) if image else None
@@ -129,6 +137,16 @@ def pdf_pages(path, out, width=1600):
             except OSError: pass
     cg.CGColorSpaceRelease(space); cf.CFRelease(png_type); cg.CGPDFDocumentRelease(doc)
     return done, missing
+
+
+def blank_share(data, stride, width, height):
+    """The tallest stretch of near-white rows in a drawn page (RGBA bytes), as a share of its height; 0 when it cannot be read."""
+    if not data or not stride or height <= 0 or stride < width * 4: return 0.0
+    run = most = 0
+    for y in range(height):  # one row at a time: never a second copy of the whole page
+        if ctypes.string_at(data + y * stride, width * 4).translate(None, _WHITE): run = 0
+        else: run += 1; most = max(most, run)
+    return most / height
 
 
 def quicklook(path, out, width=1600):
@@ -287,6 +305,10 @@ def main(argv):
         pages, missing = [(made, 0, 0)] if made else [], []
         if made: print('（這個格式只能轉第一頁；其餘內容請直接讀檔確認）')
     for target, w, h in pages: print('%s\t比例 %s' % (target, ratio(w, h)))
+    blank = [(n, share) for n, share in BLANK if n < PAGES[0]] if kind == '.pdf' else []  # the last page may end early
+    if blank:
+        print('（版面提醒：%s 是空白。看圖確認是不是內容被擠到下一頁、圖表沒畫出來或該補內容；刻意留白就不用改）'
+              % '、'.join('第 %d 頁約 %d%%' % (n, int(round(share * 10)) * 10) for n, share in blank[:20]))
     if SKIPPED[0]: print('（共 %d 頁，只轉了前 %d 頁）' % (SKIPPED[0] + len(pages) + len(missing), len(pages) + len(missing)))
     if missing:
         print('（無法預覽的頁：第 %s 頁）' % '、'.join(map(str, missing[:20])))

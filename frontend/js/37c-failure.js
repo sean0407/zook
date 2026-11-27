@@ -8,7 +8,7 @@
   function failureWhen(iso) {
     const at = new Date(iso); if (isNaN(at)) return '';
     const time = at.toLocaleTimeString('zh-TW', {hour: '2-digit', minute: '2-digit', hour12: false});
-    return at.toDateString() === new Date().toDateString() ? time : `${at.getMonth() + 1}/${at.getDate()} ${time}`;
+    return at.toDateString() === new Date().toDateString() ? time : `${dayWeek(at)}${time}`;  // #77④: 12/1（週二）18:00
   }
   // The card for a failed reply, or '' when the reply has no kind yet (an older Zook, or a reply that did not fail). Buttons only on
   // the last reply of a Bot's conversation while nothing runs: that is the reply 重試 and 換模型 act on.

@@ -36,7 +36,7 @@ class ActivityResultTest(unittest.TestCase):
         failed = by_text['對話檔 chats/a.json 寫不進去（磁碟已滿），之後每次存檔都會再試']
         self.assertEqual((failed['result'], failed['resultName']), ('failed', '失敗'))
         self.assertTrue(failed['why'] and failed['next'])  # the reason and the next step, in words
-        self.assertEqual({r['id'] for r in m.activity_list(self.store)['results']}, {'ok', 'failed', 'waiting', 'denied', 'warn'})
+        self.assertEqual({r['id'] for r in m.activity_list(self.store)['results']}, {'ok', 'failed', 'stopped', 'waiting', 'denied', 'warn'})
 
     def test_filter_by_result(self):
         m.log_activity(self.store, 'bot', '新增 Bot「小幫手」')

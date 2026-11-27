@@ -94,6 +94,17 @@ class ResumeAfterRestart(unittest.TestCase):
         self.start(); self.check_resumed()
         self.until(lambda: subprocess.run(['/bin/ps', '-p', str(pid)], capture_output=True).returncode != 0)  # stopped before the reply went on
 
+    def test_a_reply_cut_off_on_a_backup_is_checked_again_before_it_goes_on(self):
+        # #132: the Bot's own model is now Claude, so the Codex it was answering with is a backup Zook picked. This Codex never says it is
+        # signed in to a subscription: the reply does not go on with it by itself.
+        self.cut_off(); data = self.data()
+        for b in data['bots']:
+            if b['id'] == self.bot['id']: b['provider'] = 'claude'
+        (self.root / 'data/swarmr.json').write_text(json.dumps(data))
+        self.start(); time.sleep(2)
+        self.assertFalse([r for r in self.runs() if '重新啟動' in r['prompt']])  # Codex was not started again to go on (its sign-in checks are logged too)
+        self.assertNotEqual(self.state()['messages'][-1].get('content'), '接著做完了')
+
     def test_a_restored_backup_or_older_data_starts_nothing_by_itself(self):
         self.cut_off(); data = self.data()
         for j in data['jobs']:

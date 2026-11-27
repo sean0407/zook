@@ -20,7 +20,7 @@ sys.stdin.read()
 print(json.dumps({'type': 'item.completed', 'item': {'id': 'c1', 'type': 'command_execution', 'command': 'curl x'}}), flush=True)
 time.sleep(60)
 '''
-CLAUDE = '#!/usr/bin/env python3\nimport json, sys\nsys.stdin.read()\nprint(json.dumps({"type": "result", "result": "backup did it", "is_error": False}))\n'
+CLAUDE = '#!/usr/bin/env python3\nimport json, sys\nif "auth" in sys.argv: print(json.dumps({"loggedIn": True, "authMethod": "claude.ai"})); sys.exit(0)  # a subscription: a backup runs only on one (#132)\nsys.stdin.read()\nprint(json.dumps({"type": "result", "result": "backup did it", "is_error": False}))\n'
 
 
 class MemberStallTest(unittest.TestCase):
