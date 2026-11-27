@@ -67,7 +67,7 @@ print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 10, 'outpu
 '''
 CLAUDE = '''#!/usr/bin/env python3
 import json, os, sys, time
-if 'auth' in sys.argv: print(json.dumps({'loggedIn': True})); sys.exit(0)
+if 'auth' in sys.argv: print(json.dumps({'loggedIn': True, 'authMethod': 'claude.ai'})); sys.exit(0)  # a subscription: a backup runs only on one (#132)
 if '--help' in sys.argv or '--version' in sys.argv: sys.exit(0)  # Zook asking what this CLI can do
 sys.stdin.read()
 here = os.path.dirname(sys.argv[0])

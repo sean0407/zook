@@ -22,8 +22,8 @@
       post(`bots/${encodeURIComponent(b.id)}/chats/${encodeURIComponent(mine)}/open`, {}).then(() => refresh()).catch(() => {});
   }
   // On every chat page draw: the first conversation this tab shows of a Bot is its own until it picks another.
-  // A reload of the Skills and connectors page opens that page again instead of the chat (#183). Per window, like the rest.
-  const LAST_PAGE_KEY = 'zook-last-page', KEPT_PAGES = ['skills', 'mcp', 'plugins'];
+  // A reload of the Skills and connectors page, or of the activity record, opens that page again instead of the chat (#183). Per window, like the rest.
+  const LAST_PAGE_KEY = 'zook-last-page', KEPT_PAGES = ['skills', 'mcp', 'plugins', 'activity'];  // and the activity record (#247⑥)
   let lastPageSaved = null;
   function restorePage() {
     let page = '';

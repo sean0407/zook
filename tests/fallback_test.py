@@ -10,7 +10,9 @@ if 'CODEX-OK' in s: print('codex says hi'); sys.exit(0)
 sys.stderr.write('You have hit your usage limit.\\n'); sys.exit(1)
 '''
 CLAUDE = '''#!/usr/bin/env python3
-import json, sys
+import json, os, sys
+if sys.argv[1:3] == ['auth', 'status']:  # a subscription, unless the test signed it in with Anthropic Console (paid by use)
+    print(json.dumps({'loggedIn': True, 'authMethod': 'console' if os.path.exists(os.path.join(os.path.dirname(__file__), 'console')) else 'claude.ai'})); sys.exit(0)
 sys.stdin.read()
 print(json.dumps({'type': 'result', 'result': 'claude says hi', 'is_error': False}))
 '''
@@ -84,6 +86,41 @@ class FallbackTest(unittest.TestCase):
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
         message, job = self.ask('CODEX-OK')  # Codex would answer, but Zook already knows it is used up
         self.assertEqual(message['content'], 'claude says hi'); self.assertIn('額度已用完', message['note'])
+
+    def test_a_backup_on_api_billing_is_skipped_and_the_reply_says_why(self):
+        # #132: the default Claude sign-in is Anthropic Console (paid by use): Codex is used up, and Claude must not answer instead.
+        (self.root / 'bin/console').write_text('')
+        self.req('PATCH', '/api/settings', {'fallbacks': ['claude']})
+        message, job = self.ask('hello')
+        self.assertEqual(message['status'], 'failed'); self.assertNotEqual(message.get('content'), 'claude says hi')
+        self.assertNotIn('claude', [a.get('provider') for a in job.get('attempts') or [] if a.get('reason') == '額度已用完'])
+        self.assertIn('備用的 Claude 沒有改用', job['error']); self.assertIn('API 計費', job['error']); self.assertIn('不用 API 計費', job['error'])
+        (self.root / 'bin/console').unlink()  # signed in with the subscription again: the backup answers
+        self.assertEqual(self.ask('hello')[0]['content'], 'claude says hi')
+
+    def test_a_model_the_user_names_for_a_redo_is_never_held_back(self):
+        # #132: a Bot 自動選擇 matched to Claude, whose Claude is now Anthropic Console: its own replies stop (Zook's pick is never paid
+        # by use), but 換模型重答 with Claude, named by the user, runs.
+        (self.root / 'bin/console').write_text('')
+        data = self.root / 'data/swarmr.json'
+        self.proc.terminate(); self.proc.wait(timeout=5); self.proc.stdout.close(); self.proc.stderr.close()
+        state = json.loads(data.read_text())
+        for b in state['bots']:
+            if b['id'] == self.bot['id']: b.update(provider='claude', autoAssigned=True, autoReason='一般問答，配 Claude', fallbacks=[])
+        data.write_text(json.dumps(state))
+        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1')
+        self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')],
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
+        message, job = self.ask('hello')
+        self.assertEqual(message['status'], 'failed')  # Zook's own pick: not on API billing
+        self.assertEqual(self.req('POST', '/api/chat/redo', {'botId': self.bot['id'], 'mode': 'again', 'provider': 'claude', 'model': ''})[0], 202)
+        end = time.time() + 20
+        while time.time() < end:
+            last = next(b for b in self.req('GET', '/api/state')[1]['bots'] if b['id'] == self.bot['id'])['messages'][-1]
+            if last.get('status') != 'running': break
+            time.sleep(0.2)
+        self.assertEqual((last['status'], last['content']), ('completed', 'claude says hi'))  # the user's own choice
 
 
 if __name__ == '__main__': unittest.main()

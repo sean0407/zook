@@ -10,12 +10,13 @@
   // A model with both limits gets two rings; one with a single limit gets one; one without any gets a faint dotted ring.
   function ringSvg(x) {
     const both = x.fiveHour != null && x.week != null, only = x.fiveHour ?? x.week;
-    return `<svg viewBox="0 0 40 40" aria-hidden="true">${both ? ringArc(17.5, x.fiveHour, x.week <= 0) + ringArc(13, x.week) : ringArc(17.5, only)}<text class="ring-num" x="20" y="23.2" text-anchor="middle">${x.left == null ? '–' : Math.round(x.left)}</text></svg>`;
+    return `<svg viewBox="0 0 40 40" aria-hidden="true">${both ? ringArc(17.5, x.fiveHour, x.week <= 0) + ringArc(13, x.week) : ringArc(17.5, only)}<text class="ring-num" x="20" y="23.2" text-anchor="middle">${x.unknown ? '?' : x.left == null ? '–' : Math.round(x.left)}</text></svg>`;
   }
   const ringPart = (label, v) => `${label}${v == null ? '沒有資料' : '剩餘 ' + Math.round(v) + '%'}`;
-  const ringText = x => !x.known ? `${x.name}：尚未登入` : x.out ? `${x.name}：額度已用完` : x.left == null ? `${x.name}：沒有額度資料` : `${x.name}：${[x.fiveHour != null ? (x.week != null && x.week <= 0 ? '5 小時被每週額度擋住' : ringPart('5 小時', x.fiveHour)) : '', x.week != null ? ringPart('每週', x.week) : ''].filter(Boolean).join('，')}`;
+  const ringText = x => !x.known ? `${x.name}：尚未登入` : x.unknown ? `${x.name}：額度無法確定` : x.out ? `${x.name}：額度已用完` : x.left == null ? `${x.name}：沒有額度資料` : `${x.name}：${[x.fiveHour != null ? (x.week != null && x.week <= 0 ? '5 小時被每週額度擋住' : ringPart('5 小時', x.fiveHour)) : '', x.week != null ? ringPart('每週', x.week) : ''].filter(Boolean).join('，')}`;
   function leftBars(x) {
     if (!x.known) return '<p class="quota-empty">登入後才能查看額度。</p>';
+    if (x.unknown) return `<p class="quota-empty">${esc(x.note || '額度無法確定')}。</p>`;  // #323: no figure Zook does not trust
     if (!x.windows.length) return '<p class="quota-empty">這個模型不提供額度資料。</p>';
     return quotaRows(x.windows.map(w => ({label: w.label, usedPercent: 100 - w.left, resetsAt: w.resetsAt})));  // the same bars as the cards
   }

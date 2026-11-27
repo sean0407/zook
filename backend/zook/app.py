@@ -186,6 +186,7 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
         msg = resume_reply(place) if place else dict(id=ID(), role='assistant', content='', createdAt=NOW(), status='running')
         redo_who = None
         if use and not place: msg['note'], redo_who = redo_note(store, bot, replaces, provider, model)  # 原本：X／這次：Y (redonote.py, #143)
+        if use and replaces and not place: redo_versions(store, bot, replaces, content, msg, provider, model)  # 換模型重答: the answers before stay (#305)
         msg.update(auto_mark)
         if effort != 'standard': msg['effort'] = effort
         if plan: msg['plan'] = True
@@ -202,6 +203,8 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
         if replaces: job.update(redoOf=replaces, askedId=asked['id'])
         if redo_who and not model: job.update(redoWho=redo_who, redoNote=msg['note'])  # the model is added when the CLI says which it ran
         job['effort'] = effort
+        if use and replaces: job['userNamed'] = True  # 換模型重答 with a model the user picked: never held to the checks of Zook's own picks (#132)
+        if use and place and (use[0], ((resume_of.get('ran') or ['', '', ''])[2:3] or [''])[0] or '') != (bot.get('provider') or store.data['settings'].get('provider', 'codex'), bot.get('account') or ''): job['resumedBackup'] = True  # it was answering with a backup Zook picked: checked as one again (#132)
         if use and bot.get('provider') == AUTO: job.update(autoChain=[[provider, model, (resume_of.get('ran') or ['', '', ''])[2] if place else '']], autoNamed=True)  # 換模型重答 stays on the model the user named, on its own sign-in
         if auto_chain: job['autoChain'] = auto_chain; refresh_auto(self)
         if plan: job['plan'] = True
@@ -376,7 +379,7 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
             if not job or job['status'] != 'running': return
             if bot is None: bot = copy.deepcopy(store.find('bots', job['botId']))
             raw = [list(x) for x in job['autoChain']] if job.get('autoChain') else [list(x) for x in provider_chain(store, bot, provider, model)] + auto_backups(store, bot, provider, job)
-            auto, named = bot.get('provider') == AUTO, bool(job.get('autoNamed') and job.get('redoOf'))  # only the user's own 換模型重答 names a model
+            auto, named = bot.get('provider') == AUTO, bool(job.get('userNamed') or job.get('autoNamed') and job.get('redoOf'))  # only the user's own 換模型重答 names a model
             fixed = bool(bot.get('autoAssigned') or bot.get('syncedModel')) and not named  # matched here, or set on another Mac: never on API billing (routing.py)
             # (CLI, model, account, check). The account is the one 自動選擇 picked ('' its CLI's own sign-in); a 自動選擇 Bot never uses an
             # account of its own, any other Bot keeps its own (None). A pick is checked again right before it runs: the user may have
@@ -400,19 +403,19 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
             if budget_blocks(store, chain[0][0]) == 'stop' and not job.get('reattach'):
                 job.update(status='failed', error='這個月的用量預算已用完。可到「各模型使用量」調整上限。', finishedAt=NOW())
                 store.finish_message(job, '', 'failed'); store.save(); return
-            billing_keys = auto_billing_keys(store, bot, chain) if fixed else []; stale = auto_billing_stale(store, billing_keys)
+            billing_keys = auto_billing_keys(store, bot, [x for x in chain if fixed or not job.get('reattach') and (x != first or auto and not named or job.get('resumedBackup'))]); stale = auto_billing_stale(store, billing_keys)  # #33 #132: nothing Zook picks runs on API billing
         if stale: auto_recheck(store, [k for k in billing_keys if auto_billing_stale(store, [k]) and not auto_unwatched(k)])  # watched sign-ins, checked now
-        why, compacted = skipped.get(first), bool(job.get('reattach'))
+        why, compacted, reattach = skipped.get(first), bool(job.get('reattach')), bool(job.get('reattach'))
         for index, (p, m, a, check) in enumerate(chain):
             final = index == len(chain) - 1
-            run_bot = bot if a is None else dict(bot, account=a); fixed and auto_recheck_live(store, bot, p, a)  # the account picked; asked of the CLI now when Zook cannot watch it
+            run_bot = bot if a is None else dict(bot, account=a); backup = not auto and not fixed and not reattach and (p, a) != (first[0], first[2]); guard = fixed or backup or not reattach and (auto and not (named and (p, a) == (first[0], first[2])) or bool(job.get('resumedBackup'))); guard and auto_recheck_live(store, bot, p, a)  # the account picked; asked of the CLI now when Zook cannot watch it
             with store.lock:
-                problem = auto_choice_problem(store, p, a or '') if check else auto_billing_problem(store, p, a if a is not None else (find_account(bot.get('account'), p) or {}).get('id', '')) if fixed else ''  # fixed: still a subscription
+                problem = run_problem(store, bot, p, a, check or a is not None) if guard else ''  # #132: everything Zook picked, and every backup, checked lately to be a subscription (quotasource.py)
                 if problem:
                     if (p, a) == (first[0], first[2]): why = problem
-                    if not final: continue
+                    if not final: backup and (store.find('jobs', job_id) or {}).setdefault('attempts', []).append(dict(provider=p, reason=problem)); continue  # said in the reply (#132)
                     job = store.find('jobs', job_id) or {}
-                    job.update(status='failed', error='自動選擇選的 %s 現在不能用（%s）。請到「各模型使用量」確認。' % (auto_choice_name(p, a or ''), problem), finishedAt=NOW())
+                    job.update(status='failed', error=backup_skip_error(store, bot, first, why, p, a, problem) if backup else '自動選擇選的 %s 現在不能用（%s）。請到「各模型使用量」確認。' % (auto_choice_name(p, a or ''), problem), finishedAt=NOW())
                     store.finish_message(job, '', 'failed'); store.save(); return
                 (store.find('jobs', job_id) or {})['ran'] = [p, m, run_bot.get('account') or '']  # what really runs, for the task limits
             if job.get('compact') and not compacted: compacted = True; prompt = self.compact_chat(job_id, prompt, (p, m), run_bot, inventory)  # two long replies in a row: start this one from a summary
@@ -424,19 +427,19 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
                 acted = any(c.get('category') not in ('read', 'external_read') for c in (job.get('toolCalls') or [])[before:])
                 retry = job.get('status') == 'running' and job.get('resumed') and job.get('resumeGone') and not acted
                 if retry: job.update(noResume=True, resumeLost=True, resumed=False, resumeGone=False); self.attempt_errors.pop(job_id, None)
-            if retry and billing_still_ok(store, job_id, bot, p, a, fixed): self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)  # the CLI could not continue: the saved conversation
+            if retry and billing_still_ok(store, job_id, bot, p, a, guard): self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)  # the CLI could not continue: the saved conversation
             with store.lock:
                 job = store.find('jobs', job_id) or {}
                 tidy = job.get('status') == 'running' and job.get('errorKind') == 'context' and not job.get('compactTried') and not acted and can_compact(store, job)
                 if tidy: job.update(compactTried=True); job.pop('errorKind', None); self.attempt_errors.pop(job_id, None)
-            if tidy and billing_still_ok(store, job_id, bot, p, a, fixed):  # too long: the earlier part becomes a summary, and this reply is tried once more
+            if tidy and billing_still_ok(store, job_id, bot, p, a, guard):  # too long: the earlier part becomes a summary, and this reply is tried once more
                 prompt = self.compact_chat(job_id, prompt, (p, m), run_bot, inventory)
-                if billing_still_ok(store, job_id, bot, p, a, fixed): self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)  # asked again after the summary
+                if billing_still_ok(store, job_id, bot, p, a, guard): self._run_attempt(job_id, prompt, p, m, run_bot, inventory, final)  # asked again after the summary
             with store.lock:
                 job = store.find('jobs', job_id)
                 if not job: return
                 if job['status'] == 'completed' and (p, a) != (first[0], first[2]):
-                    note = '這次改用 %s（%s %s）' % (auto_choice_name(p, a or ''), auto_choice_name(first[0], first[2] or ''), why or '無法回覆')
+                    note = '這次改用 %s（%s %s）' % (auto_choice_name(p, a or ''), auto_choice_name(first[0], first[2] if first[2] is not None else (find_account(bot.get('account'), first[0]) or {}).get('id', '')), why or '無法回覆')  # #33: which account of the same CLI
                     job['fallback'] = dict(provider=p, original=provider, reason=why or '無法回覆')
                     owner = store.find('groups', job['groupId']) if job.get('groupId') else store.find('bots', job['botId'])
                     message = find_message(owner, job['messageId'])
@@ -733,7 +736,7 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
                 if parsed['usage'] and kind == 'codex' and not model: parsed['usage']['model'] = codex_default_model(env) or parsed['usage'].get('model')  # so the reply can be priced
                 if parsed['usage']: parsed['usage'] = live_usage(kept, parsed['usage'])
                 if parsed['usage']: job['usage'] = dict(parsed['usage'], provider=provider, account=account['id'] if account else ''); budget_add(self, provider, parsed['usage']); compact_note_usage(store, job, kind, parsed['usage']); (job.get('autoNamed') or model) or auto_pin_model(store, job['botId'], provider, parsed['usage'])
-                if parsed['usage'] and job.get('redoWho'): redo_model_seen(store, job, provider, parsed['usage'])
+                if parsed['usage'] and (job.get('redoWho') or job.get('redoOf')): redo_model_seen(store, job, provider, parsed['usage'])
                 if job['status'] == 'running':
                     content, options = split_choices(content) if choices_for(store, job) else (content, None)
                     job.update(status='completed', content=content, finishedAt=NOW())

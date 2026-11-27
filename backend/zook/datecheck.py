@@ -6,6 +6,15 @@ import datetime as _dt
 import re as _re
 
 DATE_WEEKDAYS = ('週一', '週二', '週三', '週四', '週五', '週六', '週日')
+# #77④: a date in a notice says its weekday, 12/1（週二）; the Bots are told to write dates the same way.
+WEEKDAY_NOTE = '寫到日期時（通知、提醒、時程、面試或會議時間）一律帶星期，寫成「月/日（週幾）」；寫星期之前先用這台 Mac 的日曆核對，不是今年的日期寫出年份。'
+
+
+def day_label(date, today=None):
+    """12/1（週二）; with the year when it is not this year (2027/1/5（週二）)."""
+    today = today or _dt.date.today()
+    shown = '%d/%d' % (date.month, date.day) if date.year == today.year else '%d/%d/%d' % (date.year, date.month, date.day)
+    return '%s（%s）' % (shown, DATE_WEEKDAYS[date.weekday()])
 _DAY_CHARS = {'一': 0, '二': 1, '三': 2, '四': 3, '五': 4, '六': 5, '日': 6, '天': 6}
 _DAY_EN = (('mon', 0), ('tue', 1), ('wed', 2), ('thu', 3), ('fri', 4), ('sat', 5), ('sun', 6))
 # 2027/1/23, 2027-1-23, 2027年1月23日, 1/23, 1月23日. A bare M-D with a dash is left alone (too often a range or a code).

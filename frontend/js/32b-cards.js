@@ -14,6 +14,7 @@
   }
   // Percent left in one limit; a limit whose reset time has passed is full again (the same rule as the rings).
   function windowLeft(w) {
+    if ('left' in w) return w.left;  // already worked out by Zook (quota_view, #323): the same figure as the rings and the replies
     const r = w.resetsAt, t = r == null ? NaN : new Date(typeof r === 'number' ? (r > 1e12 ? r : r * 1000) : r).getTime();
     if (!isNaN(t) && t <= Date.now()) return 100;
     return Math.round(Math.max(0, Math.min(100, 100 - (Number(w.usedPercent) || 0))) * 10) / 10;
@@ -46,8 +47,9 @@
   // 'low' is under 20%. reset is when it can be used again, in words; it is empty when the CLI does not say.
   const resetTime = r => r == null ? NaN : new Date(typeof r === 'number' ? (r > 1e12 ? r : r * 1000) : r).getTime();
   function accountLevel(provider, account) {
-    const q = quotaFor(provider, account || undefined), s = q?.quota;
+    const q = quotaFor(provider, account || undefined), s = q?.quota, v = q?.view;
     if (!s || q.apiBilling || q.noQuotaApi) return {level: ''};
+    if (v) return viewLevel(v);
     const wins = (s.windows || []).map(w => ({left: windowLeft(w), resetsAt: w.resetsAt, group: String(w.label || '').includes(' · ') ? String(w.label).split(' · ')[0] : ''})), empty = wins.filter(w => w.left <= 0);
     if (limitNow(s) || empty.length) {
       const last = empty.some(w => isNaN(resetTime(w.resetsAt))) ? null : empty.sort((a, b) => resetTime(b.resetsAt) - resetTime(a.resetsAt))[0];  // one without a time: nobody knows when
@@ -56,6 +58,15 @@
     const low = wins.filter(w => w.left < 20).sort((a, b) => a.left - b.left)[0];
     return low ? {level: 'low', left: Math.round(low.left), reset: fmtReset(low.resetsAt), ...groupsOf(wins, low.group)} : {level: ''};
   }
+  // The same, from Zook's own reading of the account (quota_view): what every screen and every reply goes by (#323).
+  function viewLevel(v) {
+    const wins = (v.windows || []).filter(w => w.left != null).map(w => ({left: w.left, resetsAt: w.resetsAt, group: String(w.label || '').includes(' · ') ? String(w.label).split(' · ')[0] : ''}));
+    if (v.level === 'unknown') return {level: 'unknown', note: v.note || '額度無法確定'};
+    if (v.level === 'out') return {level: 'out', reset: v.outReset != null ? fmtReset(v.outReset) : '', clock: v.outReset != null ? resetClock(v.outReset) : '', why: v.limitNow ? limitWords(v.limitCode) : '', ...groupsOf(wins, v.outGroup)};
+    if (v.level !== 'low') return {level: ''};
+    const low = wins.filter(w => w.left < 20).sort((a, b) => a.left - b.left)[0];
+    return {level: 'low', left: Math.round(low ? low.left : v.left), reset: low ? fmtReset(low.resetsAt) : '', ...groupsOf(wins, low?.group)};
+  }
   // An account with limits per kind of model (Antigravity: 「Claude 與 GPT 模型」, 「Gemini 模型」): which kind the figure is about,
   // and what each other kind still has, so 6% is not read as the whole account (#43④).
   function groupsOf(wins, group) {
@@ -63,7 +74,7 @@
     const rest = [...new Set(wins.map(w => w.group).filter(g => g && g !== group))].map(g => g + '還剩 ' + Math.round(Math.min(...wins.filter(w => w.group === g).map(w => w.left))) + '%');
     return {group, rest: rest.join('、')};
   }
-  const levelMark = l => l.level === 'out' ? '・已用完' : l.level === 'low' ? '・剩不到 20%' : '';
+  const levelMark = l => l.level === 'out' ? '・已用完' : l.level === 'low' ? '・剩不到 20%' : l.level === 'unknown' ? '・額度無法確定' : '';
   // The line under 模型與帳號 in the Bot form when the chosen account is used up or nearly so. It only tells; nothing is blocked.
   function quotaWarnText(choice) {
     const [p, a] = String(choice || '').split('::');
@@ -71,6 +82,7 @@
     const l = accountLevel(p || state.data.settings.provider || 'codex', a || '');
     const which = l.group ? `的「${l.group}」` : '', rest = l.rest ? `（${l.rest}）` : '';
     if (l.level === 'out') return `這個帳號${which}額度已用完${rest}，${l.group ? '用這類模型' : '現在'}傳訊息會失敗` + (l.reset ? '，' + l.reset : '；等額度重置或換一個帳號') + '。';
+    if (l.level === 'unknown') return `這個帳號${l.note}。傳訊息會照常用它，真的用完時照「備用模型」的設定換。`;
     if (l.level === 'low') return `這個帳號${which}只剩 ${l.left}% 額度${rest}，可能很快用完` + (l.reset ? '，' + l.reset : '') + '。';
     return '';
   }
@@ -83,7 +95,7 @@
   // 下一步 on a used-up card, in plain words: another signed-in account that still has room (same CLI first), and/or when this one resets.
   function outNext(p, a, lv) {
     const spare = [p, ...(state.accounts?.providers || []).filter(x => x.id !== p.id)].filter(x => x.installed).flatMap(x => [{x, b: null}, ...(x.profiles || []).map(b => ({x, b}))])
-      .find(({x, b}) => (x.id !== p.id || (b ? b.id : '') !== (a ? a.id : '')) && (b || x).status === 'logged_in' && !(b ? b.type === 'key' : quotaFor(x.id)?.apiBilling) && !x.issue && (quotaFor(x.id, b ? b.id : undefined)?.quota?.windows || []).length && accountLevel(x.id, b ? b.id : '').level !== 'out');  // only one known to have room
+      .find(({x, b}) => (x.id !== p.id || (b ? b.id : '') !== (a ? a.id : '')) && (b || x).status === 'logged_in' && !(b ? b.type === 'key' : quotaFor(x.id)?.apiBilling) && !x.issue && (quotaFor(x.id, b ? b.id : undefined)?.quota?.windows || []).length && !['out', 'unknown'].includes(accountLevel(x.id, b ? b.id : '').level));  // only one known to have room
     const other = spare ? `在 Bot 設定改用「${cliShort(spare.x)}${spare.b ? '（' + spare.b.name + '）' : ''}」` : '';
     if (lv.clock) return `下一步：${other ? other + '，或' : ''}等到 ${lv.clock} 重置後再用。`;
     return `下一步：${other ? other + '；' : ''}這家沒有說何時重置，稍後按「偵測使用量」再看${other ? '' : '，或按「＋ 帳號」加入其他帳號'}。`;
@@ -105,7 +117,7 @@
   // The bars of one account on its card, one per slot of its CLI; a slot it has no figure for says 不提供. A used-up weekly limit
   // stops the others of the same kind of model, as in quotaRows.
   function slotRows(slots, windows) {
-    const period = l => l.split(' · ').pop(), rows = (windows || []).map(w => ({label: String(w.label || ''), left: windowLeft(w), resetsAt: w.resetsAt}));
+    const period = l => l.split(' · ').pop(), rows = (windows || []).map(w => ({label: String(w.label || ''), left: windowLeft(w), resetsAt: w.resetsAt})).filter(r => r.left != null);
     return slots.map(label => {
       const r = rows.find(x => x.label === label);
       if (!r) return `<div class="quota-row none"><div class="quota-label"><span>${esc(label)}</span><span><b>不提供</b></span></div><div class="quota-track left-track"></div></div>`;
@@ -118,7 +130,7 @@
     const lines = [];
     for (const label of slots) {
       const w = (windows || []).find(x => String(x.label || '') === label);
-      if (!w) continue;
+      if (!w || windowLeft(w) == null) continue;
       const text = windowLeft(w) >= 100 ? '額度是滿的' : resetWords(w.resetsAt), same = lines.find(x => x.text === text);
       if (same) same.labels.push(label); else lines.push({labels: [label], text});
     }
@@ -135,6 +147,7 @@
     if (!a && p.issue) return {cls: 'off', text: '無法使用', note: issueShort(p.issue)};
     const changed = !a && (p.changed || []).length ? '部分功能暫時關閉' : '';
     if (lv.level === 'out') return {cls: 'out', text: '已用完', note: lv.why || (lv.group ? `「${lv.group}」用完了` : '')};
+    if (lv.level === 'unknown') return {cls: 'unknown', text: '無法確定', note: '額度讀不準'};
     if (lv.level === 'low') return {cls: 'low', text: '快用完', note: `剩 ${lv.left}%` + (lv.group ? `（${lv.group}）` : '')};
     return {cls: 'ok', text: '可用', note: changed};
   }
@@ -155,7 +168,8 @@
     if (state.quota.error) return {body: `<p class="error-text small">${esc(state.quota.error)}</p>`, reset: ''};
     if (!a && p.issue) return {body: done + line('這個登入目前不能用，沒有額度資料。'), reset: ''};
     if (q?.noQuotaApi) return {body: line('這個 CLI 不提供額度資料。'), reset: '不提供'};
-    const s = q?.quota, wins = s?.windows || [];
+    const s = q?.quota, wins = q?.view ? q.view.windows || [] : s?.windows || [];
+    if (q?.view?.level === 'unknown') return {body: done + `<p class="quota-empty">${esc(q.view.note)}。按右上角「偵測使用量」再讀一次。</p>`, reset: '無法確定'};
     if (!wins.length) return {body: done + (limitNow(s) ? `<p class="error-text small">${esc(limitWords(s.limitReached))}</p>` : line(q?.quotaUnread ? '讀不到額度。' : '還沒有額度資料，按右上角「偵測使用量」讀取。')), reset: ''};
     const extra = (s.resetCredits ? `<p class="quota-coupon-line">額度重置券 ${esc(s.resetCredits)} 張（在 Codex 中使用）</p>` : '') + (s.credits && (s.credits.unlimited || (s.credits.balance && s.credits.balance !== '0')) ? `<p class="quota-extra">額外額度：${s.credits.unlimited ? '不限' : esc(s.credits.balance)}</p>` : '');
     return {body: done + slotRows(slots, wins) + extra, reset: slotResets(slots, wins)};
@@ -174,6 +188,13 @@
     return (state.data?.bots || []).filter(b => (b.provider || dflt) === p.id && (b.account || '') === acct);
   }
   document.addEventListener('toggle', e => { if (e.target.dataset?.bound) (state.boundOpen ||= {})[e.target.dataset.bound] = e.target.open; }, true);
+  // #321③: what Zook itself sent through this account, in small type under the bars.
+  function zookLine(q) {
+    const z = q?.zookUsage, tok = n => n >= 1e4 ? (n / 1e4).toFixed(1).replace(/\.0$/, '') + ' 萬' : String(n || 0), part = (name, x) => x && x.replies ? `${name} ${x.replies} 則・${tok(x.tokens)} Token` : '';
+    if (!z) return '';
+    const text = [part('5 小時', z.fiveHour), part('7 天', z.week)].filter(Boolean).join('；');
+    return `<p class="uc-zook" title="這個帳號在 Zook 裡回覆用掉的量；在 Zook 外用的不算">Zook 內：${esc(text || '近 7 天沒有用到')}</p>`;
+  }
   function usageCard(r, slots, many, st) {
     const {p, a} = r, who = a || p, q = quotaFor(p.id, a ? a.id : undefined), lv = r.lv, key = r.key;
     const name = a ? a.name : p.email || '預設帳號', method = a ? (a.type === 'key' ? 'API 金鑰' : a.method || '登入帳號') : p.method || 'CLI 自己的登入';
@@ -185,7 +206,7 @@
     const bots = boundBots(p, a), bound = bots.length ? `<details class="uc-bots" data-bound="${esc(key)}" ${state.boundOpen?.[key] ? 'open' : ''}><summary>綁定 Bot：${bots.length} 個</summary><div class="uc-bot-list">${bots.map(b => `<button class="link" data-action="select-bot" data-id="${esc(b.id)}">${esc(b.name)}</button>`).join('')}</div></details>` : '<p class="uc-bots none">綁定 Bot：0 個</p>';
     const off = q?.autoOn === undefined || q.autoBilled, autoLabel = q?.autoBilled || (a && a.type === 'key') ? 'API 計費，不會自動選用' : '自動選用';
     const auto = `<label class="auto-pick small-switch">${toggle(`${a ? `data-auto-account="${esc(a.id)}"` : `data-auto-model="${esc(p.id)}"`} ${off ? 'disabled' : ''}`, !!q?.autoOn && !q.autoBilled, '自動選用')}<span ${lv.level === 'out' && q?.autoOn ? 'title="這個帳號已用完，重置前自動選用會先跳過它"' : ''}>${autoLabel}</span></label>`;
-    return `<article class="left-card account-card usage-card uc-${st.cls}" ${many ? 'draggable="true" title="拖動可以調整同一家帳號的順序" ' : ''}data-row-key="${esc(key)}"><div class="uc-main">${head}<div class="uc-quota">${quota.body}</div><div class="uc-reset"><span class="uc-label">重置時間</span>${quota.reset && quota.reset.startsWith('<') ? quota.reset : `<div><span>${esc(quota.reset || '—')}</span></div>`}</div>${next ? `<p class="uc-next">${esc(next)}</p>` : ''}${bound}</div><footer class="account-foot">${auto}<div class="card-actions"><button class="secondary small-btn" data-action="account-detail" data-id="${esc(p.id)}" data-account="${esc(a ? a.id : '')}">詳細</button></div></footer></article>`;
+    return `<article class="left-card account-card usage-card uc-${st.cls}" ${many ? 'draggable="true" title="拖動可以調整同一家帳號的順序" ' : ''}data-row-key="${esc(key)}"><div class="uc-main">${head}<div class="uc-quota">${quota.body}${zookLine(q)}</div><div class="uc-reset"><span class="uc-label">重置時間</span>${quota.reset && quota.reset.startsWith('<') ? quota.reset : `<div><span>${esc(quota.reset || '—')}</span></div>`}</div>${next ? `<p class="uc-next">${esc(next)}</p>` : ''}${bound}</div><footer class="account-foot">${auto}<div class="card-actions"><button class="secondary small-btn" data-action="account-detail" data-id="${esc(p.id)}" data-account="${esc(a ? a.id : '')}">詳細</button></div></footer></article>`;
   }
   // One CLI: a title row with ＋ 帳號 across the whole grid, then a card per account. The wrapper takes no room in the grid.
   function familyGroup(f, statuses) {
@@ -205,6 +226,7 @@
     if ((a || p).status !== 'logged_in') return [3, 0];
     const q = quotaFor(p.id, a ? a.id : undefined), s = q?.quota, rows = (s?.windows || []).filter(w => typeof w.usedPercent === 'number').map(w => ({label: String(w.label || ''), left: windowLeft(w)}));  // a limit without a figure is skipped, as on the Mac
     if (q?.apiBilling || (a && a.type === 'key')) return [1, 0];  // paid by use: a subscription's old figures say nothing about it
+    if (q?.view?.level === 'unknown') return [1, 0];  // 無法確定 (#323): not sorted by a figure Zook does not trust, as on the phone
     if (limitNow(s) || rows.some(r => r.left <= 0)) return [2, 0];
     if (!rows.length) return [1, 0];
     const focus = rows.find(r => r.label.includes('小時')) || rows.find(r => r.label.includes('週')) || rows[0];
@@ -257,6 +279,19 @@
     try { state.data.settings = await post('settings', change, 'PATCH'); }
     catch (err) { state.data.settings = before; render(true); toast(err.message); }
   }
+  // #321① #207: when the figures were last read (偵測使用量, the phone or 自動偵測) and what could not be read then.
+  const clockOf = t => new Date(t * 1000).toLocaleTimeString('zh-TW', {hour: '2-digit', minute: '2-digit', hour12: false});
+  function detectStamp() {
+    const r = state.quota?.lastDetect, auto = state.usageAuto?.doneAt || 0;
+    if (!r && !auto) return '';
+    if (!r || auto > r.at + 60) return `<p class="usage-stamp muted small">已更新於 ${clockOf(auto)}</p>`;
+    const failed = (r.failed || []).map(f => `${f.name}：${f.why}`);
+    return `<p class="usage-stamp muted small">已更新於 ${clockOf(r.at)}・${r.updated} 個帳號已更新${failed.length ? `</p><p class="usage-stamp error-text small">沒有讀到：${esc(failed.join('；'))}` : ''}</p>`;
+  }
+  function detectToast(r) {
+    if (!r) return '已更新使用量';
+    return `已更新 ${r.updated} 個帳號的使用量` + ((r.failed || []).length ? `；${r.failed.map(f => f.name).join('、')} 沒有讀到` : '');
+  }
   function accountCards() {
     const list = state.accounts?.providers;
     if (!list) return `<section class="usage-block"><h2>剩餘額度</h2>${loadingBlock('正在向各家 CLI 確認登入狀態，第一次打開約需 10 秒…')}</section>`;
@@ -265,7 +300,7 @@
     const sort = `<div class="card-sort"><span class="usage-auto-label">排序</span>${dropdown('usageCardSort', state.data?.settings?.usageCardSort === 'auto' ? 'auto' : 'custom', CARD_SORTS, 'data-card-sort')}</div>`;
     const fams = usageFamilies(shown), statuses = new Map();
     for (const f of fams) for (const r of f.rows) { r.lv = r.p.installed ? accountLevel(r.p.id, r.a ? r.a.id : '') : {level: ''}; statuses.set(r.key, cardStatus(r.p, r.a, r.lv)); }
-    return `<section class="usage-block"><div class="overview-head"><h2>剩餘額度</h2>${shown.length ? sort : ''}</div>${shown.length ? `<div class="usage-grid">${fams.map(f => familyGroup(f, statuses)).join('')}</div>` : '<div class="blank">還沒有安裝任何模型，按右上角「＋ 新增模型」。</div>'}${waiting ? `<p class="muted small">另有 ${waiting} 個已加入但尚未安裝的模型，可在「＋ 新增模型」安裝。</p>` : ''}</section>`;
+    return `<section class="usage-block"><div class="overview-head"><h2>剩餘額度</h2>${shown.length ? sort : ''}</div>${detectStamp()}${shown.length ? `<div class="usage-grid">${fams.map(f => familyGroup(f, statuses)).join('')}</div>` : '<div class="blank">還沒有安裝任何模型，按右上角「＋ 新增模型」。</div>'}${waiting ? `<p class="muted small">另有 ${waiting} 個已加入但尚未安裝的模型，可在「＋ 新增模型」安裝。</p>` : ''}</section>`;
   }
   document.addEventListener('change', e => {
     if (e.target.dataset?.cardSort === undefined) return;
