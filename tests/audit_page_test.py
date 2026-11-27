@@ -64,9 +64,12 @@ class AuditRecordTest(unittest.TestCase):
     def test_failed_and_stopped_say_why_and_what_next(self):
         m.audit_job(self.store, self.job(status='failed', error='Codex 的額度已用完，或已達使用上限。請等額度重置，或改用其他模型。 /Users/someone/x/y.txt sk-abcdefabcdefabcdefabcdef'), 'failed')
         m.audit_job(self.store, self.job(status='cancelled', messageId='m2'), 'cancelled')
-        failed, = self.items(result='failed'); stopped, = self.items(result='stopped')
+        m.audit_job(self.store, self.job(status='failed', messageId='m3', error='讀不到 /Users/someone/Private Folder/plan b.txt，請確認。'), 'failed')
+        spaced = next(x for x in self.items(result='failed') if x['messageId'] == 'm3')
+        self.assertNotIn('Private', spaced['why']); self.assertNotIn('plan b', spaced['why']); self.assertIn('請確認', spaced['why'])
+        failed = next(x for x in self.items(result='failed') if x['messageId'] == 'm1'); stopped, = self.items(result='stopped')
         self.assertEqual(failed['resultName'], '失敗'); self.assertIn('額度', failed['why']); self.assertTrue(failed['next'])
-        self.assertNotIn('/Users/someone', failed['why']); self.assertNotIn('abcdefabcdef', json.dumps(failed, ensure_ascii=False))
+        self.assertNotIn('/Users/someone', failed['why']); self.assertNotIn('y.txt', failed['why']); self.assertNotIn('abcdefabcdef', json.dumps(failed, ensure_ascii=False))
         self.assertEqual(stopped['resultName'], '已停止'); self.assertTrue(stopped['why'])
         self.assertIn('stopped', {r['id'] for r in m.activity_list(self.store)['results']})
 

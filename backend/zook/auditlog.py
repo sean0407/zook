@@ -79,7 +79,7 @@ WORK_FILE = re.compile(r'(?:寫入|建立|修改|產生|存成)檔案「([^」]{
 def _audit_reason(text):
     """A failure sentence without a whole path (only the file's own name) or anything that looks like a key."""
     text = hide_command_secrets(' '.join(str(text or '').split()))
-    text = re.sub(r'(?:~|\.{0,2})/(?:[^\s/「」（）()，。,]+/)+([^\s/「」（）()，。,]*)', lambda x: x.group(1) or '', text)
+    text = re.sub(r'(?:(?<=[\s「（(:：=])|^)(?:~|\.{0,2})/[^「」（）()，。,；;\n]*', '（路徑已省略）', text)  # to the end of the clause: a folder may have spaces in its name
     text = re.sub(r'[A-Za-z0-9_\-+=]{24,}', '…', text)
     return text[:200]
 
