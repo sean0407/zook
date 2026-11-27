@@ -3,15 +3,37 @@
 after its cd, pushd and chdir, what its variables hold, and the files xargs and parallel read their arguments from (queue #293)."""
 
 
+_AS_BEFORE = [False]  # read as before #344: eval and source taken as setting nothing (what was found then is still checked)
+
+
+def _as_before(path):
+    """Where the path leads as read before #344, for the checks that look at every place a path may be: a place found then is
+    never lost because eval or source now make the rest unknown."""
+    was, _AS_BEFORE[0] = _AS_BEFORE[0], True
+    try: return _resolved(path)
+    finally: _AS_BEFORE[0] = was
+
+
+def _sources():
+    """A command of the line being read runs eval, source or . : it may set any variable (queue #344)."""
+    return not _AS_BEFORE[0] and any(_strip(_redirects(part)[0])[:1] in (['eval'], ['source'], ['.']) for line in _LINES for part in _split(_without_inner(line))[0])
+
+
 def _folders():
     """Every folder a command of the line being read may run in, after each cd, pushd or chdir of it (in any order: one may fail);
-    None when one cannot be known (a variable, cd -, popd, env -C, a name CDPATH may lead to keys)."""
-    found, stack = [_CWD[0]], 0  # stack: pushd's of this line not yet undone; a popd goes back to a folder of this line only then
-    for line in _LINES:
+    None when one cannot be known (a variable, cd -, popd, env -C, a name CDPATH may lead to keys, eval of what is not plain text)."""
+    found, stack, lines = [_CWD[0]], 0, list(_LINES)  # stack: pushd's of this line not yet undone; a popd goes back to a folder of this line only then
+    for line in lines:
         for part in _split(_without_inner(line))[0]:
             raw = _redirects(part)[0]
             if re.search(r'(?:^|\s)(?:\S*/)?env(?:\s+(?:-\S*|\S*=\S*))*?\s+(?:-[^-\s]*C|--chdir)', ' '.join(raw)): return None  # env -C: elsewhere
             words = _strip(list(raw))
+            if words[:1] == ['eval']:  # eval 'cd ~': its text is a line of its own; what a variable or $( … ) gives it is not known
+                text = ' '.join(words[1:])
+                if set(text) & set('$`\\') or GLUED in text or len(lines) > 20:
+                    if _AS_BEFORE[0]: continue
+                    return None
+                lines.append(text); continue
             if words[:1] == ['popd'] and (words[1:] not in ([], ['-q']) or not stack) or words[:1] == ['pushd'] and len(words) == 1: return None
             stack += {'pushd': 1, 'popd': -1}.get(words[0] if words else '', 0)
             if words[:1] in (['cd'], ['pushd'], ['chdir']):
@@ -61,7 +83,8 @@ def _no_heredocs(text):
 
 def _values(name):
     """What a variable of the line being read may hold: set on it on its own (NAME=value, export NAME=value) or a for loop's words;
-    None when not known (set from outside, by read, by $( … ), or only for one command)."""
+    None when not known (set from outside, by read, by $( … ), or only for one command; any of them after eval or source)."""
+    if _sources(): return None  # eval 'F=…', source FILE: may set it again before it is read (queue #344)
     if name == 'PWD': return None if any(re.search(r'\bPWD\+?=', x) for x in _LINES) else _folders()  # set by hand: not where it runs
     found = []
     for raw in _LINES:
@@ -110,6 +133,7 @@ def _secret_any(path, unsure=True):
     """Where a key or sign-in is named, after the cds of this line; '' when none is. unsure: a path in a folder that cannot be known
     (cd "$VAR") counts too, as $PWD/…"""
     found = _resolved(path)
+    found = _as_before(path) if found is None and not unsure else found  # echo $F: a key found as before is still a key
     if found is None:  # a variable is shown by its name only: never the rest of the word, which may be anything
         named = re.search(r'\$\{?\w+\}?', path); named = '$ZOOKSUB' if GLUED in path or '`' in path else named.group() if named else ''
         return _secret_path(path) and path or ((named or '$PWD/' + _expand(path)) if unsure else '')
@@ -180,3 +204,79 @@ def _arg_files(words):
         elif w in ('-a', '--arg-file') or w.startswith('--arg-file='): out += [w.split('=', 1)[1]] if '=' in w else words[i + 1:i + 2]
         elif _short_value(words, i, WRAPPER_VALUED[tool], 'a') is not None: out.append(_short_value(words, i, WRAPPER_VALUED[tool], 'a'))
     return out
+
+
+# ---- queue #344: what a shell -c or eval script holds once the outer shell has filled it in, and file names handed on through a pipe
+TRUSTED_ENV = ('HOME', 'TMPDIR', 'USER', 'LOGNAME')  # set by macOS for the user, not by the Bot on this line
+REQUOTE = set('\'"\\`$;&|<>(){}#\n')  # in a value put into a script, what may close its quotes or start another command
+
+
+def _quoted_parts(text):
+    """The text inside each '…' and "…" of a script, as it is written."""
+    out, quote, start, j = [], '', 0, 0
+    while j < len(text):
+        c = text[j]
+        if quote == '"' and c == '\\': j += 1
+        elif quote and c == quote: out.append(text[start:j]); quote = ''
+        elif not quote and c == '\\': j += 1
+        elif not quote and c in '\'"': quote, start = c, j + 1
+        j += 1
+    return out + ([text[start:]] if quote else [])
+
+
+def _requoted(script):
+    """A shell -c or eval script the shell running it may read otherwise than it is read here: the outer shell may have put in what
+    $( … ) or `…` prints, a variable set on this line to quotes, ; or | (or set where its value is not known, or after eval or source),
+    or a variable not known here inside quotes that keep ; | <( … ) or $( … ) from running (a ' in it ends the quotes)."""
+    if GLUED in script or '$ZOOKSUB' in script: return True
+    names = set(re.findall(r'\$\{?([A-Za-z_]\w*)', script))
+    if not names and '$' not in script: return False
+    if _sources(): return True
+    for n in names:
+        held = _values(n)
+        if held is not None and any(set(v) & REQUOTE for v in held): return True
+        if held is None and any(re.search(r'(?<![\w$])%s(?!\w)' % n, re.sub(r'\$\{?%s(?!\w)' % n, '', x.replace(script, ' '))) for x in _LINES): return True  # set on the line (not by the script itself), value not known
+    for part in _quoted_parts(script):
+        if re.search(r'[;&|<>()`\n]', part) and any(n not in TRUSTED_ENV and _values(n) is None for n in re.findall(r'\$\{?(\w+|[@*#?!-])', part)): return True
+    return False
+
+
+LISTERS = {'find', 'gfind', 'ls', 'gls', 'fd', 'fdfind', 'tree', 'rg', 'ripgrep', 'ag', 'ack', 'ugrep', 'pt', 'grep', 'egrep', 'fgrep', 'ggrep'}
+EVERYWHERE = {'locate', 'glocate', 'mlocate', 'plocate', 'mdfind'}  # names from the whole disk
+NOT_OPENED = {'echo', 'printf', 'basename', 'dirname', 'true', 'false', ':', 'test', '[', 'mkdir', 'touch', 'realpath', 'readlink'}
+
+
+def _reaches(argv):
+    """The command lists or searches file names in a folder that is, or holds, keys or a sign-in (the home folder), or in one that
+    cannot be known."""
+    words = _strip(_redirects(argv)[0])
+    name = os.path.basename(words[0]) if words else ''
+    if name in EVERYWHERE: return True
+    if name not in LISTERS: return False
+    starts = (_positional(words[1:], set()) or ['.']) if name in ('ls', 'gls') else _search_roots('find' if name == 'gfind' else name, words[1:])[0]
+    rooted, unknown = _rooted(starts)
+    return unknown or any(_secret_path(s) or _holds_secrets(s) for s in rooted + starts)
+
+
+def _all_inner(text, depth=0):
+    """Every command line inside $( … ), <( … ), >( … ) and `…` of the text, those inside them too."""
+    found = [x for x in _inner(text) if x]
+    return found + [y for x in found for y in (_all_inner(x, depth + 1) if depth < 4 else [x])]
+
+
+def _piped_names(parts, n, piped, words, read, stripped, command):
+    """File names a command opens that another command of the line lists (queue #344): … | xargs cat, xargs cat < <(find ~),
+    find ~ | cpio -o, zip -@. Asked when what lists them reaches the home folder's keys, or the list file names one."""
+    before = [os.path.basename(w) for w in words[:len(words) - len(stripped)]]
+    prog = os.path.basename(stripped[0]) if stripped else ''
+    opens = ('xargs' in before or 'parallel' in before) and prog and prog not in NOT_OPENED | DELETE_COMMANDS
+    opens = opens or prog == 'cpio' and any(re.fullmatch(r'-[a-zA-Z]*o[a-zA-Z]*|--create', a) for a in stripped[1:]) or prog == 'zip' and '-@' in stripped
+    if not opens: return []
+    feeders, k = [], n
+    while k in piped and k > 0: k -= 1; feeders.append(parts[k])  # every command before it in the pipe
+    if read or any(w.startswith('<<') for w in parts[n]):  # < <( … ), <<< "$( … )": a command inside the line hands the names on
+        feeders += [p for x in _all_inner(command) for p in _split(_without_inner(x))[0]]
+    files = [r for r in read if not re.fullmatch(r'/dev/fd/\d+|/dev/stdin|-', r)]
+    listed = _listed(files, prog, words) if files else []  # xargs cat < list.txt: the names in the list, as xargs -a list.txt
+    if listed: return [_hit('secret', '讀取 ' + _names(listed))]
+    return [_hit('secret', '讀取 （另一個指令列出的檔案，範圍包含家目錄）')] if any(map(_reaches, feeders)) else []
