@@ -140,5 +140,22 @@ class CodeIsNotACommand(unittest.TestCase):  # #201③: guarded here; the words 
             self.assertNotIn('console', said); self.assertNotRegex(said, r'(^|[、；：])e($|[、；])')
 
 
+class NarrowSidebarFolds(unittest.TestCase):  # user 2026-11-27: 480 wide or less, folded by default; ☰ opens; picking closes
+    def test_folded_by_default_and_opened_by_the_button(self):
+        chat = source('10-chat.js')
+        self.assertIn("<aside class=\"sidebar ${state.sideOpen ? 'side-open' : ''}\">", chat)
+        self.assertIn('data-side-fold', chat)
+        css = (ROOT / 'frontend/style.css').read_text(encoding='utf-8')
+        at = css.index('.side-fold { display: none;')
+        rules = css[at:at + 600]
+        self.assertIn('@media (max-width: 480px)', rules); self.assertIn('.sidebar:not(.side-open) > :not(.side-top) { display: none; }', rules)
+
+    def test_picking_folds_it_again(self):
+        fold = source('34e-sidefold.js')
+        for action in ('select-bot', 'select-group', 'page'): self.assertIn("'%s'" % action, fold)
+        self.assertIn('(max-width: 480px)', fold)
+        self.assertIn('state.sideOpen = false', fold)
+
+
 if __name__ == '__main__':
     unittest.main()
