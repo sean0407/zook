@@ -454,6 +454,7 @@ def _command_boundaries(command, depth=0):
             found += _redirect_hits(read, written, empty=not stripped or os.path.basename(stripped[0]) in (':', 'true') and len(stripped) == 1 and not read or stripped[:2] == ['cat', '/dev/null'])
             listed = _listed(_arg_files(words), prog, words)  # xargs -a FILE, parallel --arg-file FILE or :::: FILE: read too
             found += [_hit('secret', '讀取 ' + _names(listed))] if listed else []
+            found += _piped_names(parts, n, piped, words, read, stripped, command)  # … | xargs cat: names another command lists (#344)
             found += _argv_boundaries(stripped, command, depth)
     finally: _LINES.pop()
     return found
@@ -487,7 +488,7 @@ def command_boundary(command, depth=0):
 def _redirect_hits(read, written, empty=False):
     out = []
     if any(map(_secret_any, read + written)): out.append(_hit('secret', _names(map(_secret_any, read + written))))
-    written = [x for t in written for x in _resolved(t) or [t]]  # a relative file, from wherever the line's cds led
+    written = [x for t in written for x in _resolved(t) or _as_before(t) or [t]]  # a relative file, from wherever the line's cds led
     if empty and any(_nonempty(t) for t in written): out.append(_hit('delete', '清空 %s 的內容' % _names([t for t in written if _nonempty(t)])))
     if any(_guard_path(t) for t in written): out.append(_hit('guard', '寫入 ' + _names([t for t in written if _guard_path(t)])))
     elif any(_system_path(t) for t in written): out.append(_hit('system', '寫入 ' + _names([t for t in written if _system_path(t)])))
@@ -577,11 +578,12 @@ def _past_pattern(plain, args, given):
 def _search_roots(name, args, whole='', depth=0):
     """(starting folders, whether it reads what is under them) for find and the grep family; None for other commands."""
     if name == 'find':
-        starts = []
-        for a in args:
+        starts, lead = [], 0
+        while lead < len(args) and re.fullmatch(r'-[HLPEXdsx]+|-O\d*|-[Df]', args[lead]): lead += 2 if args[lead] in ('-D', '-f') else 1  # find -L ~ …
+        for a in [x for i, x in enumerate(args[:lead]) if i and args[i - 1] == '-f'] + args[lead:]:
             if a.startswith(('-', '(', '!')) or a in ('(', '!'): break
             starts.append(a)
-        return starts or ['.'], any(a in ('-exec', '-execdir', '-ok', '-okdir') for a in args)
+        return (starts + ['.'] * bool(lead)) or ['.'], any(a in ('-exec', '-execdir', '-ok', '-okdir') for a in args)
     if name in ('grep', 'egrep', 'fgrep', 'ggrep'):
         opts = _options(args)
         recursive = any(a in ('-r', '-R', '--recursive', '--dereference-recursive') or re.fullmatch(r'-[a-zA-Z]*[rR][a-zA-Z]*', a) or a in ('--directories=recurse', '-drecurse')
@@ -598,7 +600,8 @@ def _search_roots(name, args, whole='', depth=0):
         if name in TARS:  # tar -C folder: the names after it are there; each -C from the one before it, so any of them counts
             moved = []
             for v in [v for i, a in enumerate(args) for v in [a[12:] if a.startswith('--directory=') else ''.join(args[i + 1:i + 2]) if a == '--directory' else _short_value(args, i, {'-f', '-b', '-T', '-X', '-s'}, 'C')] if v is not None]:
-                moved = list(dict.fromkeys(moved + [v] + ([] if os.path.isabs(_expand(v)) else [os.path.join(d, v) for d in moved])))[:40]
+                moved = list(dict.fromkeys(moved + [v] + ([] if os.path.isabs(_expand(v)) else [os.path.join(d, v) for d in moved])))
+                if len(moved) > 40: moved = moved[:40] + [GLUED]; break  # too many to follow: the folder is not known (#344)
             plain = plain + [os.path.join(d, s) for d in moved for s in (plain or ['.']) if not os.path.isabs(_expand(s))]
         listing = name in ('rg', 'ripgrep') and _rg_list_only(args, whole, depth)  # names only (#138)
         if name in ('rg', 'ripgrep') and any(a in ('--in', '--in0') or a.startswith(('--in=', '--in0=')) for a in _options(args)): plain = plain + ['/']  # the paths come from a list Zook does not read: any of them
@@ -619,7 +622,7 @@ def _argv_boundaries(argv, whole, depth):
         after = next((args[i + 1:] for i, a in enumerate(args) if re.fullmatch(r'-[a-z]*c[a-z]*', a)), [])  # bash -c [options] [--] '…'
         script = next((after[k + 1] if x == '--' else x for k, x in enumerate(after) if x == '--' and k + 1 < len(after) or x[:1] != '-'), None) if name in SHELLS else ' '.join(args)
         if script is None and name in SHELLS and any(re.fullmatch(r'-[a-z]*c[a-z]*', a) for a in args): return [_hit('unclear', '（shell -c 沒有寫出要執行的內容）')]
-        if script: return command_boundaries(script, depth + 1)
+        if script: return ([_hit('unclear', '（指令內容由外層填入變數或 $( … ) 的輸出，可能改變引號或多出指令）')] if _requoted(script) else []) + command_boundaries(script, depth + 1)
     if name in INTERPRETERS or re.fullmatch(r'python3(\.\d+)?', name):
         code = next((args[i + 1] for i, a in enumerate(args[:-1]) if a in INLINE_FLAGS), None)
         if code is None and ('-' in args or not plain) and '<<' in whole: code = whole  # the program comes from a here-document
@@ -722,7 +725,7 @@ def _argv_boundaries(argv, whole, depth):
     if name == 'truncate' and any(re.fullmatch(r'(-s|--size=?)0?', a) or a in ('-s0', '--size=0') for a in args) and ('0' in args or any(a.endswith('0') for a in args)):
         found.append(_hit('delete', '清空 %s 的內容' % _names([a for a in plain if a != '0'])))
     if name in ('cp', 'mv') and plain[:1] == ['/dev/null'] and len(plain) == 2 and _nonempty(plain[1]): found.append(_hit('delete', '清空 %s 的內容' % _names(plain[1:])))
-    targets = [x for t in targets for x in _resolved(t) or [t]]; removed = [x for t in plain for x in _resolved(t) or [t]] if name in DELETE_COMMANDS else []
+    targets = [x for t in targets for x in _resolved(t) or _as_before(t) or [t]]; removed = [x for t in plain for x in _resolved(t) or _as_before(t) or [t]] if name in DELETE_COMMANDS else []
     if any(map(_secret_any, targets)) and not any(k == 'secret' for k, _ in found): found.append(_hit('secret', '寫入 ' + _names(map(_secret_any, targets))))  # sort -boauth.json
     if any(_guard_path(t) for t in targets): found.append(_hit('guard', '修改 ' + _names([t for t in targets if _guard_path(t)])))
     elif name not in DELETE_COMMANDS and any(_system_path(t) for t in targets) and name not in ('touch', 'mkdir'): found.append(_hit('system', '寫入 ' + _names([t for t in targets if _system_path(t)])))
