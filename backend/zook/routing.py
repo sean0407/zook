@@ -131,14 +131,10 @@ AUTO_FRESH = 600  # seconds a sign-in check counts as current, for a Bot whose f
 def refresh_auto_status(store, wait=False):
     if not _auto_checking.acquire(blocking=wait): return  # one check at a time; wait=True waits for the one under way
     try:
-        found = {p: auto_status(p) for p in AUTO_MODELS if P.spec(store.data, p) and find_cli(p)}
+        found = {p: sign_in_checked(p, lambda p=p: auto_status(p)) for p in AUTO_MODELS if P.spec(store.data, p) and find_cli(p)}
         with store.lock: extras = [dict(a) for a in auto_accounts(store) if P.spec(store.data, a['provider'])]
         for account in extras:
-            if find_cli(account['provider']):
-                try: found[auto_account_key(account)] = auto_account_status(account)
-                except (OSError, ValueError, RuntimeError): pass
-        for key, state in found.items():
-            if state.get('signedIn') is not None: state.update(checkedAt=time.time(), signIn=auth_fingerprint(key))  # a check that finished
+            if find_cli(account['provider']): found[auto_account_key(account)] = sign_in_checked(auto_account_key(account), lambda a=account: auto_account_status(a))
         with store.lock:
             store.data['autoStatus'] = merge_auto_status(store.data.get('autoStatus') or {}, found)
             try: store.save()
@@ -206,13 +202,8 @@ BACKUP_MIN_LEFT = 20  # a backup with less left than this is used only when ever
 
 
 def backup_low(store, provider, account_id=''):
-    """True when the saved quota shows less than BACKUP_MIN_LEFT% left in a limit that has not reset yet."""
-    snap = (store.data.get('quota') or {}).get(provider + '@' + account_id if account_id else provider) or {}
-    if limit_reached_now(snap): return True
-    windows = [w for w in snap.get('windows') or [] if isinstance(w, dict)]
-    if provider == 'antigravity': windows = [w for w in windows if 'gemini' in str(w.get('label')).lower()] or windows  # Zook runs its default Gemini model
-    now = time.time()
-    return any(isinstance(w.get('usedPercent'), (int, float)) and w['usedPercent'] > 100 - BACKUP_MIN_LEFT and _window_open(w, snap, now) for w in windows)
+    """True when less than BACKUP_MIN_LEFT% is left in a limit that has not reset yet (quota_low, the shared reading, #323)."""
+    return quota_low(store, provider, account_id, BACKUP_MIN_LEFT)
 
 
 def backups_with_room(store, bot, backups):
@@ -226,13 +217,8 @@ def backups_with_room(store, bot, backups):
 
 
 def auto_quota_low(store, provider, account_id=''):
-    """True when the saved quota shows less than 10% left in a limit that has not reset yet."""
-    snap = (store.data.get('quota') or {}).get(provider + '@' + account_id if account_id else provider) or {}
-    if limit_reached_now(snap): return True  # e.g. the workspace ran out of credits (a recent reading only)
-    windows = [w for w in snap.get('windows') or [] if isinstance(w, dict)]
-    if provider == 'antigravity': windows = [w for w in windows if 'gemini' in str(w.get('label')).lower()] or windows  # Zook runs its default Gemini model
-    now = time.time()
-    return any(isinstance(w.get('usedPercent'), (int, float)) and w['usedPercent'] > 100 - AUTO_MIN_LEFT and _window_open(w, snap, now) for w in windows)
+    """True when less than AUTO_MIN_LEFT% is left in a limit that has not reset yet (quota_low, the shared reading, #323)."""
+    return quota_low(store, provider, account_id, AUTO_MIN_LEFT)
 
 
 def pick_auto(store, content, names=(), plan=False, bot=None, taken=None, keep=None):
@@ -370,9 +356,7 @@ def auto_recheck(store, keys):
     for key in dict.fromkeys(keys):
         provider, _, account_id = key.partition('@')
         with store.lock: account = dict(find_account(account_id, provider) or {}) if account_id else None
-        try: state = auto_account_status(account) if account else auto_status(provider) if not account_id else dict(signedIn=None, billed=True)
-        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError): state = dict(signedIn=None, billed=True)
-        if state.get('signedIn') is not None: state.update(checkedAt=time.time(), signIn=auth_fingerprint(key))
+        state = sign_in_checked(key, lambda: auto_account_status(account) if account else auto_status(provider) if not account_id else dict(signedIn=None, billed=True))
         with store.lock:
             status = store.data.setdefault('autoStatus', {})
             if state.get('signedIn') is None: (status.get(key) or {}).pop('checkedAt', None)  # could not say: not used until it can
@@ -406,9 +390,23 @@ def auto_unwatched(key): return provider_kind(str(key).partition('@')[0]) in UNW
 
 
 def auto_recheck_live(store, bot, provider, account):
-    """Right before a request of a Bot whose model must not run on API billing: ask a CLI Zook cannot watch which sign-in it uses now."""
-    with store.lock: key = auto_billing_keys(store, bot, [(provider, '', account, False)])[0]
-    if auto_unwatched(key): auto_recheck(store, [key])
+    """Right before a request of a Bot whose model must not run on API billing: ask a CLI Zook cannot watch which sign-in it uses now,
+    and any other whose check is old (a backup taking over 15 minutes into a reply, #132), instead of skipping it as unconfirmed."""
+    with store.lock: key = auto_billing_keys(store, bot, [(provider, '', account, False)])[0]; stale = auto_billing_stale(store, [key])
+    if auto_unwatched(key) or stale: auto_recheck(store, [key])
+
+
+def sign_in_checked(key, ask, tries=3):
+    """Runs ask() (the CLI says which sign-in it uses) between two readings of the sign-in files. Only an answer with the files unchanged
+    meanwhile is kept, with that fingerprint, so a sign-in switched during the check is never recorded as the one checked (#132)."""
+    for _ in range(tries):
+        before = auth_fingerprint(key)
+        try: state = ask()
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError): return dict(signedIn=None, billed=True)
+        if auth_fingerprint(key) == before:
+            if state.get('signedIn') is not None: state.update(checkedAt=time.time(), signIn=before)
+            return state
+    return dict(signedIn=None, billed=True)  # it kept changing: not known
 
 
 def _auto_stale(state, key):
@@ -425,6 +423,7 @@ def auth_fingerprint(key):
     if account_id:  # an extra account signs in inside its own folder; a key account has nothing on disk to watch
         try: files = [account_dir(account['id'])] if account and account.get('type') == 'login' and provider in ACCOUNT_HOME else []
         except ValueError: files = []
+    elif provider_kind(provider) == 'codex' and provider_env(provider).get('CODEX_HOME'): files = [pathlib.Path(provider_env(provider)['CODEX_HOME']).expanduser() / 'auth.json']  # where the CLI really keeps it (#132)
     else: files = [pathlib.Path(os.path.expanduser(p)) for p in AUTH_FILES.get(provider_kind(provider) or '', ())]
     out = []
     for f in files:
@@ -479,15 +478,6 @@ def _old_quota_match(bot):
     found = _OLD_MATCH.search(str(bot.get('autoReason') or ''))
     if not found: return ''
     return 'move' if found.group(1) == auto_choice_name(bot.get('provider') or '', bot.get('account') or '') else 'gone'
-
-
-def quota_left(store, provider, account_id=''):
-    """Percent left in the tightest limit that has not reset, from the saved quota; 50 when nothing is known."""
-    snap = (store.data.get('quota') or {}).get(provider + '@' + account_id if account_id else provider) or {}
-    if limit_reached_now(snap): return 0
-    now = time.time()
-    used = [w['usedPercent'] for w in snap.get('windows') or [] if isinstance(w, dict) and isinstance(w.get('usedPercent'), (int, float)) and _window_open(w, snap, now)]
-    return max(0, 100 - max(used)) if used else 50
 
 
 def auto_backups(store, bot, provider, job=None):

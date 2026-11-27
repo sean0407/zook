@@ -406,6 +406,9 @@ def upkeep_fields(data, body, changes):
     if 'streamReplies' in body:
         if not isinstance(body['streamReplies'], bool): raise ValueError('streamReplies 無效。')
         changes['streamReplies'] = body['streamReplies']
+    if 'startTips' in body:  # 從這裡開始 on the empty chat (#308); 說明 always has it
+        if not isinstance(body['startTips'], bool): raise ValueError('startTips 無效。')
+        changes['startTips'] = body['startTips']
     if 'onboarded' in body:
         if body['onboarded'] is not True: raise ValueError('onboarded 無效。')
         changes['onboarded'] = True
@@ -508,7 +511,7 @@ def state_view(store, whole=False):
                     for j in store.data['jobs'] if not j.get('slim') and not j.get('internal')]
     if not whole: view['bots'] = [page_bot(b) for b in store.data['bots']]  # the newest part of each open conversation; older parts are asked for
     if not whole: view['groups'] = [page_group(g) for g in store.data['groups']]
-    view.pop('usageArchive', None); view.pop('usageDaily', None); view['rings'] = usage_rings(store)
+    view.pop('usageArchive', None); view.pop('usageDaily', None); view['rings'] = usage_rings(store); view['bots'] = bots_with_backup(store, view['bots'])  # #132: what a reply really tries next
     view['knowledge'] = knowledge_view(store)  # a file's text only as a preview (knowledge.py)
     view['deletedBots'] = [{k: b.get(k) for k in ('id', 'name', 'color', 'shape', 'deletedAt')} for b in store.data.get('deletedBots') or []]  # their conversations stay on disk
     return view

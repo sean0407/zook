@@ -325,6 +325,7 @@
         if (!id) data.clientId = onceId(form);
         if (accessShown && data.access === 'folder' && !data.accessFolder) { needFolder(form); return; }
         if (id && form.botBase) data.base = form.botBase;  // G46 (#162)
+        if (!id && sameNameAgain(form, data.name)) return;  // #309①: a second press makes it anyway
         let result;
         try { result = await post(id ? 'bots/' + encodeURIComponent(id) : 'bots', data, id ? 'PATCH' : 'POST'); }
         catch (error) { if (error.status === 409 && id) { formNote(form, error.message, 'conflict'); return; } throw error; }  // stays open; nothing is overwritten
@@ -337,7 +338,7 @@
           render()
         }
         const made = '已建立「' + (result.name || result.bot?.name || data.name) + '」';  // #253: says which Bot, and stays long enough to be read
-        toast(id ? (result.autoNotice ? '已儲存 Bot。' + result.autoNotice : '已儲存 Bot') : result.autoReason ? made + '，自動配好：' + result.autoReason : made + '，可以開始對話了', id ? 3000 : 6000)
+        toast(id ? (result.autoNotice ? '已儲存 Bot。' + result.autoNotice : '已儲存 Bot') : createdWords(result.autoReason ? made + '，自動配好：' + result.autoReason : made, state.selected, data.fallbacks, !!result.autoReason), id ? 3000 : 6000)
       } else if (form.id === 'mcp-bots-form') {
         const id = form.dataset.id, chosen = new Set(new FormData(form).getAll('bots'));
         for (const b of state.data.bots) {
@@ -470,13 +471,7 @@
       } else if (form.id === 'note-form') {
         await saveNote(form, form.dataset.id ? '' : onceId(form));  // 36c-knowledge.js; a typed one is made once however often 儲存 is pressed
       } else if (form.id === 'settings-form') {
-        let d = new FormData(form);
-        await post('settings', {
-          provider: d.get('provider'),
-          model: d.get('model')
-        }, 'PATCH');
-        await refresh();
-        toast('已儲存設定')
+        await saveModelSettings(form);  // Enter in the typed model name: saved like any change (38c-settings.js)
       }
     } catch (err) {
       toast(/^(建立|新增)/.test(String(label || '').trim()) ? '建立失敗：' + err.message : err.message)
@@ -530,7 +525,6 @@
   refresh().then(() => {
     startPollers();
     recoveryNotice();
-    if (state.data.settings.onboarded === false) api('accounts').then(a => { state.accounts = a; render(true); }).catch(() => {});
     setInterval(syncFromElsewhere, 3000);
     setTimeout(refreshUpdate, 4000); setTimeout(refreshUpdate, 20000); setInterval(refreshUpdate, 3600 * 1000);
   }).catch(e => {
