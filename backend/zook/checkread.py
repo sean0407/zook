@@ -21,7 +21,8 @@ GROUP_TEXT_PARTS = 5000    # parts of one Office file (a ZIP)
 GROUP_TEXT_KEEP = 600      # seconds a text version no file of this turn has is kept (another turn of the group may still copy it)
 try: GROUP_TEXT_BUDGET = max(0.0, float(os.environ.get('ZOOK_GROUP_TEXT_BUDGET') or 60))  # seconds a turn waits for text versions not made yet
 except ValueError: GROUP_TEXT_BUDGET = 60.0
-_group_text_jobs, _group_text_jobs_lock, _group_text_slots = {}, threading.Lock(), threading.Semaphore(2)  # text versions being made; two at a time
+GROUP_TEXT_MEMORY = 1 << 30  # bytes of memory one helper program may take (a PDF crafted to unpack to a huge page only fails itself)
+_group_text_jobs, _group_text_jobs_lock, _group_text_queue, _group_text_workers = {}, threading.Lock(), queue.Queue(), []  # text versions waiting or being made, two at a time
 _GROUP_TEXT_PDF = """ObjC.import('PDFKit');
 function run(argv) {
   const doc = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(argv[0]));
@@ -29,9 +30,10 @@ function run(argv) {
   if (doc.isLocked) return 'locked';
   const n = doc.pageCount, most = parseInt(argv[2], 10), each = parseInt(argv[3], 10); let out = '', i = 0;
   for (; i < n && out.length < most; i++) {
-    const page = doc.pageAtIndex(i), s = page && !page.isNil() ? page.string : null;
-    let t = s && !s.isNil() ? s.js : '（這一頁沒有文字，可能是圖片）';
-    if (t.length > each) t = t.slice(0, each) + '（這一頁後面還有，太長沒有列出）';
+    const page = doc.pageAtIndex(i), chars = page && !page.isNil() ? page.numberOfCharacters : 0;
+    const part = chars ? page.selectionForRange($.NSMakeRange(0, Math.min(chars, each))) : null;  // only the first characters are ever made into a string
+    let t = part && !part.isNil() && part.string && !part.string.isNil() ? part.string.js : '（這一頁沒有文字，可能是圖片）';
+    if (chars > each) t += '（這一頁後面還有，太長沒有列出）';
     t = '【第 ' + (i + 1) + ' 頁】\\n' + t + '\\n';
     out += t.length > most - out.length + each ? t.slice(0, most - out.length + each) : t;
   }
@@ -58,9 +60,11 @@ def _text_run(command, cancel, input=None, out=None):
         end = time.monotonic() + GROUP_TEXT_SECONDS
         while proc.poll() is None:
             big = out is not None and os.path.exists(str(out)) and os.path.getsize(str(out)) > GROUP_TEXT_MAX * 4
-            if cancel.is_set() or big or time.monotonic() > end:
-                raise KnowledgeUnreadable('已停止' if cancel.is_set() else '內容太大' if big else '處理太久')
+            heavy = _text_memory(proc.pid) > GROUP_TEXT_MEMORY  # macOS cannot cap a program's memory ahead (setrlimit is refused), so it is watched
+            if cancel.is_set() or big or heavy or time.monotonic() > end:
+                raise KnowledgeUnreadable('已停止' if cancel.is_set() else '內容太大' if big else '佔用記憶體太多' if heavy else '處理太久')
             time.sleep(0.05)
+        if out is not None and os.path.exists(str(out)) and os.path.getsize(str(out)) > GROUP_TEXT_MAX * 4: raise KnowledgeUnreadable('內容太大')  # it may have ended between two looks
         return proc.stdout.read(4096)
     finally:
         if proc.poll() is None:
@@ -68,6 +72,15 @@ def _text_run(command, cancel, input=None, out=None):
             except OSError: pass
             proc.wait(timeout=5)
         proc.stdout.close()
+
+
+def _text_memory(pid):
+    """The memory a helper program holds now (resident bytes, through macOS's libproc), 0 when it cannot be told."""
+    try:
+        buf = ctypes.create_string_buffer(96)
+        if ctypes.CDLL('/usr/lib/libproc.dylib').proc_pidinfo(int(pid), 4, ctypes.c_uint64(0), buf, 96) < 16: return 0  # PROC_PIDTASKINFO
+        return int.from_bytes(buf.raw[8:16], sys.byteorder)  # pti_resident_size
+    except (OSError, AttributeError, ValueError): return 0
 
 
 def group_text_pdf(path, cancel):
@@ -92,9 +105,16 @@ def group_text_pictures(path, out, cancel):
 def _text_zip(path, kind):
     """An Office file is a ZIP: one that unpacks to too much, or into too many parts, is not read."""
     try:
-        with _kzip.ZipFile(str(path)) as z: parts = z.infolist()
-    except (_kzip.BadZipFile, OSError, ValueError): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔' % kind)
-    if len(parts) > GROUP_TEXT_PARTS or sum(p.file_size for p in parts) > KNOWLEDGE_UNPACKED: raise KnowledgeUnreadable('檔案解開後太大')
+        with _kzip.ZipFile(str(path)) as z:
+            parts = z.infolist(); left = KNOWLEDGE_UNPACKED
+            if len(parts) > GROUP_TEXT_PARTS or sum(p.file_size for p in parts) > left: raise KnowledgeUnreadable('檔案解開後太大')
+            for info in parts:  # unpacked once and counted by the bytes really there, never by what the file claims (nothing is kept)
+                with z.open(info) as part:
+                    for chunk in iter(lambda: part.read(1 << 20), b''):
+                        left -= len(chunk)
+                        if left < 0: raise KnowledgeUnreadable('檔案解開後太大')
+    except KnowledgeUnreadable: raise
+    except (_kzip.BadZipFile, OSError, ValueError, EOFError, RuntimeError, NotImplementedError, _xzlib.error): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔' % kind)
 
 
 def _text_docx(path, cancel):
@@ -104,6 +124,7 @@ def _text_docx(path, cancel):
     try:
         _text_run(['/usr/bin/textutil', '-convert', 'txt', '-output', str(out), '--', str(path)], cancel, out=out)
         if not out.is_file(): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 Word 檔')
+        if out.stat().st_size > GROUP_TEXT_MAX * 4: raise KnowledgeUnreadable('內容太大')
         with open(str(out), 'rb') as f: return f.read(GROUP_TEXT_MAX * 4).decode('utf-8', 'replace')[:GROUP_TEXT_MAX]
     finally:
         try: out.unlink()
@@ -212,16 +233,29 @@ def group_text_start(store, group_id, name, digest, cancel):
     with _group_text_jobs_lock:
         if key in _group_text_jobs: return _group_text_jobs[key]
         done = _group_text_jobs[key] = threading.Event()
-    def work():
+        _group_text_queue.put((key, done, store, group_id, name, digest, cancel))
+        _group_text_workers[:] = [t for t in _group_text_workers if t.is_alive()]
+        while len(_group_text_workers) < 2:  # two workers for every turn of every group, not a thread per file
+            _group_text_workers.append(threading.Thread(target=_group_text_work, daemon=True, name='zook-group-text')); _group_text_workers[-1].start()
+    return done
+
+
+def _group_text_work():
+    while True:
+        key, done, store, group_id, name, digest, cancel = _group_text_queue.get()
         try:
-            with _group_text_slots:
-                if not cancel.is_set(): group_text_make(store, group_id, name, digest, cancel)
+            if not cancel.is_set(): group_text_make(store, group_id, name, digest, cancel)
         except Exception: pass
         finally:
             with _group_text_jobs_lock: _group_text_jobs.pop(key, None)
             done.set()
-    threading.Thread(target=work, daemon=True, name='zook-group-text').start()
-    return done
+
+
+def _group_text_watch(stopped, cancel, waiting):
+    """After a turn stopped waiting (its time for text versions ran out): the making it started still ends if the turn is stopped."""
+    while not all(e.is_set() for e in waiting):
+        if stopped(): cancel.set(); return
+        time.sleep(0.5)
 
 
 def group_text_sources(store, group_id, names):
@@ -259,6 +293,7 @@ def group_text_in(store, group_id, bot_id, seen, stopped=None, budget=None):
         folder = group_text_cached(store, group_id, name, seen[name])
         if folder: made[name] = folder
     late = [n for n in waiting if n not in made]
+    if late and stopped: threading.Thread(target=_group_text_watch, args=(stopped, cancel, [waiting[n] for n in late]), daemon=True, name='zook-group-text-watch').start()
     if made or late:
         with bot_folder(store, bot_id, 'attachments', GROUP_FILES_FOLDER, GROUP_TEXT_FOLDER) as fd:
             clear_folder(fd)

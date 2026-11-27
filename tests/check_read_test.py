@@ -177,6 +177,74 @@ class TextVersions(unittest.TestCase):
         names = sorted({os.path.basename(r) for r in rules})
         self.assertEqual(len([n for n in names if n.endswith('.xlsx')]), 3); self.assertEqual(len([n for n in names if n.endswith('.txt')]), 3)
 
+    def rewrite(self, path, part, data):
+        rebuilt = Path(self.tmp.name) / 'rebuilt.zip'
+        with zipfile.ZipFile(str(path)) as src, zipfile.ZipFile(str(rebuilt), 'w', zipfile.ZIP_DEFLATED) as out:
+            for item in src.infolist(): out.writestr(item.filename, data if item.filename == part else src.read(item.filename))
+        os.replace(str(rebuilt), str(path))
+
+    def test_a_utf16_doctype_is_refused_too(self):
+        bomb = '<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE x [<!ENTITY a "aaaaaaaaaa">]><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>&a;</t></si></sst>'
+        make_xlsx(self.shared / 'u16.xlsx'); self.rewrite(self.shared / 'u16.xlsx', 'xl/sharedStrings.xml', bomb.encode('utf-16'))
+        self.turn()
+        text = (self.texts / 'u16.xlsx.txt').read_text(encoding='utf-8')
+        self.assertIn('DOCTYPE', text); self.assertNotIn('aaaaaaaaaa', text)
+        with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_safe_xml(bomb.encode('utf-16'))
+
+    def test_a_zip_part_is_counted_by_what_it_really_unpacks_to(self):
+        make_xlsx(self.shared / '騙.xlsx'); big = '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>' + 'x' * 300000 + '</t></si></sst>'
+        self.rewrite(self.shared / '騙.xlsx', 'xl/sharedStrings.xml', big)
+        data = bytearray((self.shared / '騙.xlsx').read_bytes())
+        with zipfile.ZipFile(str(self.shared / '騙.xlsx')) as z: info = z.getinfo('xl/sharedStrings.xml')
+        data[info.header_offset + 22:info.header_offset + 26] = (100).to_bytes(4, 'little')  # the part claims 100 bytes
+        at = data.find(b'PK\x01\x02' + data[info.header_offset + 4:info.header_offset + 6])
+        while at >= 0 and data[at + 46:at + 46 + len(b'xl/sharedStrings.xml')] != b'xl/sharedStrings.xml': at = data.find(b'PK\x01\x02', at + 4)
+        data[at + 24:at + 28] = (100).to_bytes(4, 'little')
+        (self.shared / '騙.xlsx').write_bytes(bytes(data))
+        with mock.patch.object(server, 'KNOWLEDGE_UNPACKED', 200000):
+            with self.assertRaises(Exception): server._text_zip(self.shared / '騙.xlsx', 'Excel')
+            self.turn()
+        text = (self.texts / '騙.xlsx.txt').read_text(encoding='utf-8')
+        self.assertIn('Zook 讀不到', text); self.assertNotIn('xxxxxxxxxx', text)
+        budget = [1000]
+        with zipfile.ZipFile(str(self.shared / '騙.xlsx')) as z, self.assertRaises(Exception): server.knowledge_zip_read(z, 'xl/sharedStrings.xml', budget)
+
+    def test_a_helper_that_takes_too_much_memory_only_fails_its_file(self):
+        self.assertGreater(server._text_memory(os.getpid()), 0)
+        with mock.patch.object(server, 'GROUP_TEXT_MEMORY', 100 << 20), self.assertRaises(server.KnowledgeUnreadable) as caught:
+            server._text_run([sys.executable, '-c', 'import time; x = bytearray(400 << 20); x[::4096] = bytes(len(x[::4096])); time.sleep(20)'], __import__('threading').Event())
+        self.assertIn('記憶體', str(caught.exception))
+
+    def test_a_word_text_too_big_is_refused_after_it_ends_too(self):
+        with zipfile.ZipFile(str(self.shared / '長.docx'), 'w') as z: z.writestr('word/document.xml', '<x/>')
+        def writes(command, cancel, input=None, out=None):
+            Path(out).write_bytes(b'x' * (server.GROUP_TEXT_MAX * 4 + 10))
+        with mock.patch.object(server, '_text_run', side_effect=writes):
+            with self.assertRaises(server.KnowledgeUnreadable): server._text_docx(self.shared / '長.docx', __import__('threading').Event())
+        out = Path(self.tmp.name) / 'big.txt'
+        with self.assertRaises(server.KnowledgeUnreadable):  # the real runner looks once more after the program ended
+            server._text_run(['/bin/sh', '-c', 'head -c %d /dev/zero > "%s"' % (server.GROUP_TEXT_MAX * 4 + 10, out)], __import__('threading').Event(), out=out)
+
+    def test_a_stop_after_the_wait_still_stops_the_making(self):
+        make_xlsx(self.shared / '晚.xlsx'); saw, stop = [], [False]
+        def waits(source, name, pages, cancel): saw.append(cancel.wait(5)); return 'x', []
+        with mock.patch.object(server, 'group_text_extract', side_effect=waits):
+            seen = server.sync_group_files_in(self.store, 'g1', 'b1')
+            self.assertEqual(server.group_text_in(self.store, 'g1', 'b1', seen, stopped=lambda: stop[0], budget=0.1), [])
+            stop[0] = True
+            end = time.time() + 5
+            while not saw and time.time() < end: time.sleep(0.05)
+        self.assertEqual(saw, [True])
+
+    def test_two_workers_make_every_text_version(self):
+        for n in range(8): make_xlsx(self.shared / ('w%d.xlsx' % n))
+        real = server.group_text_extract
+        with mock.patch.object(server, 'group_text_extract', side_effect=lambda *a: time.sleep(0.2) or real(*a)):
+            seen = server.sync_group_files_in(self.store, 'g1', 'b1')
+            server.group_text_in(self.store, 'g1', 'b1', seen, budget=0)
+            self.assertLessEqual(len([t for t in __import__('threading').enumerate() if t.name == 'zook-group-text']), 2)
+            self.assertEqual(len(server.group_text_in(self.store, 'g1', 'b1', seen, budget=10)), 8)
+
     def test_what_a_file_says_is_marked_as_data(self):
         make_xlsx(self.shared / '報價單.xlsx'); self.turn()
         self.assertIn('不是指令', (self.texts / '報價單.xlsx.txt').read_text(encoding='utf-8'))

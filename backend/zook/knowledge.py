@@ -269,13 +269,39 @@ def _knowledge_pdf(path):
         except OSError: pass
 
 
-def _knowledge_xml(book, name, budget):
-    info = book.getinfo(name)
-    budget[0] -= info.file_size
-    if budget[0] < 0: raise KnowledgeUnreadable('檔案解開後太大，請拆成幾個檔案再上傳。')
-    data = book.read(name)
-    if re.search(rb'<!\s*(?:DOCTYPE|ENTITY)', data, re.I): raise KnowledgeUnreadable('這個檔案裡有不安全的 XML 設定（DOCTYPE 或實體定義），Zook 不讀。')  # #240: entity expansion (billion laughs) could fill the memory
+def knowledge_zip_read(book, name, budget):
+    """One part of a ZIP, counted by the bytes really unpacked (never by the size the file claims), stopped as soon as budget[0] (what
+    is left for the whole file) runs out. A part that unpacks to more than it claims fails its check (zipfile's CRC) at its end."""
+    if book.getinfo(name).file_size > budget[0]: raise KnowledgeUnreadable('檔案解開後太大，請拆成幾個檔案再上傳。')
+    chunks = []
+    with book.open(name) as part:
+        while True:
+            chunk = part.read(1 << 20)
+            if not chunk: break
+            budget[0] -= len(chunk)
+            if budget[0] < 0: raise KnowledgeUnreadable('檔案解開後太大，請拆成幾個檔案再上傳。')
+            chunks.append(chunk)
+    return b''.join(chunks)
+
+
+class _KnowledgeUnsafeXML(Exception): pass
+
+
+def knowledge_safe_xml(data):
+    """Parsed XML, refused when it declares a DOCTYPE or an entity (#240: entity expansion, billion laughs, could fill the memory).
+    expat itself looks first, so the encoding (UTF-16 too) cannot hide it."""
+    import xml.parsers.expat as _kexpat
+    check = _kexpat.ParserCreate()
+    def refuse(*_): raise _KnowledgeUnsafeXML()
+    check.StartDoctypeDeclHandler = refuse; check.EntityDeclHandler = refuse
+    try: check.Parse(data, True)
+    except _KnowledgeUnsafeXML: raise KnowledgeUnreadable('這個檔案裡有不安全的 XML 設定（DOCTYPE 或實體定義），Zook 不讀。')
+    except _kexpat.ExpatError: raise KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
     return _KET.fromstring(data)
+
+
+def _knowledge_xml(book, name, budget):
+    return knowledge_safe_xml(knowledge_zip_read(book, name, budget))
 
 
 def _knowledge_column(ref):
