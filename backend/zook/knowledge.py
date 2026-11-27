@@ -269,18 +269,40 @@ def _knowledge_pdf(path):
         except OSError: pass
 
 
-def knowledge_zip_read(book, name, budget):
-    """One part of a ZIP, counted by the bytes really unpacked (never by the size the file claims), stopped as soon as budget[0] (what
-    is left for the whole file) runs out. A part that unpacks to more than it claims fails its check (zipfile's CRC) at its end."""
-    if book.getinfo(name).file_size > budget[0]: raise KnowledgeUnreadable('檔案解開後太大，請拆成幾個檔案再上傳。')
-    chunks = []
-    with book.open(name) as part:
-        while True:
-            chunk = part.read(1 << 20)
-            if not chunk: break
-            budget[0] -= len(chunk)
-            if budget[0] < 0: raise KnowledgeUnreadable('檔案解開後太大，請拆成幾個檔案再上傳。')
-            chunks.append(chunk)
+def knowledge_zip_read(book, name, budget, keep=True):
+    """One part of a ZIP, unpacked here from its own stored bytes (zipfile's reader stops at the size a part claims, so a part that lies
+    about its size and check would pass it), counted by what really comes out: stopped as soon as budget[0] (what is left for the whole
+    file) runs out, and refused when what came out is not the size and check it claims. Only stored and deflated parts are read.
+    keep=False only counts (nothing is held)."""
+    import zlib as _kzlib
+    too_big = lambda: KnowledgeUnreadable('檔案解開後太大，請拆成幾個檔案再上傳。')
+    broken = KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
+    info = book.getinfo(name)
+    if info.flag_bits & 0x1 or info.compress_type not in (_kzip.ZIP_STORED, _kzip.ZIP_DEFLATED): raise broken  # locked, or packed some other way
+    if info.file_size > budget[0]: raise too_big()
+    with open(book.filename, 'rb') as f:
+        f.seek(info.header_offset); head = f.read(30)
+        if len(head) != 30 or head[:4] != b'PK\x03\x04': raise broken
+        f.seek(info.header_offset + 30 + int.from_bytes(head[26:28], 'little') + int.from_bytes(head[28:30], 'little'))
+        raw = f.read(info.compress_size)
+    if len(raw) != info.compress_size: raise broken
+    unpack = _kzlib.decompressobj(-15) if info.compress_type == _kzip.ZIP_DEFLATED else None
+    chunks, size, crc = [], 0, 0
+    def take(chunk):
+        nonlocal size, crc
+        size += len(chunk); budget[0] -= len(chunk)
+        if budget[0] < 0 or size > info.file_size: raise too_big() if budget[0] < 0 else broken
+        crc = _kzlib.crc32(chunk, crc)
+        if keep: chunks.append(chunk)
+    try:
+        for at in range(0, len(raw), 1 << 16):
+            data = raw[at:at + (1 << 16)]
+            if unpack is None: take(data); continue
+            while data:
+                take(unpack.decompress(data, 1 << 20)); data = unpack.unconsumed_tail
+        if unpack is not None: take(unpack.flush())
+    except _kzlib.error: raise broken
+    if size != info.file_size or crc != info.CRC: raise broken
     return b''.join(chunks)
 
 

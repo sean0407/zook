@@ -22,7 +22,7 @@ GROUP_TEXT_KEEP = 600      # seconds a text version no file of this turn has is 
 try: GROUP_TEXT_BUDGET = max(0.0, float(os.environ.get('ZOOK_GROUP_TEXT_BUDGET') or 60))  # seconds a turn waits for text versions not made yet
 except ValueError: GROUP_TEXT_BUDGET = 60.0
 GROUP_TEXT_MEMORY = 1 << 30  # bytes of memory one helper program may take (a PDF crafted to unpack to a huge page only fails itself)
-_group_text_jobs, _group_text_jobs_lock, _group_text_queue, _group_text_workers = {}, threading.Lock(), queue.Queue(), []  # text versions waiting or being made, two at a time
+_group_text_jobs, _group_text_jobs_lock, _group_text_queue, _group_text_workers = {}, threading.Lock(), queue.Queue(maxsize=400), []  # text versions waiting or being made, two at a time
 _GROUP_TEXT_PDF = """ObjC.import('PDFKit');
 function run(argv) {
   const doc = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(argv[0]));
@@ -108,27 +108,30 @@ def _text_zip(path, kind):
         with _kzip.ZipFile(str(path)) as z:
             parts = z.infolist(); left = KNOWLEDGE_UNPACKED
             if len(parts) > GROUP_TEXT_PARTS or sum(p.file_size for p in parts) > left: raise KnowledgeUnreadable('檔案解開後太大')
-            for info in parts:  # unpacked once and counted by the bytes really there, never by what the file claims (nothing is kept)
-                with z.open(info) as part:
-                    for chunk in iter(lambda: part.read(1 << 20), b''):
-                        left -= len(chunk)
-                        if left < 0: raise KnowledgeUnreadable('檔案解開後太大')
+            budget = [left]
+            for info in parts: knowledge_zip_read(z, info.filename, budget, keep=False)  # every part unpacked once, counted by what really comes out (nothing is kept)
     except KnowledgeUnreadable: raise
     except (_kzip.BadZipFile, OSError, ValueError, EOFError, RuntimeError, NotImplementedError, _xzlib.error): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 %s 檔' % kind)
 
 
 def _text_docx(path, cancel):
-    """A Word file's text through textutil, written to a file whose size is watched while it is written."""
+    """A Word file's text read here (no other program unpacks it): paragraph by paragraph, tabs and page breaks kept."""
     _text_zip(path, 'Word')
-    out = path.with_name('docx-text.txt')
-    try:
-        _text_run(['/usr/bin/textutil', '-convert', 'txt', '-output', str(out), '--', str(path)], cancel, out=out)
-        if not out.is_file(): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 Word 檔')
-        if out.stat().st_size > GROUP_TEXT_MAX * 4: raise KnowledgeUnreadable('內容太大')
-        with open(str(out), 'rb') as f: return f.read(GROUP_TEXT_MAX * 4).decode('utf-8', 'replace')[:GROUP_TEXT_MAX]
-    finally:
-        try: out.unlink()
-        except OSError: pass
+    w = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+    with _kzip.ZipFile(str(path)) as book:
+        if 'word/document.xml' not in book.namelist(): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 Word 檔')
+        root = knowledge_safe_xml(knowledge_zip_read(book, 'word/document.xml', [KNOWLEDGE_UNPACKED]))
+    lines, total = [], 0
+    for para in root.iter(w + 'p'):
+        if cancel.is_set(): raise KnowledgeUnreadable('已停止')
+        parts = []
+        for x in para.iter():
+            if x.tag == w + 't': parts.append(x.text or '')
+            elif x.tag == w + 'tab': parts.append('\t')
+            elif x.tag == w + 'br': parts.append('\n（分頁）\n' if x.get(w + 'type') == 'page' else '\n')
+        lines.append(''.join(parts)); total += len(lines[-1]) + 1
+        if total > GROUP_TEXT_MAX: lines.append('（後面還有，太長沒有列出；需要時打開原檔）'); break
+    return '\n'.join(lines)
 
 
 def _text_xlsx(path):
@@ -233,7 +236,9 @@ def group_text_start(store, group_id, name, digest, cancel):
     with _group_text_jobs_lock:
         if key in _group_text_jobs: return _group_text_jobs[key]
         done = _group_text_jobs[key] = threading.Event()
-        _group_text_queue.put((key, done, store, group_id, name, digest, cancel))
+        try: _group_text_queue.put_nowait((key, done, store, group_id, name, digest, cancel))
+        except queue.Full:  # too much waiting already: this turn says 處理中, a later one asks again
+            _group_text_jobs.pop(key, None); done.set(); return done
         _group_text_workers[:] = [t for t in _group_text_workers if t.is_alive()]
         while len(_group_text_workers) < 2:  # two workers for every turn of every group, not a thread per file
             _group_text_workers.append(threading.Thread(target=_group_text_work, daemon=True, name='zook-group-text')); _group_text_workers[-1].start()
@@ -323,7 +328,12 @@ def group_text_read(store, group_id, name):
     found = group_text_sources(store, group_id, [name])
     if not found:
         path = group_files_dir(store, group_id) / name
-        try: group_text_start(store, group_id, name, _file_hash(path), threading.Event())
+        with store.lock: run = (store.find('groups', group_id) or {}).get('runId')
+        def stopped():  # the discussion whose turn asked for it was stopped (or ended)
+            with store.lock: return (store.find('groups', group_id) or {}).get('runId') != run
+        try:
+            cancel = threading.Event(); done = group_text_start(store, group_id, name, _file_hash(path), cancel)
+            if run: threading.Thread(target=_group_text_watch, args=(stopped, cancel, [done]), daemon=True, name='zook-group-text-watch').start()
         except OSError: pass
         raise RuntimeError('這個檔案的文字版還在處理中（或讀不到），請稍後再讀。這一輪讀不到時，查核判定寫【判定】無法查核（讀不到檔案）。')
     text = found[0][1].read_text(encoding='utf-8', errors='replace')

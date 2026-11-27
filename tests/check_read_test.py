@@ -219,8 +219,6 @@ class TextVersions(unittest.TestCase):
         with zipfile.ZipFile(str(self.shared / '長.docx'), 'w') as z: z.writestr('word/document.xml', '<x/>')
         def writes(command, cancel, input=None, out=None):
             Path(out).write_bytes(b'x' * (server.GROUP_TEXT_MAX * 4 + 10))
-        with mock.patch.object(server, '_text_run', side_effect=writes):
-            with self.assertRaises(server.KnowledgeUnreadable): server._text_docx(self.shared / '長.docx', __import__('threading').Event())
         out = Path(self.tmp.name) / 'big.txt'
         with self.assertRaises(server.KnowledgeUnreadable):  # the real runner looks once more after the program ended
             server._text_run(['/bin/sh', '-c', 'head -c %d /dev/zero > "%s"' % (server.GROUP_TEXT_MAX * 4 + 10, out)], __import__('threading').Event(), out=out)
@@ -244,6 +242,55 @@ class TextVersions(unittest.TestCase):
             server.group_text_in(self.store, 'g1', 'b1', seen, budget=0)
             self.assertLessEqual(len([t for t in __import__('threading').enumerate() if t.name == 'zook-group-text']), 2)
             self.assertEqual(len(server.group_text_in(self.store, 'g1', 'b1', seen, budget=10)), 8)
+
+    def lie(self, path, part, size, crc):
+        """Make a ZIP part claim another size and check, in both its headers."""
+        data = bytearray(path.read_bytes())
+        with zipfile.ZipFile(str(path)) as z: info = z.getinfo(part)
+        data[info.header_offset + 14:info.header_offset + 18] = crc.to_bytes(4, 'little'); data[info.header_offset + 22:info.header_offset + 26] = size.to_bytes(4, 'little')
+        at = data.find(b'PK\x01\x02')
+        while data[at + 46:at + 46 + len(part.encode())] != part.encode(): at = data.find(b'PK\x01\x02', at + 4)
+        data[at + 16:at + 20] = crc.to_bytes(4, 'little'); data[at + 24:at + 28] = size.to_bytes(4, 'little')
+        path.write_bytes(bytes(data))
+
+    def test_a_part_lying_about_its_size_and_check_is_refused(self):
+        import zlib
+        path = Path(self.tmp.name) / 'lie.docx'
+        with zipfile.ZipFile(str(path), 'w', zipfile.ZIP_DEFLATED) as z: z.writestr('word/document.xml', b'x' * (8 << 20))
+        self.lie(path, 'word/document.xml', 100, zlib.crc32(b'x' * 100))
+        with zipfile.ZipFile(str(path)) as z: self.assertEqual(z.read('word/document.xml'), b'x' * 100)  # what zipfile alone would let through
+        with zipfile.ZipFile(str(path)) as z, self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_read(z, 'word/document.xml', [1000])
+        with self.assertRaises(server.KnowledgeUnreadable): server._text_zip(path, 'Word')
+        with zipfile.ZipFile(str(path)) as z, self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_read(z, 'word/document.xml', [100 << 20])  # more came out than it claims
+
+    def test_a_word_file_is_read_here(self):
+        w = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        with zipfile.ZipFile(str(self.shared / '說明.docx'), 'w', zipfile.ZIP_DEFLATED) as z:
+            z.writestr('word/document.xml', '<w:document %s><w:body><w:p><w:r><w:t>第一段</w:t><w:tab/><w:t>甲</w:t></w:r></w:p><w:p><w:r><w:br w:type="page"/><w:t>第二頁</w:t></w:r></w:p></w:body></w:document>' % w)
+        self.turn()
+        text = (self.texts / '說明.docx.txt').read_text(encoding='utf-8')
+        self.assertIn('第一段\t甲', text); self.assertIn('（分頁）', text); self.assertIn('第二頁', text)
+
+    def test_a_tool_asked_making_stops_with_its_discussion(self):
+        make_xlsx(self.shared / '工具.xlsx'); saw = []
+        self.store.data['groups'][0]['runId'] = 'r1'
+        def waits(source, name, pages, cancel): saw.append(cancel.wait(5)); return 'x', []
+        with mock.patch.object(server, 'group_text_extract', side_effect=waits):
+            with self.assertRaises(RuntimeError): server.group_text_read(self.store, 'g1', '工具.xlsx')
+            time.sleep(0.3); self.store.data['groups'][0]['runId'] = None
+            end = time.time() + 5
+            while not saw and time.time() < end: time.sleep(0.05)
+        self.assertEqual(saw, [True])
+
+    def test_a_full_queue_says_processing(self):
+        make_xlsx(self.shared / '滿.xlsx')
+        class Full:
+            def put_nowait(self, item): raise __import__('queue').Full()
+        with mock.patch.object(server, '_group_text_queue', Full()):
+            seen = server.sync_group_files_in(self.store, 'g1', 'b1')
+            self.assertEqual(server.group_text_in(self.store, 'g1', 'b1', seen, budget=1), [])
+        self.assertIn('處理中', (self.texts / '滿.xlsx.txt').read_text(encoding='utf-8'))
+        self.assertEqual(server._group_text_jobs, {})
 
     def test_what_a_file_says_is_marked_as_data(self):
         make_xlsx(self.shared / '報價單.xlsx'); self.turn()
