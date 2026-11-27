@@ -25,43 +25,31 @@
     const chain = Array.isArray(fallbacks) ? fallbacks : state.data.settings.fallbacks || [];
     return chain.find(x => x && x !== provider && x !== 'auto' && !modelTrouble(x, '')) || '';
   }
-  // What a reply really tries next (#33 #132), in the order the Mac runs them: the same CLI's other accounts (自動選用 on, a
-  // subscription, not used up; 無法確定 counts as half left), then the backups of other CLIs; any with less than 20% left come last.
-  function nextBackup(provider, account, fallbacks) {
-    const q = state.quota ? quotaFor(provider) : null, list = [];
-    if (q) {
-      const room = x => x.status === 'logged_in' && x.autoOn && !x.autoBilled && ['ok', 'low', 'unknown'].includes(x.view?.level);
-      const left = x => x.view.level === 'unknown' ? 50 : x.view.left ?? 50;
-      [{x: q, id: ''}, ...(q.profiles || []).map(a => ({x: a, id: a.id}))].filter(c => c.id !== (account || '') && room(c.x)).sort((a, b) => left(b.x) - left(a.x))
-        .forEach(c => list.push({name: providerShort(provider) + (c.id ? '（' + c.x.name + '）' : ''), low: c.x.view.level === 'low'}));
-    }
-    const other = usableBackup(provider, fallbacks);
-    if (other) list.push({name: providerShort(other), low: accountLevel(other, '').level === 'low'});
-    return (list.find(x => !x.low) || list[0] || {}).name || '';
-  }
   // One sentence: why the model cannot answer, then what happens when a message is sent.
-  function troubleText(t, provider, fallbacks, account = '') {
+  // next: the model a reply really tries next, as the Mac works it out (bot.nextBackup, #132); undefined in an unsaved form.
+  function troubleText(t, provider, fallbacks, next) {
     if (!t) return '';
     const why = t.kind === 'out' ? '這個帳號的額度已用完' + (t.reset ? '（' + t.reset + '）' : '') : t.kind === 'login' ? providerShort(provider) + ' 尚未登入' : String(t.why || '').replace(/[。．.]+$/, '');
-    const backup = nextBackup(provider, account, fallbacks);
-    return why + (backup ? `。傳訊息時會先試 ${backup}（只用訂閱帳號），回覆裡會註明。` : '，現在傳訊息會失敗。可以在「備用模型」選一家，不能用時自動改用。');
+    if (next === undefined) return why + '。傳訊息時會照備用順序改用其他訂閱帳號，都不能用時會失敗；回覆裡會註明。';
+    return why + (next ? `。傳訊息時會先試 ${next}（只用訂閱帳號），回覆裡會註明。` : '，現在傳訊息會失敗。可以在「備用模型」選一家，不能用時自動改用。');
   }
-  const troubleBadge = b => { const t = botTrouble(b); return t ? ` <span class="trouble-badge" title="${esc(troubleText(t, botProvider(b), b.fallbacks, b.account))}">${esc(t.tag)}</span>` : ''; };
-  const troubleBanner = b => { const t = botTrouble(b); return t ? `<div class="trouble-banner" role="status">${esc(troubleText(t, botProvider(b), b.fallbacks, b.account))}</div>` : ''; };
+  const troubleBadge = b => { const t = botTrouble(b); return t ? ` <span class="trouble-badge" title="${esc(troubleText(t, botProvider(b), b.fallbacks, b.nextBackup ?? ''))}">${esc(t.tag)}</span>` : ''; };
+  const troubleBanner = b => { const t = botTrouble(b); return t ? `<div class="trouble-banner" role="status">${esc(troubleText(t, botProvider(b), b.fallbacks, b.nextBackup ?? ''))}</div>` : ''; };
   // The Bot form: 模型與帳號 and 備用模型 as chosen in the form, before it is saved.
   function formTroubleText(form, choice) {
     const [p, a] = String(choice || '').split('::'), id = p || state.data.settings.provider || 'codex';
     const t = id === 'auto' ? null : modelTrouble(id, a || '');
     if (!t) return '';
     const fb = form.querySelector('input[name="fallbackChoice"]')?.value || '';
-    return troubleText(t, id, fb === '' ? undefined : fb === '__none' ? [] : [fb], a || '');
+    const b = state.data.bots.find(x => x.id === form.dataset.id), saved = b && (b.provider || '') === (p || '') && (b.account || '') === (a || '') && fb === (!Array.isArray(b.fallbacks) ? '' : b.fallbacks.length ? b.fallbacks[0] : '__none');
+    return troubleText(t, id, fb === '' ? undefined : fb === '__none' ? [] : [fb], saved ? b.nextBackup ?? '' : undefined);  // as saved: what the Mac works out
   }
   // A schedule sent to a Bot that cannot answer says so under 對象, as the Bot form does (#166②).
   function scheduleTargetWarn(form) {
     const warn = form?.querySelector('[data-target-warn]');
     if (!warn) return;
     const [kind, id] = String(form.elements.target?.value || '').split(':'), b = kind === 'bot' ? state.data.bots.find(x => x.id === id) : null;
-    const t = botTrouble(b), said = t ? troubleText(t, botProvider(b), b.fallbacks) : '';
+    const t = botTrouble(b), said = t ? troubleText(t, botProvider(b), b.fallbacks, b.nextBackup ?? '') : '';
     warn.textContent = said; warn.hidden = !said;
   }
-  const scheduleTroubleLine = x => { const b = state.data.bots.find(y => y.id === x.botId), t = botTrouble(b); return t ? `<p class="small quota-warn sched-trouble">${esc(troubleText(t, botProvider(b), b.fallbacks))}</p>` : ''; };
+  const scheduleTroubleLine = x => { const b = state.data.bots.find(y => y.id === x.botId), t = botTrouble(b); return t ? `<p class="small quota-warn sched-trouble">${esc(troubleText(t, botProvider(b), b.fallbacks, b.nextBackup ?? ''))}</p>` : ''; };

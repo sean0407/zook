@@ -2,7 +2,7 @@
 """#323: the usage page cards, the sidebar and Bot detail rings, the Bot form and the reply's backups read one source (quota_view),
 and a figure Zook cannot trust is 無法確定, never a number. #33: a Bot whose model the user picked first tries the same CLI's other
 accounts, and the default backup order goes by what is left. #321 #207: 偵測使用量 reports what it updated and what it could not."""
-import datetime, importlib.util, json, shutil, sys, tempfile, time, unittest
+import datetime, importlib.util, json, os, shutil, sys, tempfile, time, unittest
 from unittest import mock
 from pathlib import Path
 
@@ -101,6 +101,21 @@ class QuotaSourceTest(unittest.TestCase):
         self.assertEqual(self.m.quota_view(self.store, 'antigravity')['level'], 'out')
         ring = self.ring('antigravity'); self.assertEqual((ring['unknown'], ring['week']), (False, 80))
 
+    def test_a_pick_runs_only_on_a_fresh_subscription_check(self):
+        # #132: 自動選用 alone (auto_choice_problem) is not enough; the check must be recent and the sign-in files unchanged since.
+        m, x = self.m, 'c' * 32
+        self.store.data['accounts'] = [dict(id=x, provider='codex', name='Waifdance', type='login')]
+        bot = dict(id='b', provider='auto')
+        self.store.data['autoStatus'] = {'codex@' + x: dict(signedIn=True, billed=False, checkedAt=time.time() - 7200)}  # confirmed two hours ago
+        self.assertEqual(m.auto_choice_problem(self.store, 'codex', x), '')  # what was checked before #132
+        self.assertTrue(m.run_problem(self.store, bot, 'codex', x, True))
+        self.store.data['autoStatus']['codex@' + x] = dict(signedIn=True, billed=False, checkedAt=time.time(), signIn=m.auth_fingerprint('codex@' + x))
+        self.assertEqual(m.run_problem(self.store, bot, 'codex', x, True), '')  # just checked: fine
+        (m.account_dir(x) / 'auth.json').write_text('{}'); os.utime(m.account_dir(x), (time.time() + 5, time.time() + 5))  # signed in again since (maybe with a key)
+        self.assertTrue(m.run_problem(self.store, bot, 'codex', x, True))
+        self.store.data['autoStatus']['codex@' + x] = dict(signedIn=True, billed=True, checkedAt=time.time(), signIn=m.auth_fingerprint('codex@' + x))
+        self.assertIn('API', m.run_problem(self.store, bot, 'codex', x, True))
+
     def add_codex_accounts(self):
         now, data = time.time(), self.store.data
         data['accounts'] = [dict(id='w1', provider='codex', name='Waifdance', type='login'), dict(id='w2', provider='codex', name='Home', type='login'),
@@ -130,6 +145,24 @@ class QuotaSourceTest(unittest.TestCase):
         self.store.data['settings']['autoAccounts'] = {}
         backups = m.backups_with_room(self.store, bot, [(x[0], x[1], x[2] if len(x) > 2 else None, True) for x in m.provider_chain(self.store, bot, 'codex', 'gpt-6')[1:]])
         self.assertEqual([(x[0], x[2]) for x in backups], [('codex', 'w1'), ('claude', None), ('codex', 'w2')])
+
+    def test_next_backup_is_what_the_reply_really_tries(self):
+        self.add_codex_accounts(); m, data = self.m, self.store.data
+        data['autoStatus']['claude'] = dict(signedIn=True, billed=False, checkedAt=time.time())
+        data['quota']['claude'] = dict(windows=[dict(label='5 小時', usedPercent=40, resetsAt=time.time() + 3600)], updatedAt=iso(10))
+        bot = dict(id='b', name='寫手', provider='codex', account='', model='gpt-6', fallbacks=['claude'])
+        self.assertEqual(m.next_backup(self.store, bot), 'Codex（Home）')  # most left first
+        data['quota']['codex@w2']['windows'][0]['usedPercent'] = 90
+        self.assertEqual(m.next_backup(self.store, bot), 'Codex（Waifdance）')
+        data['quota']['codex@w1']['windows'][0]['usedPercent'] = 85
+        self.assertEqual(m.next_backup(self.store, bot), 'Claude')  # both nearly used up: another CLI with room comes first
+        data['autoStatus']['claude']['billed'] = True
+        self.assertEqual(m.next_backup(self.store, bot), 'Codex（Waifdance）')  # API billing is never tried
+        data['autoStatus']['codex@w1']['billed'] = True; data['autoStatus']['codex@w2']['billed'] = True
+        self.assertEqual(m.next_backup(self.store, bot), '')
+        data['autoStatus']['codex@w2']['billed'] = False; data['bots'].append(dict(bot, messages=[]))
+        self.assertEqual(m.state_view(self.store)['bots'][-1]['nextBackup'], 'Codex（Home）')  # sent with every state; the page only shows it
+        self.assertNotIn('nextBackup', data['bots'][-1])  # never written into the saved Bot
 
     def test_the_default_order_goes_by_what_is_left(self):
         now, m = time.time(), self.m
@@ -167,22 +200,14 @@ class QuotaSourcePageTest(unittest.TestCase):
         self.assertIn('Zook 內：5 小時 2 則', got['zook'])
 
 
-    def test_the_bot_page_names_what_really_runs_next(self):
+    def test_the_bot_page_shows_what_the_mac_works_out(self):
         sys.path.insert(0, str(Path(__file__).resolve().parent)); from usage_cards_test import run, JS
         botstate = (JS / '32c-botstate.js').read_text(encoding='utf-8')
-        got = run(botstate.replace('  const troubleBadge', '  const unused0') + """
+        got = run(botstate + """
           const providerShort = id => ({codex: 'Codex', claude: 'Claude'})[id] || id;
-          const acct = (id, name, level, left) => ({id, name, status: 'logged_in', autoOn: true, view: {level, left, windows: []}});
-          state = {data: {settings: {provider: 'codex', fallbacks: ['claude']}, bots: []}, quota: {providers: [
-            {id: 'codex', status: 'logged_in', autoOn: true, view: {level: 'out', left: 0, windows: []}, quota: {windows: []}, profiles: [acct('w1', 'Low', 'low', 8), acct('w2', 'Unsure', 'unknown', null)]},
-            {id: 'claude', status: 'logged_in', autoOn: true, view: {level: 'ok', left: 70, windows: []}, quota: {windows: [{label: '5 小時', usedPercent: 30}]}, profiles: []}]}};
-          const a = nextBackup('codex', '', ['claude']);
-          state.quota.providers[0].profiles.pop();
-          const b = nextBackup('codex', '', ['claude']);
-          console.log(JSON.stringify({a, b, c: nextBackup('codex', '', [])}));""")
-        self.assertEqual(got['a'], 'Codex（Unsure）')  # 無法確定 is tried, as on the Mac (half left)
-        self.assertEqual(got['b'], 'Claude')  # a same-CLI account under 20% comes after another CLI with room
-        self.assertEqual(got['c'], 'Codex（Low）')  # nothing else: the nearly used-up one
-
+          const t = {kind: 'out', tag: '額度用完'};
+          console.log(JSON.stringify({a: troubleText(t, 'codex', ['claude'], 'Codex（Home）'), b: troubleText(t, 'codex', ['claude'], ''), c: troubleText(t, 'codex', ['claude'], undefined)}));""")
+        self.assertIn('會先試 Codex（Home）', got['a'])  # the name the Mac sent (bot.nextBackup), not worked out again here
+        self.assertIn('現在傳訊息會失敗', got['b']); self.assertIn('照備用順序', got['c'])
 
 if __name__ == '__main__': unittest.main()

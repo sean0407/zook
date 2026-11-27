@@ -147,12 +147,13 @@ def quota_low(store, provider, account_id, under):
     return any(r['left'] < under for r in rows)
 
 
-def manual_backup_problem(store, bot, provider, account):
-    """Lock held. #132: why a backup of a Bot whose model the user picked must not run now, or ''. Every backup, of its own CLI or
-    another, runs only on a sign-in known lately to be a subscription; API billing or one not confirmed is skipped (only the Bot's own
-    model, as the user chose it, is not held to this). account None: that CLI's own sign-in, unless the Bot's account is one of it."""
-    if account is not None: return auto_choice_problem(store, provider, account) or auto_billing_problem(store, provider, account)
-    return auto_billing_problem(store, provider, (find_account(bot.get('account'), provider) or {}).get('id', ''))
+def run_problem(store, bot, provider, account, pick):
+    """Lock held. #132: why one try of a reply must not run now, or ''. Every model Zook picked (自動選擇, its backups, a Bot matched
+    automatically) and every backup of a Bot runs only on a sign-in checked lately (time and sign-in files, auto_billing_problem) to be
+    a subscription; API billing or one not confirmed is skipped. Only the model the user chose for a Bot is not held to this.
+    pick: an account Zook chose, so its 自動選用 switch counts too. account None: that CLI's own sign-in, unless the Bot's account is one of it."""
+    chosen = auto_choice_problem(store, provider, account or '') if pick else ''
+    return chosen or auto_billing_problem(store, provider, account if account is not None else (find_account(bot.get('account'), provider) or {}).get('id', ''))
 
 
 def backup_skip_error(store, bot, first, why, provider, account, problem):
@@ -160,3 +161,29 @@ def backup_skip_error(store, bot, first, why, provider, account, problem):
     mine = first[2] if first[2] is not None else (find_account(bot.get('account'), first[0]) or {}).get('id', '')
     named = lambda p, a: auto_choice_name(p, a if a is not None else (find_account(bot.get('account'), p) or {}).get('id', ''))
     return '%s 沒有回覆（%s）；備用的 %s 沒有改用：%s。Zook 只用訂閱額度，不用 API 計費。' % (auto_choice_name(first[0], mine), why or '無法回覆', named(provider, account), problem)
+
+
+def next_backup(store, bot):
+    """Lock held. #132: the model a reply of this Bot would really try first when its own model cannot answer, by name ('' when none):
+    the same chain, filters and order as _run_job (installed, not used up or over budget, a known subscription, nearly used-up ones
+    last). A check that is only old counts, since the reply asks again first. Runs no CLI."""
+    provider = bot.get('provider') or store.data['settings'].get('provider', 'codex')
+    if provider == AUTO: return ''
+    first = (provider, bot.get('model') or '', None, False)
+    raw = [list(x) for x in provider_chain(store, bot, provider, first[1])][1:] + auto_backups(store, bot, provider)
+    chain = [x for x in held_backups(bot, provider, [first] + [(x[0], x[1], x[2] if len(x) > 2 else None, len(x) > 2) for x in raw]) if x != first]
+    status, ok = store.data.get('autoStatus') or {}, []
+    for p, m, a, check in chain:
+        own = None if a is not None else find_account(bot.get('account'), p)
+        if not find_cli(p) or quota_exhausted(store, p + '@' + (a or own['id']) if a or own else p) or budget_blocks(store, p): continue
+        if check and auto_choice_problem(store, p, a or ''): continue
+        known = status.get(auto_billing_keys(store, bot, [(p, m, a, check)])[0]) or {}
+        if known.get('signedIn') is True and known.get('billed') is False: ok.append((p, m, a, check))
+    if not ok: return ''
+    p, _, a, _ = backups_with_room(store, bot, ok)[0]
+    return auto_choice_name(p, a if a is not None else (find_account(bot.get('account'), p) or {}).get('id', ''))
+
+
+def bots_with_backup(store, bots):
+    """Lock held. Copies of the Bots for the window, each with nextBackup (next_backup), so the page never works it out itself."""
+    return [dict(b, nextBackup=next_backup(store, b)) for b in bots]

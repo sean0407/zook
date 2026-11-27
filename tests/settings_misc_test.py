@@ -151,7 +151,7 @@ class TroubleInTheInterface(unittest.TestCase):
         self.assertIn('<p>${esc(botModelLine(b))}${troubleBadge(b)}</p>', self.code)  # 詳情
 
     def test_words_follow_the_backup(self):
-        self.assertIn("傳訊息時會先試 ${backup}（只用訂閱帳號），回覆裡會註明。", self.code)  # #132: what really runs next (nextBackup)
+        self.assertIn("傳訊息時會先試 ${next}（只用訂閱帳號），回覆裡會註明。", self.code)  # #132: what the Mac works out (bot.nextBackup)
         self.assertIn('現在傳訊息會失敗。可以在「備用模型」選一家', self.code)
         self.assertIn("said = warn ? formTroubleText(form, choice) || quotaWarnText(choice) : ''", self.code)
         self.assertIn("['providerChoice', 'fallbackChoice'].includes(e.target.name)", self.code)  # a backup picked in the form changes the line
