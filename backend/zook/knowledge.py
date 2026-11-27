@@ -466,7 +466,24 @@ def _knowledge_column(ref):
     return n - 1
 
 
-def _knowledge_office(path, suffix):
+KNOWLEDGE_OFFICE_SECONDS = 30  # one .xlsx or .pptx read for the knowledge base; longer is 「處理逾時」
+
+
+class _KnowledgeDeadline:
+    def __init__(self, seconds): self.at = time.monotonic() + seconds
+    def is_set(self): return time.monotonic() > self.at
+
+
+def _knowledge_office(path, suffix, cancel=None):
+    """_knowledge_office_read with a stop: cancel when given (a group turn's), else KNOWLEDGE_OFFICE_SECONDS from now (#240)."""
+    stop = cancel if cancel is not None else _KnowledgeDeadline(KNOWLEDGE_OFFICE_SECONDS)
+    try: return _knowledge_office_read(path, suffix, stop)
+    except KnowledgeUnreadable:
+        if cancel is None and stop.is_set(): raise KnowledgeUnreadable('處理逾時')
+        raise
+
+
+def _knowledge_office_read(path, suffix, cancel):
     """Slides' and sheets' text. Every piece counts against KNOWLEDGE_TEXT as it is added, so a small file cannot grow into a huge text;
     page and sheet headings alone do not count as content."""
     try: book = _kzip.ZipFile(str(path))
@@ -481,24 +498,24 @@ def _knowledge_office(path, suffix):
             ns = '{http://schemas.openxmlformats.org/drawingml/2006/main}'
             for i, name in enumerate(sorted((n for n in names if re.fullmatch(r'ppt/slides/slide\d+\.xml', n)), key=number), 1):
                 if add('【第 %d 頁】' % i, False): break
-                paras = (''.join(t.text or '' for t in p.iter(ns + 't')) for p in _knowledge_xml(book, name, budget, {ns + 'p'}))
+                paras = (''.join(t.text or '' for t in p.iter(ns + 't')) for p in _knowledge_xml(book, name, budget, {ns + 'p'}, cancel))
                 if any(add(p) for p in paras if p.strip()): break
             return result()
         ns = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
         shared = []
         if 'xl/sharedStrings.xml' in names:
-            shared = [''.join(t.text or '' for t in si.iter(ns + 't')) for si in _knowledge_xml(book, 'xl/sharedStrings.xml', budget, {ns + 'si'})]
+            shared = [''.join(t.text or '' for t in si.iter(ns + 't')) for si in _knowledge_xml(book, 'xl/sharedStrings.xml', budget, {ns + 'si'}, cancel)]
         titles = {}
         try:
-            rels = {r.get('Id'): r.get('Target') for r in _knowledge_xml(book, 'xl/_rels/workbook.xml.rels', budget, {'{http://schemas.openxmlformats.org/package/2006/relationships}Relationship'})}
-            for sheet in _knowledge_xml(book, 'xl/workbook.xml', budget, {ns + 'sheet'}):
+            rels = {r.get('Id'): r.get('Target') for r in _knowledge_xml(book, 'xl/_rels/workbook.xml.rels', budget, {'{http://schemas.openxmlformats.org/package/2006/relationships}Relationship'}, cancel)}
+            for sheet in _knowledge_xml(book, 'xl/workbook.xml', budget, {ns + 'sheet'}, cancel):
                 target = rels.get(sheet.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')) or ''
                 titles['xl/' + target.lstrip('/').replace('xl/', '', 1)] = sheet.get('name') or ''
         except KeyError: pass
         sheets = [n for n in titles if n in names] or sorted((n for n in names if re.fullmatch(r'xl/worksheets/sheet\d+\.xml', n)), key=number)
         for name in sheets:
             if add('【工作表 %s】' % (titles.get(name) or number(name)), False): break
-            for row in _knowledge_xml(book, name, budget, {ns + 'row'}):
+            for row in _knowledge_xml(book, name, budget, {ns + 'row'}, cancel):
                 cells, size = [], 0
                 for c in row.iter(ns + 'c'):
                     kind, value = c.get('t'), c.find(ns + 'v')

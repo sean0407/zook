@@ -192,7 +192,7 @@ def group_text_extract(source, name, pages, cancel):
     suffix = pathlib.Path(name).suffix.lower()
     if suffix in ('.xlsx', '.xlsm'): return '（每一格寫成「儲存格：值」，有公式的另外寫出公式。）\n' + _text_xlsx(source, cancel), []
     if suffix == '.docx': return _text_docx(source, cancel), []
-    if suffix == '.pptx': _text_zip(source, 'PowerPoint'); return _knowledge_office(source, suffix)[:GROUP_TEXT_MAX], []  # slide by slide
+    if suffix == '.pptx': _text_zip(source, 'PowerPoint'); return _knowledge_office(source, suffix, cancel)[:GROUP_TEXT_MAX], []  # slide by slide
     count, text = group_text_pdf(source, cancel)
     try: group_text_pictures(source, pages, cancel)
     except KnowledgeUnreadable:

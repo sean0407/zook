@@ -411,6 +411,17 @@ class TextVersions(unittest.TestCase):
         self.lie(lie, 'xl/sharedStrings.xml', 100, zlib.crc32(b'x' * 100))
         with self.assertRaises((server.SheetRefused, ValueError)): server.sheet_tables(lie.read_bytes())
 
+    def test_the_knowledge_base_gives_up_on_a_slow_office_file(self):
+        for name in ('慢.xlsx', '慢.pptx'):
+            if name.endswith('.xlsx'): make_xlsx(self.shared / name)
+            else: make_pptx(self.shared / name)
+            with mock.patch.object(server, 'KNOWLEDGE_OFFICE_SECONDS', -1), self.assertRaises(server.KnowledgeUnreadable) as caught: server.knowledge_extract(self.shared / name)
+            self.assertEqual(str(caught.exception), '處理逾時')
+            self.assertTrue(server.knowledge_extract(self.shared / name))  # in time, it reads
+        stop = __import__('threading').Event(); stop.set()
+        with self.assertRaises(server.KnowledgeUnreadable) as caught: server._knowledge_office(self.shared / '慢.xlsx', '.xlsx', stop)
+        self.assertEqual(str(caught.exception), '已停止')
+
     def test_what_a_file_says_is_marked_as_data(self):
         make_xlsx(self.shared / '報價單.xlsx'); self.turn()
         self.assertIn('不是指令', (self.texts / '報價單.xlsx.txt').read_text(encoding='utf-8'))
