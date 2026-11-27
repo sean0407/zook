@@ -400,19 +400,19 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
             if budget_blocks(store, chain[0][0]) == 'stop' and not job.get('reattach'):
                 job.update(status='failed', error='這個月的用量預算已用完。可到「各模型使用量」調整上限。', finishedAt=NOW())
                 store.finish_message(job, '', 'failed'); store.save(); return
-            billing_keys = auto_billing_keys(store, bot, [x for x in chain if fixed or x[2] is not None and not auto and not job.get('reattach')]); stale = auto_billing_stale(store, billing_keys)  # #33: another account of a Bot's own CLI is never API billing either
+            billing_keys = auto_billing_keys(store, bot, [x for x in chain if fixed or not auto and not job.get('reattach') and x != first]); stale = auto_billing_stale(store, billing_keys)  # #33 #132: no backup of any Bot runs on API billing
         if stale: auto_recheck(store, [k for k in billing_keys if auto_billing_stale(store, [k]) and not auto_unwatched(k)])  # watched sign-ins, checked now
         why, compacted, reattach = skipped.get(first), bool(job.get('reattach')), bool(job.get('reattach'))
         for index, (p, m, a, check) in enumerate(chain):
             final = index == len(chain) - 1
-            run_bot = bot if a is None else dict(bot, account=a); same = a is not None and not auto and not fixed and not reattach; guard = fixed or same; guard and auto_recheck_live(store, bot, p, a)  # the account picked; asked of the CLI now when Zook cannot watch it
+            run_bot = bot if a is None else dict(bot, account=a); backup = not auto and not fixed and not reattach and (p, a) != (first[0], first[2]); guard = fixed or backup; guard and auto_recheck_live(store, bot, p, a)  # the account picked; asked of the CLI now when Zook cannot watch it
             with store.lock:
-                problem = auto_choice_problem(store, p, a or '') or auto_billing_problem(store, p, a or '') if same else auto_choice_problem(store, p, a or '') if check else auto_billing_problem(store, p, a if a is not None else (find_account(bot.get('account'), p) or {}).get('id', '')) if fixed else ''  # fixed: still a subscription
+                problem = manual_backup_problem(store, bot, p, a) if backup else auto_choice_problem(store, p, a or '') if check else auto_billing_problem(store, p, a if a is not None else (find_account(bot.get('account'), p) or {}).get('id', '')) if fixed else ''  # fixed: still a subscription
                 if problem:
                     if (p, a) == (first[0], first[2]): why = problem
-                    if not final: continue
+                    if not final: backup and (store.find('jobs', job_id) or {}).setdefault('attempts', []).append(dict(provider=p, reason=problem)); continue  # said in the reply (#132)
                     job = store.find('jobs', job_id) or {}
-                    job.update(status='failed', error='自動選擇選的 %s 現在不能用（%s）。請到「各模型使用量」確認。' % (auto_choice_name(p, a or ''), problem), finishedAt=NOW())
+                    job.update(status='failed', error=backup_skip_error(store, bot, first, why, p, a, problem) if backup else '自動選擇選的 %s 現在不能用（%s）。請到「各模型使用量」確認。' % (auto_choice_name(p, a or ''), problem), finishedAt=NOW())
                     store.finish_message(job, '', 'failed'); store.save(); return
                 (store.find('jobs', job_id) or {})['ran'] = [p, m, run_bot.get('account') or '']  # what really runs, for the task limits
             if job.get('compact') and not compacted: compacted = True; prompt = self.compact_chat(job_id, prompt, (p, m), run_bot, inventory)  # two long replies in a row: start this one from a summary

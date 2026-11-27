@@ -151,7 +151,7 @@ class TroubleInTheInterface(unittest.TestCase):
         self.assertIn('<p>${esc(botModelLine(b))}${troubleBadge(b)}</p>', self.code)  # 詳情
 
     def test_words_follow_the_backup(self):
-        self.assertIn('傳訊息時會自動改用 ${providerShort(backup)} 回覆，回覆裡會註明。', self.code)
+        self.assertIn("傳訊息時會先試 ${backup}（只用訂閱帳號），回覆裡會註明。", self.code)  # #132: what really runs next (nextBackup)
         self.assertIn('現在傳訊息會失敗。可以在「備用模型」選一家', self.code)
         self.assertIn("said = warn ? formTroubleText(form, choice) || quotaWarnText(choice) : ''", self.code)
         self.assertIn("['providerChoice', 'fallbackChoice'].includes(e.target.name)", self.code)  # a backup picked in the form changes the line
@@ -159,7 +159,7 @@ class TroubleInTheInterface(unittest.TestCase):
     def test_backup_menus_are_marked(self):
         self.assertIn("base + (troubleMark(modelTrouble(value, '')) || levelMark(accountLevel(value, '')))", self.code)  # Bot form
         self.assertIn("name: p.name + troubleMark(modelTrouble(p.id, ''))", self.code)  # 設定
-        self.assertIn('一律先換同一家其他有額度的帳號', self.code); self.assertIn('都選「不使用」就不換別家', self.code)  # #33, 2026-11-27
+        self.assertIn('剩不到 20% 的帳號排最後，API 計費或還沒確認是訂閱的不會換上', self.code); self.assertIn('都選「不使用」就不換別家', self.code)  # #33, 2026-11-27
 
     def test_antigravity_is_never_called_used_up_as_a_whole(self):
         self.assertEqual(self.code.count("provider !== 'antigravity'"), 2)

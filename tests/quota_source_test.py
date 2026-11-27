@@ -167,4 +167,22 @@ class QuotaSourcePageTest(unittest.TestCase):
         self.assertIn('Zook 內：5 小時 2 則', got['zook'])
 
 
+    def test_the_bot_page_names_what_really_runs_next(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parent)); from usage_cards_test import run, JS
+        botstate = (JS / '32c-botstate.js').read_text(encoding='utf-8')
+        got = run(botstate.replace('  const troubleBadge', '  const unused0') + """
+          const providerShort = id => ({codex: 'Codex', claude: 'Claude'})[id] || id;
+          const acct = (id, name, level, left) => ({id, name, status: 'logged_in', autoOn: true, view: {level, left, windows: []}});
+          state = {data: {settings: {provider: 'codex', fallbacks: ['claude']}, bots: []}, quota: {providers: [
+            {id: 'codex', status: 'logged_in', autoOn: true, view: {level: 'out', left: 0, windows: []}, quota: {windows: []}, profiles: [acct('w1', 'Low', 'low', 8), acct('w2', 'Unsure', 'unknown', null)]},
+            {id: 'claude', status: 'logged_in', autoOn: true, view: {level: 'ok', left: 70, windows: []}, quota: {windows: [{label: '5 小時', usedPercent: 30}]}, profiles: []}]}};
+          const a = nextBackup('codex', '', ['claude']);
+          state.quota.providers[0].profiles.pop();
+          const b = nextBackup('codex', '', ['claude']);
+          console.log(JSON.stringify({a, b, c: nextBackup('codex', '', [])}));""")
+        self.assertEqual(got['a'], 'Codex（Unsure）')  # 無法確定 is tried, as on the Mac (half left)
+        self.assertEqual(got['b'], 'Claude')  # a same-CLI account under 20% comes after another CLI with room
+        self.assertEqual(got['c'], 'Codex（Low）')  # nothing else: the nearly used-up one
+
+
 if __name__ == '__main__': unittest.main()

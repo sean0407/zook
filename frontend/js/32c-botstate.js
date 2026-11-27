@@ -25,22 +25,26 @@
     const chain = Array.isArray(fallbacks) ? fallbacks : state.data.settings.fallbacks || [];
     return chain.find(x => x && x !== provider && x !== 'auto' && !modelTrouble(x, '')) || '';
   }
-  // #33: another account of the same CLI that a reply switches to first (自動選用 on, known to have room), by name; '' when none.
-  function sameSpare(provider, account, fallbacks) {
-    const q = state.quota ? quotaFor(provider) : null;
-    if (!q) return '';  // with no backups too: 不自動換 only means no other CLI
-    const room = x => x.status === 'logged_in' && x.autoOn && !x.autoBilled && ['ok', 'low'].includes(x.view?.level);
-    const spare = [{x: q, id: ''}, ...(q.profiles || []).map(a => ({x: a, id: a.id}))].filter(c => c.id !== (account || '') && room(c.x)).sort((a, b) => (b.x.view.left ?? 0) - (a.x.view.left ?? 0))[0];
-    return spare ? providerShort(provider) + (spare.id ? '（' + spare.x.name + '）' : '') : '';
+  // What a reply really tries next (#33 #132), in the order the Mac runs them: the same CLI's other accounts (自動選用 on, a
+  // subscription, not used up; 無法確定 counts as half left), then the backups of other CLIs; any with less than 20% left come last.
+  function nextBackup(provider, account, fallbacks) {
+    const q = state.quota ? quotaFor(provider) : null, list = [];
+    if (q) {
+      const room = x => x.status === 'logged_in' && x.autoOn && !x.autoBilled && ['ok', 'low', 'unknown'].includes(x.view?.level);
+      const left = x => x.view.level === 'unknown' ? 50 : x.view.left ?? 50;
+      [{x: q, id: ''}, ...(q.profiles || []).map(a => ({x: a, id: a.id}))].filter(c => c.id !== (account || '') && room(c.x)).sort((a, b) => left(b.x) - left(a.x))
+        .forEach(c => list.push({name: providerShort(provider) + (c.id ? '（' + c.x.name + '）' : ''), low: c.x.view.level === 'low'}));
+    }
+    const other = usableBackup(provider, fallbacks);
+    if (other) list.push({name: providerShort(other), low: accountLevel(other, '').level === 'low'});
+    return (list.find(x => !x.low) || list[0] || {}).name || '';
   }
   // One sentence: why the model cannot answer, then what happens when a message is sent.
   function troubleText(t, provider, fallbacks, account = '') {
     if (!t) return '';
-    const same = t.kind === 'out' ? sameSpare(provider, account, fallbacks) : '';
-    if (same) return `這個帳號的額度已用完${t.reset ? '（' + t.reset + '）' : ''}。傳訊息時會先改用 ${same} 回覆，回覆裡會註明。`;
     const why = t.kind === 'out' ? '這個帳號的額度已用完' + (t.reset ? '（' + t.reset + '）' : '') : t.kind === 'login' ? providerShort(provider) + ' 尚未登入' : String(t.why || '').replace(/[。．.]+$/, '');
-    const backup = usableBackup(provider, fallbacks);
-    return why + (backup ? `。傳訊息時會自動改用 ${providerShort(backup)} 回覆，回覆裡會註明。` : '，現在傳訊息會失敗。可以在「備用模型」選一家，不能用時自動改用。');
+    const backup = nextBackup(provider, account, fallbacks);
+    return why + (backup ? `。傳訊息時會先試 ${backup}（只用訂閱帳號），回覆裡會註明。` : '，現在傳訊息會失敗。可以在「備用模型」選一家，不能用時自動改用。');
   }
   const troubleBadge = b => { const t = botTrouble(b); return t ? ` <span class="trouble-badge" title="${esc(troubleText(t, botProvider(b), b.fallbacks, b.account))}">${esc(t.tag)}</span>` : ''; };
   const troubleBanner = b => { const t = botTrouble(b); return t ? `<div class="trouble-banner" role="status">${esc(troubleText(t, botProvider(b), b.fallbacks, b.account))}</div>` : ''; };

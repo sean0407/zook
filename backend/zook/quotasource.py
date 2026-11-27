@@ -145,3 +145,18 @@ def quota_low(store, provider, account_id, under):
     rows = [r for r in view['windows'] if r['left'] is not None]
     if provider == 'antigravity': rows = [r for r in rows if 'gemini' in r['label'].lower()] or rows
     return any(r['left'] < under for r in rows)
+
+
+def manual_backup_problem(store, bot, provider, account):
+    """Lock held. #132: why a backup of a Bot whose model the user picked must not run now, or ''. Every backup, of its own CLI or
+    another, runs only on a sign-in known lately to be a subscription; API billing or one not confirmed is skipped (only the Bot's own
+    model, as the user chose it, is not held to this). account None: that CLI's own sign-in, unless the Bot's account is one of it."""
+    if account is not None: return auto_choice_problem(store, provider, account) or auto_billing_problem(store, provider, account)
+    return auto_billing_problem(store, provider, (find_account(bot.get('account'), provider) or {}).get('id', ''))
+
+
+def backup_skip_error(store, bot, first, why, provider, account, problem):
+    """Lock held. The reply's error when the last backup could not be used: what failed first, and why the backup was not used."""
+    mine = first[2] if first[2] is not None else (find_account(bot.get('account'), first[0]) or {}).get('id', '')
+    named = lambda p, a: auto_choice_name(p, a if a is not None else (find_account(bot.get('account'), p) or {}).get('id', ''))
+    return '%s 沒有回覆（%s）；備用的 %s 沒有改用：%s。Zook 只用訂閱額度，不用 API 計費。' % (auto_choice_name(first[0], mine), why or '無法回覆', named(provider, account), problem)

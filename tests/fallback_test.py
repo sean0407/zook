@@ -10,7 +10,9 @@ if 'CODEX-OK' in s: print('codex says hi'); sys.exit(0)
 sys.stderr.write('You have hit your usage limit.\\n'); sys.exit(1)
 '''
 CLAUDE = '''#!/usr/bin/env python3
-import json, sys
+import json, os, sys
+if sys.argv[1:3] == ['auth', 'status']:  # a subscription, unless the test signed it in with Anthropic Console (paid by use)
+    print(json.dumps({'loggedIn': True, 'authMethod': 'console' if os.path.exists(os.path.join(os.path.dirname(__file__), 'console')) else 'claude.ai'})); sys.exit(0)
 sys.stdin.read()
 print(json.dumps({'type': 'result', 'result': 'claude says hi', 'is_error': False}))
 '''
@@ -84,6 +86,17 @@ class FallbackTest(unittest.TestCase):
         ready = json.loads(self.proc.stdout.readline()); self.port, self.token = ready['port'], ready['token']
         message, job = self.ask('CODEX-OK')  # Codex would answer, but Zook already knows it is used up
         self.assertEqual(message['content'], 'claude says hi'); self.assertIn('額度已用完', message['note'])
+
+    def test_a_backup_on_api_billing_is_skipped_and_the_reply_says_why(self):
+        # #132: the default Claude sign-in is Anthropic Console (paid by use): Codex is used up, and Claude must not answer instead.
+        (self.root / 'bin/console').write_text('')
+        self.req('PATCH', '/api/settings', {'fallbacks': ['claude']})
+        message, job = self.ask('hello')
+        self.assertEqual(message['status'], 'failed'); self.assertNotEqual(message.get('content'), 'claude says hi')
+        self.assertNotIn('claude', [a.get('provider') for a in job.get('attempts') or [] if a.get('reason') == '額度已用完'])
+        self.assertIn('備用的 Claude 沒有改用', job['error']); self.assertIn('API 計費', job['error']); self.assertIn('不用 API 計費', job['error'])
+        (self.root / 'bin/console').unlink()  # signed in with the subscription again: the backup answers
+        self.assertEqual(self.ask('hello')[0]['content'], 'claude says hi')
 
 
 if __name__ == '__main__': unittest.main()
