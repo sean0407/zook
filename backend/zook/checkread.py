@@ -130,42 +130,27 @@ class _DocxDone(Exception): pass
 
 
 def _docx_stream(data, cancel):
-    """word/document.xml read as it streams by (expat, no tree kept): paragraph text, tabs and page breaks. Refused when it declares a
-    DOCTYPE or an entity, has more than GROUP_TEXT_NODES elements or is nested deeper than GROUP_TEXT_DEPTH; stopped (cancel) between
-    elements."""
-    import xml.parsers.expat as _dexpat
-    w = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main '
-    parser = _dexpat.ParserCreate(namespace_separator=' ')
-    lines, line, state = [], [], dict(depth=0, nodes=0, text=False, total=0)
-    def refuse(*_): raise KnowledgeUnreadable('這個檔案裡有不安全的 XML 設定（DOCTYPE 或實體定義），Zook 不讀。')
+    """word/document.xml as it streams by (knowledge_xml_walk: no tree kept, DOCTYPE and entities refused, at most GROUP_TEXT_NODES
+    elements nested GROUP_TEXT_DEPTH deep, stopped with cancel): paragraph text, tabs and page breaks."""
+    w = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+    lines, line, state = [], [], dict(text=False, total=0)
     def start(tag, attrs):
-        state['depth'] += 1; state['nodes'] += 1
-        if state['depth'] > GROUP_TEXT_DEPTH or state['nodes'] > GROUP_TEXT_NODES: raise KnowledgeUnreadable('檔案結構太大或太深')
-        if state['nodes'] % 10000 == 0 and cancel.is_set(): raise KnowledgeUnreadable('已停止')
         if tag == w + 't': state['text'] = True
         elif tag == w + 'tab': line.append('\t')
         elif tag == w + 'br': line.append('\n（分頁）\n' if attrs.get(w + 'type') == 'page' else '\n')
     def end(tag):
-        state['depth'] -= 1
         if tag == w + 't': state['text'] = False
         elif tag == w + 'p':
             lines.append(''.join(line)); line.clear(); state['total'] += len(lines[-1]) + 1
             if state['total'] > GROUP_TEXT_MAX: raise _DocxDone()
     def chars(text):
         if state['text']: line.append(text)
-    parser.StartDoctypeDeclHandler = refuse; parser.EntityDeclHandler = refuse
-    parser.StartElementHandler, parser.EndElementHandler, parser.CharacterDataHandler = start, end, chars
-    try:
-        for at in range(0, len(data), 1 << 20):
-            if cancel.is_set(): raise KnowledgeUnreadable('已停止')
-            parser.Parse(data[at:at + (1 << 20)], False)
-        parser.Parse(b'', True)
+    try: knowledge_xml_walk(data, start, end, chars, cancel, GROUP_TEXT_NODES, GROUP_TEXT_DEPTH)
     except _DocxDone: lines.append('（後面還有，太長沒有列出；需要時打開原檔）')
-    except _dexpat.ExpatError: raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 Word 檔')
     return '\n'.join(lines)
 
 
-def _text_xlsx(path):
+def _text_xlsx(path, cancel=None):
     """A workbook cell by cell: 「C10：140（公式 =C9*2）」, row by row, sheet by sheet, the formulas as written."""
     ns = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
     _text_zip(path, 'Excel')
@@ -175,17 +160,17 @@ def _text_xlsx(path):
         lines.append(line); total[0] += len(line) + 1; return total[0] > GROUP_TEXT_MAX
     with book:
         names = set(book.namelist()); shared, titles = [], {}
-        if 'xl/sharedStrings.xml' in names: shared = [''.join(t.text or '' for t in si.iter(ns + 't')) for si in _knowledge_xml(book, 'xl/sharedStrings.xml', budget).iter(ns + 'si')]
+        if 'xl/sharedStrings.xml' in names: shared = [''.join(t.text or '' for t in si.iter(ns + 't')) for si in _knowledge_xml(book, 'xl/sharedStrings.xml', budget, {ns + 'si'}, cancel)]
         try:
-            rels = {r.get('Id'): r.get('Target') for r in _knowledge_xml(book, 'xl/_rels/workbook.xml.rels', budget)}
-            for sheet in _knowledge_xml(book, 'xl/workbook.xml', budget).iter(ns + 'sheet'):
+            rels = {r.get('Id'): r.get('Target') for r in _knowledge_xml(book, 'xl/_rels/workbook.xml.rels', budget, {'{http://schemas.openxmlformats.org/package/2006/relationships}Relationship'})}
+            for sheet in _knowledge_xml(book, 'xl/workbook.xml', budget, {ns + 'sheet'}):
                 titles['xl/' + (rels.get(sheet.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')) or '').lstrip('/').replace('xl/', '', 1)] = sheet.get('name') or ''
-        except (KeyError, _KET.ParseError): pass
+        except KeyError: pass
         number = lambda n: int(re.sub(r'\D', '', n.rsplit('/', 1)[-1]) or 0)
         sheets = [n for n in titles if n in names] or sorted((n for n in names if re.fullmatch(r'xl/worksheets/sheet\d+\.xml', n)), key=number)
         for name in sheets:
             if add('【工作表 %s】' % (titles.get(name) or number(name))): break
-            for row in _knowledge_xml(book, name, budget).iter(ns + 'row'):
+            for row in _knowledge_xml(book, name, budget, {ns + 'row'}, cancel):
                 cells = []
                 for c in row.iter(ns + 'c'):
                     kind, value, formula = c.get('t'), c.find(ns + 'v'), c.find(ns + 'f')
@@ -207,7 +192,7 @@ def _text_xlsx(path):
 def group_text_extract(source, name, pages, cancel):
     """(text, [(page, picture written into pages)]) of one file Zook copied to source (named with the file's suffix)."""
     suffix = pathlib.Path(name).suffix.lower()
-    if suffix in ('.xlsx', '.xlsm'): return '（每一格寫成「儲存格：值」，有公式的另外寫出公式。）\n' + _text_xlsx(source), []
+    if suffix in ('.xlsx', '.xlsm'): return '（每一格寫成「儲存格：值」，有公式的另外寫出公式。）\n' + _text_xlsx(source, cancel), []
     if suffix == '.docx': return _text_docx(source, cancel), []
     if suffix == '.pptx': _text_zip(source, 'PowerPoint'); return _knowledge_office(source, suffix)[:GROUP_TEXT_MAX], []  # slide by slide
     count, text = group_text_pdf(source, cancel)

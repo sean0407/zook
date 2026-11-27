@@ -189,7 +189,7 @@ class TextVersions(unittest.TestCase):
         self.turn()
         text = (self.texts / 'u16.xlsx.txt').read_text(encoding='utf-8')
         self.assertIn('DOCTYPE', text); self.assertNotIn('aaaaaaaaaa', text)
-        with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_safe_xml(bomb.encode('utf-16'))
+        with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_xml_walk(bomb.encode('utf-16'), lambda *a: None)
 
     def test_a_zip_part_is_counted_by_what_it_really_unpacks_to(self):
         make_xlsx(self.shared / '騙.xlsx'); big = '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><si><t>' + 'x' * 300000 + '</t></si></sst>'
@@ -329,6 +329,56 @@ class TextVersions(unittest.TestCase):
         second = data.rfind(b'PK\x01\x02'); data[second + 42:second + 46] = (0).to_bytes(4, 'little')  # the second entry points at the first part
         path.write_bytes(bytes(data))
         with zipfile.ZipFile(str(path)) as z, self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_read(z, 'a.xml', [1000])
+
+    def test_excel_and_powerpoint_with_too_many_or_too_deep_elements_are_refused(self):
+        many_cells = '<row r="1">' + '<c r="A1"><v>1</v></c>' * 3000 + '</row>'
+        deep = '<row r="1"><c r="A1"><v>1</v></c></row>' + '<x>' * 300 + '</x>' * 300
+        for name, body in (('多.xlsx', many_cells), ('深.xlsx', deep)):
+            make_xlsx(self.shared / name)
+            self.rewrite(self.shared / name, 'xl/worksheets/sheet1.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>%s</sheetData></worksheet>' % body)
+        a = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"'
+        for name, body in (('多.pptx', '<a:p><a:r><a:t>x</a:t></a:r></a:p>' * 3000), ('深.pptx', '<a:p>' + '<a:r>' * 300 + '</a:r>' * 300 + '</a:p>')):
+            with zipfile.ZipFile(str(self.shared / name), 'w', zipfile.ZIP_DEFLATED) as z: z.writestr('ppt/slides/slide1.xml', '<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" %s>%s</p:sld>' % (a, body))
+        with mock.patch.object(server, 'KNOWLEDGE_NODES', 5000): self.turn()
+        for name, why in (('多.xlsx', '太大或太深'), ('深.xlsx', '太大或太深'), ('多.pptx', '太大或太深'), ('深.pptx', '太大或太深')):
+            text = (self.texts / (name + '.txt')).read_text(encoding='utf-8')
+            self.assertIn('Zook 讀不到', text, name); self.assertIn(why, text, name)
+        with mock.patch.object(server, 'KNOWLEDGE_NODES', 5000), self.assertRaises(server.KnowledgeUnreadable): server.knowledge_extract(self.shared / '多.xlsx')  # the knowledge base too
+        with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_extract(self.shared / '深.pptx')
+        self.assertEqual(server.xlsx_scan(str(self.shared / '深.xlsx')), [])  # the Excel check after a reply reads through it too, and gives up quietly
+
+    def test_no_untrusted_xml_is_parsed_into_a_tree(self):
+        import subprocess
+        root = Path(__file__).resolve().parents[1] / 'backend'
+        found = subprocess.run(['/usr/bin/grep', '-rnE', r'ElementTree|fromstring|ET\.parse|iterparse|minidom|XMLParser', str(root / 'zook')], stdout=subprocess.PIPE, text=True).stdout
+        self.assertEqual(found.strip(), '')
+
+    def descriptor_zip(self, path):
+        class Pipe:  # zipfile writes sizes and checks after each part when it cannot go back
+            def __init__(self): self.data = bytearray()
+            def write(self, b): self.data += b; return len(b)
+            def flush(self): pass
+            def tell(self): raise OSError()
+        pipe = Pipe()
+        with zipfile.ZipFile(pipe, 'w', zipfile.ZIP_DEFLATED) as z: z.writestr('a.xml', b'<a>' + b'x' * 1000 + b'</a>')
+        path.write_bytes(bytes(pipe.data))
+
+    def test_a_trailing_descriptor_must_agree_with_the_directory(self):
+        path = Path(self.tmp.name) / 'desc.zip'; self.descriptor_zip(path)
+        with zipfile.ZipFile(str(path)) as z:
+            self.assertTrue(z.getinfo('a.xml').flag_bits & 0x8)
+            self.assertEqual(len(server.knowledge_zip_read(z, 'a.xml', [10000])), 1007)
+        data = bytearray(path.read_bytes()); at = data.find(b'PK\x07\x08'); data[at + 4] ^= 0xff  # its check no longer agrees
+        path.write_bytes(bytes(data))
+        with zipfile.ZipFile(str(path)) as z, self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_read(z, 'a.xml', [10000])
+
+    def test_a_part_reaching_into_the_directory_is_refused(self):
+        path = Path(self.tmp.name) / 'reach.zip'
+        with zipfile.ZipFile(str(path), 'w') as z: z.writestr('a.xml', b'<a/>')
+        data = bytearray(path.read_bytes()); central = data.find(b'PK\x01\x02')
+        data[18:22] = (100).to_bytes(4, 'little'); data[central + 20:central + 24] = (100).to_bytes(4, 'little')  # it claims to be packed into 100 bytes
+        path.write_bytes(bytes(data))
+        with zipfile.ZipFile(str(path)) as z, self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_read(z, 'a.xml', [10000])
 
     def test_what_a_file_says_is_marked_as_data(self):
         make_xlsx(self.shared / '報價單.xlsx'); self.turn()

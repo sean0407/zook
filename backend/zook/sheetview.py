@@ -3,7 +3,7 @@
 # Values are the ones Excel saved (formulas are not worked out again). Only the first SHEET_ROWS rows and SHEET_COLS columns
 # of each sheet are shown. The file is read from a private copy, as data: an XML part that declares a DOCTYPE or entities is
 # refused, so a crafted file cannot make Zook expand entities. Loaded by backend/server.py into one shared namespace.
-import io, xml.parsers.expat
+import io
 SHEET_ROWS = 300       # rows shown per sheet
 SHEET_COLS = 60        # columns shown per sheet (A … BH)
 SHEET_TABS = 30        # sheets shown
@@ -30,24 +30,21 @@ class SheetRefused(Exception): pass
 
 
 def _sheet_xml(stream, start, end=None, text=None):
-    """Walk one XML part with expat, calling start(name, attrs), end(name) and text(data) with names stripped of their namespace.
-    A handler raises _SheetStop to finish early. A DOCTYPE or entity declaration is refused (SheetRefused)."""
-    parser = xml.parsers.expat.ParserCreate(namespace_separator=' ')
-    def refuse(*_): raise SheetRefused('doctype')
-    parser.StartDoctypeDeclHandler = refuse; parser.EntityDeclHandler = refuse
-    parser.StartElementHandler = lambda name, attrs: start(name.rsplit(' ', 1)[-1], {k.rsplit(' ', 1)[-1]: v for k, v in attrs.items()})
-    if end: parser.EndElementHandler = lambda name: end(name.rsplit(' ', 1)[-1])
-    if text: parser.CharacterDataHandler = text
-    read = 0
-    try:
-        while read < SHEET_XML:
+    """Walk one XML part with Zook's one safe XML reader (knowledge_xml_walk: DOCTYPE and entities refused, elements and depth capped,
+    nothing kept), calling start(name, attrs), end(name) and text(data) with names stripped of their namespace. A handler raises
+    _SheetStop to finish early; a part bigger than SHEET_XML is read that far and said to be partial."""
+    local = lambda name: name.rsplit('}', 1)[-1]
+    def chunks():
+        read = 0
+        while True:
             chunk = stream.read(65536)
-            if not chunk: break
-            read += len(chunk); parser.Parse(chunk, False)
-        if read < SHEET_XML: parser.Parse(b'', True)
-        else: _sheet_partial[0] = True  # a part bigger than Zook reads: what was read is shown, and said to be partial
+            if not chunk: return
+            read += len(chunk); yield chunk
+            if read >= SHEET_XML: _sheet_partial[0] = True; raise _SheetStop()  # what was read is shown, and said to be partial
+    try: knowledge_xml_walk(chunks(), lambda name, attrs: start(local(name), {local(k): v for k, v in attrs.items()}), (lambda name: end(local(name))) if end else None, text)
     except _SheetStop: pass
-    except xml.parsers.expat.ExpatError: raise SheetRefused('broken')
+    except KnowledgeUnsafeXML: raise SheetRefused('doctype')
+    except KnowledgeUnreadable: raise SheetRefused('broken')
 
 
 def _sheet_part(z, name):

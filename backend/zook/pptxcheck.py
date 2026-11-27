@@ -1,6 +1,6 @@
 # 簡報檢查 (#67, #42): text whose size, weight, colour or font is set only in the paragraph default (a:pPr/a:defRPr) and not on the text
 # run itself. Quick Look shows it right; PowerPoint may not take the paragraph default and open it at its default size and colour.
-# Runs with the Excel check after a reply (xlsx_after_reply), read only, with its guards (_XGuard, size and time caps). Loaded by backend/server.py.
+# Runs with the Excel check after a reply (xlsx_after_reply), read only, with its guards (knowledge.py's safe XML reader, size and time caps). Loaded by backend/server.py.
 
 _PA = '{http://schemas.openxmlformats.org/drawingml/2006/main}'
 _PP = '{http://schemas.openxmlformats.org/presentationml/2006/main}'
@@ -17,17 +17,17 @@ _PSIZES = {'screen4x3': (4 / 3, '4:3'), 'screen16x9': (16 / 9, '16:9'), 'screen1
 def _pslides(z, deadline, budget):
     """Slide parts in presentation order."""
     targets = {}
-    for _, el in _xparse(z, 'ppt/_rels/presentation.xml.rels', deadline, budget):
+    for _, el in _xparse(z, 'ppt/_rels/presentation.xml.rels', deadline, budget, {_XP + 'Relationship'}):
         if el.tag == _XP + 'Relationship' and el.get('Id'):
             target = el.get('Target') or ''
             targets[el.get('Id')] = target.lstrip('/') if target.startswith('/') else _xposix.normpath('ppt/' + target)
-    return [targets[el.get(_XR)] for _, el in _xparse(z, 'ppt/presentation.xml', deadline, budget) if el.tag == _PP + 'sldId' and targets.get(el.get(_XR))]
+    return [targets[el.get(_XR)] for _, el in _xparse(z, 'ppt/presentation.xml', deadline, budget, {_PP + 'sldId'}) if el.tag == _PP + 'sldId' and targets.get(el.get(_XR))]
 
 
 def _psize_wrong(z, deadline, budget):
     """True when presentation.xml names the size 4:3 (or 16:9, 16:10) but its width and height are another shape, as pptxgenjs writes a
     16:9 deck with type="screen4x3": PowerPoint's page setup then says 4:3 and changing anything there may stretch every slide."""
-    for _, el in _xparse(z, 'ppt/presentation.xml', deadline, budget):
+    for _, el in _xparse(z, 'ppt/presentation.xml', deadline, budget, {_PP + 'sldSz'}):
         if el.tag != _PP + 'sldSz': continue
         want = _PSIZES.get(el.get('type') or '')
         try: cx, cy = int(el.get('cx') or 0), int(el.get('cy') or 0)
@@ -58,7 +58,7 @@ def pptx_scan(path):
                     try: z.getinfo(part)
                     except KeyError: continue
                     bare = 0
-                    for n, (_, el) in enumerate(_xparse(z, part, deadline, budget)):
+                    for n, (_, el) in enumerate(_xparse(z, part, deadline, budget, {_PA + 'p'})):
                         if n % 2000 == 0 and time.monotonic() > deadline: raise _XSlow()
                         if el.tag != _PA + 'p': continue
                         default = el.find(_PA + 'pPr/' + _PA + 'defRPr')
@@ -69,7 +69,7 @@ def pptx_scan(path):
                                 bare += sum(1 for run in el if run.tag in (_PA + 'r', _PA + 'fld') and _prun_bare(run, attrs, children))
                         el.clear()
                     if bare: found.append((index + 1, bare))
-    except (_XSlow, _xzip.BadZipFile, _XET.ParseError, _xzlib.error, KeyError, OSError, ValueError, LookupError, RuntimeError, EOFError,
+    except (_XSlow, _xzip.BadZipFile, _xzlib.error, KeyError, OSError, ValueError, LookupError, RuntimeError, EOFError,
             NotImplementedError, OverflowError, RecursionError, UnicodeError):
         return []
     return found

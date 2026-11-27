@@ -4,7 +4,6 @@
 # Standard library only (zipfile + expat). Loaded by backend/server.py into one shared namespace.
 import math as _xmath
 import posixpath as _xposix
-import xml.etree.ElementTree as _XET
 import zipfile as _xzip
 import zlib as _xzlib
 
@@ -42,22 +41,6 @@ def _xfixed(raw, bare):
     return bool(_XCODE.search(raw)) and any(float(m.group(1)) not in (0.0, 1.0) for m in _XLITERAL.finditer(bare))
 
 
-class _XGuard:
-    """A zip member read in chunks: no DOCTYPE or other encodings (no entity tricks), a cap on what is unpacked, and a deadline."""
-    def __init__(self, raw, deadline, budget): self.raw, self.deadline, self.budget, self.tail, self.first = raw, deadline, budget, b'', True
-
-    def read(self, n=65536):
-        if time.monotonic() > self.deadline: raise _XSlow()
-        chunk = self.raw.read(min(n, 65536) if n and n > 0 else 65536)
-        self.budget[0] -= len(chunk)
-        if self.budget[0] < 0: raise _XSlow()
-        if self.first and chunk:
-            self.first = False
-            if chunk[:2] in (b'\xff\xfe', b'\xfe\xff') or b'\x00' in chunk[:64]: raise ValueError('encoding')  # UTF-16 would hide a DOCTYPE from the check below
-        if b'<!DOCTYPE' in self.tail + chunk or b'<!ENTITY' in self.tail + chunk: raise ValueError('doctype')
-        self.tail = chunk[-16:]; return chunk
-
-
 def _xpos(ref):
     m = _XCELL.match(str(ref or '').upper())
     if not m: return None
@@ -93,21 +76,26 @@ def _xbare(text):
     return ''.join(out).upper()
 
 
-def _xparse(z, part, deadline, budget):
-    info = z.getinfo(part)
-    if info.compress_type not in (_xzip.ZIP_STORED, _xzip.ZIP_DEFLATED) or info.file_size > budget[0]: raise _XSlow()  # checked before anything is unpacked
-    return _XET.iterparse(_XGuard(z.open(part), deadline, budget), events=('end',))
+class _XDeadline:
+    def __init__(self, deadline): self.deadline = deadline
+    def is_set(self): return time.monotonic() > self.deadline
+
+
+def _xparse(z, part, deadline, budget, tags):
+    """('end', record) for each element of part whose tag is in tags, with what is inside it: Zook's one safe XML reader
+    (knowledge.py: the bytes really unpacked are counted, DOCTYPE and entities refused, elements and depth capped, nothing else kept)."""
+    for record in knowledge_xml_records(knowledge_zip_read(z, part, budget), tags, _XDeadline(deadline)): yield 'end', record
 
 
 def _xsheets(z, deadline, budget):
     """[(sheet name, zip part)] in workbook order."""
     targets = {}
-    for _, el in _xparse(z, 'xl/_rels/workbook.xml.rels', deadline, budget):
+    for _, el in _xparse(z, 'xl/_rels/workbook.xml.rels', deadline, budget, {_XP + 'Relationship'}):
         if el.tag == _XP + 'Relationship' and el.get('Id'):
             target = el.get('Target') or ''
             targets[el.get('Id')] = target.lstrip('/') if target.startswith('/') else _xposix.normpath('xl/' + target)
     found = []
-    for _, el in _xparse(z, 'xl/workbook.xml', deadline, budget):
+    for _, el in _xparse(z, 'xl/workbook.xml', deadline, budget, {_XM + 'sheet'}):
         if el.tag == _XM + 'sheet' and targets.get(el.get(_XR)): found.append((str(el.get('name') or '')[:40], targets[el.get(_XR)]))
     return found
 
@@ -115,7 +103,7 @@ def _xsheets(z, deadline, budget):
 def _xread_sheet(z, part, deadline, budget):
     """{(row, col): (number or None, is a SUM formula, is a formula)}, {pos: [ranges of its SUM]} and [(pos, bare formula, saved number, saved text, type)]."""
     cells, sums, formulas, shared, shared_fixed = {}, {}, [], {}, {}
-    for n, (_, el) in enumerate(_xparse(z, part, deadline, budget)):
+    for n, (_, el) in enumerate(_xparse(z, part, deadline, budget, {_XM + 'c'})):
         if n % 2000 == 0 and time.monotonic() > deadline: raise _XSlow()
         if el.tag == _XM + 'row': el.clear(); continue  # the cells read so far are let go
         if el.tag != _XM + 'c': continue
@@ -206,7 +194,7 @@ def xlsx_scan(path):
                         off = redo is not None and abs(redo - number) > max(1e-6, 1e-12 * abs(redo))
                         if stacked: found['double'].append(at(pos, number if off else None, redo if off else None))
                         elif off: found['wrong'].append(at(pos, number, redo))
-    except (_XSlow, _xzip.BadZipFile, _XET.ParseError, _xzlib.error, KeyError, OSError, ValueError, LookupError, RuntimeError, EOFError,
+    except (_XSlow, _xzip.BadZipFile, _xzlib.error, KeyError, OSError, ValueError, LookupError, RuntimeError, EOFError,
             NotImplementedError, OverflowError, RecursionError, UnicodeError):
         return []
     return [(k, len(found[k]), found[k][:3]) for k in _XKINDS if found[k]]
