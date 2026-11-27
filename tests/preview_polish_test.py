@@ -20,14 +20,15 @@ def xlsx(sheets, shared=(), styles='', hidden=(), extra=None, doctype=''):
     """A small .xlsx made by hand: sheets is [(name, sheet XML rows)]."""
     out = io.BytesIO()
     with zipfile.ZipFile(out, 'w') as z:
-        z.writestr('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
-        z.writestr('xl/workbook.xml', '<workbook xmlns="%s" xmlns:r="%s"><sheets>%s</sheets></workbook>' % (SS, RS, ''.join(
+        put = lambda name, data: name in (extra or {}) or z.writestr(name, data)  # a part given in extra takes the place of the usual one (#240: two parts of one name are refused)
+        put('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>')
+        put('xl/workbook.xml', '<workbook xmlns="%s" xmlns:r="%s"><sheets>%s</sheets></workbook>' % (SS, RS, ''.join(
             '<sheet name="%s" sheetId="%d" r:id="rId%d"%s/>' % (n, i + 1, i + 1, ' state="hidden"' if n in hidden else '') for i, (n, _) in enumerate(sheets))))
-        z.writestr('xl/_rels/workbook.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">%s</Relationships>' % ''.join(
+        put('xl/_rels/workbook.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">%s</Relationships>' % ''.join(
             '<Relationship Id="rId%d" Target="worksheets/sheet%d.xml"/>' % (i + 1, i + 1) for i in range(len(sheets))))
-        for i, (_, rows) in enumerate(sheets): z.writestr('xl/worksheets/sheet%d.xml' % (i + 1), doctype + '<worksheet xmlns="%s"><sheetData>%s</sheetData></worksheet>' % (SS, rows))
-        if shared: z.writestr('xl/sharedStrings.xml', '<sst xmlns="%s">%s</sst>' % (SS, ''.join('<si><t>%s</t></si>' % s for s in shared)))
-        if styles: z.writestr('xl/styles.xml', '<styleSheet xmlns="%s">%s</styleSheet>' % (SS, styles))
+        for i, (_, rows) in enumerate(sheets): put('xl/worksheets/sheet%d.xml' % (i + 1), doctype + '<worksheet xmlns="%s"><sheetData>%s</sheetData></worksheet>' % (SS, rows))
+        if shared: put('xl/sharedStrings.xml', '<sst xmlns="%s">%s</sst>' % (SS, ''.join('<si><t>%s</t></si>' % s for s in shared)))
+        if styles: put('xl/styles.xml', '<styleSheet xmlns="%s">%s</styleSheet>' % (SS, styles))
         for name, data in (extra or {}).items(): z.writestr(name, data)
     return out.getvalue()
 
@@ -65,6 +66,11 @@ class SheetTables(unittest.TestCase):
         self.assertFalse(server.sheet_tables(xlsx([('x', '<row r="1"><c r="A1"><v>1</v></c></row>')]))['partial'])
         twice = xlsx([('a', '<row r="1"><c r="A1"><v>1</v></c></row>')], extra={'xl/workbook.xml': '<workbook xmlns="%s" xmlns:r="%s"><sheets><sheet name="a" r:id="rId1"/><sheet name="b" r:id="rId1"/></sheets></workbook>' % (SS, RS)})
         self.assertEqual(len(server.sheet_tables(twice)['sheets']), 1)  # one sheet part is read once
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore'); out = io.BytesIO()
+            with zipfile.ZipFile(out, 'w') as z: z.writestr('xl/workbook.xml', '<a/>'); z.writestr('xl/workbook.xml', '<b/>')
+        with self.assertRaises(server.SheetRefused): server.sheet_tables(out.getvalue())  # two parts of one name (#240)
 
     def test_crafted_files_are_refused(self):
         bomb = '<!DOCTYPE x [<!ENTITY a "aaaaaaaa"><!ENTITY b "&a;&a;&a;&a;">]>'
