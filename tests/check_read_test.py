@@ -574,6 +574,24 @@ class TextVersions(unittest.TestCase):
         self.assertIn('-output', command); self.assertNotIn('-stdout', command); self.assertIsNotNone(out)  # written to a file it watches, not a pipe
         self.assertFalse(Path(out).exists())  # and cleaned up
 
+    def test_two_parts_of_one_name_are_refused(self):
+        import warnings
+        odt = self.shared / '同名.odt'
+        with warnings.catch_warnings(), zipfile.ZipFile(str(odt), 'w', zipfile.ZIP_DEFLATED) as z:
+            warnings.simplefilter('ignore')
+            z.writestr('content.xml', b'x' * (3 << 20)); z.writestr('content.xml', b'<small/>')  # the big one first, a small one of the same name last
+        ran = []
+        with mock.patch.object(server, 'KNOWLEDGE_UNPACKED', 1 << 20), mock.patch.object(server, '_text_run', side_effect=lambda *a, **k: ran.append(a)):
+            with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_extract(odt)
+        self.assertEqual(ran, [])
+        with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_precheck(odt)
+        with zipfile.ZipFile(str(odt)) as z:
+            with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_layout(z)
+        with zipfile.ZipFile(str(odt)) as z:  # given a part, the stream reads that very part
+            z._zook_layout = {id(i): i.header_offset + 30 + len(i.filename) for i in z.infolist()}
+            first = z.infolist()[0]
+            self.assertEqual(len(server.knowledge_zip_read(z, first, [10 << 20])), 3 << 20)
+
     def test_what_a_file_says_is_marked_as_data(self):
         make_xlsx(self.shared / '報價單.xlsx'); self.turn()
         self.assertIn('不是指令', (self.texts / '報價單.xlsx.txt').read_text(encoding='utf-8'))

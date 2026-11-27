@@ -235,7 +235,7 @@ def _knowledge_zip_count(path, limit):
         with _kzip.ZipFile(str(path)) as z:
             budget = [KNOWLEDGE_UNPACKED]
             for info in z.infolist():
-                for _ in knowledge_zip_stream(z, info.filename, budget, limit): pass
+                for _ in knowledge_zip_stream(z, info, budget, limit): pass
     except KnowledgeUnreadable: raise
     except (_kzip.BadZipFile, OSError, ValueError, EOFError, RuntimeError, NotImplementedError): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
 
@@ -341,10 +341,13 @@ def knowledge_zip_precheck(source):
         if directory > end_at: raise broken()
         f.seek(end_at - directory); listing = f.read(directory)  # where zipfile will read it: just before the end record
         if len(listing) != directory: raise broken()
-        seen, at = 0, 0
+        seen, at, names = 0, 0, set()
         while at < directory:  # walked record by record, as zipfile would, never trusting the count the end record gave
             if listing[at:at + 4] != b'PK\x01\x02' or at + 46 > directory: raise broken()
             name_len, extra_len = u16(listing, at + 28), u16(listing, at + 30)
+            name = bytes(listing[at + 46:at + 46 + name_len])
+            if name in names: raise broken()  # two parts of one name: which one a reader gets is not the one counted
+            names.add(name)
             if 0xFFFFFFFF in (u32(listing, at + 20), u32(listing, at + 24), u32(listing, at + 42)): raise broken()  # sizes or place left to ZIP64
             extra, x = listing[at + 46 + name_len:at + 46 + name_len + extra_len], 0
             while x + 4 <= len(extra):
@@ -369,6 +372,7 @@ def knowledge_zip_layout(book, cancel=None):
     if layout is not None: return layout
     broken = KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
     layout, spans = {}, []
+    if len({i.filename for i in book.infolist()}) != len(book.infolist()): raise broken  # two parts of one name
     if len(book.infolist()) > KNOWLEDGE_PARTS: raise KnowledgeUnreadable('檔案解開後太大，請拆成幾個檔案再上傳。')  # right after its directory was read
     with _zip_source(book) as f:
         f.seek(0, 2); end = f.tell()
@@ -406,7 +410,7 @@ def knowledge_zip_stream(book, name, budget, cancel=None):
     import zlib as _kzlib
     too_big = lambda: KnowledgeUnreadable('檔案解開後太大，請拆成幾個檔案再上傳。')
     broken = lambda: KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
-    info = book.getinfo(name)
+    info = name if isinstance(name, _kzip.ZipInfo) else book.getinfo(name)  # the very part given, never another of the same name
     if info.flag_bits & 0x1 or info.compress_type not in (_kzip.ZIP_STORED, _kzip.ZIP_DEFLATED): raise broken()  # locked, or packed some other way
     if info.file_size > budget[0]: raise too_big()
     start = knowledge_zip_layout(book, cancel).get(id(info))
