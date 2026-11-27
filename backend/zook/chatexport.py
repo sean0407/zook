@@ -4,6 +4,7 @@
 # The file has one top title (the conversation). Each message starts with a bold line: who said it, when, and for a reply the
 # model and whether it failed or was stopped. A reply's own headings move two levels down, so they never sit level with the title.
 # Attached files, and the files a reply saved (#302), are named but not put in the file.
+# A reply answered again (#305) is written once per version, oldest first, each marked 第 N／M 版 with its model.
 EXPORT_UNSAFE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 EXPORT_FENCE = re.compile(r'^\s{0,3}(`{3,}|~{3,})')
 EXPORT_FENCE_END = re.compile(r'^\s{0,3}(`{3,}|~{3,})\s*$')
@@ -55,7 +56,7 @@ def export_message(data, jobs, m, speaker, tag='', verdict=''):
     if export_time(m.get('createdAt')): head.append(export_time(m.get('createdAt')))
     job = jobs.get(m.get('id'))
     if m.get('role') == 'assistant':
-        if export_model(data, job): head.append(export_model(data, job))
+        if export_model(data, job) or m.get('who'): head.append(export_model(data, job) or str(m['who']))
         status = m.get('status')
         if status == 'failed': head.append('⚠️ 回覆失敗')
         elif status == 'cancelled': head.append('⏹ 已停止')
@@ -75,6 +76,12 @@ def export_message(data, jobs, m, speaker, tag='', verdict=''):
     made = export_saved(job) if m.get('role') == 'assistant' else []
     if made: lines.append('📄 這則回覆存的檔案：%s（檔案沒有帶入這份匯出）' % '、'.join(made))
     return '\n\n'.join(lines)
+
+
+def export_versions(m):
+    """[(message, tag)]: a reply with earlier versions gives each of them, then itself."""
+    every = [v for v in m.get('versions') or [] if isinstance(v, dict)] + [m] if m.get('role') == 'assistant' else [m]
+    return [(v, '（第 %d／%d 版）' % (i + 1, len(every)) if len(every) > 1 else '') for i, v in enumerate(every)]
 
 
 def export_saved(job):
@@ -109,7 +116,7 @@ def export_chat(data, bot, chat_id, now=None):
     title = chat.get('title') or ('排程' if chat.get('kind') == 'schedule' else '本機腳本' if chat.get('kind') == 'script' else '新對話')
     jobs = {j.get('messageId'): j for j in data.get('jobs') or [] if j.get('botId') == bot.get('id') and not j.get('groupId')}
     shown = [m for m in messages if m.get('role') in ('user', 'assistant') and (m.get('content') or m.get('attachments') or m.get('role') == 'assistant')]
-    blocks = [export_message(data, jobs, m, (m.get('author') or '我') if m.get('role') == 'user' else bot.get('name') or 'Bot') for m in shown]
+    blocks = [export_message(data, jobs, v, (m.get('author') or '我') if m.get('role') == 'user' else bot.get('name') or 'Bot', tag) for m in shown for v, tag in export_versions(m)]
     facts = [('Bot', bot.get('name')), ('對話', title), ('期間', export_span(shown)), ('匯出時間', export_time(now or NOW()))]
     return dict(name=export_name(bot.get('name') or 'Bot', title, now=now), markdown=export_file('%s · %s' % (bot.get('name') or 'Bot', title), facts, blocks), empty=not blocks)
 

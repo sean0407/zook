@@ -579,8 +579,13 @@ def schedule_when(item):
     if trigger_when(item): return trigger_when(item)
     if repeat == 'hourly': return '每小時的 %s 分' % at[3:]
     if repeat == 'monthly': return '每月 %s 號 %s' % (item.get('day'), at)
-    if repeat == 'once': return '%s %s（只一次）' % (item.get('date'), at)
+    if repeat == 'once': return '%s %s（只一次）' % (_once_day(item.get('date')), at)  # #77④: with its weekday
     return '%s %s' % (REPEAT_NAMES.get(repeat, '每天'), at)
+
+
+def _once_day(date):
+    try: return day_label(datetime.datetime.strptime(str(date), '%Y-%m-%d').date())
+    except ValueError: return str(date or '')
 
 
 def schedule_target_name(store, item):

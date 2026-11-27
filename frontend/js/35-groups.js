@@ -69,12 +69,20 @@
     const families = members.map(botFamily), one = members.length >= 2 && families.every(f => f && f === families[0]);
     const el = form.querySelector('[data-group-problem]'), hint = form.querySelector('[data-group-hint]');
     if (el) { el.textContent = problem; el.hidden = !problem; }
-    const kept = groupKeepsAuto(form) ? '這個群組設定為「自動」，但任務引擎已關閉，所以暫時用「自由」討論；儲存不會改掉，到「設定」打開任務引擎就會恢復。' : '';
-    const words = [kept, one && mode === 'auto' ? `成員都是 ${providerShort(families[0])}，沒有跨家驗收：結果要你自己看，或加一位別家的 Bot。` : '', mode === 'auto' && form.elements.checkMode?.value !== 'pick' ? '「自動」討論方式會另外請別家成員驗收每一項工作，不受「驗收方式」影響（指定查核員除外）。' : ''].filter(Boolean).join(' ');
+    const kept = groupKeepsAuto(form) ? '這個群組設定為「自動」，但任務引擎已關閉，所以暫時用「自由」討論；儲存不會改掉，到「設定 → 進階」打開群組自動分工就會恢復。' : '';
+    const words = [kept, one && mode === 'auto' ? `成員都是 ${providerShort(families[0])}，沒有跨家驗收：結果要你自己看，或加一位別家的 Bot。` : '', mode === 'auto' && form.elements.checkMode?.value !== 'pick' ? '「自動」討論方式會另外請別家成員驗收每一項工作，不受「驗收方式」影響（指定查核員除外）。' : '', splitNoHost(form, mode, host, members)].filter(Boolean).join(' ');
     if (hint) { hint.textContent = words; hint.hidden = !words; }
     const check = form.querySelector('[data-check-hint]'), said = mode === 'auto' ? '' : checkHint(form, ids, host || '');
     if (check) { check.textContent = said; check.hidden = !said; }
     return !problem;
+  }
+  // #332③: 主持人分工 with no host still runs; the first member (not the 查核員) hands out the work and merges, as groups.py does.
+  function splitNoHost(form, mode, host, members) {
+    if (!(mode === 'split' && !host) || members.length < 2) return '';
+    const cm = form.elements.checkMode?.value, ids = members.map(b => b.id), picked = form.elements.checkerId?.value;  // the 查核員 as checkorder.py picks it
+    const checker = cm === 'pick' && ids.includes(picked) ? picked : ['auto', 'same', 'pick'].includes(cm) ? autoChecker(ids, '', cm === 'same') : '';
+    const lead = members.find(b => b.id !== checker) || members[0], known = ['auto', 'same', 'pick', 'none'].includes(cm);  // 照名稱判斷 (an older group): worked out on the Mac
+    return `「主持人分工」沒有設主持人：這次會由${known ? `「${lead.name}」` : '第一位不是查核員的成員'}分工和合併。要指定誰來分工，請在「主持人」選一位。`;
   }
   // #223②: a group saved as 自動 while the task engine is off shows 自由; left on 自由 (and still with a host and two members), saving keeps 自動.
   function groupKeepsAuto(form) {
@@ -98,7 +106,7 @@
       const e = await post('groups/' + encodeURIComponent(g.id) + '/estimate', {content: $('#chat-input')?.value || '', mode: currentGroupMode(g)});
       const fallback = currentGroupMode(g) === 'auto' && e.upTo ? `預計至少 ${e.replies} 次回覆：主持人規劃、每位成員做事各算一次，驗收和重做會再多幾次`  // #223①: 自動 has no upper bound
         : `預計${e.upTo ? '最多 ' : ' '}${e.replies} 次回覆${e.most ? `（主持人退回修正時最多 ${e.most} 次）` : ''}`;
-      const text = e.text || fallback;  // in rounds, worded by the Mac (#174); the token figure meant nothing to people and looked alarming
+      const text = groupMembers(g).length < 2 ? '' : e.text || fallback;  // #333⑦: 成員不足 above the box already says it; no 預計 1 次回覆  // in rounds, worded by the Mac (#174); the token figure meant nothing to people and looked alarming
       state.groupEstimate = {key, text};
       const el = $('#group-estimate');
       if (el && activeGroup()?.id === g.id) el.textContent = text;

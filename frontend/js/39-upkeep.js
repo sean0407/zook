@@ -4,7 +4,7 @@
 
   function rulesSection() {
     const rules = state.data.settings.rules || '';
-    return `<h2 class="settings-h">固定規則</h2><p class="muted small settings-note">所有 Bot 每次回覆都會遵守，比各自的工作指示優先。改完要按「儲存規則」才會生效。</p><form id="rules-form" class="rules-form"><textarea name="rules" maxlength="10000" rows="5" aria-label="固定規則" placeholder="例如：一律用繁體中文回答。金額一律標示幣別。">${esc(rules)}</textarea><div class="setting-actions"><button class="primary" data-save>儲存規則</button><span class="unsaved-note" data-unsaved hidden>尚未儲存</span></div></form>`;
+    return `<h2 class="settings-h">固定規則</h2><p class="muted small settings-note">所有 Bot 每次回覆都會遵守，比各自的工作指示優先。打完字就會自動存好。</p><form id="rules-form" class="rules-form"><textarea name="rules" maxlength="10000" rows="5" aria-label="固定規則" placeholder="例如：一律用繁體中文回答。金額一律標示幣別。">${esc(rules)}</textarea><div class="rules-status" data-saved-for="固定規則"></div></form>`;
   }
 
   // 備份與還原 (queue #232, #50, #51): settings as switches and dropdowns, a name for a backup made by hand, and what a restore changes.
@@ -32,36 +32,10 @@
       const used = x.limit ? `本月已用 ${fmtTokens(x.used)}（${pct}%）` : `本月已用 ${fmtTokens(x.used)}`;
       return settingRow(esc(x.name), `${used}${x.limit ? `<span class="budget-bar ${x.state}"><i style="width:${pct}%"></i></span>` : ''}`, dropdown('budget-' + x.id, String(x.limit), limits, `data-budget="${esc(x.id)}"`));
     }).join('');
-    return `<section class="usage-block"><h2>用量預算</h2><p class="muted small settings-note">每月上限，只計算 Zook 送出的回覆（輸入加輸出）。達 80% 和用完時會通知。</p><div class="setting-list">${settingRow('預算用完時', '', dropdown('budgetOver', b.over, BUDGET_OVER, 'data-budget-over'))}${rows}</div></section>`;
+    return `<section class="usage-block"><h2>用量預算</h2><p class="muted small settings-note">每月上限，只計算 Zook 送出的回覆（輸入加輸出）。達 80% 和用完時會通知。</p><div class="setting-list">${settingRow('預算用完時', b.over === 'switch' ? '「改用備用模型」照各 Bot 的「備用模型」換。' + FALLBACK_LINK : '', dropdown('budgetOver', b.over, BUDGET_OVER, 'data-budget-over'))}${rows}</div></section>`;
   }
 
-  // #61 #247: each line says how it ended and opens to why and what to do next; filters by 分類 and 結果; an empty filter says so.
-  const ACTIVITY_EXAMPLES = {approval: '核准或拒絕 Bot 的動作', tool: 'Bot 沒先問就做的事、清理暫存資料夾', bot: '新增、修改、刪除 Bot 或群組', setting: '變更設定、用量預算提醒',
-    connector: '加入或移除 Skills、連接器', schedule: '新增、修改或手動執行排程', data: '新增或刪除知識、記憶', backup: '備份、還原與同步', device: '配對或移除手機'};
-  function activityEmpty(names) {
-    const kind = state.activityKind || '', result = state.activityResult || '';
-    if (!kind && !result) return '還沒有紀錄。設定變更、核准和 Bot 對外的動作會記在這裡。';
-    if (result) return `沒有${kind ? '「' + (names[kind] || '') + '」分類裡' : ''}結果是「${(state.activity.results || []).find(r => r.id === result)?.name || ''}」的紀錄。可以把「結果」改回「全部」。`;
-    return `這個分類目前沒有紀錄（例如${ACTIVITY_EXAMPLES[kind] || '這一類的變更'}會記在這裡）。可以改選其他分類。`;
-  }
-  function activityDetail(x, names) {
-    const line = (k, v) => v ? `<div class="act-line"><span>${k}</span><p>${esc(v)}</p></div>` : '';
-    const go = x.groupId ? `<button class="link" data-action="select-group" data-id="${esc(x.groupId)}">打開群組</button>` : x.botId ? `<button class="link" data-action="select-bot" data-id="${esc(x.botId)}">打開對話</button>` : '';
-    return `<div class="act-detail" id="act-${esc(x.id)}">${line('內容', x.text)}${line('時間', formatDate(x.at))}${line('分類', names[x.kind])}${line('來源', x.by)}${line('結果', x.resultName)}${line(x.result === 'failed' ? '失敗原因' : '原因', x.why)}${line('下一步', x.next || (x.result === 'ok' ? '不用做什麼。' : ''))}${go ? `<div class="act-go">${go}</div>` : ''}</div>`;
-  }
-  function activityPage() {
-    const a = state.activity;
-    if (!a) return loadingBlock('正在讀取紀錄…');
-    if (a.error) return `<div class="blank error-text">${esc(a.error)}</div>`;
-    const kinds = [{id: '', name: '全部'}, ...a.kinds], names = Object.fromEntries(a.kinds.map(k => [k.id, k.name]));
-    const results = [{id: '', name: '全部'}, ...(a.results || [])];
-    const row = x => {
-      const open = state.activityOpen === x.id;
-      return `<div class="act-item"><button type="button" class="plain-row act-row" data-up="act-open" data-id="${esc(x.id)}" aria-expanded="${open}" aria-controls="act-${esc(x.id)}"><span class="plain-copy"><strong>${esc(x.text)}</strong><span>${[formatDate(x.at), names[x.kind], x.by].filter(Boolean).map(esc).join(' · ')}</span></span><span class="act-result r-${esc(x.result || 'ok')}">${esc(x.resultName || '成功')}</span></button>${open ? activityDetail(x, names) : ''}</div>`;
-    };
-    const rows = a.items.length ? `<div class="plain-rows act-rows">${a.items.map(row).join('')}</div>` : `<div class="blank">${esc(activityEmpty(names))}</div>`;
-    return `<p class="muted">設定變更、核准與對外動作的紀錄，保留最近 1000 筆。點一列看詳情。對話內容不會記在這裡。</p><div class="setting-list">${settingRow('分類', '', dropdown('activityKind', state.activityKind || '', kinds, 'data-activity-kind'))}${settingRow('結果', '', dropdown('activityResult', state.activityResult || '', results, 'data-activity-result'))}</div>${rows}`;
-  }
+  // The activity page: 39b-activity.js.
 
   async function loadUpkeep(p) {
     const fill = async (key, path, pick) => {
@@ -71,7 +45,7 @@
     };
     if (p === 'settings') { fill('backupInfo', 'backups'); fill('sync', 'sync'); }
     if (p === 'usage') fill('budget', 'budget');
-    if (p === 'activity') { const q = new URLSearchParams(); if (state.activityKind) q.set('kind', state.activityKind); if (state.activityResult) q.set('result', state.activityResult); fill('activity', 'activity' + (q.toString() ? '?' + q : '')); }
+    if (p === 'activity') loadActivity();  // 39b-activity.js
   }
 
   document.addEventListener('click', async e => {
@@ -115,12 +89,7 @@
     } catch (err) { toast(err.message); }
   });
 
-  document.addEventListener('submit', async e => {
-    if (e.target.id !== 'rules-form') return;
-    e.preventDefault();
-    try { state.data.settings = await post('settings', {rules: e.target.elements.rules.value}, 'PATCH'); toast('已儲存規則'); }
-    catch (err) { toast(err.message); }
-  });
+  document.addEventListener('submit', e => { if (e.target.id === 'rules-form') e.preventDefault(); });  // saved as it is typed (38c-settings.js)
 
   // Skill templates: listed under the Skills you have, grouped the same way; one click adds one.
   function templateSections(query) {
@@ -153,42 +122,6 @@
       if (picked && box) { box.querySelector('input').value = picked; box.querySelector('.watch-path').textContent = picked; }
     } catch (err) { toast(err.message); }
   });
-
-  // First-run guide: three steps, shown until they are done or skipped. The steps read the same sign-in state as 各模型使用量.
-  function guideSteps() {
-    const list = state.accounts?.providers || [];
-    const installed = list.filter(p => p.installed), signedIn = list.filter(p => p.status === 'logged_in' && !p.issue);
-    const replied = state.data.bots.some(b => (b.messages || []).some(m => m.role === 'assistant' && m.status === 'completed'));
-    const names = a => a.map(p => p.name.split('（')[0]).join('、');
-    return [{title: '安裝一個 AI 工具', done: installed.length > 0, note: installed.length ? '已安裝 ' + names(installed) : '有 ChatGPT 帳號選 Codex，有 Claude 帳號選 Claude。裝一個就能開始。', go: 'usage', label: '前往安裝'},
-            {title: '登入帳號', done: signedIn.length > 0, note: signedIn.length ? '已登入 ' + names(signedIn) : '登入由官方工具完成，Zook 不會看到密碼。', go: 'usage', label: '前往登入'},
-            {title: '傳第一則訊息', done: replied, note: replied ? '完成' : '選一個 Bot，在下方輸入想問的事。', go: 'chat', label: '開始對話'}];
-  }
-  function guideCard() {
-    if (!state.data || state.data.settings.onboarded !== false || state.groupId) return '';
-    if (!state.accounts) return '';
-    const steps = guideSteps(), at = steps.findIndex(s => !s.done);
-    if (at < 0) { finishGuide(); return ''; }
-    return `<section class="guide-card" aria-label="開始使用"><div class="guide-head"><strong>開始使用 Zook</strong><span class="muted">${at} / ${steps.length} 完成</span><button class="link" data-up="guide-skip">略過</button></div><ol class="guide-steps">${steps.map((s, i) => `<li class="${s.done ? 'done' : i === at ? 'now' : ''}"><span class="guide-mark" aria-hidden="true">${s.done ? '✓' : i + 1}</span><div class="guide-copy"><strong>${s.title}</strong><span>${esc(s.note)}</span></div>${i === at && !(s.go === 'chat' ? state.page === 'chat' : state.page === s.go) ? `<button class="primary small-btn" data-up="guide-go" data-id="${s.go}">${s.label}</button>` : ''}</li>`).join('')}</ol></section>`;
-  }
-  async function finishGuide(skipped) {
-    if (state.guideClosing) return;
-    state.guideClosing = true;
-    try { state.data.settings = await post('settings', {onboarded: true}, 'PATCH'); if (!skipped) toast('設定完成，可以開始使用了'); } catch (_) {}
-    state.guideClosing = false; render(true);
-  }
-  document.addEventListener('click', async e => {
-    const el = e.target.closest?.('[data-up^="guide-"]');
-    if (!el) return;
-    if (el.dataset.up === 'guide-skip') return finishGuide(true);
-    if (el.dataset.id === 'chat') { state.page = 'chat'; state.groupId = null; render(); $('#chat-input')?.focus(); }
-    else await loadPage(el.dataset.id);
-  });
-  // While the guide is showing, keep the sign-in state fresh so each step ticks itself off.
-  setInterval(async () => {
-    if (!state.data || state.data.settings.onboarded !== false || document.hidden) return;
-    try { const next = await api('accounts'); if (JSON.stringify(next) !== JSON.stringify(state.accounts)) { state.accounts = next; if (state.page !== 'usage' || !$('#account-code-form input:focus')) render(true); } } catch (_) {}
-  }, 4000);
 
   // Voice input: the Mac app listens and sends the words back; they are added to what is already typed.
   const VOICE_LANGS = [{id: '', name: '跟隨系統語言'}, {id: 'zh-TW', name: '中文（台灣）'}, {id: 'en-US', name: 'English'}, {id: 'ja-JP', name: '日本語'}];
