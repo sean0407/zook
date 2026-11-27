@@ -104,7 +104,7 @@ class Table(unittest.TestCase):
 class Front(unittest.TestCase):
     def test_no_menu_is_written_out_in_the_page(self):
         js = ''.join(JS.values())
-        for gone in ("const EFFORTS = [", "const ACCESS = [", "const GATED_CLIS = ["): self.assertNotIn(gone, js)
+        for gone in (r'\bEFFORTS\b', r'\bACCESS\b', r'\bGATED_CLIS\b'): self.assertIsNone(re.search(gone, js), gone)  # nor left in use anywhere (31-team.js had one)
         self.assertIn('cliRow(', JS['20-models.js'])
 
     @unittest.skipUnless(shutil.which('node'), 'needs node')
@@ -118,6 +118,15 @@ class Front(unittest.TestCase):
         code = snippet('20-models.js', r'// #246 table helpers.*?// end #246 table helpers\n')
         got = run_js('const state = %s;\n%s\nconsole.log(JSON.stringify([effortsFor("cursor").map(x => x.id), effortsFor("codex").map(x => x.id), accessFor("cursor").map(x => x.id), gatedCli("cursor"), gatedCli("codex"), planOk("gemini"), planOk("codex"), efforts().length, accessChoices().length, effortsFor("unknown").map(x => x.id)]))' % (json.dumps(state), code))
         self.assertEqual(got, [['standard'], ['standard', 'fast', 'medium', 'deep'], ['full'], True, False, False, True, 4, 3, ['standard']])
+
+    @unittest.skipUnless(shutil.which('node'), 'needs node')
+    def test_team_card_levels_from_the_table(self):  # review: 31-team.js still named the removed list and failed to draw
+        state = {'data': {'settings': {'provider': 'codex'}, 'cliTable': {'efforts': [{'id': 'standard', 'name': '標準'}, {'id': 'deep', 'name': '深入'}], 'access': [],
+                 'clis': {'claude': {'efforts': ['standard', 'deep'], 'access': ['full'], 'gated': True, 'readOnly': True}}}}, 'team': {'choices': [{'id': 'claude', 'name': 'Claude', 'effort': True}]}}
+        helpers = snippet('20-models.js', r'// #246 table helpers.*?// end #246 table helpers\n')
+        team = snippet('31-team.js', r'  function teamModelOptions.*?\n  function teamCard')[:-len('  function teamCard')]
+        html = run_js('const esc = s => String(s); const dropdown = (n, v, o) => n + ":" + o.map(x => x.name).join(","); const state = %s;\n%s\n%s\nconsole.log(JSON.stringify(teamModelRow({provider: "claude", effort: ""})))' % (json.dumps(state), helpers, team))
+        self.assertIn('effort:預設,標準,深入', html)
 
     @unittest.skipUnless(shutil.which('node'), 'needs node')
     def test_long_menu_has_groups_and_search(self):
