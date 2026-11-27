@@ -32,6 +32,13 @@ class Entries(unittest.TestCase):
         self.assertIn('startCard(true)', body('chat'))  # no Bot yet
         self.assertIn("inChat && state.data.settings.startTips === false", body('startCard'))  # hidden once 收起, always in 說明
 
+    def test_only_one_start_card(self):
+        # 2026-11-27 user: the old three-step 開始使用 Zook card is gone; 從這裡開始 shows on a fresh install (startTips not set yet)
+        for old in ('function guideCard', 'function guideSteps', 'function finishGuide', '開始使用 Zook', 'guide-card', 'data-up="guide-'):
+            self.assertNotIn(old, JS, old)
+        self.assertNotIn('.guide-card', CSS)
+        self.assertIn("inChat && state.data.settings.startTips === false) return ''", body('startCard'))  # only an explicit 收起 hides it
+
     def test_help_has_an_address_and_entries_are_in_plain_sight(self):
         self.assertIn("'help'", re.search(r'PAGE_HASHES = \[[^\]]*\]', JS).group(0))
         self.assertIn("help: '說明'", JS)
