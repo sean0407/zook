@@ -442,6 +442,9 @@ def upkeep_fields(data, body, changes):
     if 'streamReplies' in body:
         if not isinstance(body['streamReplies'], bool): raise ValueError('streamReplies 無效。')
         changes['streamReplies'] = body['streamReplies']
+    if 'startTips' in body:  # 從這裡開始 on the empty chat (#308); 說明 always has it
+        if not isinstance(body['startTips'], bool): raise ValueError('startTips 無效。')
+        changes['startTips'] = body['startTips']
     if 'onboarded' in body:
         if body['onboarded'] is not True: raise ValueError('onboarded 無效。')
         changes['onboarded'] = True
