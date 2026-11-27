@@ -101,9 +101,10 @@
       try { res = await fetch(src + '/pages'); info = await res.json(); } catch (_) {}
       if (!box.isConnected) return;
       if (info.status === 'ready') {
-        const n = info.pages, more = info.total > n ? `，只顯示前 ${n} 頁` : '';
+        const n = info.pages, last = (info.numbers || [])[n - 1] || n, more = info.total > last ? `，只顯示前 ${last} 頁` : '';  // #354: a page left out in the middle is not 「只顯示前」
         const about = box.dataset.kind === 'pdf' ? (n > 1 ? `共 ${info.total} 頁${more}。` : '') : `這是預覽圖，版面可能和原檔略有不同${n > 1 ? `。共 ${info.total} 頁${more}` : ''}。`;
-        box.innerHTML = `${about || info.note ? `<p class="muted small office-note">${about}${esc(info.note || '')}</p>` : ''}<div class="office-pages">${Array.from({length: n}, (_, i) => `<figure class="office-page"><img src="${esc(src + '/pages/' + (i + 1) + '?v=' + info.version)}" alt="第 ${i + 1} 頁" loading="lazy">${n > 1 ? `<figcaption>${i + 1} / ${n}</figcaption>` : ''}</figure>`).join('')}</div>`;
+        const big = new Set(info.big || []), at = i => (info.numbers || [])[i] || i + 1, of = info.numbers ? info.total : n;  // #354: real page numbers; a picture too big to send
+        box.innerHTML = `${about || info.note ? `<p class="muted small office-note">${about}${esc(info.note || '')}</p>` : ''}<div class="office-pages">${Array.from({length: n}, (_, i) => `<figure class="office-page">${big.has(i + 1) ? `<p class="muted">第 ${at(i)} 頁：這頁太大，請下載查看。</p>` : `<img src="${esc(src + '/pages/' + (i + 1) + '?v=' + info.version)}" alt="第 ${at(i)} 頁" loading="lazy">`}${n > 1 ? `<figcaption>${at(i)} / ${of}</figcaption>` : ''}</figure>`).join('')}</div>`;
         return;
       }
       if (info.status !== 'working' || Date.now() > until) {
