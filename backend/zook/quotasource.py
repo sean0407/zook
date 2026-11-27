@@ -85,10 +85,8 @@ def quota_left(store, provider, account_id=''):
 def same_cli_backups(store, bot, provider, model):
     """Lock held. #33 (decisions #7): a Bot whose model the user picked tries the same CLI's other accounts, model kept, before
     another CLI: those 自動選擇 may use (signed in, a subscription, 自動選用 on), most left first. Nearly used-up ones go last later
-    (backups_with_room). A Bot set to 不自動換, or 自動選擇 (auto_backups does it), gets none."""
+    (backups_with_room). Also with no backups at all: 不自動換 only means no other CLI (使用者 2026-11-27). 自動選擇 has auto_backups."""
     if bot.get('autoAssigned') or bot.get('provider') == AUTO: return []
-    order = bot.get('fallbacks') if isinstance(bot.get('fallbacks'), list) else store.data['settings'].get('fallbacks') or []
-    if not order: return []
     own = (find_account(bot.get('account'), provider) or {}).get('id', '')
     try: same = [c for c in auto_choices(store, 'quick', (provider,)) if c[1] != own]
     except ValueError: return []

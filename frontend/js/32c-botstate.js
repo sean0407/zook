@@ -27,8 +27,8 @@
   }
   // #33: another account of the same CLI that a reply switches to first (自動選用 on, known to have room), by name; '' when none.
   function sameSpare(provider, account, fallbacks) {
-    const q = state.quota ? quotaFor(provider) : null, chain = Array.isArray(fallbacks) ? fallbacks : state.data.settings.fallbacks || [];
-    if (!q || !chain.length) return '';
+    const q = state.quota ? quotaFor(provider) : null;
+    if (!q) return '';  // with no backups too: 不自動換 only means no other CLI
     const room = x => x.status === 'logged_in' && x.autoOn && !x.autoBilled && ['ok', 'low'].includes(x.view?.level);
     const spare = [{x: q, id: ''}, ...(q.profiles || []).map(a => ({x: a, id: a.id}))].filter(c => c.id !== (account || '') && room(c.x)).sort((a, b) => (b.x.view.left ?? 0) - (a.x.view.left ?? 0))[0];
     return spare ? providerShort(provider) + (spare.id ? '（' + spare.x.name + '）' : '') : '';

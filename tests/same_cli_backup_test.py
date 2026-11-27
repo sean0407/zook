@@ -77,6 +77,14 @@ class SameCliBackupTest(unittest.TestCase):
         self.assertNotEqual(message.get('content'), 'codex w1 says hi')
         self.assertNotEqual((job.get('ran') or ['', '', ''])[2], W1)
 
+    def test_with_no_backups_at_all_the_same_cli_still_takes_over(self):
+        self.req('PATCH', '/api/settings', {'fallbacks': []})  # 設定: 不使用 for both
+        self.assertEqual(self.req('PATCH', '/api/bots/' + self.bot['id'], {'fallbacks': []})[0], 200)  # and 不自動換 on the Bot
+        self.with_account(False)
+        message, job = self.ask('hello')
+        self.assertEqual((message['status'], message['content']), ('completed', 'codex w1 says hi'))  # 不自動換 only keeps other CLIs out (2026-11-27)
+        self.assertIn('改用 Codex（Waifdance）', message['note'])
+
     def test_an_account_switched_to_an_api_key_since_is_not_used(self):
         folder = self.root / 'data/accounts' / W1; folder.mkdir(parents=True); (folder / 'apikey').write_text('')  # signed in with a key outside Zook
         self.with_account(False, checked=0)  # Zook still thinks it is a subscription, from a check long ago

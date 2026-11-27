@@ -120,7 +120,9 @@ class QuotaSourceTest(unittest.TestCase):
         self.assertEqual(chain[3][0], 'claude')  # another CLI only after them
         on_w1 = m.provider_chain(self.store, dict(bot, account='w1'), 'codex', 'gpt-6')
         self.assertEqual([x[2] if len(x) > 2 else None for x in on_w1[:3]], [None, 'w2', ''])  # its own account is not tried twice; the CLI's own sign-in is one of them
-        self.assertEqual(m.provider_chain(self.store, dict(bot, fallbacks=[]), 'codex', 'gpt-6'), [('codex', 'gpt-6')])  # 不自動換 stays so
+        self.assertEqual(m.provider_chain(self.store, dict(bot, fallbacks=[]), 'codex', 'gpt-6'), chain[:3])  # 不自動換: still the same CLI's accounts, no other CLI (2026-11-27)
+        self.store.data['settings']['fallbacks'] = []
+        self.assertEqual(m.provider_chain(self.store, dict(id='c', provider='codex', account='', model='gpt-6'), 'codex', 'gpt-6'), chain[:3])  # nothing set in 設定 either
         self.assertEqual(m.provider_chain(self.store, dict(bot, autoAssigned=True), 'codex', 'gpt-6')[1][0], 'claude')  # 自動選擇 has its own (auto_backups)
         self.store.data['settings']['autoAccounts'] = {'w2': False}  # 自動選用 turned off: not used without asking
         self.assertNotIn(('codex', 'gpt-6', 'w2'), m.provider_chain(self.store, bot, 'codex', 'gpt-6'))

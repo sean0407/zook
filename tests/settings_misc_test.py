@@ -159,7 +159,7 @@ class TroubleInTheInterface(unittest.TestCase):
     def test_backup_menus_are_marked(self):
         self.assertIn("base + (troubleMark(modelTrouble(value, '')) || levelMark(accountLevel(value, '')))", self.code)  # Bot form
         self.assertIn("name: p.name + troubleMark(modelTrouble(p.id, ''))", self.code)  # 設定
-        self.assertIn('先換同一家其他有額度的帳號，再換備用 AI（剩餘額度多的先）', self.code)  # #33
+        self.assertIn('一律先換同一家其他有額度的帳號', self.code); self.assertIn('都選「不使用」就不換別家', self.code)  # #33, 2026-11-27
 
     def test_antigravity_is_never_called_used_up_as_a_whole(self):
         self.assertEqual(self.code.count("provider !== 'antigravity'"), 2)
