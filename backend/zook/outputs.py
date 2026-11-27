@@ -282,6 +282,10 @@ def output_response(item):
 # #338 #337⑧: a Word file on A4 with its page breaks where the pages end; a document for other people is never signed with the Bot.
 FILE_DELIVERY_NOTE += ('Word 檔用 A4 紙張（python-docx 預設是 Letter，要把每節的 page_width、page_height 設成 A4），換頁的地方插入分頁符。'
                        '文件裡的署名、承辦人、簽核欄不要填 Bot 的名稱，留【承辦人】這類具名欄位給使用者填；範本的空格也用具名欄位（【姓名】【到職日】），不要全寫成同一個【請填寫】。')
+# #278 #215①: an 「IG 方形」 picture came out 1254×1254 and was handed over as it was. Common sizes, then measured after saving.
+FILE_DELIVERY_NOTE += ('圖片照用途的平台規格輸出：IG 方形 1080×1080、IG 直式 1080×1350、IG／FB 限時動態與 Reels 1080×1920、FB 分享連結圖 1200×630、'
+                       'YouTube 縮圖 1280×720、LINE 圖文訊息 1040×1040；使用者給了尺寸就照給的。存好後用 sips -g pixelWidth -g pixelHeight 檔案 量實際像素，'
+                       '不符就縮放或裁切到規格再交（sips 不能用時用 Pillow），回覆寫出實際尺寸。')
 
 
 # 這段對話的資料夾 (#241): where a conversation's files go when the user names no place, instead of the real Desktop. Inside the
