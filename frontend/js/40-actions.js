@@ -328,6 +328,14 @@
           await post('privacy-settings', {pane: el.dataset.pane});
           toast('已打開系統設定。允許 Zook 後回來按「重試」');
           break;
+        case 'reply-version': {  // #305: ‹ › between the answers to the same question
+          const b = activeBot(), m = (b?.messages || []).find(x => x.id === el.dataset.id), n = (m?.versions || []).length;
+          if (!n) break;
+          const at = (state.versionAt ||= {})[m.id] ?? n, next = Math.max(0, Math.min(n, at + Number(el.dataset.step)));
+          if (next === n) delete state.versionAt[m.id]; else state.versionAt[m.id] = next;
+          render();
+          break;
+        }
         case 'redo-again': {
           const b = activeBot();
           if (await redoAllowed(b)) await redo(b, {mode: 'again'});
@@ -447,7 +455,7 @@
           toggleVoice();
           break;
         case 'composer-menu':
-          modal('更多選項', '<div class="modal-body more-options"><button class="secondary" data-action="pick-files">📎 附加檔案或圖片</button><p class="muted">也可以拖進對話或貼上截圖。最多 10 個，單檔 20 MB。' + ATTACH_HINT + '</p><button class="secondary" data-action="new-note">＋ 新增知識</button><p class="muted">新增知識，為 Bot 提供相關背景。</p>' + `<div class="setting-list mode-rows">${effortRow()}</div>` + (activeGroup() ? '' : '<p class="muted">在訊息框輸入 <b>/goal</b> 開啟長任務、<b>/plan</b> 開啟先規劃。</p>') + '</div>');
+          modal('更多選項', '<div class="modal-body more-options"><button class="secondary" data-action="pick-files">📎 附加檔案或圖片</button><p class="muted">也可以拖進對話或貼上截圖。最多 10 個，單檔 20 MB。' + ATTACH_HINT + '</p><button class="secondary" data-action="new-note">＋ 新增知識</button><p class="muted">新增知識，為 Bot 提供相關背景。</p>' + `<div class="setting-list mode-rows">${effortRow()}${longPlanRows()}</div>` + '</div>');
           break;
         case 'chat-folder': { const b = activeBot(); if (b) await post('bots/' + encodeURIComponent(b.id) + '/chats/' + encodeURIComponent(b.chatId) + '/folder'); break; }
         case 'dismiss-approval': state.seenApprovals[id] = true; render(true); break;

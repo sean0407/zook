@@ -455,13 +455,16 @@
       activity: '活動紀錄',
       memory: '記憶',
       schedules: '排程',
-      plugins: 'Skills 與連接器'
+      plugins: 'Skills 與連接器',
+      help: '說明'
     } [state.page] || '';
     let content = '';
     if (state.page === 'knowledge') {
       content = knowledgePage();  // 36c-knowledge.js
     } else if (state.page === 'activity') {
       content = activityPage();
+    } else if (state.page === 'help') {
+      content = helpPage();  // 34d-help.js
     } else if (state.page === 'schedules') {
       content = schedulesPage();
     } else if (state.page === 'skills' || state.page === 'mcp' || state.page === 'plugins') {
@@ -488,8 +491,8 @@
         ['輸入 Token', groups.reduce((a, g) => a + (g.inputTokens || 0), 0)],
         ['輸出 Token', groups.reduce((a, g) => a + (g.outputTokens || 0), 0)]
       ];
-      content = guideCard() + accountCards() + overviewSection() + fold('budget', '用量預算', budgetSection()) + fold('bots', 'Bot 用量', botUsageSection()) + `<details class="usage-local"><summary>本機 CLI 全部紀錄（包含 Zook 以外的使用）</summary><p>${esc(u.note||'本機記錄的使用情況。')} ${u.truncated?'資料已截斷。':''}</p><div class="stats">${metrics.map(([k,v])=>`<div class="card"><span class="muted">${k}</span><div class="stat-num">${v.toLocaleString()}</div></div>`).join('')}</div>${groups.length?`<div class="usage-chart">${groups.slice(0,14).map(g=>`<div class="usage-row"><span>${esc(g.date)} · ${esc(g.provider)}</span><div class="usage-track"><div class="usage-bar" style="width:${Math.round(100*((g.inputTokens||0)+(g.outputTokens||0))/Math.max(1,...groups.map(x=>(x.inputTokens||0)+(x.outputTokens||0))))}%"></div></div><small>${((g.inputTokens||0)+(g.outputTokens||0)).toLocaleString()} tokens</small></div>`).join('')}</div><div class="cards">${groups.map(g=>`<div class="card"><h3>${esc(g.date)} · ${esc(g.provider)}</h3><p>${esc(g.model)}<br>${(g.inputTokens||0).toLocaleString()} 輸入 / ${(g.outputTokens||0).toLocaleString()} 輸出</p></div>`).join('')}</div>`:'<div class="blank">尚無使用紀錄。</div>'}` + '</details>';
-      if (!state.usage || state.usage.error) content = guideCard() + accountCards() + overviewSection() + fold('budget', '用量預算', budgetSection()) + fold('bots', 'Bot 用量', botUsageSection()) + `<details class="usage-local"><summary>本機 CLI 全部紀錄（包含 Zook 以外的使用）</summary>${state.usage?.error ? `<div class="blank error-text">${esc(state.usage.error)}</div>` : loadingBlock('正在讀取本機紀錄…')}</details>`;
+      content = accountCards() + overviewSection() + fold('budget', '用量預算', budgetSection()) + fold('bots', 'Bot 用量', botUsageSection()) + `<details class="usage-local"><summary>本機 CLI 全部紀錄（包含 Zook 以外的使用）</summary><p>${esc(u.note||'本機記錄的使用情況。')} ${u.truncated?'資料已截斷。':''}</p><div class="stats">${metrics.map(([k,v])=>`<div class="card"><span class="muted">${k}</span><div class="stat-num">${v.toLocaleString()}</div></div>`).join('')}</div>${groups.length?`<div class="usage-chart">${groups.slice(0,14).map(g=>`<div class="usage-row"><span>${esc(g.date)} · ${esc(g.provider)}</span><div class="usage-track"><div class="usage-bar" style="width:${Math.round(100*((g.inputTokens||0)+(g.outputTokens||0))/Math.max(1,...groups.map(x=>(x.inputTokens||0)+(x.outputTokens||0))))}%"></div></div><small>${((g.inputTokens||0)+(g.outputTokens||0)).toLocaleString()} tokens</small></div>`).join('')}</div><div class="cards">${groups.map(g=>`<div class="card"><h3>${esc(g.date)} · ${esc(g.provider)}</h3><p>${esc(g.model)}<br>${(g.inputTokens||0).toLocaleString()} 輸入 / ${(g.outputTokens||0).toLocaleString()} 輸出</p></div>`).join('')}</div>`:'<div class="blank">尚無使用紀錄。</div>'}` + '</details>';
+      if (!state.usage || state.usage.error) content = accountCards() + overviewSection() + fold('budget', '用量預算', budgetSection()) + fold('bots', 'Bot 用量', botUsageSection()) + `<details class="usage-local"><summary>本機 CLI 全部紀錄（包含 Zook 以外的使用）</summary>${state.usage?.error ? `<div class="blank error-text">${esc(state.usage.error)}</div>` : loadingBlock('正在讀取本機紀錄…')}</details>`;
     } else if (state.page === 'plugins-legacy') {
       const list = state.integrations?.plugins || [];
       content = `<p class="muted">來自 Claude Code 的插件。啟用後所有 Bot 共用。</p>${list.length ? `<div class="cards">${list.map(pl => {
@@ -499,7 +502,7 @@
       }).join('')}</div>` : '<div class="blank">沒有偵測到插件。</div>'}`;
     } else if (state.page === 'settings') {
       let s = state.data.settings || {};
-      content = settingsNav() + lookSection() + permissionSection(s.permissionMode || 'manual') + rulesSection() + `<div class="setting-list">${settingRow('記憶', 'Bot 記住的偏好，點此查看', '<button type="button" class="secondary" data-action="page" data-id="memory">查看記憶</button>')}</div>` + modelSection(s) + chatSection() + taskSection() + noticeSection() + voiceSection() + remoteSection() + syncSection() + backupSection() + updateSection()
+      content = settingsNav() + lookSection() + permissionSection(s.permissionMode || 'manual') + rulesSection() + `<div class="setting-list">${settingRow('記憶', 'Bot 記住的偏好，點此查看', '<button type="button" class="secondary" data-action="page" data-id="memory">查看記憶</button>')}</div>` + modelSection(s) + chatSection() + noticeSection() + voiceSection() + remoteSection() + backupSection() + advancedSettings()
     }
     return `<main class="main"><header class="main-header"><div class="bot-pill">Zook</div></header><div class="page"><div class="page-inner"><div class="page-top"><h1>${name}</h1>${state.page==='knowledge'?'<button class="primary" data-action="new-note">＋ 新增知識</button>':state.page==='usage'?`<div class="page-top-actions">${usageAutoPick()}<button class="secondary" data-action="detect-usage" title="重新向各家讀取剩餘額度的數字，不會更新軟體" ${state.usageBusy ? 'disabled' : ''}>${state.usageBusy === 'detect' ? '偵測中…' : '偵測使用量'}</button><button class="secondary" data-action="update-all" title="把有新版的 CLI 軟體全部更新到最新版，完成後再讀一次額度" ${state.usageBusy ? 'disabled' : ''}>${state.usageBusy === 'update' ? '更新中…' : '更新全部 CLI'}</button><button class="primary" data-action="provider-add">＋ 新增模型</button></div>`:state.page==='schedules'?'<button class="primary" data-action="new-schedule">＋ 新增排程</button>':''}</div>${content}</div></div></main>`
   }
@@ -533,7 +536,7 @@
     document.querySelectorAll('[data-approval-details]').forEach(x => { if (openApprovals.includes(x.dataset.approvalDetails)) x.open = true; });
     if ($('#conversation')) {
       const c = $('#conversation');
-      if (!keepFocus()) c.scrollTo({top: y != null && !nearBottom ? y : c.scrollHeight, behavior: 'instant'});
+      if (!keepFocus()) c.scrollTo({top: c.querySelector(':scope > .empty-chat') ? 0 : y != null && !nearBottom ? y : c.scrollHeight, behavior: 'instant'});  // an empty chat starts at 從這裡開始
       updateChatNav();  // the rail's current question and the 直接到底 button follow where the page now is
       if (railFocus) [...document.querySelectorAll('[data-rail]')].find(x => x.dataset.rail === railFocus)?.focus();
     }
@@ -561,6 +564,7 @@
     form.querySelectorAll('[data-feature-row]').forEach(row => { row.hidden = !offered.includes(row.dataset.featureRow); });
     const auto = id === 'auto';  // the model is picked when the Bot is saved, so these choices do not apply yet
     form.querySelectorAll('[data-account-field],.model-picker,[data-fixed-model]').forEach(el => { el.hidden = auto; });
+    form.querySelector('[data-auto-fallback]')?.toggleAttribute('hidden', !auto);  // #324②: why 備用模型 is not there
     const gated = !auto && gatedCli(id), access = form.querySelector('[data-access-row]');  // Claude and Cursor: the whole Mac, nothing to choose
     if (access) access.hidden = gated;
     const held = form.querySelector('[data-held-access]');  // only while it stays on the model it was held on: another model is chosen afresh
@@ -619,11 +623,18 @@
     loadModels(form);
     syncFeatureRows(form);  // Claude and Cursor have nothing to choose about access
     polishBotForm(form, b);  // limits, a name already in use, what 帳號 and 備用模型 do
+    polishBotFormMore(form, b);  // 46-botform-more.js
     if (!state.quota) api('quota').then(q => {  // 已用完／剩不到 20% beside each account
       state.quota = q;
       if (!form.isConnected) return;
       const sel = form.elements.providerChoice, v = sel.value;
       sel.innerHTML = choiceOptions(form.elements.provider.value, form.elements.account.value); sel.value = v; syncFeatureRows(form);
+    }).catch(() => {});
+    if (!state.accounts) api('accounts').then(a => {  // the main sign-in's name beside 預設 (#281③)
+      state.accounts = a;
+      if (!form.isConnected) return;
+      const sel = form.elements.providerChoice, v = sel.value, [p, acc] = v.split('::');  // what is chosen now, which may not be saved yet
+      sel.innerHTML = choiceOptions(p, acc || ''); sel.value = v;
     }).catch(() => {});
     const selected = {enabledSkills: b.enabledSkills || [], enabledMcp: b.enabledMcp || []};
     if (!b.id) { try { const d = JSON.parse(sessionStorage.getItem('swarmr-new-bot-draft') || '{}'); selected.enabledSkills = d.enabledSkills || []; selected.enabledMcp = d.enabledMcp || []; } catch (_) {} }

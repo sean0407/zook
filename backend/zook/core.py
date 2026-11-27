@@ -704,7 +704,7 @@ def web_enabled():
 def identity_block(bot):
     """Who the Bot is: its own persona file, then its work instructions. Personal instruction files are not used."""
     now = datetime.datetime.now().astimezone()
-    parts = ['你是 %s%s。' % (bot['name'], '，職稱是「%s」' % bot['jobTitle'] if bot.get('jobTitle') else ''), '現在時間：%s（%s）。' % (now.strftime('%Y-%m-%d %H:%M'), now.tzname() or 'local'), ISOLATION_NOTE, NATURAL_REPLY_NOTE, FILE_DELIVERY_NOTE, FACTS_NOTE, CLIENT_COPY_NOTE]
+    parts = ['你是 %s%s。' % (bot['name'], '，職稱是「%s」' % bot['jobTitle'] if bot.get('jobTitle') else ''), '現在時間：%s（%s，%s）。' % (now.strftime('%Y-%m-%d %H:%M'), DATE_WEEKDAYS[now.weekday()], now.tzname() or 'local'), ISOLATION_NOTE, NATURAL_REPLY_NOTE, FILE_DELIVERY_NOTE, FACTS_NOTE, CLIENT_COPY_NOTE, WEEKDAY_NOTE]  # #77④ (datecheck.py)
     if web_enabled():
         parts.append('你可以上網搜尋與讀取網頁來取得最新資訊。涉及價格、新聞、日期等會變動的事實時，先查證再回答，並註明來源網站與資料時間。')
     else:

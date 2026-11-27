@@ -27,7 +27,7 @@
   }
   function recheckForm(form) {
     const note = form?.querySelector('.form-need');
-    if (!note || note.dataset.kind === 'conflict') return;  // 「已在別處修改」 stays until the window is opened again
+    if (!note || ['conflict', 'same'].includes(note.dataset.kind)) return;  // 「已在別處修改」 stays until the window is opened again
     if (note.dataset.kind !== 'folder') { sayMissing(form); return; }
     if (form.elements.access?.value !== 'folder' || form.elements.accessFolder?.value) { formNote(form, ''); form.querySelector('.row-need')?.classList.remove('row-need'); }
   }

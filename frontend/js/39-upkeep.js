@@ -4,7 +4,7 @@
 
   function rulesSection() {
     const rules = state.data.settings.rules || '';
-    return `<h2 class="settings-h">固定規則</h2><p class="muted small settings-note">所有 Bot 每次回覆都會遵守，比各自的工作指示優先。改完要按「儲存規則」才會生效。</p><form id="rules-form" class="rules-form"><textarea name="rules" maxlength="10000" rows="5" aria-label="固定規則" placeholder="例如：一律用繁體中文回答。金額一律標示幣別。">${esc(rules)}</textarea><div class="setting-actions"><button class="primary" data-save>儲存規則</button><span class="unsaved-note" data-unsaved hidden>尚未儲存</span></div></form>`;
+    return `<h2 class="settings-h">固定規則</h2><p class="muted small settings-note">所有 Bot 每次回覆都會遵守，比各自的工作指示優先。打完字就會自動存好。</p><form id="rules-form" class="rules-form"><textarea name="rules" maxlength="10000" rows="5" aria-label="固定規則" placeholder="例如：一律用繁體中文回答。金額一律標示幣別。">${esc(rules)}</textarea><div class="rules-status" data-saved-for="固定規則"></div></form>`;
   }
 
   // 備份與還原 (queue #232, #50, #51): settings as switches and dropdowns, a name for a backup made by hand, and what a restore changes.
@@ -32,7 +32,7 @@
       const used = x.limit ? `本月已用 ${fmtTokens(x.used)}（${pct}%）` : `本月已用 ${fmtTokens(x.used)}`;
       return settingRow(esc(x.name), `${used}${x.limit ? `<span class="budget-bar ${x.state}"><i style="width:${pct}%"></i></span>` : ''}`, dropdown('budget-' + x.id, String(x.limit), limits, `data-budget="${esc(x.id)}"`));
     }).join('');
-    return `<section class="usage-block"><h2>用量預算</h2><p class="muted small settings-note">每月上限，只計算 Zook 送出的回覆（輸入加輸出）。達 80% 和用完時會通知。</p><div class="setting-list">${settingRow('預算用完時', '', dropdown('budgetOver', b.over, BUDGET_OVER, 'data-budget-over'))}${rows}</div></section>`;
+    return `<section class="usage-block"><h2>用量預算</h2><p class="muted small settings-note">每月上限，只計算 Zook 送出的回覆（輸入加輸出）。達 80% 和用完時會通知。</p><div class="setting-list">${settingRow('預算用完時', b.over === 'switch' ? '「改用備用模型」照各 Bot 的「備用模型」換。' + FALLBACK_LINK : '', dropdown('budgetOver', b.over, BUDGET_OVER, 'data-budget-over'))}${rows}</div></section>`;
   }
 
   // #61 #247: each line says how it ended and opens to why and what to do next; filters by 分類 and 結果; an empty filter says so.
@@ -115,12 +115,7 @@
     } catch (err) { toast(err.message); }
   });
 
-  document.addEventListener('submit', async e => {
-    if (e.target.id !== 'rules-form') return;
-    e.preventDefault();
-    try { state.data.settings = await post('settings', {rules: e.target.elements.rules.value}, 'PATCH'); toast('已儲存規則'); }
-    catch (err) { toast(err.message); }
-  });
+  document.addEventListener('submit', e => { if (e.target.id === 'rules-form') e.preventDefault(); });  // saved as it is typed (38c-settings.js)
 
   // Skill templates: listed under the Skills you have, grouped the same way; one click adds one.
   function templateSections(query) {
@@ -153,42 +148,6 @@
       if (picked && box) { box.querySelector('input').value = picked; box.querySelector('.watch-path').textContent = picked; }
     } catch (err) { toast(err.message); }
   });
-
-  // First-run guide: three steps, shown until they are done or skipped. The steps read the same sign-in state as 各模型使用量.
-  function guideSteps() {
-    const list = state.accounts?.providers || [];
-    const installed = list.filter(p => p.installed), signedIn = list.filter(p => p.status === 'logged_in' && !p.issue);
-    const replied = state.data.bots.some(b => (b.messages || []).some(m => m.role === 'assistant' && m.status === 'completed'));
-    const names = a => a.map(p => p.name.split('（')[0]).join('、');
-    return [{title: '安裝一個 AI 工具', done: installed.length > 0, note: installed.length ? '已安裝 ' + names(installed) : '有 ChatGPT 帳號選 Codex，有 Claude 帳號選 Claude。裝一個就能開始。', go: 'usage', label: '前往安裝'},
-            {title: '登入帳號', done: signedIn.length > 0, note: signedIn.length ? '已登入 ' + names(signedIn) : '登入由官方工具完成，Zook 不會看到密碼。', go: 'usage', label: '前往登入'},
-            {title: '傳第一則訊息', done: replied, note: replied ? '完成' : '選一個 Bot，在下方輸入想問的事。', go: 'chat', label: '開始對話'}];
-  }
-  function guideCard() {
-    if (!state.data || state.data.settings.onboarded !== false || state.groupId) return '';
-    if (!state.accounts) return '';
-    const steps = guideSteps(), at = steps.findIndex(s => !s.done);
-    if (at < 0) { finishGuide(); return ''; }
-    return `<section class="guide-card" aria-label="開始使用"><div class="guide-head"><strong>開始使用 Zook</strong><span class="muted">${at} / ${steps.length} 完成</span><button class="link" data-up="guide-skip">略過</button></div><ol class="guide-steps">${steps.map((s, i) => `<li class="${s.done ? 'done' : i === at ? 'now' : ''}"><span class="guide-mark" aria-hidden="true">${s.done ? '✓' : i + 1}</span><div class="guide-copy"><strong>${s.title}</strong><span>${esc(s.note)}</span></div>${i === at && !(s.go === 'chat' ? state.page === 'chat' : state.page === s.go) ? `<button class="primary small-btn" data-up="guide-go" data-id="${s.go}">${s.label}</button>` : ''}</li>`).join('')}</ol></section>`;
-  }
-  async function finishGuide(skipped) {
-    if (state.guideClosing) return;
-    state.guideClosing = true;
-    try { state.data.settings = await post('settings', {onboarded: true}, 'PATCH'); if (!skipped) toast('設定完成，可以開始使用了'); } catch (_) {}
-    state.guideClosing = false; render(true);
-  }
-  document.addEventListener('click', async e => {
-    const el = e.target.closest?.('[data-up^="guide-"]');
-    if (!el) return;
-    if (el.dataset.up === 'guide-skip') return finishGuide(true);
-    if (el.dataset.id === 'chat') { state.page = 'chat'; state.groupId = null; render(); $('#chat-input')?.focus(); }
-    else await loadPage(el.dataset.id);
-  });
-  // While the guide is showing, keep the sign-in state fresh so each step ticks itself off.
-  setInterval(async () => {
-    if (!state.data || state.data.settings.onboarded !== false || document.hidden) return;
-    try { const next = await api('accounts'); if (JSON.stringify(next) !== JSON.stringify(state.accounts)) { state.accounts = next; if (state.page !== 'usage' || !$('#account-code-form input:focus')) render(true); } } catch (_) {}
-  }, 4000);
 
   // Voice input: the Mac app listens and sends the words back; they are added to what is already typed.
   const VOICE_LANGS = [{id: '', name: '跟隨系統語言'}, {id: 'zh-TW', name: '中文（台灣）'}, {id: 'en-US', name: 'English'}, {id: 'ja-JP', name: '日本語'}];
