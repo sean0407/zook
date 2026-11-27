@@ -44,7 +44,7 @@
         case 'detect-usage':
           if (state.usageBusy) break;
           state.usageBusy = 'detect'; render(true);
-          try { await detectUsage(); toast('已更新使用量'); }
+          try { await detectUsage(); toast(detectToast(state.quota?.lastDetect)); }
           catch (err) { toast(err.message); }
           state.usageBusy = ''; render(true);
           break;
@@ -58,8 +58,9 @@
             await loadAccounts();
             for (let i = 0; i < 400 && state.accounts.providers.some(p => p.install?.state === 'running'); i++) { await new Promise(r => setTimeout(r, 1500)); await loadAccounts(); }
             await detectUsage();
-            const failed = state.accounts.providers.filter(p => started.includes(p.id) && p.install?.state !== 'succeeded').map(p => p.name.split('（')[0]);
-            toast(!list.length ? '全部都是最新版，使用量已更新' : failed.length ? `${failed.join('、')} 沒有更新成功，其他已完成` : '全部更新完成，使用量已更新');
+            const failed = list.filter(p => !started.includes(p.id) || state.accounts.providers.find(x => x.id === p.id)?.install?.state !== 'succeeded').map(p => p.name.split('（')[0]);  // a request that was refused counts as not updated too
+            const read = detectToast(state.quota?.lastDetect);  // #207: how many accounts were read again, and which were not
+            toast((!list.length ? '全部都是最新版' : failed.length ? `${failed.join('、')} 沒有更新成功，其他 ${list.length - failed.length} 個已更新` : `${list.length} 個 CLI 已更新`) + '；' + read);
           } catch (err) { toast(err.message); }
           state.usageBusy = ''; render(true);
           break;

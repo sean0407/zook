@@ -73,7 +73,7 @@
     // 帳號 and 備用模型 in words (#43): what the menu decides, where other accounts come from, and that the same CLI is never a fallback.
     const accounts = form.querySelector('[data-action="accounts-from-form"]')?.parentElement;
     if (accounts?.firstChild?.nodeType === 3) accounts.firstChild.textContent = '這個 Bot 用哪一家、哪個帳號回覆。同一家的其他帳號要先到「各模型使用量」按「＋ 帳號」加入。';
-    setRowText(form.querySelector('[data-fixed-model] .setting-row'), '額度用完或出錯時，這一則改用哪一家，回覆裡會註明；不會換成同一家');
+    setRowText(form.querySelector('[data-fixed-model] .setting-row'), '額度用完或出錯時，這一則依序改用：同一家其他帳號（開著「自動選用」的訂閱帳號）→ 這裡選的家；剩不到 20% 的排最後，API 計費的不會換上，回覆裡會註明。選「不自動換」只是不換別家');
     setRowText(form.querySelector('input[name="section"]')?.closest('.setting-row'), '放在左側哪一組，只影響排列');
     setRowText(form.querySelector('input[name="effort"]')?.closest('.setting-row'), '回答前想多久；想越久越仔細，也越慢、用量越多');
     form.dataset.firstChoice = form.elements.providerChoice?.value ?? '';
@@ -81,7 +81,7 @@
   // The text under 備用模型's 預設 line: the order 設定 gives, without the Bot's own CLI, which is never switched to.
   function fallbackDefaultLabel(id) {
     const chain = state.data.settings.fallbacks || [], left = chain.filter(x => x !== id).map(providerShort);
-    return '預設（目前是 ' + (left.join(' → ') || '不自動換') + (id && chain.includes(id) ? `；同一家的 ${providerShort(id)} 不會切換` : '') + '）';
+    return '預設（' + (left.length ? '先換同一家其他帳號，再依剩餘額度換 ' + left.join('、') + '；剩不到 20% 的最後' : '目前是不換別家，只換同一家其他帳號') + '）';  // #33
   }
   document.addEventListener('input', e => {
     const form = e.target.closest?.('form');

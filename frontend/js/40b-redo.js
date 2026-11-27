@@ -3,8 +3,8 @@
   function redoModelOptions(b) {
     const current = b.provider === 'auto' ? '' : (b.provider || state.data.settings.provider || 'codex');
     const list = (state.providers || []).filter(p => p.installed !== false).map(p => {
-      const out = accountLevel(p.id, p.id === current ? (b.account || '') : '').level === 'out';
-      const hint = [p.id === current ? '這個 Bot 目前用的' : '', out ? '額度已用完，這次可能會失敗' : ''].filter(Boolean).join('・');
+      const level = accountLevel(p.id, p.id === current ? (b.account || '') : '').level, out = level === 'out';
+      const hint = [p.id === current ? '這個 Bot 目前用的' : '', out ? '額度已用完，這次可能會失敗' : level === 'unknown' ? '額度無法確定' : ''].filter(Boolean).join('・');  // #323
       return {id: p.id, name: cliShort(p) + (out ? '（已用完）' : ''), hint, current: p.id === current, out};
     });
     return [...list.filter(o => !o.out), ...list.filter(o => o.out)];
