@@ -470,13 +470,7 @@
       } else if (form.id === 'note-form') {
         await saveNote(form, form.dataset.id ? '' : onceId(form));  // 36c-knowledge.js; a typed one is made once however often 儲存 is pressed
       } else if (form.id === 'settings-form') {
-        let d = new FormData(form);
-        await post('settings', {
-          provider: d.get('provider'),
-          model: d.get('model')
-        }, 'PATCH');
-        await refresh();
-        toast('已儲存設定')
+        await saveModelSettings(form);  // Enter in the typed model name: saved like any change (38c-settings.js)
       }
     } catch (err) {
       toast(/^(建立|新增)/.test(String(label || '').trim()) ? '建立失敗：' + err.message : err.message)

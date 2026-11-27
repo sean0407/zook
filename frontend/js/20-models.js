@@ -455,13 +455,16 @@
       activity: '活動紀錄',
       memory: '記憶',
       schedules: '排程',
-      plugins: 'Skills 與連接器'
+      plugins: 'Skills 與連接器',
+      help: '說明'
     } [state.page] || '';
     let content = '';
     if (state.page === 'knowledge') {
       content = knowledgePage();  // 36c-knowledge.js
     } else if (state.page === 'activity') {
       content = activityPage();
+    } else if (state.page === 'help') {
+      content = helpPage();  // 34d-help.js
     } else if (state.page === 'schedules') {
       content = schedulesPage();
     } else if (state.page === 'skills' || state.page === 'mcp' || state.page === 'plugins') {
@@ -499,7 +502,7 @@
       }).join('')}</div>` : '<div class="blank">沒有偵測到插件。</div>'}`;
     } else if (state.page === 'settings') {
       let s = state.data.settings || {};
-      content = settingsNav() + lookSection() + permissionSection(s.permissionMode || 'manual') + rulesSection() + `<div class="setting-list">${settingRow('記憶', 'Bot 記住的偏好，點此查看', '<button type="button" class="secondary" data-action="page" data-id="memory">查看記憶</button>')}</div>` + modelSection(s) + chatSection() + taskSection() + noticeSection() + voiceSection() + remoteSection() + syncSection() + backupSection() + updateSection()
+      content = settingsNav() + lookSection() + permissionSection(s.permissionMode || 'manual') + rulesSection() + `<div class="setting-list">${settingRow('記憶', 'Bot 記住的偏好，點此查看', '<button type="button" class="secondary" data-action="page" data-id="memory">查看記憶</button>')}</div>` + modelSection(s) + chatSection() + noticeSection() + voiceSection() + remoteSection() + backupSection() + advancedSettings()
     }
     return `<main class="main"><header class="main-header"><div class="bot-pill">Zook</div></header><div class="page"><div class="page-inner"><div class="page-top"><h1>${name}</h1>${state.page==='knowledge'?'<button class="primary" data-action="new-note">＋ 新增知識</button>':state.page==='usage'?`<div class="page-top-actions">${usageAutoPick()}<button class="secondary" data-action="detect-usage" title="重新向各家讀取剩餘額度的數字，不會更新軟體" ${state.usageBusy ? 'disabled' : ''}>${state.usageBusy === 'detect' ? '偵測中…' : '偵測使用量'}</button><button class="secondary" data-action="update-all" title="把有新版的 CLI 軟體全部更新到最新版，完成後再讀一次額度" ${state.usageBusy ? 'disabled' : ''}>${state.usageBusy === 'update' ? '更新中…' : '更新全部 CLI'}</button><button class="primary" data-action="provider-add">＋ 新增模型</button></div>`:state.page==='schedules'?'<button class="primary" data-action="new-schedule">＋ 新增排程</button>':''}</div>${content}</div></div></main>`
   }
@@ -533,7 +536,7 @@
     document.querySelectorAll('[data-approval-details]').forEach(x => { if (openApprovals.includes(x.dataset.approvalDetails)) x.open = true; });
     if ($('#conversation')) {
       const c = $('#conversation');
-      if (!keepFocus()) c.scrollTo({top: y != null && !nearBottom ? y : c.scrollHeight, behavior: 'instant'});
+      if (!keepFocus()) c.scrollTo({top: c.querySelector(':scope > .empty-chat') ? 0 : y != null && !nearBottom ? y : c.scrollHeight, behavior: 'instant'});  // an empty chat starts at 從這裡開始
       updateChatNav();  // the rail's current question and the 直接到底 button follow where the page now is
       if (railFocus) [...document.querySelectorAll('[data-rail]')].find(x => x.dataset.rail === railFocus)?.focus();
     }

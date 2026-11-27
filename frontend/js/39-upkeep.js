@@ -4,7 +4,7 @@
 
   function rulesSection() {
     const rules = state.data.settings.rules || '';
-    return `<h2 class="settings-h">固定規則</h2><p class="muted small settings-note">所有 Bot 每次回覆都會遵守，比各自的工作指示優先。改完要按「儲存規則」才會生效。</p><form id="rules-form" class="rules-form"><textarea name="rules" maxlength="10000" rows="5" aria-label="固定規則" placeholder="例如：一律用繁體中文回答。金額一律標示幣別。">${esc(rules)}</textarea><div class="setting-actions"><button class="primary" data-save>儲存規則</button><span class="unsaved-note" data-unsaved hidden>尚未儲存</span></div></form>`;
+    return `<h2 class="settings-h">固定規則</h2><p class="muted small settings-note">所有 Bot 每次回覆都會遵守，比各自的工作指示優先。打完字就會自動存好。</p><form id="rules-form" class="rules-form"><textarea name="rules" maxlength="10000" rows="5" aria-label="固定規則" placeholder="例如：一律用繁體中文回答。金額一律標示幣別。">${esc(rules)}</textarea><div class="rules-status" data-saved-for="固定規則"></div></form>`;
   }
 
   // 備份與還原 (queue #232, #50, #51): settings as switches and dropdowns, a name for a backup made by hand, and what a restore changes.
@@ -115,12 +115,7 @@
     } catch (err) { toast(err.message); }
   });
 
-  document.addEventListener('submit', async e => {
-    if (e.target.id !== 'rules-form') return;
-    e.preventDefault();
-    try { state.data.settings = await post('settings', {rules: e.target.elements.rules.value}, 'PATCH'); toast('已儲存規則'); }
-    catch (err) { toast(err.message); }
-  });
+  document.addEventListener('submit', e => { if (e.target.id === 'rules-form') e.preventDefault(); });  // saved as it is typed (38c-settings.js)
 
   // Skill templates: listed under the Skills you have, grouped the same way; one click adds one.
   function templateSections(query) {

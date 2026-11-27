@@ -69,7 +69,7 @@
     const families = members.map(botFamily), one = members.length >= 2 && families.every(f => f && f === families[0]);
     const el = form.querySelector('[data-group-problem]'), hint = form.querySelector('[data-group-hint]');
     if (el) { el.textContent = problem; el.hidden = !problem; }
-    const kept = groupKeepsAuto(form) ? '這個群組設定為「自動」，但任務引擎已關閉，所以暫時用「自由」討論；儲存不會改掉，到「設定」打開任務引擎就會恢復。' : '';
+    const kept = groupKeepsAuto(form) ? '這個群組設定為「自動」，但任務引擎已關閉，所以暫時用「自由」討論；儲存不會改掉，到「設定 → 進階」打開群組自動分工就會恢復。' : '';
     const words = [kept, one && mode === 'auto' ? `成員都是 ${providerShort(families[0])}，沒有跨家驗收：結果要你自己看，或加一位別家的 Bot。` : '', mode === 'auto' && form.elements.checkMode?.value !== 'pick' ? '「自動」討論方式會另外請別家成員驗收每一項工作，不受「驗收方式」影響（指定查核員除外）。' : ''].filter(Boolean).join(' ');
     if (hint) { hint.textContent = words; hint.hidden = !words; }
     const check = form.querySelector('[data-check-hint]'), said = mode === 'auto' ? '' : checkHint(form, ids, host || '');
