@@ -94,7 +94,7 @@ def resave_room(steps):
 def group_estimate_text(e, mode):
     """The line under the message box, in words."""
     if e.get('auto'):
-        return '預計至少 %d 次回覆（含驗收）：主持人先寫下目標和完成條件，派工給成員，%s做到達成為止（退回重做另計）；每 %d 回合或滿 %d 次回覆先整理進度，問你要不要繼續' % (
+        return '預計至少 %d 次回覆（含驗收）：主持人先寫下目標和完成條件，派工給成員，%s做到達成為止（驗收沒過、退回重做時較多）；每 %d 回合或滿 %d 次回覆先整理進度，問你要不要繼續' % (
             e['replies'], '每項做完由別家成員驗收，' if e.get('checks') else '', TASK_CHECK_EVERY, e['responders'] * TASK_CHECK_EVERY)
     people, rounds, cap = e['responders'], e['rounds'], e['cap']
     limit = '上限 %d 回合，最多 %d 次（%s）' % (rounds, cap, '%d 位 × %d 回合，含自動轉交和追問' % (people, rounds) if people > 1 else '含自動轉交和追問')

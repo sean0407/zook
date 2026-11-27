@@ -7,7 +7,8 @@
 # over is marked failed.
 
 # ---- 說交了但沒有 (#319, #326) ----
-CLAIM_DONE = re.compile(r'已(?:經)?(?:另存|存|上傳|交付|交出|產出|輸出|匯出|建立|放|寫入|完成|做好|寫好)|存(?:好|妥)|(?:存|放|寫)(?:到|進|入|成)了|交付了|交了|交出了|產出了|做好了|完成了')
+CLAIM_DONE = re.compile(r'已(?:經)?(?:另存|存|上傳|交付|交出|產出|輸出|匯出|放|寫入)|存(?:好|妥)|(?:存|放|寫)(?:到|進|入|成)了|交付了|交了|交出了|產出了')
+CLAIM_UNDONE = re.compile(r'尚未|還沒|沒(?:有)?(?:存|放|上傳|交|產出)|未(?:存|放|上傳|交|產出)|失敗|存不|放不|不了')  # 「已交付，但尚未存到群組檔案」
 CLAIM_NOT = re.compile(r'請|麻煩|需要|要|會|將|預計|準備|打算|記得|負責|應該|必須|可以|待|還沒|尚未|沒有|沒|未|無法|不能|不要|是否|嗎|@')
 CLAIM_ROLES_NOT = ('kickoff', 'moderate', 'verify', 'split_check', 'check_final', 'split_follow')  # handing work out or checking it
 _CLAIM_CUT = re.compile(r'[。；;！!？?]')
@@ -27,20 +28,28 @@ def delivery_claims(text, others=(), role=None):
             if not hit: continue
             start = max(clause.rfind(x, 0, hit.start()) for x in '，,、') + 1
             end = min([i for i in (clause.find(x, hit.end()) for x in '，,、') if i >= 0] or [len(clause)])
-            if CLAIM_NOT.search(clause[start:hit.start()]) or any(n and n in clause[start:end] for n in others): continue  # a request or doubt, or what another member did
+            if CLAIM_NOT.search(clause[start:hit.start()]) or CLAIM_UNDONE.search(clause[hit.end():]) or any(n and n in clause[start:end] for n in others): continue  # a request, a doubt, not done after all, or what another member did
             kept.append(clause); listing = clause.rstrip(' *').endswith(('：', ':'))
     return '\n'.join(kept)
 
 
 # ---- A deck's check belongs to the member that saved it (#326) ----
-def group_copy_unchanged(store, group_id, bot_id, path):
-    """Whether this file is Zook's copy of the group's file in the member's folder, unchanged: the member did not make it."""
+GROUP_COPIES_SEEN = {}  # job id → {name: content hash} of the group's files Zook copied in for that reply (in memory, for its checks)
+
+
+def group_copies_seen(job_id, seen=None):
+    """Kept while a reply runs (seen given), dropped after it (None)."""
+    if seen is None: GROUP_COPIES_SEEN.pop(job_id, None)
+    else: GROUP_COPIES_SEEN[job_id] = dict(seen)
+
+
+def group_copy_unchanged(store, job_id, bot_id, path):
+    """Whether this file is Zook's copy of a group file in the member's folder, as it was copied in for this reply: the member did
+    not make it. Compared with what was copied, not with the group's file now (another member may have changed that meanwhile)."""
     try:
-        folder = group_copy_folder(store, bot_id)
-        if os.path.dirname(str(path)) != str(folder): return False
-        shared = group_files_dir(store, group_id) / os.path.basename(str(path))
-        if not shared.is_file() or shared.is_symlink() or shared.stat().st_size != os.stat(str(path), follow_symlinks=False).st_size: return False
-        return _file_hash(shared) == _file_hash(pathlib.Path(str(path)))
+        if os.path.dirname(str(path)) != str(group_copy_folder(store, bot_id)): return False
+        digest = (GROUP_COPIES_SEEN.get(job_id) or {}).get(os.path.basename(str(path)))
+        return bool(digest) and _file_hash(pathlib.Path(str(path))) == digest
     except (OSError, ValueError): return False
 
 
@@ -49,15 +58,23 @@ _PLACE_GAP = re.compile(r'(?<=[^\x00-\x7f])(?=~?/)')
 _PLACE_TAIL = ('資料夾裡', '資料夾內', '資料夾', '目錄下', '底下', '裡面', '裡', '里', '內', '中', '下')
 
 
+_PLACE_SAID = re.compile(r'(?:存到|存在|存進|存入|存放(?:到|在)?|存一份(?:到|在)?|放一份(?:到|在)|另存(?:一份)?(?:到|在)?|儲存(?:到|在)|放到|放在|放進|輸出到|匯出到|交到|save (?:it )?(?:to|in))'
+                         r'\s*[:：]?\s*(?:「([^」\n]{1,300})」|『([^』\n]{1,300})』|"([^"\n]{1,300})"|(~?/[^\s，。、；;！？」』"\n]{1,300}))', re.I)
+
+
 def asked_places(group):
-    """Folders or files the user named in this ask for the results (an absolute path, or one under ~/)."""
-    text = _PLACE_GAP.sub(' ', str(group_asked(group).get('content') or '')[:20000])
-    text = re.sub(r'(?<![\w/~])~/', os.path.expanduser('~') + '/', text)
-    found = []
-    for path in named_folders(text) + named_paths(text):
+    """Folders or files the user said to save the results to in this ask (「存到 /…」「放在「~/…」」): only a path right after such
+    words, so a file the user only gave to be read is not one. A quoted path keeps its spaces."""
+    found, home = [], os.path.expanduser('~')
+    for hit in _PLACE_SAID.finditer(str(group_asked(group).get('content') or '')[:20000]):
+        path = next(x for x in hit.groups() if x).strip().rstrip('。，.,:：;；')
+        if path.startswith('~/'): path = home + path[1:]
+        if path.startswith('file:///'): path = path[7:]
         for tail in _PLACE_TAIL:
-            if path.endswith(tail) and len(path) > len(tail) + 2: path = path[:-len(tail)].rstrip('/'); break
-        if path not in found: found.append(path)
+            if path.endswith(tail) and len(path) > len(tail) + 2: path = path[:-len(tail)]; break
+        path = path.rstrip('/')
+        if not path.startswith('/') or path.startswith('//') or path.count('/') < 2 or _folder_never(path) or path in found: continue
+        found.append(path)
     return found[:5]
 
 
@@ -74,7 +91,9 @@ def asked_place_rules(group, writable, moderator):
 
 
 def asked_place_missed(store, group_id, turn, saved):
-    """A member that handed files in to the group but put nothing in the place the user named, during this reply: that place, else ''."""
+    """A member that handed files in to the group but did not put them in the place the user named during this reply: that place,
+    else ''. Looked for by the names it handed in (saved, or kept as a group file with the same content)."""
+    saved = list(dict.fromkeys(list(saved or []) + [n for pair in turn.get('kept') or [] for n in pair]))
     if not saved or turn.get('role') in CLAIM_ROLES_NOT + ('final', 'compare_diff', 'verdict'): return ''
     with store.lock:
         group = store.find('groups', group_id)
@@ -84,9 +103,8 @@ def asked_place_missed(store, group_id, turn, saved):
     for place in places:
         try:
             if os.path.isdir(place):
-                if _folder_files(place, start - 1, time.time() + 1): return ''
+                if any(os.path.isfile(os.path.join(place, n)) and os.stat(os.path.join(place, n)).st_mtime >= start - 1 for n in saved): return ''
             elif os.path.isfile(place) and os.stat(place).st_mtime >= start - 1: return ''
-            elif os.path.isdir(os.path.dirname(place)) and any(os.path.isfile(os.path.join(place, n)) for n in saved): return ''
         except OSError: continue
     return places[0]
 

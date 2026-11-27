@@ -439,6 +439,7 @@ def task_worker_prompt(store, group, run, task, bot, writable):
     copy_folder = group_copy_folder(store, bot['id'])
     if shared: rules.append('群組共用檔案在 %s：%s。用你的讀檔工具查看；讀不到時改用 zook_group_file_read。' % (copy_folder, '、'.join(shared[:40])) + group_text_note(store, bot['id'], shared))
     rules.append('要交給群組的檔案請存到 %s（只放在這一層）；工作說明指定的存放位置也要存一份。' % copy_folder if writable else '這次不能修改或新增群組共用檔案。')
+    rules += asked_place_rules(group, writable, 'split_check' if task.get('check') else None)  # #273④: where the user wants the results
     if group_standing(group): rules.append(group_standing(group))  # #294
     parts = [identity_block(bot) + memory_block(store, bot), '\n規則：\n' + '\n'.join('- ' + r for r in rules),
              '\n=== 工作 %d：%s ===\n%s' % (task['n'], task['title'], task['spec']), '\n怎樣算完成：\n' + task['doneWhen']]

@@ -288,8 +288,9 @@ def group_estimate(store, group, content, mode):
     if mode == 'auto' and not task_on(store): mode = 'free'  # 任務引擎 is off: it runs as 自由
     rounds = group_limit(store, group); people = group_responders(store, group, targets, everyone, mode); limit = round_cap(rounds, people)
     checks = estimate_checks(store, group, members, mode)
-    if not everyone and mode == 'split' and len(members) > 1 and targets == [group_host(store, group)]: count, open_ended, more = len(members) + 1, True, len(members)  # #71: the host may hand out work, then merges; #312: and send it back once
-    elif not everyone: count = len(targets)
+    checking = group_checkers(store, group)
+    if not everyone and mode == 'split' and len(members) > 1 and targets == [group_host(store, group)]: count, open_ended, more = len(members) + 1, True, (2 * (len(members) - 1) + 1 if checking else len(members))  # #71: the host may hand out work, then merges; #312: 補存 and its check, redo, check, merge again
+    elif not everyone: count = len(targets) + (len([x for x in checking if x not in targets]) if [x for x in targets if x not in checking] else 0)  # #312: a 查核員 checks the work of those named
     elif mode == 'auto' and len(members) > 1: count, open_ended = len(members) + 1 + checks, True  # the host plans, each member works and another vendor checks it (#312), the host sums up
     elif mode != 'free' and len(members) > 1:
         steps = group_steps(store, group, mode); count = sum(len(s['bots']) for s in steps)
@@ -306,7 +307,7 @@ def group_estimate(store, group, content, mode):
     out = dict(replies=count, upTo=open_ended, limit=rounds, rounds=rounds, responders=people, cap=limit, tokens=int(sum(averages) / len(averages) * count) if averages else None)
     if more and min(count + more, limit) > count: out['most'] = min(count + more, limit)
     if mode == 'auto' and len(members) > 1: out.update(auto=True, checks=checks)
-    if mode != 'auto' and group_checkers(store, group): out['checked'] = True
+    if mode != 'auto' and checking: out['checked'] = True
     if mode == 'split' and everyone and len(members) > 1: out['split'] = True
     out['text'] = group_estimate_text(out, mode)
     return out
@@ -533,10 +534,12 @@ class GroupRuns:
                 lost = [n for n, digest in need.items() if seen.get(n) != digest]
                 if lost: turn['job']['lostFiles'] = lost; raise RuntimeError('要查核的檔案 %s 在查核開始前不見了（可能被刪掉），這次沒有查核。' % '、'.join(lost))
                 group_text_turn(store, group_id, bot['id'], seen, turn['job']['id'])  # #240: text versions of the Office files and PDFs it has
+                group_copies_seen(turn['job']['id'], seen)  # #326: what was copied in is not this reply's work
                 if turn.get('check'): turn['prompt'] += named_check_copy(store, group_id, bot['id'], turn['job'], turn['check'])
             except (OSError, ValueError, RuntimeError) as exc:
                 return self._group_stage_failed(turn['job']['id'], str(exc) if isinstance(exc, RuntimeError) else '')
-            self.run_job(turn['job']['id'], turn['prompt'], turn['provider'], turn['model'], bot, None)
+            try: self.run_job(turn['job']['id'], turn['prompt'], turn['provider'], turn['model'], bot, None)
+            finally: group_copies_seen(turn['job']['id'])
             if not turn['writable'] or turn['job']['status'] != 'completed': return
             if seen is None: turn['published'] = False; return
             kept = []
@@ -761,7 +764,7 @@ class GroupRuns:
             if step['role'] == 'split_plan' and done and host_asks_first(done[0]['job'].get('content')): steps = ask_first_hold(store, group_id, run_id)  # #335: nobody starts before the user answers
             if step['role'] == 'split_plan' and done and steps and steps[0]['role'] in ('split_work', 'split_check'): steps = self._skip_idle(group_id, run_id, done[0], steps)
             if step['role'] == 'verify' and done: steps = self._after_check(group_id, run_id, done[0], steps)
-            if step['role'] == 'split_follow' and done: steps = self._hand_out(group_id, run_id, done[0], steps)
+            if step['role'] == 'split_follow' and done: steps = ask_first_hold(store, group_id, run_id) + steps if host_asks_first(done[0]['job'].get('content')) else self._hand_out(group_id, run_id, done[0], steps)  # #335
             if step['role'] in GROUP_CLOSING and done:
                 before = steps
                 if step['role'] in ('split_merge', 'split_remerge'): steps = self._send_back(group_id, run_id, step, done[0], steps)

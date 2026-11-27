@@ -108,6 +108,21 @@ class Server(unittest.TestCase):
         self.assertEqual([r['name'] for r in self.runs()], ['Alpha'])
         self.assertTrue(any('主持人要先問你' in (x.get('content') or '') for x in found['messages']))
 
+    def test_a_host_named_alone_asking_first_hands_nothing_out(self):
+        """#335: also when only the host is named in 分工, asking the user first starts nobody."""
+        self.says.write_text(json.dumps({'Alpha': '【先問你】\n1. 預算多少？\n【派工】Beta：做報價單'}))
+        found = self.say(self.group(hostId=self.bots['Alpha']['id'], mode='split'), '@Alpha 再補一份報價')
+        self.assertEqual([r['name'] for r in self.runs()], ['Alpha'])
+        self.assertTrue(any('主持人要先問你' in (x.get('content') or '') for x in found['messages']))
+
+    def test_estimate_counts_the_check_of_named_work(self):
+        """#312: naming the host alone, or one maker, still counts the check and the redo."""
+        g = self.group(hostId=self.bots['Alpha']['id'], checkMode='pick', checkerId=self.bots['Gamma']['id'], turnLimit=4)
+        e = self.estimate(g, '@Alpha 再改一下', 'split')
+        self.assertEqual(e['most'], 9); self.assertIn('預計最多 9 次回覆', e['text'])
+        e = self.estimate(g, '@Beta 改一下', 'split')
+        self.assertEqual(e['replies'], 2); self.assertIn('含查核', e['text'])  # Beta works, Gamma checks
+
     def test_the_place_the_user_named_reaches_every_member(self):
         """#273④, #266①: every member is told where the user wants the results."""
         place = Path(tempfile.mkdtemp(dir='/tmp')) / '交件'  # a folder of the Mac's own (/var/folders) is never read as a place
@@ -136,6 +151,8 @@ class Units(unittest.TestCase):
         self.assertEqual(m.delivery_claims('B-設計已存好 approval-card.jpg。', ['B-設計'], 'split_merge'), '')
         self.assertIn('報價單.xlsx', m.delivery_claims('我已存到群組檔案：報價單.xlsx。', [], 'split_work'))
         self.assertIn('報價單.xlsx', m.delivery_claims('已存好 報價單.xlsx，請 B-查核 看一下', ['B-查核'], 'split_work'))  # naming who checks next is still its own claim
+        self.assertEqual(m.delivery_claims('報價單.xlsx 已交付，但尚未存到群組檔案。', [], 'split_work'), '')  # not done after all
+        self.assertEqual(m.delivery_claims('報價單.xlsx 工作已完成。', [], 'split_work'), '')  # the work, not a file handed over
         said = m.delivery_claims('已存到群組檔案：\n- 報價單.xlsx\n- 說明.docx\n\n後續請主持人確認 草稿.md', [], 'split_work')
         self.assertIn('說明.docx', said); self.assertNotIn('草稿.md', said)
 
@@ -160,17 +177,22 @@ class Units(unittest.TestCase):
         msg = dict(id='m1', role='assistant', botId=bot['id'], content='看過了', status='completed'); group['messages'].append(msg)
         job = dict(id='j1', botId=bot['id'], groupId='g1', messageId='m1', status='completed', content='看過了', createdAt=iso(start), finishedAt=iso(time.time() + 1), toolCalls=[])
         store.data['jobs'].append(job)
-        self.assertTrue(m.group_copy_unchanged(store, 'g1', bot['id'], str(copies / '提案.pptx')))
+        m.group_copies_seen('j1', {'提案.pptx': m._file_hash(copies / '提案.pptx')})  # as Zook copied it in for this reply
+        deck(shared / '提案.pptx', '<p:sldSz cx="7772400" cy="10058400" type="screen16x9"/>')  # another member changed the group's file meanwhile
+        self.assertTrue(m.group_copy_unchanged(store, 'j1', bot['id'], str(copies / '提案.pptx')))
         m.xlsx_after_reply(store, 'j1')
         self.assertNotIn('pptxIssues', job); self.assertNotIn('note', msg)
         deck(copies / '提案.pptx', '<p:sldSz cx="7772400" cy="10058400" type="screen16x9"/>')  # changed by the member: its own
-        self.assertFalse(m.group_copy_unchanged(store, 'g1', bot['id'], str(copies / '提案.pptx')))
+        self.assertFalse(m.group_copy_unchanged(store, 'j1', bot['id'], str(copies / '提案.pptx')))
+        m.group_copies_seen('j1'); self.assertFalse(m.group_copy_unchanged(store, 'j1', bot['id'], str(copies / '提案.pptx')))
 
     def test_the_place_the_user_named_is_read_and_looked_at(self):
         home = os.path.expanduser('~')
-        g = dict(messages=[dict(id='u', role='user', content='存到/tmp/zk-place/尾牙企劃裡，另外 ~/Desktop/交件/ 也放一份')])
-        self.assertEqual(m.asked_places(g), ['/tmp/zk-place/尾牙企劃', home + '/Desktop/交件'])
+        g = dict(messages=[dict(id='u', role='user', content='依 /tmp/zk-src/價目表.xlsx 做報價，存到/tmp/zk-place/尾牙企劃裡，另外也放一份到 ~/Desktop/交件/')])
+        self.assertEqual(m.asked_places(g), ['/tmp/zk-place/尾牙企劃', home + '/Desktop/交件'])  # the file given to read is not a place to save to
         self.assertEqual(m.asked_places(dict(messages=[dict(id='u', role='user', content='做一份報價單')])), [])
+        self.assertEqual(m.asked_places(dict(messages=[dict(id='u', role='user', content='存到「/tmp/zk place/Q4 報價」')])), ['/tmp/zk place/Q4 報價'])  # quoted: spaces kept
+        self.assertEqual(m.asked_places(dict(messages=[dict(id='u', role='user', content='存到 /System/x/y')])), [])  # the Mac's own folders never
         rules = ' '.join(m.asked_place_rules(g, True, 'split_work'))
         self.assertIn('/tmp/zk-place/尾牙企劃', rules); self.assertIn('另存一份', rules); self.assertIn('不要說下一則再存', rules)
         self.assertIn('確認成品也存到', ' '.join(m.asked_place_rules(g, False, 'split_check')))
@@ -182,6 +204,10 @@ class Units(unittest.TestCase):
         job = dict(id='j1', createdAt=datetime.datetime.fromtimestamp(time.time() - 2, datetime.timezone.utc).isoformat()); store.data['jobs'].append(job)
         turn = dict(job=job, role='split_work')
         self.assertEqual(m.asked_place_missed(store, 'g1', turn, ['報價單.xlsx']), str(place))
+        (place / '別的.txt').write_text('x')  # some other file changing there is not this work
+        self.assertEqual(m.asked_place_missed(store, 'g1', turn, ['報價單.xlsx']), str(place))
+        (place / '舊版.xlsx').write_text('x')
+        self.assertEqual(m.asked_place_missed(store, 'g1', dict(turn, kept=[('舊版.xlsx', '舊版.xlsx')]), []), '')  # kept as the group's file with the same content: still handed in
         (place / '報價單.xlsx').write_text('x')
         self.assertEqual(m.asked_place_missed(store, 'g1', turn, ['報價單.xlsx']), '')
         self.assertEqual(m.asked_place_missed(store, 'g1', turn, []), '')  # nothing handed in to the group: nothing to look for
@@ -213,6 +239,23 @@ class Units(unittest.TestCase):
         store.data['jobs'].append(dict(taskRunId='r1')); self.assertTrue(m.task_replies_due(store, group, run))
         run['replyMark'] = 30; self.assertFalse(m.task_replies_due(store, group, run))  # counted again from the last summing up
         self.assertTrue(m.task_round_ok(dict(run, wakes=0))); self.assertFalse(m.task_round_ok(dict(run, wakes=0, replyMark=-1)))
+
+    def test_auto_starts_nothing_new_once_the_replies_are_used(self):
+        """#312: with the replies of ten rounds used, a task waiting to start does not start; the host sums up first."""
+        def look(replies):
+            store = m.Store(self.root / ('data%d' % replies)); m._active['data'] = store.data
+            for x in 'abc': store.data['bots'].append(dict(id=x * 32, name=x, provider='claude'))
+            task = dict(id='t1', n=1, title='做', status='ready', assignee='b' * 32, attempts=[], spec='x', doneWhen='y', deps=[])
+            run = dict(id='r1', status='running', tasks=[task], hostId='a' * 32, origin='user', wakes=0, attempts=0, batches=0, delivered=[])
+            group = dict(id='g1', name='g', botIds=[x * 32 for x in 'abc'], messages=[], taskRun=run); store.data['groups'].append(group)
+            store.data['jobs'] += [dict(id=str(i), taskRunId='r1', status='completed') for i in range(replies)]
+            class App: notify = lambda *a, **k: None
+            App._task_choose = m.App._task_choose
+            return m.App._task_next(App(), store, group, run, False), run
+        out, run = look(30)
+        self.assertEqual((out['start'], out['wake']), ([], 'converge')); self.assertEqual(run['replyMark'], 30)
+        out, run = look(5)
+        self.assertEqual(out['start'], ['t1']); self.assertFalse(out['wake'])
 
 
 if __name__ == '__main__': unittest.main()
