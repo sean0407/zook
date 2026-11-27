@@ -603,7 +603,8 @@
   // Accounts a Bot can use for a provider: the CLI's own sign-in, plus any extra ones added on the 各模型使用量 page.
   const accountOptions = (provider, selected) => {
     const list = ((state.providers || []).find(p => p.id === (provider || state.data.settings.provider || 'codex')) || {}).accounts || [];
-    return `<option value="">預設帳號</option>` + list.map(a => `<option value="${esc(a.id)}" ${selected === a.id ? 'selected' : ''}>${esc(a.name)}${a.type === 'key' ? '（API 金鑰）' : ''}</option>`).join('');
+    const main = mainAccountName(provider || state.data.settings.provider || 'codex');
+    return `<option value="">${esc('預設帳號' + (main ? '・' + main : ''))}</option>` + list.map(a => `<option value="${esc(a.id)}" ${selected === a.id ? 'selected' : ''}>${esc(a.name)}${a.type === 'key' ? '（API 金鑰）' : ''}</option>`).join('');
   };
   const accountCount = provider => (((state.providers || []).find(p => p.id === (provider || state.data.settings.provider || 'codex')) || {}).accounts || []).length;
   const accountField = (provider, selected) => `帳號<select name="account">${accountOptions(provider, selected)}</select>${accountCount(provider) ? '' : '<small class="muted field-hint">這個模型目前只有預設帳號。<button type="button" class="link" data-action="accounts-from-form">新增其他帳號</button></small>'}`;
@@ -619,9 +620,10 @@
     const kept = !provider && account ? list.flatMap(p => p.accounts || []).find(a => a.id === account) : null;  // an older Bot: the default CLI with one of its extra accounts
     const fallback = list.find(p => p.id === (state.data.settings.provider || 'codex')), short = String(fallback?.name || state.data.settings.provider || 'Codex').split('（')[0];
     // The default CLI on its own sign-in is the 預設 line, so it is not listed again, unless this Bot picked it itself (then （固定）).
-    return opt('', '預設（目前是 ' + short + '）') + (kept ? opt('::' + account, '預設（目前是 ' + short + '）・' + kept.name) : '') + opt('auto', '自動配（依人格和工作指示）') + list.map(p => {
+    const mainOf = id => mainAccountName(id), dflt = mainOf(fallback?.id || state.data.settings.provider || 'codex');
+    return opt('', '預設（目前是 ' + short + (dflt ? '・' + dflt : '') + '）') + (kept ? opt('::' + account, '預設（目前是 ' + short + '）・' + kept.name) : '') + opt('auto', '自動配（依人格和工作指示）') + list.map(p => {
       const name = String(p.name).split('（')[0], extra = p.accounts || [], own = p.id === fallback?.id ? (picked === p.id ? '固定' : null) : '';
-      return (own === null ? '' : opt(p.id, extra.length || own ? name + '（' + [extra.length ? '預設帳號' : '', own].filter(Boolean).join('・') + '）' : name)) + extra.map(a => opt(p.id + '::' + a.id, name + '（' + a.name + (a.type === 'key' ? '・API 金鑰' : '') + '）')).join('');
+      return (own === null ? '' : opt(p.id, extra.length || own ? name + '（' + [extra.length ? '預設帳號' + (mainOf(p.id) ? '・' + mainOf(p.id) : '') : '', own].filter(Boolean).join('・') + '）' : name)) + extra.map(a => opt(p.id + '::' + a.id, name + '（' + a.name + (a.type === 'key' ? '・API 金鑰' : '') + '）')).join('');
     }).join('');
   };
   const providerOptions = (selected, withDefault, withAuto) => (withDefault ? `<option value="" ${!selected ? 'selected' : ''}>使用預設</option>` : '') + (withAuto ? `<option value="auto" ${selected === 'auto' ? 'selected' : ''}>自動選擇</option>` : '') + (state.providers || [{id: 'codex', name: 'Codex'}, {id: 'claude', name: 'Claude'}]).map(p => `<option value="${esc(p.id)}" ${selected === p.id ? 'selected' : ''}>${esc(p.name)}${p.installed === false ? '（未安裝）' : ''}</option>`).join('');

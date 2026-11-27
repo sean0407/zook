@@ -2097,6 +2097,10 @@ html.zoomed .modal { max-height:calc((100vh - 80px) / var(--zoom, 1)); }
 .field-error { display: block; color: #c0392b; font-size: 12px; margin-top: 4px; font-weight: 500; }
 .modal [aria-invalid="true"] { border-color: #d33; box-shadow: 0 0 0 1px #d33; }
 /* #224 #209: what is still missing, beside the buttons; required fields marked; how much a long text may hold; a name in use (#156 #115) */
+/* G49–G50 (#324 #309): what a new Bot still needs, the sample 人格, the way to 設定 → 模型 */
+.form-todo { flex: 1; min-width: 0; align-self: center; text-align: right; font-size: 12.5px; }
+.persona-sample { align-self: flex-start; margin-top: 4px; text-decoration: underline; }
+.setting-copy .link { font-size: inherit; text-decoration: underline; }
 .form-need { flex: 1; min-width: 0; margin: 0; align-self: center; text-align: right; color: #c0392b; font-size: 13px; font-weight: 500; }
 .need-mark { margin-left: 6px; padding: 0 6px; border-radius: 8px; background: #fdecea; color: #c0392b; font-size: 11px; font-weight: 600; }
 .char-count { display: block; margin-top: 4px; text-align: right; font-size: 11px; }

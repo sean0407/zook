@@ -561,6 +561,7 @@
     form.querySelectorAll('[data-feature-row]').forEach(row => { row.hidden = !offered.includes(row.dataset.featureRow); });
     const auto = id === 'auto';  // the model is picked when the Bot is saved, so these choices do not apply yet
     form.querySelectorAll('[data-account-field],.model-picker,[data-fixed-model]').forEach(el => { el.hidden = auto; });
+    form.querySelector('[data-auto-fallback]')?.toggleAttribute('hidden', !auto);  // #324②: why 備用模型 is not there
     const gated = !auto && gatedCli(id), access = form.querySelector('[data-access-row]');  // Claude and Cursor: the whole Mac, nothing to choose
     if (access) access.hidden = gated;
     const held = form.querySelector('[data-held-access]');  // only while it stays on the model it was held on: another model is chosen afresh
@@ -619,11 +620,18 @@
     loadModels(form);
     syncFeatureRows(form);  // Claude and Cursor have nothing to choose about access
     polishBotForm(form, b);  // limits, a name already in use, what 帳號 and 備用模型 do
+    polishBotFormMore(form, b);  // 46-botform-more.js
     if (!state.quota) api('quota').then(q => {  // 已用完／剩不到 20% beside each account
       state.quota = q;
       if (!form.isConnected) return;
       const sel = form.elements.providerChoice, v = sel.value;
       sel.innerHTML = choiceOptions(form.elements.provider.value, form.elements.account.value); sel.value = v; syncFeatureRows(form);
+    }).catch(() => {});
+    if (!state.accounts) api('accounts').then(a => {  // the main sign-in's name beside 預設 (#281③)
+      state.accounts = a;
+      if (!form.isConnected) return;
+      const sel = form.elements.providerChoice, v = sel.value, [p, acc] = v.split('::');  // what is chosen now, which may not be saved yet
+      sel.innerHTML = choiceOptions(p, acc || ''); sel.value = v;
     }).catch(() => {});
     const selected = {enabledSkills: b.enabledSkills || [], enabledMcp: b.enabledMcp || []};
     if (!b.id) { try { const d = JSON.parse(sessionStorage.getItem('swarmr-new-bot-draft') || '{}'); selected.enabledSkills = d.enabledSkills || []; selected.enabledMcp = d.enabledMcp || []; } catch (_) {} }
