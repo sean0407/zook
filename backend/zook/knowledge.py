@@ -269,6 +269,33 @@ def _knowledge_pdf(path):
         except OSError: pass
 
 
+def knowledge_zip_layout(book):
+    """{id(ZipInfo): where its packed bytes start}, checked once per opened ZIP: every part's own header names it as the directory does
+    (and, without a trailing descriptor, claims the same size and check), lies inside the file, and no two parts share bytes. Raises
+    KnowledgeUnreadable for a ZIP made to fool a reader."""
+    layout = getattr(book, '_zook_layout', None)
+    if layout is not None: return layout
+    broken = KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
+    layout, spans = {}, []
+    with open(book.filename, 'rb') as f:
+        end = os.fstat(f.fileno()).st_size
+        for info in book.infolist():
+            f.seek(info.header_offset); head = f.read(30)
+            if len(head) != 30 or head[:4] != b'PK\x03\x04': raise broken
+            size_name, size_extra = int.from_bytes(head[26:28], 'little'), int.from_bytes(head[28:30], 'little')
+            local = f.read(size_name)
+            if local != info.orig_filename.encode('utf-8' if info.flag_bits & 0x800 else 'cp437', 'replace'): raise broken  # the directory and the part disagree
+            flags = int.from_bytes(head[6:8], 'little')
+            if not flags & 0x8 and (int.from_bytes(head[14:18], 'little') != info.CRC or int.from_bytes(head[18:22], 'little') != info.compress_size or int.from_bytes(head[22:26], 'little') != info.file_size): raise broken
+            start = info.header_offset + 30 + size_name + size_extra; stop = start + info.compress_size  # with a descriptor, what comes out is checked against the directory's size and check
+            if stop > end: raise broken
+            layout[id(info)] = start; spans.append((info.header_offset, stop))
+    spans.sort()
+    if any(spans[i][0] < spans[i - 1][1] for i in range(1, len(spans))): raise broken  # two parts sharing bytes
+    book._zook_layout = layout
+    return layout
+
+
 def knowledge_zip_read(book, name, budget, keep=True):
     """One part of a ZIP, unpacked here from its own stored bytes (zipfile's reader stops at the size a part claims, so a part that lies
     about its size and check would pass it), counted by what really comes out: stopped as soon as budget[0] (what is left for the whole
@@ -280,11 +307,10 @@ def knowledge_zip_read(book, name, budget, keep=True):
     info = book.getinfo(name)
     if info.flag_bits & 0x1 or info.compress_type not in (_kzip.ZIP_STORED, _kzip.ZIP_DEFLATED): raise broken  # locked, or packed some other way
     if info.file_size > budget[0]: raise too_big()
+    start = knowledge_zip_layout(book).get(id(info))
+    if start is None: raise broken
     with open(book.filename, 'rb') as f:
-        f.seek(info.header_offset); head = f.read(30)
-        if len(head) != 30 or head[:4] != b'PK\x03\x04': raise broken
-        f.seek(info.header_offset + 30 + int.from_bytes(head[26:28], 'little') + int.from_bytes(head[28:30], 'little'))
-        raw = f.read(info.compress_size)
+        f.seek(start); raw = f.read(info.compress_size)
     if len(raw) != info.compress_size: raise broken
     unpack = _kzlib.decompressobj(-15) if info.compress_type == _kzip.ZIP_DEFLATED else None
     chunks, size, crc = [], 0, 0

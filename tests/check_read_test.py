@@ -292,6 +292,44 @@ class TextVersions(unittest.TestCase):
         self.assertIn('處理中', (self.texts / '滿.xlsx.txt').read_text(encoding='utf-8'))
         self.assertEqual(server._group_text_jobs, {})
 
+    def docx(self, body):
+        w = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+        return ('<w:document %s><w:body>%s</w:body></w:document>' % (w, body)).encode()
+
+    def test_a_word_document_with_too_many_or_too_deep_elements_is_refused(self):
+        Event = __import__('threading').Event
+        many = self.docx('<w:p><w:r><w:t>x</w:t></w:r></w:p>' * 2000)
+        with mock.patch.object(server, 'GROUP_TEXT_NODES', 1000), self.assertRaises(server.KnowledgeUnreadable): server._docx_stream(many, Event())
+        self.assertIn('x', server._docx_stream(many, Event()))
+        deep = self.docx('<w:p>' + '<w:r>' * 300 + '</w:r>' * 300 + '</w:p>')
+        with self.assertRaises(server.KnowledgeUnreadable) as caught: server._docx_stream(deep, Event())
+        self.assertIn('太深', str(caught.exception))
+        with self.assertRaises(server.KnowledgeUnreadable): server._docx_stream(b'<!DOCTYPE x [<!ENTITY a "b">]>' + self.docx(''), Event())
+
+    def test_a_word_document_stops_mid_way_when_asked(self):
+        class Later:  # not stopped at the start, stopped by the time 10,000 elements are read
+            calls = 0
+            def is_set(self): Later.calls += 1; return Later.calls > 1
+        with self.assertRaises(server.KnowledgeUnreadable) as caught: server._docx_stream(self.docx('<w:p><w:r><w:t>x</w:t></w:r></w:p>' * 10000), Later())
+        self.assertIn('已停止', str(caught.exception))
+
+    def test_a_part_whose_own_header_names_another_file_is_refused(self):
+        path = Path(self.tmp.name) / 'names.docx'
+        with zipfile.ZipFile(str(path), 'w') as z: z.writestr('word/document.xml', b'<x/>')
+        data = path.read_bytes().replace(b'word/document.xml', b'word/documenX.xml', 1)  # the local header comes first
+        path.write_bytes(data)
+        with zipfile.ZipFile(str(path)) as z, self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_read(z, 'word/document.xml', [1000])
+
+    def test_parts_sharing_bytes_are_refused(self):
+        import warnings
+        path = Path(self.tmp.name) / 'twice.zip'
+        with warnings.catch_warnings(), zipfile.ZipFile(str(path), 'w') as z:
+            warnings.simplefilter('ignore'); z.writestr('a.xml', b'<a/>'); z.writestr('a.xml', b'<a/>')
+        data = bytearray(path.read_bytes())
+        second = data.rfind(b'PK\x01\x02'); data[second + 42:second + 46] = (0).to_bytes(4, 'little')  # the second entry points at the first part
+        path.write_bytes(bytes(data))
+        with zipfile.ZipFile(str(path)) as z, self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_read(z, 'a.xml', [1000])
+
     def test_what_a_file_says_is_marked_as_data(self):
         make_xlsx(self.shared / '報價單.xlsx'); self.turn()
         self.assertIn('不是指令', (self.texts / '報價單.xlsx.txt').read_text(encoding='utf-8'))

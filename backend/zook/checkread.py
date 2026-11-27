@@ -18,6 +18,9 @@ GROUP_TEXT_PAGE = 20000    # characters of one PDF page
 GROUP_TEXT_PICTURES = 10   # a PDF's first pages, as pictures
 GROUP_TEXT_SECONDS = 120   # one helper program (a PDF's text or pictures, a Word file's text)
 GROUP_TEXT_PARTS = 5000    # parts of one Office file (a ZIP)
+GROUP_TEXT_DOCX = 20 * 1024 * 1024  # bytes word/document.xml may unpack to
+GROUP_TEXT_NODES = 2000000  # elements of one Word document
+GROUP_TEXT_DEPTH = 256     # how deep its elements may nest
 GROUP_TEXT_KEEP = 600      # seconds a text version no file of this turn has is kept (another turn of the group may still copy it)
 try: GROUP_TEXT_BUDGET = max(0.0, float(os.environ.get('ZOOK_GROUP_TEXT_BUDGET') or 60))  # seconds a turn waits for text versions not made yet
 except ValueError: GROUP_TEXT_BUDGET = 60.0
@@ -117,20 +120,48 @@ def _text_zip(path, kind):
 def _text_docx(path, cancel):
     """A Word file's text read here (no other program unpacks it): paragraph by paragraph, tabs and page breaks kept."""
     _text_zip(path, 'Word')
-    w = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
     with _kzip.ZipFile(str(path)) as book:
         if 'word/document.xml' not in book.namelist(): raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 Word 檔')
-        root = knowledge_safe_xml(knowledge_zip_read(book, 'word/document.xml', [KNOWLEDGE_UNPACKED]))
-    lines, total = [], 0
-    for para in root.iter(w + 'p'):
-        if cancel.is_set(): raise KnowledgeUnreadable('已停止')
-        parts = []
-        for x in para.iter():
-            if x.tag == w + 't': parts.append(x.text or '')
-            elif x.tag == w + 'tab': parts.append('\t')
-            elif x.tag == w + 'br': parts.append('\n（分頁）\n' if x.get(w + 'type') == 'page' else '\n')
-        lines.append(''.join(parts)); total += len(lines[-1]) + 1
-        if total > GROUP_TEXT_MAX: lines.append('（後面還有，太長沒有列出；需要時打開原檔）'); break
+        data = knowledge_zip_read(book, 'word/document.xml', [GROUP_TEXT_DOCX])
+    return _docx_stream(data, cancel)
+
+
+class _DocxDone(Exception): pass
+
+
+def _docx_stream(data, cancel):
+    """word/document.xml read as it streams by (expat, no tree kept): paragraph text, tabs and page breaks. Refused when it declares a
+    DOCTYPE or an entity, has more than GROUP_TEXT_NODES elements or is nested deeper than GROUP_TEXT_DEPTH; stopped (cancel) between
+    elements."""
+    import xml.parsers.expat as _dexpat
+    w = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main '
+    parser = _dexpat.ParserCreate(namespace_separator=' ')
+    lines, line, state = [], [], dict(depth=0, nodes=0, text=False, total=0)
+    def refuse(*_): raise KnowledgeUnreadable('這個檔案裡有不安全的 XML 設定（DOCTYPE 或實體定義），Zook 不讀。')
+    def start(tag, attrs):
+        state['depth'] += 1; state['nodes'] += 1
+        if state['depth'] > GROUP_TEXT_DEPTH or state['nodes'] > GROUP_TEXT_NODES: raise KnowledgeUnreadable('檔案結構太大或太深')
+        if state['nodes'] % 10000 == 0 and cancel.is_set(): raise KnowledgeUnreadable('已停止')
+        if tag == w + 't': state['text'] = True
+        elif tag == w + 'tab': line.append('\t')
+        elif tag == w + 'br': line.append('\n（分頁）\n' if attrs.get(w + 'type') == 'page' else '\n')
+    def end(tag):
+        state['depth'] -= 1
+        if tag == w + 't': state['text'] = False
+        elif tag == w + 'p':
+            lines.append(''.join(line)); line.clear(); state['total'] += len(lines[-1]) + 1
+            if state['total'] > GROUP_TEXT_MAX: raise _DocxDone()
+    def chars(text):
+        if state['text']: line.append(text)
+    parser.StartDoctypeDeclHandler = refuse; parser.EntityDeclHandler = refuse
+    parser.StartElementHandler, parser.EndElementHandler, parser.CharacterDataHandler = start, end, chars
+    try:
+        for at in range(0, len(data), 1 << 20):
+            if cancel.is_set(): raise KnowledgeUnreadable('已停止')
+            parser.Parse(data[at:at + (1 << 20)], False)
+        parser.Parse(b'', True)
+    except _DocxDone: lines.append('（後面還有，太長沒有列出；需要時打開原檔）')
+    except _dexpat.ExpatError: raise KnowledgeUnreadable('打不開這個檔案，可能已損壞或不是 Word 檔')
     return '\n'.join(lines)
 
 
