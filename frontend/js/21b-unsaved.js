@@ -42,6 +42,7 @@
       const away = await ask({title: '要放棄修改嗎？', lines: ['剛才的修改還沒儲存，放棄就不會留下。'], ok: '放棄修改', keep: '繼續編輯'});
       if (!away || modalRoot.firstElementChild !== shown) return;  // 繼續編輯, or the window is already another one
       if (form?.id === 'bot-form' && !form.dataset.id) try { sessionStorage.removeItem('swarmr-new-bot-draft'); } catch (_) {}  // the new Bot's draft is what was given up
+      if (form?.id === 'note-form' && !form.dataset.id) try { sessionStorage.removeItem('swarmr-know-draft'); } catch (_) {}  // so is a new knowledge item's (36c-knowledge.js)
       closeModal(); modalEdit.form = null;
     } finally { closeAsking = false; }
   }

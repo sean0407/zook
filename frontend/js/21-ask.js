@@ -4,7 +4,8 @@
   //   lines: what goes away, whether it can be brought back, what else changes; each a line of plain text.
   //   keep:  the other button (取消; 「繼續編輯」 when a window with changes is about to close).
   //   run:   the work itself, done while the dialog shows 刪除中… (working) with both buttons off, so a second press sends nothing twice.
-  //          It closes afterwards either way; a failure is passed on to the caller (which shows it).
+  //          It closes when it worked. When it did not, the reason stays inside the question (a toast after it closed looked like
+  //          nothing happened, #339①) and only 取消 is left: the promise then resolves false.
   // Resolves true when the person said yes (after run, when given), false otherwise.
   function ask({title, lines = [], ok = '刪除', keep = '取消', danger = true, run = null, working = ok + '中…'}) {
     $('#ask-root')?.dispatchEvent(new Event('ask-cancel'));  // only one question at a time; an older one counts as no
@@ -14,13 +15,13 @@
     document.body.appendChild(root);
     const yes = root.querySelector('[data-ask="yes"]'), no = root.querySelector('[data-ask="no"]');
     (danger ? no : yes).focus();  // Enter on a delete question keeps things as they are
-    return new Promise((resolve, reject) => {
+    return new Promise(resolve => {
       let busy = false;
       const close = () => { document.removeEventListener('keydown', keys, true); root.remove(); if (back?.isConnected) back.focus?.(); };
       const cancel = () => { if (busy) return; close(); resolve(false); };
       const keys = e => {  // ahead of the page's own keys: Esc must not also close the window underneath
         if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); cancel(); }
-        else if (e.key === 'Tab') { e.preventDefault(); e.stopImmediatePropagation(); (document.activeElement === yes ? no : yes).focus(); }
+        else if (e.key === 'Tab') { e.preventDefault(); e.stopImmediatePropagation(); (document.activeElement === yes || !yes.isConnected ? no : yes).focus(); }
         else if (e.key === 'Enter' && !e.isComposing) e.stopImmediatePropagation();  // the button in focus takes it; nothing else does
       };
       document.addEventListener('keydown', keys, true);
@@ -31,7 +32,11 @@
         if (e.target !== yes || busy) return;
         if (!run) { close(); return resolve(true); }
         busy = true; yes.disabled = no.disabled = true; yes.textContent = working; root.querySelector('.ask').setAttribute('aria-busy', 'true');
-        try { await run(); close(); resolve(true); } catch (err) { close(); reject(err); }
+        try { await run(); close(); resolve(true); }
+        catch (err) {
+          busy = false; no.disabled = false; no.textContent = '關閉'; yes.remove(); no.focus(); root.querySelector('.ask').removeAttribute('aria-busy');
+          root.querySelector('#ask-body').insertAdjacentHTML('beforeend', `<p class="ask-error" role="alert">${esc(err.message || '沒有成功，請再試一次。')}</p>`);
+        }
       });
     });
   }

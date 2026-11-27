@@ -15,9 +15,10 @@ FORCED = set()  # job ids whose wait for their CLI is to end now (強制停止)
 PROGRESS_STEP = 15  # seconds: lastAt moves in steps, so a busy reply does not redraw the window for every word
 
 
-def progress_start(job_id):
-    """A CLI starts for this reply (also a backup model, or the same reply taken up after a restart): counted from here."""
-    PROGRESS[job_id] = dict(read=0, write=0, command=0, web=0, last=time.time(), step='', stepAt=0.0, seen=set(), asked={}, zookDone=0, zookAt=0.0, files=[])
+def progress_start(job_id, kind=''):
+    """A CLI starts for this reply (also a backup model, or the same reply taken up after a restart): counted from here. kind: which
+    CLI, so the window waits as long as that one usually stays quiet before saying it may be stuck (#237, 37b-progress.js)."""
+    PROGRESS[job_id] = dict(read=0, write=0, command=0, web=0, last=time.time(), step='', stepAt=0.0, seen=set(), asked={}, zookDone=0, zookAt=0.0, files=[], cli=str(kind or ''))
 
 
 def progress_end(job_id):
@@ -174,7 +175,7 @@ def progress_view(job):
     read, write, web, other, zook_step, zook_at = _progress_zook(job)
     if read + write + web + other > rec['zookDone']: rec['zookDone'], rec['zookAt'] = read + write + web + other, time.time()  # when it was seen done, not asked for
     step = zook_step if zook_step and rec['zookAt'] >= rec['stepAt'] else rec['step'] or zook_step  # whichever was done last
-    out['progress'] = dict(read=rec['read'] + read, write=rec['write'] + write, command=rec['command'], web=rec['web'] + web, tool=other, lastAt=int(rec['last'] * 1000), step=step)
+    out['progress'] = dict(read=rec['read'] + read, write=rec['write'] + write, command=rec['command'], web=rec['web'] + web, tool=other, lastAt=int(rec['last'] * 1000), step=step, cli=rec.get('cli', ''))
     started = list(rec['asked'].values())  # a step the CLI began and has not finished: what it is doing right now
     if started: out['progress']['now'] = _progress_words(*started[-1])
     if rec['files']: out['progress']['files'] = list(rec['files'])
