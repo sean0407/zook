@@ -1,6 +1,6 @@
 # 換模型重答 (#143): the note under the new reply says who answered before and who answers now, with the model when it is known
 # («原本：Codex gpt-5.5／這次：Claude claude-sonnet-4-5»). Loaded by backend/server.py into one shared namespace.
-# #305: answering the same question again keeps the answers before it. The new reply carries them in 'versions' (oldest first,
+# #305: answering the same question with another model (換模型重答) keeps the answers before it; 重新回答 replaces them. The new reply carries them in 'versions' (oldest first,
 # each a copy of that reply with 'who' wrote it) and its own 'who'; the page switches 第 1／2 版, the export lists every one.
 # Only the newest is what the conversation goes on from. A reply without 'versions' (older Zook) is shown as before.
 MAX_REPLY_VERSIONS = 10

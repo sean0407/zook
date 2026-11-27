@@ -186,7 +186,7 @@ class App(Scheduling, Resuming, GroupRuns, CheckOrder, TaskRuns, TaskChecks, Tri
         msg = resume_reply(place) if place else dict(id=ID(), role='assistant', content='', createdAt=NOW(), status='running')
         redo_who = None
         if use and not place: msg['note'], redo_who = redo_note(store, bot, replaces, provider, model)  # 原本：X／這次：Y (redonote.py, #143)
-        if replaces and not place: redo_versions(store, bot, replaces, content, msg, provider, model)  # the answers before stay (#305)
+        if use and replaces and not place: redo_versions(store, bot, replaces, content, msg, provider, model)  # 換模型重答: the answers before stay (#305)
         msg.update(auto_mark)
         if effort != 'standard': msg['effort'] = effort
         if plan: msg['plan'] = True

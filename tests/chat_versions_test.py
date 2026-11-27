@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """#305/#265/#77④: the single-Bot chat.
-- 重答 keeps the answers before it: the reply carries them as versions (oldest first), each saying which model wrote it; the
+- 換模型重答 keeps the answers before it (重新回答 with the same model replaces it, as before): the reply carries them as versions (oldest first), each saying which model wrote it; the
   page switches 第 1／2 版 left and right; an older conversation without versions shows as before; the export has every version.
   Editing the question still replaces the answer. 原本：X／這次：Y stays.
 - A message sent with 先規劃 says so on the user's bubble.
@@ -69,22 +69,26 @@ class Live(unittest.TestCase):
         self.assertEqual(status, 202, out); self.wait(out['jobId'])
         return next(b for b in self.req('GET', '/api/state?full=1')[1]['bots'] if b['id'] == self.bot['id'])['messages']
 
-    def test_redo_keeps_every_answer_with_its_model(self):
+    def test_other_model_keeps_every_answer_with_its_model(self):
         sent = self.req('POST', '/api/chat', {'botId': self.bot['id'], 'content': '週報是什麼'})[1]; self.wait(sent['jobId'])
-        first = self.redo({'mode': 'again'})[-1]  # the same Bot again: nothing to say who answered before
+        first = self.redo({'mode': 'again'})[-1]                                                 # 重新回答 (same model): replaced as before
+        self.assertNotIn('versions', first)
         messages = self.redo({'mode': 'again', 'provider': 'codex'})
         self.assertEqual([m['role'] for m in messages], ['user', 'assistant'])
         last = messages[-1]
         self.assertEqual(last['content'], 'codex answered')
         self.assertEqual(last['note'], '原本：Gemini／這次：Codex gpt-test-9')                    # #143 stays
         self.assertEqual(last['who'], 'Codex gpt-test-9')
-        self.assertEqual([(v['content'], v['who']) for v in last['versions']], [('gemini answered', 'Gemini'), ('gemini answered', 'Gemini')])
-        self.assertEqual(last['versions'][1]['id'], first['id'])
+        self.assertEqual([(v['content'], v['who'], v['id']) for v in last['versions']], [('gemini answered', 'Gemini', first['id'])])
+        last = self.redo({'mode': 'again', 'provider': 'gemini'})[-1]
+        self.assertEqual([(v['content'], v['who']) for v in last['versions']], [('gemini answered', 'Gemini'), ('codex answered', 'Codex gpt-test-9')])
         self.assertNotIn('versions', last['versions'][1])                                       # never nested
         out = self.req('GET', '/api/bots/%s/export' % self.bot['id'])[1]
-        self.assertEqual(out['markdown'].count('gemini answered'), 2)
+        self.assertEqual(out['markdown'].count('gemini answered'), 2); self.assertIn('codex answered', out['markdown'])
         self.assertIn('第 1／3 版', out['markdown']); self.assertIn('第 3／3 版', out['markdown'])
         self.assertLess(out['markdown'].index('第 1／3 版'), out['markdown'].index('第 3／3 版'))
+        again = self.redo({'mode': 'again'})                                                    # 重新回答 replaces, versions too
+        self.assertEqual(len(again), 2); self.assertNotIn('versions', again[-1])
         edited = self.redo({'mode': 'edit', 'content': '週報怎麼寫'})                              # another question: the answers go
         self.assertNotIn('versions', edited[-1])
 
