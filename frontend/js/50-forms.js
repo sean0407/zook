@@ -325,6 +325,7 @@
         if (!id) data.clientId = onceId(form);
         if (accessShown && data.access === 'folder' && !data.accessFolder) { needFolder(form); return; }
         if (id && form.botBase) data.base = form.botBase;  // G46 (#162)
+        if (!id && sameNameAgain(form, data.name)) return;  // #309①: a second press makes it anyway
         let result;
         try { result = await post(id ? 'bots/' + encodeURIComponent(id) : 'bots', data, id ? 'PATCH' : 'POST'); }
         catch (error) { if (error.status === 409 && id) { formNote(form, error.message, 'conflict'); return; } throw error; }  // stays open; nothing is overwritten
@@ -337,7 +338,7 @@
           render()
         }
         const made = '已建立「' + (result.name || result.bot?.name || data.name) + '」';  // #253: says which Bot, and stays long enough to be read
-        toast(id ? (result.autoNotice ? '已儲存 Bot。' + result.autoNotice : '已儲存 Bot') : result.autoReason ? made + '，自動配好：' + result.autoReason : made + '，可以開始對話了', id ? 3000 : 6000)
+        toast(id ? (result.autoNotice ? '已儲存 Bot。' + result.autoNotice : '已儲存 Bot') : createdWords(result.autoReason ? made + '，自動配好：' + result.autoReason : made, state.selected, data.fallbacks, !!result.autoReason), id ? 3000 : 6000)
       } else if (form.id === 'mcp-bots-form') {
         const id = form.dataset.id, chosen = new Set(new FormData(form).getAll('bots'));
         for (const b of state.data.bots) {

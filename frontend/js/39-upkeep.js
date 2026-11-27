@@ -32,7 +32,7 @@
       const used = x.limit ? `本月已用 ${fmtTokens(x.used)}（${pct}%）` : `本月已用 ${fmtTokens(x.used)}`;
       return settingRow(esc(x.name), `${used}${x.limit ? `<span class="budget-bar ${x.state}"><i style="width:${pct}%"></i></span>` : ''}`, dropdown('budget-' + x.id, String(x.limit), limits, `data-budget="${esc(x.id)}"`));
     }).join('');
-    return `<section class="usage-block"><h2>用量預算</h2><p class="muted small settings-note">每月上限，只計算 Zook 送出的回覆（輸入加輸出）。達 80% 和用完時會通知。</p><div class="setting-list">${settingRow('預算用完時', '', dropdown('budgetOver', b.over, BUDGET_OVER, 'data-budget-over'))}${rows}</div></section>`;
+    return `<section class="usage-block"><h2>用量預算</h2><p class="muted small settings-note">每月上限，只計算 Zook 送出的回覆（輸入加輸出）。達 80% 和用完時會通知。</p><div class="setting-list">${settingRow('預算用完時', b.over === 'switch' ? '「改用備用模型」照各 Bot 的「備用模型」換。' + FALLBACK_LINK : '', dropdown('budgetOver', b.over, BUDGET_OVER, 'data-budget-over'))}${rows}</div></section>`;
   }
 
   // #61 #247: each line says how it ended and opens to why and what to do next; filters by 分類 and 結果; an empty filter says so.
