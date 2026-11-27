@@ -547,6 +547,7 @@ def state_view(store, whole=False):
     if not whole: view['bots'] = [page_bot(b) for b in store.data['bots']]  # the newest part of each open conversation; older parts are asked for
     if not whole: view['groups'] = [page_group(g) for g in store.data['groups']]
     view.pop('usageArchive', None); view.pop('usageDaily', None); view['rings'] = usage_rings(store)
+    view['cliTable'] = cli_table_view(store)  # #246: every menu of models, levels and access is made from it (clitable.py)
     view['knowledge'] = knowledge_view(store)  # a file's text only as a preview (knowledge.py)
     view['deletedBots'] = [{k: b.get(k) for k in ('id', 'name', 'color', 'shape', 'deletedAt')} for b in store.data.get('deletedBots') or []]  # their conversations stay on disk
     return view

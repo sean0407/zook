@@ -15,7 +15,7 @@
   }
   const teamEffortOk = r => !r.provider || (state.team.choices || []).find(c => c.id === r.provider)?.effort !== false;
   function teamModelRow(r) {
-    const effort = teamEffortOk(r) ? dropdown('effort', r.effort || '', [{id: '', name: '預設'}, ...EFFORTS], 'aria-label="思考強度"') : '<span class="muted small">不能調整</span>';
+    const effort = teamEffortOk(r) ? dropdown('effort', r.effort || '', [{id: '', name: '預設'}, ...effortsFor(r.provider || 'auto')], 'aria-label="思考強度"') : '<span class="muted small">不能調整</span>';
     return `<div class="team-model"><label><span>模型</span>${dropdown('provider', r.provider ?? 'auto', teamModelOptions(r), 'data-team-provider aria-label="模型"')}</label><label><span>思考強度</span>${effort}</label></div>${r.problem && !r.provider ? `<p class="error-text small">${esc(r.problem)}</p>` : ''}${GATED_CLIS.includes(r.provider) ? '<p class="muted small">整台 Mac；刪除檔案、對外送出等動作前會先問你</p>' : ''}`;
   }
   function teamCard(r, i) {

@@ -189,7 +189,7 @@ class LocalRulesTest(unittest.TestCase):
 
     def test_form_keeps_what_a_bot_set_itself(self):
         page = ''.join(p.read_text(encoding='utf-8') for p in sorted((ROOT / 'frontend/js').glob('*.js')))
-        self.assertIn("const ownAccess = ACCESS.some(x => x.id === b.access) ? b.access : '';", page)
+        self.assertIn("const ownAccess = accessChoices().some(x => x.id === b.access) ? b.access : '';", page)
         self.assertIn("const featureChoice = key => b.features && key in b.features ? (b.features[key] ? 'on' : 'off') : '';", page)
         self.assertIn("options.filter(o => !d || o.id !== d.id || o.id === own)", page)  # a value the Bot set itself stays choosable, even when it equals the default
         self.assertIn('盡力攔下', page)  # the limit of reading commands is said plainly

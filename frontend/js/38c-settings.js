@@ -27,17 +27,18 @@
   // The settings page draws its two lists of choices (provider, model) like every other menu (#188⑥).
   // The real <select> stays in the form, hidden, so saving and the model list work as before; the menu mirrors it.
   function mirrorSelects(form) {
-    if (form?.id !== 'settings-form') return;
-    form.querySelectorAll('select').forEach(sel => {
-      const options = [...sel.options].map(o => ({id: o.value, name: o.textContent}));
+    // #220: the Bot form's model list too, so a long one has its families and a search box
+    const selects = form?.id === 'settings-form' ? form.querySelectorAll('select') : form?.id === 'bot-form' && form.elements.modelSelect ? [form.elements.modelSelect] : [];
+    selects.forEach(sel => {
+      const options = [...sel.options].map(o => ({id: o.value, name: o.textContent, group: o.parentElement?.tagName === 'OPTGROUP' ? o.parentElement.label : ''}));
       const box = document.createElement('div');
       box.innerHTML = dropdown(sel.name + 'Menu', sel.value, options, `data-mirror-of="${esc(sel.name)}"`);
       const dd = box.firstElementChild, old = sel.parentElement.querySelector(':scope > .dd[data-mirror]'), focused = old?.contains(document.activeElement);
-      dd.dataset.mirror = '';
+      dd.dataset.mirror = ''; dd.querySelector('.dd-btn').disabled = sel.disabled;
       if (old?.classList.contains('open')) {  // the list arrived while it is open: new choices in place, the menu stays open
         old.querySelector('.dd-menu').innerHTML = dd.querySelector('.dd-menu').innerHTML;
         old.querySelector('.dd-label').textContent = dd.querySelector('.dd-label').textContent;
-        old.querySelector('input[type=hidden]').value = dd.querySelector('input[type=hidden]').value;
+        old.querySelector('input[type=hidden]').value = dd.querySelector('input[type=hidden]').value; old.querySelector('.dd-btn').disabled = sel.disabled;
         sel.hidden = true; return;
       }
       if (old) old.replaceWith(dd); else sel.after(dd);

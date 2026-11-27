@@ -86,7 +86,7 @@ class FormWords(unittest.TestCase):
         self.assertIn("g + '還剩 '", code)
 
     def test_detail_shows_thinking_level(self):
-        self.assertIn("'思考強度：' + (EFFORTS.find(x => x.id === (b.effort || st.effort))?.name || '標準')", js()); self.assertIn('${esc(botModelLine(b))}', js())  # #215③: in one line with the account and model
+        self.assertIn("'思考強度：' + (efforts().find(x => x.id === (b.effort || st.effort))?.name || '標準')", js()); self.assertIn('${esc(botModelLine(b))}', js())  # #215③: in one line with the account and model
 
     def test_long_name_in_title_bar(self):
         style = css()

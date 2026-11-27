@@ -35,7 +35,7 @@ class Medium(unittest.TestCase):
         self.assertEqual(server.TOOL_EFFORTS['medium'], 'medium')
 
     def test_form_lists_medium(self):
-        self.assertIn("{id: 'medium', name: '中'", JS['20-models.js'])
+        self.assertIn(('medium', '中', '比快速仔細，用量比深入少'), server.EFFORT_CHOICES)  # #246: the words come from the CLI table (clitable.py)
 
 
 @unittest.skipUnless(shutil.which('node'), 'needs node')

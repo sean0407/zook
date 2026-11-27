@@ -145,7 +145,7 @@ class KnowledgeFiles(unittest.TestCase):
 class KnowledgeUnits(unittest.TestCase):
     def setUp(self):
         self.ns = {'__file__': str(ROOT / 'backend/server.py')}
-        for part in ('core', 'sheetview', 'knowledge', 'knowsearch'):  # core's upload_name keeps a long name's extension with sheetview's keep_suffix
+        for part in ('clitable', 'core', 'sheetview', 'knowledge', 'knowsearch'):  # core's upload_name keeps a long name's extension with sheetview's keep_suffix
             f = ROOT / 'backend/zook' / (part + '.py'); exec(compile(f.read_text(encoding='utf-8'), str(f), 'exec'), self.ns)
 
     def test_only_ready_items_newest_ten_when_nothing_matches(self):
@@ -209,7 +209,7 @@ class KnowledgeUnits(unittest.TestCase):
 
     def test_synced_file_name_is_checked(self):
         ns = {'__file__': str(ROOT / 'backend/server.py')}
-        for part in ('core', 'knowledge', 'sync'):
+        for part in ('clitable', 'core', 'knowledge', 'sync'):
             f = ROOT / 'backend/zook' / (part + '.py'); exec(compile(f.read_text(encoding='utf-8'), str(f), 'exec'), ns)
         clean = lambda source: ns['sync_clean']('knowledge:' + 'a' * 32, dict(title='t', content='c', botId='', tags=[], source=source))
         self.assertEqual(clean('手冊.pdf')['source'], '手冊.pdf')
