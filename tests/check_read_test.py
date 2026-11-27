@@ -497,16 +497,44 @@ class TextVersions(unittest.TestCase):
         with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_precheck(bytes(data))
         with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_precheck(b'not a zip at all, long enough to look')
 
-    def test_zip64_end_records_are_read_too(self):
+    def test_zip64_in_any_form_is_refused(self):
         path = Path(self.tmp.name) / 'z64.zip'
         with mock.patch.object(zipfile, 'ZIP_FILECOUNT_LIMIT', 1), zipfile.ZipFile(str(path), 'w') as z:  # forces ZIP64's end records
             z.writestr('a.xml', b'<a/>'); z.writestr('b.xml', b'<b/>')
-        data = bytearray(path.read_bytes()); self.assertIn(b'PK\x06\x06', data)
-        server.knowledge_zip_precheck(bytes(data))  # sound
-        at = data.rfind(b'PK\x06\x06'); data[at + 32:at + 40] = (6000).to_bytes(8, 'little')
-        with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_precheck(bytes(data))
-        data[at + 32:at + 40] = (2).to_bytes(8, 'little'); data[at + 40:at + 48] = (8 << 20).to_bytes(8, 'little')  # a directory said to be 8 MB
-        with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_precheck(bytes(data))
+        self.assertIn(b'PK\x06\x06', path.read_bytes())
+        with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_precheck(path)
+        plain = Path(self.tmp.name) / 'plain.zip'
+        with zipfile.ZipFile(str(plain), 'w') as z: z.writestr('a.xml', b'<a/>')
+        server.knowledge_zip_precheck(plain)
+        data = bytearray(plain.read_bytes()); end = data.rfind(b'PK\x05\x06')
+        over = bytearray(data); over[end + 12:end + 16] = b'\xff' * 4  # a directory size left to ZIP64
+        with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_precheck(bytes(over))
+        with zipfile.ZipFile(str(plain)) as z: info = z.getinfo('a.xml')
+        central = data.find(b'PK\x01\x02'); extra = (1).to_bytes(2, 'little') + (8).to_bytes(2, 'little') + (4).to_bytes(8, 'little')
+        tagged = data[:central + 30] + len(extra).to_bytes(2, 'little') + data[central + 32:central + 46 + len(b'a.xml')] + extra + data[central + 46 + len(b'a.xml'):]
+        tagged[-10:-6] = (int.from_bytes(tagged[-10:-6], 'little') + len(extra)).to_bytes(4, 'little')  # the directory grew by the field
+        with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_precheck(bytes(tagged))
+
+    def test_a_zip64_record_where_zipfile_looks_is_refused(self):
+        """The reviewer's case: a normal end record counts few parts while a ZIP64 record 76 bytes before it (where zipfile looks)
+        points at a directory of 6,000. The check must not pass what zipfile would read otherwise."""
+        many = Path(self.tmp.name) / 'many.zip'
+        with zipfile.ZipFile(str(many), 'w') as z:
+            for n in range(6000): z.writestr('x/%d' % n, b'')
+        big = many.read_bytes(); big_end = big.rfind(b'PK\x05\x06'); big_dir = int.from_bytes(big[big_end + 12:big_end + 16], 'little')
+        few = Path(self.tmp.name) / 'few.zip'
+        with zipfile.ZipFile(str(few), 'w') as z: z.writestr('a.xml', b'<a/>')
+        small = few.read_bytes(); small_end = small.rfind(b'PK\x05\x06')
+        body = big[:big_end] + small[small.find(b'PK\x01\x02'):small_end]  # 6,000 parts' directory, then one part's
+        record = b'PK\x06\x06' + (44).to_bytes(8, 'little') + (45).to_bytes(2, 'little') * 2 + (0).to_bytes(8, 'little') + (6000).to_bytes(8, 'little') * 2 + big_dir.to_bytes(8, 'little') + (big_end - big_dir).to_bytes(8, 'little')
+        locator = b'PK\x06\x07' + (0).to_bytes(4, 'little') + len(body).to_bytes(8, 'little') + (1).to_bytes(4, 'little')
+        one_dir = small_end - small.find(b'PK\x01\x02')
+        end = b'PK\x05\x06' + (0).to_bytes(4, 'little') + (1).to_bytes(2, 'little') * 2 + one_dir.to_bytes(4, 'little') + (len(body) - one_dir).to_bytes(4, 'little') + (0).to_bytes(2, 'little')
+        crafted = body + record + locator + end
+        with mock.patch.object(zipfile, 'ZipFile', side_effect=AssertionError('zipfile was asked to read it')) as opened:
+            with self.assertRaises(server.KnowledgeUnreadable): server.knowledge_zip_precheck(crafted)
+            with self.assertRaises(server.SheetRefused): server.sheet_tables(crafted)
+        self.assertFalse(opened.called)
 
     def test_what_a_file_says_is_marked_as_data(self):
         make_xlsx(self.shared / '報價單.xlsx'); self.turn()

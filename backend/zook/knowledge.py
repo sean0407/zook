@@ -289,13 +289,13 @@ KNOWLEDGE_DIRECTORY = 4 * 1024 * 1024  # bytes its directory may take
 def knowledge_zip_precheck(source):
     """Before zipfile reads a ZIP's whole directory (which nothing can stop): its end record, read here, must be there and sound, and
     say at most KNOWLEDGE_PARTS parts and a directory of at most KNOWLEDGE_DIRECTORY bytes (ZIP64's records too). source: a path,
-    bytes, or an open file (put back where it was). Raises KnowledgeUnreadable."""
+    bytes, or an open file (put back where it was). ZIP64 in any form is refused. Raises KnowledgeUnreadable."""
     broken = lambda: KnowledgeUnreadable('打不開這個檔案，可能已損壞。')
     too_big = lambda: KnowledgeUnreadable('檔案解開後太大，請拆成幾個檔案再上傳。')
     if isinstance(source, (bytes, bytearray)): source = io.BytesIO(source)
     own = not hasattr(source, 'read')
     f = open(str(source), 'rb') if own else source
-    at = None if own else f.tell()
+    back_to = None if own else f.tell()
     try:
         f.seek(0, 2); size = f.tell()
         if size < 22: raise broken()
@@ -307,13 +307,8 @@ def knowledge_zip_precheck(source):
         end_at = size - back + pos
         parts, here, directory, offset = u16(tail, pos + 10), u16(tail, pos + 8), u32(tail, pos + 12), u32(tail, pos + 16)
         if u16(tail, pos + 4) or u16(tail, pos + 6) or here != parts: raise broken()  # split over several disks
-        if pos >= 20 and tail[pos - 20:pos - 16] == b'PK\x06\x07':  # ZIP64: its own end record holds the real numbers
-            at64 = u64(tail, pos - 12)
-            if at64 + 56 > end_at: raise broken()
-            f.seek(at64); record = f.read(56)
-            if len(record) != 56 or record[:4] != b'PK\x06\x06': raise broken()
-            parts, directory, offset, end_at = u64(record, 32), u64(record, 40), u64(record, 48), at64
-        elif 0xFFFF in (parts,) or 0xFFFFFFFF in (directory, offset): raise broken()  # says ZIP64 without its records
+        if tail[max(0, pos - 20):pos - 16] == b'PK\x06\x07' or tail[max(0, pos - 76):pos - 72] == b'PK\x06\x06' or 0xFFFF in (parts, here) or 0xFFFFFFFF in (directory, offset):
+            raise broken()  # ZIP64 is refused: no Office file under 20 MB needs it, and zipfile and this check could read different directories
         if parts > KNOWLEDGE_PARTS or directory > KNOWLEDGE_DIRECTORY: raise too_big()
         if offset + directory > end_at: raise broken()
         if directory > end_at: raise broken()
@@ -322,7 +317,13 @@ def knowledge_zip_precheck(source):
         seen, at = 0, 0
         while at < directory:  # walked record by record, as zipfile would, never trusting the count the end record gave
             if listing[at:at + 4] != b'PK\x01\x02' or at + 46 > directory: raise broken()
-            at += 46 + u16(listing, at + 28) + u16(listing, at + 30) + u16(listing, at + 32)
+            name_len, extra_len = u16(listing, at + 28), u16(listing, at + 30)
+            if 0xFFFFFFFF in (u32(listing, at + 20), u32(listing, at + 24), u32(listing, at + 42)): raise broken()  # sizes or place left to ZIP64
+            extra, x = listing[at + 46 + name_len:at + 46 + name_len + extra_len], 0
+            while x + 4 <= len(extra):
+                if u16(extra, x) == 0x0001: raise broken()  # a ZIP64 field
+                x += 4 + u16(extra, x + 2)
+            at += 46 + name_len + extra_len + u16(listing, at + 32)
             if at > directory: raise broken()
             seen += 1
             if seen > KNOWLEDGE_PARTS: raise too_big()
@@ -330,7 +331,7 @@ def knowledge_zip_precheck(source):
     except OSError: raise broken()
     finally:
         if own: f.close()
-        else: f.seek(at)
+        else: f.seek(back_to)
 
 
 def knowledge_zip_layout(book, cancel=None):
