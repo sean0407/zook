@@ -108,13 +108,13 @@ class GroupRounds(unittest.TestCase):
         e = self.estimate(g, '@Beta 看一下')
         self.assertEqual((e['replies'], e['cap']), (1, 8)); self.assertIn('最多 8 次', e['text']); self.assertIn('自動轉交', e['text'])
         e = self.estimate(g, '', 'split')
-        self.assertIn('主持人退回修正時最多', e['text'])
+        self.assertIn('預計 4–7 次回覆', e['text']); self.assertIn('主持人退回修正時較多', e['text'])  # #312: the most it may take leads
 
     def test_estimate_for_auto_says_it_goes_on_until_done(self):
         self.assertEqual(self.req('PATCH', '/api/settings', {'taskEngine': True})[0], 200)
         g = self.group(hostId=self.bots['Alpha']['id'])
         e = self.estimate(g, 'x', 'auto')
-        self.assertIn('做到達成為止', e['text']); self.assertIn('每 10 回合', e['text']); self.assertIn('要不要繼續', e['text'])
+        self.assertIn('做到達成為止', e['text']); self.assertIn('每 10 回合', e['text']); self.assertIn('要不要繼續', e['text']); self.assertIn('含驗收', e['text'])
 
     def test_the_form_offers_rounds(self):
         js = (ROOT / 'frontend/js/35-groups.js').read_text(encoding='utf-8')

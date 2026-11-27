@@ -40,8 +40,9 @@ def group_asked(group):
 
 def group_round_budget(store, group, targets, broadcast, mode, resume=None):
     """Lock held. The replies this run may still use, as {ask, rounds, responders, used}; None for a run outside any ask (整理結論,
-    查核). 插話 answered after the round belongs to the same ask: it pays from what is left, and never makes the total bigger."""
-    if (resume or {}).get('own'): return None
+    查核). 插話 answered after the round belongs to the same ask: it pays from what is left, and never makes the total bigger.
+    請其他成員查核 (paid) is a reply of the ask too (#266②): it is paid from the same rounds, so it never starts the count again."""
+    if (resume or {}).get('own') and not (resume or {}).get('paid'): return None
     rounds, asked = group_limit(store, group), group_asked(group).get('id') or ''
     budget = group.get('roundBudget') if isinstance(group.get('roundBudget'), dict) else {}
     used = budget.get('used') if type(budget.get('used')) is int and budget.get('used') >= 0 else 0
@@ -51,6 +52,13 @@ def group_round_budget(store, group, targets, broadcast, mode, resume=None):
     budget['rounds'] = rounds
     group['roundBudget'] = budget
     return dict(budget)
+
+
+def round_limit(budget, resume=None):
+    """(the replies the ask may reach, what it has used). A check the user asked for always runs, even when the rounds are used up;
+    what it sets off after (the host's wrap-up) waits for 「繼續」 then."""
+    cap = round_cap(budget['rounds'], budget['responders'])
+    return (max(cap, budget['used'] + 1) if (resume or {}).get('paid') else cap), budget['used']
 
 
 def round_spend(group, budget, used):
@@ -70,15 +78,31 @@ def round_pause_text(group, cap):
     return '這次詢問已達 %d 回合上限（%s，共 %d 次回覆；自動轉交和追問也算在內）。按「繼續」可以再進行 %d 回合。' % (rounds, who, cap, rounds)
 
 
+def estimate_checks(store, group, members, mode):
+    """#312: in 自動 each member's work is checked by a member of another vendor: one more reply per member, when there is one."""
+    if mode != 'auto': return 0
+    vendors = [bot_vendor(store, b) for b in members]
+    return len(members) - 1 if '' in vendors or len(set(vendors)) > 1 else 0
+
+
+def resave_room(steps):
+    """#312: with a 查核員 in 分工, a file said to be handed in that is not there is saved again first, and the check runs again."""
+    checks = sum(len(s['bots']) for s in steps if s['role'] == 'split_check')
+    return sum(len(s['bots']) for s in steps if s['role'] == 'split_work') + checks if checks else 0
+
+
 def group_estimate_text(e, mode):
     """The line under the message box, in words."""
     if e.get('auto'):
-        return '預計至少 %d 次回覆：主持人先寫下目標和完成條件，派工給成員，做到達成為止（驗收和重做另計）；每 %d 回合先整理進度，問你要不要繼續' % (e['replies'], TASK_CHECK_EVERY)
+        return '預計至少 %d 次回覆（含驗收）：主持人先寫下目標和完成條件，派工給成員，%s做到達成為止（退回重做另計）；每 %d 回合或滿 %d 次回覆先整理進度，問你要不要繼續' % (
+            e['replies'], '每項做完由別家成員驗收，' if e.get('checks') else '', TASK_CHECK_EVERY, e['responders'] * TASK_CHECK_EVERY)
     people, rounds, cap = e['responders'], e['rounds'], e['cap']
     limit = '上限 %d 回合，最多 %d 次（%s）' % (rounds, cap, '%d 位 × %d 回合，含自動轉交和追問' % (people, rounds) if people > 1 else '含自動轉交和追問')
-    if e.get('upTo'): return '預計最多 %d 次回覆 · %s' % (e['replies'], limit)
+    if e.get('upTo'): return '預計最多 %d 次回覆%s · %s' % (e.get('most') or e['replies'], '（含查核）' if e.get('checked') else '', limit)
     who = '主持人 2 次、成員各 1 次' if mode == 'split' and e.get('split') else '%d 位各 1 次' % people if people > 1 and e['replies'] == people else ''
-    return '預計 %d 次回覆%s · %s%s' % (e['replies'], '（%s）' % who if who else '', limit, '；主持人退回修正時最多 %d 次' % e['most'] if e.get('most') else '')
+    if e.get('checked'): who += ('，' if who else '') + '含查核'
+    if e.get('most'): return '預計 %d–%d 次回覆（%s；檔案要補存或主持人退回修正時較多）· %s' % (e['replies'], e['most'], who or '含驗收', limit)  # #312: the most an ask may take, checks and redos in it
+    return '預計 %d 次回覆%s · %s' % (e['replies'], '（%s）' % who if who else '', limit)
 
 
 # ---- 自動 (任務引擎): the 邊界 and the check every TASK_CHECK_EVERY rounds ----
@@ -86,6 +110,18 @@ def group_estimate_text(e, mode):
 def task_rounds(run):
     """Rounds of a run so far: the host's plan, and every time it was woken with reports or to go on (not for 插話)."""
     return 1 + int(run.get('wakes') or 0)
+
+
+def task_reply_count(store, run):
+    """Replies a run has started: the host's, the members' work and the checks of it, redone ones too."""
+    return sum(1 for j in store.data.get('jobs') or [] if j.get('taskRunId') == run.get('id'))
+
+
+def task_replies_due(store, group, run):
+    """#312: checks and redos count too. Since the last summing up, TASK_CHECK_EVERY rounds of replies (a round: every member answering
+    once, decisions #30) also make the host sum up first and the user decide."""
+    people = max(1, len([x for x in group.get('botIds') or [] if store.find('bots', x)]))
+    return task_reply_count(store, run) - int(run.get('replyMark') or 0) >= people * TASK_CHECK_EVERY
 
 
 def task_round_cap(run):
@@ -226,7 +262,7 @@ def task_checkpoint_typed(store, group, run, content):
 
 def task_round_ok(run):
     """The fields this file adds to a run, as task_run_ok() checks a file put back."""
-    if any(k in run and (type(run[k]) is not int or run[k] < 0) for k in ('roundCap', 'continued')): return False
+    if any(k in run and (type(run[k]) is not int or run[k] < 0) for k in ('roundCap', 'continued', 'replyMark')): return False
     if type(run.get('wakes', 0)) is not int or run.get('roundCap', 0) > task_rounds(run) + TASK_CHECK_EVERY: return False  # never further off than one stretch
     if 'goOn' in run and not isinstance(run['goOn'], bool): return False
     if 'boundary' in run and (not isinstance(run['boundary'], dict) or any(k in run['boundary'] and not (isinstance(run['boundary'][k], str) and len(run['boundary'][k]) <= 600) for k in ('goal', 'doneWhen', 'at'))): return False

@@ -363,7 +363,7 @@ class CheckAfterDone(unittest.TestCase):
 
     def test_estimate_counts_the_second_check(self):
         e = self.req('POST', '/api/groups/%s/estimate' % self.group()['id'], {'content': '', 'mode': 'split'})[1]
-        self.assertEqual((e['replies'], e.get('most')), (4, 7))
+        self.assertEqual((e['replies'], e.get('most')), (4, 9))  # #312: also 補存 and its second check (專員, 查核員)
 
     def test_free_discussion_with_a_host_checks_after_the_work(self):
         self.say(self.group(mode='free'))

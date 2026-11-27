@@ -175,7 +175,7 @@ class TaskRuns:
         if not host_busy and not waiting and news and (any(t['status'] in ('asked', 'blocked') for t in news) or not busy):
             # No count of wakes stops a run (#174): every TASK_CHECK_EVERY rounds the host sums up first and the user decides.
             out['wake'] = True
-            if task_rounds(run) >= task_round_cap(run): run['checkpoint'] = dict(state='converging'); out['wake'] = 'converge'
+            if task_rounds(run) >= task_round_cap(run) or task_replies_due(store, group, run): run['checkpoint'] = dict(state='converging'); run['replyMark'] = task_reply_count(store, run); out['wake'] = 'converge'
             run['wakes'] += 1; run['wakeFor'] = [t['id'] for t in news]; run['delivered'] = sorted(delivered | {task_key(t) for t in news}); run.pop('goOn', None)
         if not host_busy and not out['wake'] and run.get('goOn'):  # the user said 繼續: the host goes on from where it summed up
             run.pop('goOn'); run['wakes'] += 1; run['wakeFor'] = []; out['wake'] = 'resume'

@@ -63,9 +63,12 @@ class DeckSizeTest(unittest.TestCase):
 
     def test_named_four_three_drawn_wide(self):
         scan = self.scan('<p:sldSz cx="12192000" cy="6858000" type="screen4x3"/>')  # what pptxgenjs writes for 16:9
+        self.assertEqual([tuple(x) for x in scan], [m.PPTX_SIZE_LABEL])
+        self.assertEqual(m.pptx_render([list(x) for x in scan]), [])  # #326②: it opens 16:9, so the user is not warned
+        self.assertIn('sldSz', m.pptx_render([list(x) for x in scan], for_bot=True)[0])  # the Bot is still told to fix the label
+        scan = self.scan('<p:sldSz cx="7772400" cy="10058400" type="screen4x3"/>')  # named 4:3, drawn as a page
         self.assertEqual([tuple(x) for x in scan], [m.PPTX_SIZE_WRONG])
         said = m.pptx_render([list(x) for x in scan]); self.assertEqual(len(said), 1); self.assertIn('投影片大小', said[0])
-        self.assertIn('sldSz', m.pptx_render([list(x) for x in scan], for_bot=True)[0])
 
     def test_sound_sizes_say_nothing(self):
         for size in ('<p:sldSz cx="12192000" cy="6858000"/>', '<p:sldSz cx="9144000" cy="6858000" type="screen4x3"/>',

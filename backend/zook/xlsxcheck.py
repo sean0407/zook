@@ -277,6 +277,7 @@ def xlsx_after_reply(store, job_id):
             lower = item['name'].lower(); deck = lower.endswith(PPTX_SUFFIXES)  # decks and PDFs are checked here too (pptxcheck.py, pdfcheck.py)
             paper = lower.endswith(PDF_SUFFIXES)
             if not deck and not paper and not lower.endswith(XLSX_SUFFIXES): continue
+            if job.get('groupId') and group_copy_unchanged(store, job['groupId'], bot['id'], item['path']): continue  # #326: Zook's copy of another member's file is not this reply's
             chosen = slides if deck else papers if paper else books
             if len(chosen) >= (PPTX_FILES if deck else PDF_FILES if paper else XLSX_FILES): continue
             try: when = os.stat(item['path'], follow_symlinks=False).st_mtime
