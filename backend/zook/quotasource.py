@@ -98,7 +98,7 @@ def provider_chain(store, bot, provider, model):
     own list as set, or the default order from 設定 with the CLI that has most left first (#33)."""
     settings = store.data['settings']
     mine = isinstance(bot.get('fallbacks'), list)
-    order = bot['fallbacks'] if mine else list(settings.get('fallbacks') or [])
+    order = [p for p in (bot['fallbacks'] if mine else settings.get('fallbacks') or []) if isinstance(p, str)]  # an odd value left in old data is skipped, as before
     if not mine: order.sort(key=lambda p: -quota_left(store, p))
     chain = [(provider, model)] + same_cli_backups(store, bot, provider, model)
     for p in order:
@@ -186,4 +186,7 @@ def next_backup(store, bot):
 
 def bots_with_backup(store, bots):
     """Lock held. Copies of the Bots for the window, each with nextBackup (next_backup), so the page never works it out itself."""
-    return [dict(b, nextBackup=next_backup(store, b)) for b in bots]
+    def safe(b):
+        try: return next_backup(store, b)
+        except Exception: return ''  # the window always loads, whatever is in an old Bot
+    return [dict(b, nextBackup=safe(b)) for b in bots]

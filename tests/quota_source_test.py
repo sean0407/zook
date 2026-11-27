@@ -172,6 +172,8 @@ class QuotaSourceTest(unittest.TestCase):
         bot = dict(id='b', name='寫手', provider='codex', account='', model='')
         self.assertEqual([x[0] for x in m.provider_chain(self.store, bot, 'codex', '')], ['codex', 'grok', 'claude'])
         self.assertEqual([x[0] for x in m.provider_chain(self.store, dict(bot, fallbacks=['claude', 'grok']), 'codex', '')], ['codex', 'claude', 'grok'])  # its own list stays as set
+        self.store.data['settings']['fallbacks'] = [{'odd': 1}, 'grok']  # an odd value left in old data: skipped, the reply still runs
+        self.assertEqual([x[0] for x in m.provider_chain(self.store, bot, 'codex', '')], ['codex', 'grok'])
 
     def test_detect_report_says_what_was_updated(self):
         started = time.time() - 5
