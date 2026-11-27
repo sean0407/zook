@@ -73,6 +73,26 @@ class FeederTest(unittest.TestCase):
         self.assertEqual((p['write'], p['web'], p['tool']), (0, 1, 0))
 
 
+class CollectTest(unittest.TestCase):
+    def test_a_cli_killed_by_stop_does_not_stay_behind(self):
+        """■ ends a CLI that ignores SIGTERM with SIGKILL 2 s later. Zook also collects it: otherwise, when nothing else waits for
+        it any more (強制停止 has stopped waiting), it stays in the process list as <defunct> until Zook next starts a program.
+        That is why test_force_stop failed now and then under load ('not killed')."""
+        m = load()
+        proc = subprocess.Popen([sys.executable, '-c', 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print(1, flush=True); time.sleep(60)'],
+                                stdout=subprocess.PIPE, start_new_session=True)
+        try:
+            proc.stdout.readline()  # its SIGTERM is ignored from here on
+            m.terminate_tree(proc)
+            gone = lambda: subprocess.run(['/bin/ps', '-p', str(proc.pid)], capture_output=True).returncode != 0  # a <defunct> one is still listed
+            end = time.time() + 15
+            while not gone() and time.time() < end: time.sleep(0.1)
+            self.assertTrue(gone(), 'still in the process list')
+        finally:
+            if proc.returncode is None: proc.kill(); proc.wait()
+            proc.stdout.close()
+
+
 CODEX = '''#!/usr/bin/env python3
 import json, os, signal, sys, time
 here = os.path.dirname(sys.argv[0])
