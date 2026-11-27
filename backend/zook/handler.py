@@ -62,13 +62,16 @@ class Handler(BaseHTTPRequestHandler):
                 for a in item['profiles']:
                     account = a.pop('_account')
                     if item['id'] in AUTO_MODELS: a.update(autoOn=auto_account_on(store, account), autoBilled=account.get('type') == 'key' or auto_known_billed(known.get(auto_account_key(account))))
-        if phone:
-            with store.lock: result = usage_card_sort(store.data['settings'], result)  # the same order as the cards on the Mac
-        return {'providers': result, 'usageDetectEvery': usage_detect_every(store)}
+        with store.lock:
+            out = quota_attach_views(store, {'providers': result, 'usageDetectEvery': usage_detect_every(store)})  # one reading for every screen (quotasource.py)
+            if phone: out['providers'] = usage_card_sort(store.data['settings'], result)  # the same order as the cards on the Mac
+        return out
 
     def detect_usage(self):
         """偵測使用量 (usagewatch.py, shared with 自動偵測), then the fresh figures."""
-        detect_usage_now(self.server); return self.quota()
+        started = time.time(); detect_usage_now(self.server); out = self.quota()
+        with self.server.store.lock: detect_report(self.server.store, started, out); self.server.store.save()  # 已更新於 and what was not read (#321 #207)
+        return out
 
     def accounts(self, parts):
         logins = self.server.logins

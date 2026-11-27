@@ -374,7 +374,7 @@ class FinalReviewTest(unittest.TestCase):
         self.assertEqual(job['status'], 'failed'); self.assertIn('沒有重送', job['error'])
         self.assertTrue(m.billing_still_ok(store, 'j', dict(bot, autoAssigned=False), 'claude', None, False))
         app = (ROOT / 'backend/zook/app.py').read_text(encoding='utf-8')
-        self.assertEqual(app.count('billing_still_ok(store, job_id, bot, p, a, fixed)'), 3)  # after a summary too, right before it is sent again
+        self.assertEqual(app.count('billing_still_ok(store, job_id, bot, p, a, guard)'), 3)  # after a summary too, right before it is sent again
 
 
 def zook_gate_names(path):

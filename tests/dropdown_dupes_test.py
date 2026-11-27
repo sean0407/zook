@@ -66,12 +66,20 @@ class NoDuplicates(unittest.TestCase):
         got = self.with_default([{'id': '__none', 'name': '不自動換'}, {'id': 'claude', 'name': 'Claude'}], None, '', 'Claude → Grok')
         self.assertEqual(self.names(got), ['預設（目前是 Claude → Grok）', '不自動換', 'Claude'])
 
-    def provider_choice(self, provider, account, accounts):
+    def provider_choice(self, provider, account, accounts, main=None):
         fn = snippet('10-chat.js', r'const choiceOptions = .*?\n  \};\n')
         stub = ('const esc = s => String(s); const levelMark = () => ""; const accountLevel = () => 0;'
+                'const mainAccountName = id => (%s)[id] || "";' % json.dumps(main or {}) +
                 'const state = {data: {settings: {provider: "codex"}}, providers: [{id: "codex", name: "Codex", accounts: %s}, {id: "claude", name: "Claude", accounts: []}]};' % json.dumps(accounts))
         html = run_js(stub + fn + 'console.log(JSON.stringify(choiceOptions(%s, %s)))' % (json.dumps(provider), json.dumps(account)))
         return re.findall(r'<option value="([^"]*)"[^>]*>([^<]*)</option>', html)
+
+    def test_main_account_is_named(self):  # #281③ #333⑥: the CLI's own sign-in by name, not only 預設
+        labels = [x[1] for x in self.provider_choice('auto', '', [{'id': 'w', 'name': 'Waifdance'}], {'codex': 'sean', 'claude': 'amy'})]
+        self.assertEqual(labels[0], '預設（目前是 Codex・sean）')
+        self.assertIn('Codex（Waifdance）', labels)
+        labels = [x[1] for x in self.provider_choice('claude', '', [], {'codex': 'sean', 'claude': 'amy'})]
+        self.assertIn('Claude', labels)  # no extra account: the name alone, as before
 
     def test_model_and_account_default_not_twice(self):
         got = self.provider_choice('auto', '', [{'id': 'w', 'name': 'Waifdance'}])

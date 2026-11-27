@@ -699,7 +699,7 @@ def web_enabled():
 def identity_block(bot):
     """Who the Bot is: its own persona file, then its work instructions. Personal instruction files are not used."""
     now = datetime.datetime.now().astimezone()
-    parts = ['你是 %s%s。' % (bot['name'], '，職稱是「%s」' % bot['jobTitle'] if bot.get('jobTitle') else ''), '現在時間：%s（%s）。' % (now.strftime('%Y-%m-%d %H:%M'), now.tzname() or 'local'), ISOLATION_NOTE, NATURAL_REPLY_NOTE, FILE_DELIVERY_NOTE, FACTS_NOTE, CLIENT_COPY_NOTE]
+    parts = ['你是 %s%s。' % (bot['name'], '，職稱是「%s」' % bot['jobTitle'] if bot.get('jobTitle') else ''), '現在時間：%s（%s，%s）。' % (now.strftime('%Y-%m-%d %H:%M'), DATE_WEEKDAYS[now.weekday()], now.tzname() or 'local'), ISOLATION_NOTE, NATURAL_REPLY_NOTE, FILE_DELIVERY_NOTE, FACTS_NOTE, CLIENT_COPY_NOTE, WEEKDAY_NOTE]  # #77④ (datecheck.py)
     if web_enabled():
         parts.append('你可以上網搜尋與讀取網頁來取得最新資訊。涉及價格、新聞、日期等會變動的事實時，先查證再回答，並註明來源網站與資料時間。')
     else:
@@ -944,26 +944,6 @@ def limit_reached_now(snap):
     full = [w for w in snap.get('windows') or [] if isinstance(w.get('usedPercent'), (int, float)) and w['usedPercent'] >= 100]
     if full and not any(_window_open(w, snap, now) for w in full): return False  # the window that was full has reset since
     return now - at < LIMIT_FRESH
-
-
-def quota_exhausted(store, provider):
-    if provider == 'antigravity': return False  # its limits are per model group; a used-up group simply fails over
-    """True when the last known quota snapshot says this provider is used up and has not reset yet."""
-    snap = (store.data.get('quota') or {}).get(provider) or {}
-    if limit_reached_now(snap): return True  # the CLI says so itself, e.g. a workspace out of credits with every window still open
-    now = time.time()
-    return any(isinstance(w.get('usedPercent'), (int, float)) and w['usedPercent'] >= 100 and _window_open(w, snap, now) for w in snap.get('windows') or [])
-
-
-def provider_chain(store, bot, provider, model):
-    """Models to try for one reply: the Bot's own model first, then its backup order (or the default order from 設定)."""
-    settings = store.data['settings']
-    order = bot.get('fallbacks') if isinstance(bot.get('fallbacks'), list) else settings.get('fallbacks') or []
-    chain = [(provider, model)]
-    for p in order:
-        if p != provider and p not in [x[0] for x in chain] and P.spec(store.data, p):
-            chain.append((p, settings.get('model', '') if p == settings.get('provider', 'codex') else ''))
-    return chain
 
 
 def fallback_reason(error):

@@ -3,7 +3,7 @@
 # nothing new is kept: no command, key or path is added beyond the line's text, which already follows actwords.py and command_summary.
 import re
 
-ACTIVITY_RESULTS = {'ok': '成功', 'failed': '失敗', 'waiting': '等核准', 'denied': '已拒絕', 'warn': '需留意'}
+ACTIVITY_RESULTS = {'ok': '成功', 'failed': '失敗', 'stopped': '已停止', 'waiting': '等核准', 'denied': '已拒絕', 'warn': '需留意'}
 _RESTORE = '可以到「設定 › 備份與還原」還原較早的備份。'
 ACTIVITY_OUTCOMES = (  # (pattern on the text, result, why, next step)
     (r'寫不進去', 'failed', '磁碟空間不足，或資料夾沒有寫入權限。', 'Zook 每次存檔都會再試；確認磁碟空間和資料夾權限後就會恢復。'),
@@ -24,6 +24,8 @@ ACTIVITY_OUTCOMES = (  # (pattern on the text, result, why, next step)
 
 def activity_outcome(item):
     """{result, resultName, why, next} for one saved line."""
+    if item.get('result') in ACTIVITY_RESULTS:  # a reply's line says how it ended itself (auditlog.py)
+        return dict(result=item['result'], resultName=ACTIVITY_RESULTS[item['result']], why=str(item.get('why') or ''), next=str(item.get('next') or ''))
     text = str(item.get('text') or '')
     result, why, step = 'ok', '', ''
     for pattern, kind, reason, after in ACTIVITY_OUTCOMES:

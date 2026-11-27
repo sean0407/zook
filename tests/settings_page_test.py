@@ -79,7 +79,7 @@ class Readable(unittest.TestCase):
     def test_grey_text_on_the_settings_page_is_at_least_4_5_to_1_in_both_looks(self):
         white = [255, 255, 255]
         greys = {'--muted': re.search(r'--muted:\s*#([0-9a-f]{6})', CSS).group(1)}
-        for sel in ('.muted', '.page p', '.setting-copy span', '.dd-opt small', '.model-note', '.link', '.plain-copy span', '.unsaved-note', '.saved-flash'):
+        for sel in ('.muted', '.page p', '.setting-copy span', '.dd-opt small', '.model-note', '.link', '.plain-copy span', '.saved-flash'):
             greys[sel] = color(rule(sel))
         for name, value in greys.items():
             c = rgb(value)
@@ -125,8 +125,8 @@ class Words(unittest.TestCase):
 class Saving(unittest.TestCase):
     def test_saved_and_unsaved_are_shown(self):
         self.assertTrue('✓ 已儲存' in JS, '✓ 已儲存')
-        self.assertEqual(JS.count('data-unsaved hidden>尚未儲存'), 2)  # 固定規則 and 模型, the two parts that wait for their button
-        self.assertTrue("if (row?.closest('#settings-form')) return;" in JS, 'rows waiting for 儲存 are never marked saved on their own')
+        self.assertEqual(JS.count('尚未儲存'), 0)  # #300: nothing waits for a button any more
+        self.assertTrue("if (row?.closest('#settings-form')) return;" in JS, 'the model rows are named by saveModelSettings')
         self.assertTrue("settingFailed(); throw e;" in JS, 'a failed save marks nothing')
         self.assertTrue("if (path === 'settings' && method === 'PATCH') settingSaved();" in JS, "if (path === 'settings' && method === 'PATCH') settingSaved();")
 

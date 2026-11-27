@@ -16,20 +16,18 @@ def usage_rings(store):
     None means there is no figure: the model reports none (Grok, API keys), or it is not signed in yet (known is False).
     signedIn is what the last sign-in check said (None: not checked), issue why a signed-in CLI still cannot be used: with
     left at 0 for a limit reported reached, the sidebar and the chat say a Bot's model cannot answer now (#80④ #158)."""
-    data = store.data; quota = data.get('quota') or {}; status = data.get('autoStatus') or {}; now = time.time(); issues = data.get('providerIssues') or {}
+    data = store.data; status = data.get('autoStatus') or {}; now = time.time(); issues = data.get('providerIssues') or {}
     used = {(j.get('usage') or {}).get('provider') for j in data['jobs'] if isinstance(j.get('usage'), dict)}
     out = []
     for provider in P.active_ids(data):
-        snap = quota.get(provider) if isinstance(quota.get(provider), dict) else {}
-        windows = [w for w in snap.get('windows') or [] if isinstance(w, dict)]
-        out_now = limit_reached_now(snap)  # #184②: the CLI just said the limit is reached; what the bars last read does not count (same as 已用完 in the Bot form)
-        rows = [dict(label=str(w.get('label') or ''), left=0.0 if out_now and _left(w, snap, now) is not None else _left(w, snap, now), resetsAt=w.get('resetsAt')) for w in windows]
-        rows = [r for r in rows if r['left'] is not None]
+        view = quota_view(store, provider, '', now)  # the same reading as the cards and the Bot form (#323)
+        out_now, unknown = view['limitNow'], view['level'] == 'unknown'  # #184②: the CLI just said the limit is reached; what the bars last read does not count
+        rows = [r for r in view['windows'] if r['left'] is not None and not unknown]
         main = [r for r in rows if 'gemini' in r['label'].lower()] or rows if provider == 'antigravity' else rows  # the rings follow the model Zook runs by default
         short = [r['left'] for r in main if '小時' in r['label']]; long = [r['left'] for r in main if '週' in r['label']]
         out.append(dict(id=provider, name=provider_label(provider).split('（')[0], fiveHour=min(short) if short else None, week=min(long) if long else None,
-                        left=min(r['left'] for r in main) if main else 0.0 if out_now else None, windows=rows, updatedAt=snap.get('updatedAt'), out=out_now,
-                        known=bool(rows) or (status.get(provider) or {}).get('signedIn') is True or provider in used,
+                        left=min(r['left'] for r in main) if main else 0.0 if out_now and not unknown else None, windows=rows, updatedAt=view['readAt'], out=out_now and not unknown,
+                        unknown=unknown, note=view['note'], known=bool(rows) or unknown or (status.get(provider) or {}).get('signedIn') is True or provider in used,
                         signedIn=(status.get(provider) or {}).get('signedIn'), issue=str((issues.get(provider) or {}).get('issue') or '')[:300]))
     return out
 
@@ -66,6 +64,7 @@ def usage_card_focus(item, now=None):
     rows = [(str(w.get('label') or ''), _left(w, snap, now)) for w in snap.get('windows') or [] if isinstance(w, dict)]
     rows = [r for r in rows if r[1] is not None]
     if item.get('apiBilling'): return 1, 0.0  # paid by use: old figures of a subscription say nothing about it
+    if (item.get('view') or {}).get('level') == 'unknown': return 1, 0.0  # 無法確定 (quota_view): not sorted by a figure Zook does not trust
     if limit_reached_now(snap) or any(left <= 0 for _, left in rows): return 2, 0.0
     if not rows: return 1, 0.0
     focus = next((r for r in rows if '小時' in r[0]), None) or next((r for r in rows if '週' in r[0]), None) or rows[0]

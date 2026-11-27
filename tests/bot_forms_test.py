@@ -72,8 +72,8 @@ class FormWords(unittest.TestCase):
     def test_account_and_fallback_say_what_they_do(self):
         code = js()
         self.assertIn('同一家的其他帳號要先到「各模型使用量」按「＋ 帳號」加入', code)
-        self.assertIn('不會換成同一家', code)
-        self.assertIn('同一家的 ${providerShort(id)} 不會切換', code)  # the 預設 line leaves the Bot's own CLI out (#43②)
+        self.assertIn('同一家其他帳號（開著「自動選用」的訂閱帳號）→ 這裡選的家；剩不到 20% 的排最後，API 計費的不會換上', code)  # #33: the same CLI's other accounts come first
+        self.assertIn('先換同一家其他帳號，再依剩餘額度換', code)  # the 預設 line: the same CLI's accounts, then by what is left (#43② #33)
         self.assertIn("levelMark(accountLevel(value, ''))", code)  # 已用完 beside a fallback, as beside an account (#43③)
         self.assertIn("[data-auto-reason]')?.toggleAttribute('hidden'", code)  # 自動配好… goes once another model is picked (#205③)
         self.assertIn('正在讀取這一家的型號…', code)  # the last CLI's model is not shown while the new list loads (#43⑥)

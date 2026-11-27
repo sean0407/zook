@@ -9,10 +9,13 @@ import json, os, sys
 name = os.path.basename(sys.argv[0])
 if 'auth' in sys.argv: print(json.dumps({'loggedIn': True, 'authMethod': 'claude.ai'})); sys.exit(0)
 if '--help' in sys.argv or '--version' in sys.argv: sys.exit(0)
-if 'login' in sys.argv: print('Logged in using ChatGPT'); sys.exit(0)
+if 'login' in sys.argv: print('Logged in using an API key' if os.path.exists(os.path.join(os.environ.get('CODEX_HOME', '/nonexistent'), 'apikey')) else 'Logged in using ChatGPT'); sys.exit(0)
 if set(sys.argv) & {'models', 'app-server'}: print('Logged in'); sys.exit(0)
 sys.stdin.read()
 home = os.environ.get('CODEX_HOME', '')
+switch = os.environ.get('AUTO_SWITCH', '')
+if name == 'codex' and not home and switch and os.path.exists(switch):  # #132: while it answers, the other account is signed in with a key
+    open(os.path.join(open(switch).read(), 'apikey'), 'w').close(); sys.stderr.write('You have hit your usage limit.\\n'); sys.exit(1)
 open(os.environ['AUTO_LOG'], 'a').write(name + ' ' + (os.path.basename(home) if home else '-') + '\\n')
 if name == 'claude': print(json.dumps({'type': 'result', 'result': 'from ' + name, 'is_error': False}))
 else: print('from ' + name)
@@ -35,7 +38,7 @@ class AutoAccountTest(unittest.TestCase):
         self.stop(); self.temp.cleanup()
 
     def start(self):
-        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', AUTO_LOG=str(self.log), ZOOK_SECRETS_DIR=str(self.root / 'secrets'))
+        env = dict(os.environ, PATH=str(self.root / 'bin') + os.pathsep + '/usr/bin:/bin', ZOOK_SKIP_UPDATE_CHECK='1', ZOOK_NO_INTRO='1', AUTO_LOG=str(self.log), AUTO_SWITCH=str(self.root / 'switch'), ZOOK_SECRETS_DIR=str(self.root / 'secrets'))
         env.pop('CODEX_HOME', None)
         self.proc = subprocess.Popen([sys.executable, str(SERVER), '--port', '0', '--data-dir', str(self.root / 'data'), '--assets', str(self.root / 'assets')],
                                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
@@ -97,6 +100,14 @@ class AutoAccountTest(unittest.TestCase):
         self.with_accounts(codex_used=95, switches={EXTRA: False})
         reply, _ = self.send('幫我修這段 python 的 bug')
         self.assertEqual(reply['auto'], 'Claude code')
+
+    def test_an_account_switched_to_a_key_during_the_reply_is_not_used(self):
+        # #132: the default Codex fails, and meanwhile the next pick (Waifdance) was signed in with an API key: it must not answer.
+        self.with_accounts()
+        (self.root / 'switch').write_text(str(self.root / 'data/accounts' / EXTRA))
+        reply, job = self.send('幫我修這段 python 的 bug')
+        self.assertNotIn(EXTRA, self.log.read_text().split())
+        self.assertNotEqual((job.get('ran') or ['', '', ''])[2], EXTRA)
 
     def test_api_key_account_is_never_picked(self):
         self.with_accounts(codex_used=95, key=True, switches={EXTRA: False, KEY: True})
