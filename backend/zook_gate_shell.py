@@ -28,11 +28,10 @@ def _folders():
             raw = _redirects(part)[0]
             if re.search(r'(?:^|\s)(?:\S*/)?env(?:\s+(?:-\S*|\S*=\S*))*?\s+(?:-[^-\s]*C|--chdir)', ' '.join(raw)): return None  # env -C: elsewhere
             words = _strip(list(raw))
+            if words[:1] == ['eval'] and _AS_BEFORE[0]: continue  # as before #344: eval's text not followed
             if words[:1] == ['eval']:  # eval 'cd ~': its text is a line of its own; what a variable or $( … ) gives it is not known
                 text = ' '.join(words[1:])
-                if set(text) & set('$`\\') or GLUED in text or len(lines) > 20:
-                    if _AS_BEFORE[0]: continue
-                    return None
+                if set(text) & set('$`\\') or GLUED in text or len(lines) > 20: return None
                 lines.append(text); continue
             if words[:1] == ['popd'] and (words[1:] not in ([], ['-q']) or not stack) or words[:1] == ['pushd'] and len(words) == 1: return None
             stack += {'pushd': 1, 'popd': -1}.get(words[0] if words else '', 0)
@@ -133,7 +132,9 @@ def _secret_any(path, unsure=True):
     """Where a key or sign-in is named, after the cds of this line; '' when none is. unsure: a path in a folder that cannot be known
     (cd "$VAR") counts too, as $PWD/…"""
     found = _resolved(path)
-    found = _as_before(path) if found is None and not unsure else found  # echo $F: a key found as before is still a key
+    if found is None:  # a key found as before #344 (eval or source now make it unknown) is still named as then: echo $F, a long path
+        before = _as_before(path)
+        found = before if not unsure or before and any(map(_secret_path, before)) else None
     if found is None:  # a variable is shown by its name only: never the rest of the word, which may be anything
         named = re.search(r'\$\{?\w+\}?', path); named = '$ZOOKSUB' if GLUED in path or '`' in path else named.group() if named else ''
         return _secret_path(path) and path or ((named or '$PWD/' + _expand(path)) if unsure else '')
@@ -274,9 +275,10 @@ def _piped_names(parts, n, piped, words, read, stripped, command):
     if not opens: return []
     feeders, k = [], n
     while k in piped and k > 0: k -= 1; feeders.append(parts[k])  # every command before it in the pipe
+    files = [r for r in read if not re.fullmatch(r'/dev/fd/\d+|/dev/stdin|-', r)]
+    if files:  # xargs cat < list.txt: the names in the list, as xargs -a list.txt (not what a pipe before it writes)
+        listed = _listed(files, prog, words)
+        return [_hit('secret', '讀取 ' + _names(listed))] if listed else []
     if read or any(w.startswith('<<') for w in parts[n]):  # < <( … ), <<< "$( … )": a command inside the line hands the names on
         feeders += [p for x in _all_inner(command) for p in _split(_without_inner(x))[0]]
-    files = [r for r in read if not re.fullmatch(r'/dev/fd/\d+|/dev/stdin|-', r)]
-    listed = _listed(files, prog, words) if files else []  # xargs cat < list.txt: the names in the list, as xargs -a list.txt
-    if listed: return [_hit('secret', '讀取 ' + _names(listed))]
     return [_hit('secret', '讀取 （另一個指令列出的檔案，範圍包含家目錄）')] if any(map(_reaches, feeders)) else []

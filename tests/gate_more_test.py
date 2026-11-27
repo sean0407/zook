@@ -56,6 +56,12 @@ class GateMore(unittest.TestCase):
         self.assertIn('secret', kinds('eval "$X"; cd ~; ls .ssh'))
         self.assertIn('guard', kinds('cd ~/.claude && eval "$X"; echo {} > settings.json'))
         self.assertIn('guard', kinds('cd ~/.claude && source x.sh; echo {} > settings.json'))
+        gate._CWD[0] = os.path.expanduser('~/Documents')
+        self.assertIn('secret', kinds("cd ~/.claude && eval 'cd -'; ls .credentials.json"))
+        self.assertIn('guard', kinds("cd ~/.claude && eval 'cd -'; printf x > settings.json"))
+        gate._CWD[0] = self.temp.name
+        long = '~/.ssh/' + 'k' * 220 + '.pem'  # too long for a card: refused, as before
+        self.assertEqual(gate.command_boundaries("F=%s; eval 'echo hi'; cat \"$F\"" % long), gate.command_boundaries('F=%s; cat "$F"' % long))
 
     def test_plain_eval_and_source_are_not_asked(self):
         Path(self.temp.name, 'notes.txt').write_text('x')
@@ -89,7 +95,7 @@ class GateMore(unittest.TestCase):
         Path(self.temp.name, 'names.txt').write_text('src\n')
         for line in ("find . -name '*.py' | xargs grep foo", "find src -name '*.py' | xargs wc -l", 'ls | xargs cat', 'git ls-files | xargs wc -l',
                      "find ~ -name '*.txt' | xargs echo", "find ~ -name '*.log' | wc -l", "grep -l TODO src/*.py | xargs sed -n 1p", 'rg -l x src | xargs cat',
-                     'xargs cat < names.txt', 'ls ~ | head', "find ~/Documents -name '*.md' | xargs cat" if os.path.isdir(os.path.expanduser('~/Documents')) else 'true'):
+                     'xargs cat < names.txt', 'find ~ -type f | xargs cat < names.txt', 'ls ~ | head', "find ~/Documents -name '*.md' | xargs cat" if os.path.isdir(os.path.expanduser('~/Documents')) else 'true'):
             self.assertNotAsked(line)
 
 
